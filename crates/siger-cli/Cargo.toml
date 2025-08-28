@@ -1,0 +1,23 @@
+[package]
+name = "siger-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow     = "1"
+serialport = "4"
+postcard   = { workspace = true, features = ["use-std"] }   # to_stdvec_cobs
+serde      = { workspace = true, features = ["std", "derive"] }
+serde-big-array = "0.5"
+cobs = { version = "0.4",    default-features = false }
+k256 = { version = "0.13", features = ["ecdsa"] }
+hex = "0.4"
+bip39 = "2"
+sha2 = "0.10"
+num-bigint = "0.4"
+num-integer = "0.1.46"
+bech32 = "0.9"
+ripemd = "0.1"
+
+siger-core = { path = "../siger-core", features = ["alloc-path"] }
+tx-types = { path = "../tx-types", default-features = false }

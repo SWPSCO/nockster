@@ -1,0 +1,52 @@
+[package]
+name = "nicker"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+clap = { workspace = true, features = ["derive", "env"] }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+bytes = { workspace = true, features = ["serde"] }
+toml = "0.9.4"
+reqwest = { version = "0.12.22", default-features = false, features = ["rustls-tls", "json"] }
+tx-types = { path = "../tx-types" }
+futures = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+rand_chacha = "0.3"
+num-traits = { version = "0.2.19" }
+serialport = "4"
+postcard = "1"
+serde = { version = "1", features = ["derive"] }
+bip39 = { version = "2", default-features = false, features = ["std"] }
+bip32 = { version = "0.5", default-features = false, features = ["secp256k1"] }
+k256 = { version = "0.13", features = ["schnorr", "ecdsa", "alloc"] }
+sha2 = "0.10"
+bs58 = "0.5"
+zeroize = "1"
+hmac = "0.12"
+ibig = "0.3"
+
+siger-core = { path = "../siger-core" }
+
+# Dependencies for Noun/transaction types
+nockapp = { workspace = true }
+noun-serde-derive = { workspace = true }
+noun-serde = { workspace = true }
+nockvm = { workspace = true }
+nockvm_macros = { workspace = true }
+nockchain-libp2p-io = { workspace = true }
+zkvm-jetpack = { workspace = true }
+proc-macro2 = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+TEST MNEMONIC (NEVER USE FOR REAL FUNDS!):
+gorilla bullet result matter risk flower weekend bunker cattle post gauge swing
+
+BIP39 Seed (hex): e20baa8aa272b3845a2a3f89d94f64bb4571c67187a5e760233b5c823dec6a2492d0223b3b6c5f4026b080d8c4fbcda540a3232b41d091e7af5c139a044d6bb9
+
+To test your firmware, run:
+export BIP39_SEED_HEX=e20baa8aa272b3845a2a3f89d94f64bb4571c67187a5e760233b5c823dec6a2492d0223b3b6c5f4026b080d8c4fbcda540a3232b41d091e7af5c139a044d6bb9
+./ping
+
+Master private key: 66e350254ad57279217abfbc05d791f7bebac705a77b75784912626429c8e07e
+Master chain code: cd39e8532261132f731b82d95d2f7eb96f37d01dd9eea824815583a2332c3bb2
+
+Common derivation paths:
+m/44'/0'/0'/0/0  - Bitcoin first address
+m/44'/60'/0'/0/0 - Ethereum first address
+❯ export BIP39_SEED_HEX=e20baa8aa272b384

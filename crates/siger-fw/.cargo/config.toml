@@ -1,0 +1,8 @@
+[build]
+target = "xtensa-esp32s3-none-elf"
+
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor"
+
+[unstable]
+build-std = ["core", "alloc"]

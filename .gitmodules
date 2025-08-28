@@ -1,0 +1,3 @@
+[submodule "tx-types"]
+	path = tx-types
+	url = https://github.com/SWPSCO/tx-types

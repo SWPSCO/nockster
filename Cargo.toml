@@ -1,0 +1,77 @@
+[workspace]
+members = [
+    "crates/siger-core",
+    "crates/nicker",
+    "crates/siger-fw",
+    "crates/siger-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+
+[workspace.dependencies]
+cobs = { version = "0.4", default-features = false }
+heapless = { version = "0.8", features = ["serde"] }
+serde-big-array = { version = "0.5", default-features = false }
+tokio = { version = "1.44.2", features = ["full"] }
+tracing = { version = "0.1.41" }
+tracing-subscriber = { version = "0.3.19" }
+dirs = { version = "6.0.0" }
+equix = { version = "0.2.3" }
+clap = { version = "4.5.37", features = ["derive"] }
+chrono = { version = "0.4.41", features = ["serde"] }
+anyhow = "1.0.75"
+libp2p = { git = "https://github.com/libp2p/rust-libp2p.git", rev = "da0017ee887a868e231ed78c7de892779c17800d" }
+tempfile = "3.8.1"
+rand = { version = "0.8.5" }
+x25519-dalek = { version = "2.0.1" }
+ed25519-dalek = { version = "2.1.1", features = ["rand_core"] }
+hkdf = { version = "0.12.4" }
+sha2 = { version = "0.10.9" }
+chacha20poly1305 = { version = "0.10.1" }
+snow = { version = "0.9.4" }
+thiserror = { version = "1.0.61" }
+postcard = { version = "1.1.3", default-features = false }  # baseline: no std
+serde    = { version = "1.0.218", default-features = false } # baseline: no std
+serde_derive = "1.0.218"
+bincode = "1.3.3"
+crossbeam-queue = "0.3"
+futures = "0.3"
+uuid = { version = "1.6.1", features = ["v4"] }
+hex = { version = "0.4.3" }
+async-nats = "0.42.0"
+async-trait = "0.1"
+serde_json = { version = "1" }
+r2d2 = { version = "0.8.10" }
+diesel = { version = "2.2.11", features = ["postgres", "r2d2"] }
+diesel_derives = { version = "2.2.6" }
+axum = { version = "0.8.4" }
+bytes = { version = "1.10.1" }
+hyper = { version = "0.14", features = ["full"] }
+rustls = "0.23"
+rustls-pemfile = "2.2.0"
+postgrest = "1.0.1"
+proc-macro2 = "1.0.95"
+either = "1.13"
+
+# nockchain
+nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockchain" }
+nockvm = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockvm" }
+nockapp = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockapp" }
+zkvm-jetpack = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "zkvm-jetpack" }
+nockvm_macros = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockvm_macros" }
+nockchain-libp2p-io = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockchain-libp2p-io" }
+kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "kernels" }
+noun-serde-derive = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "noun-serde-derive" }
+noun-serde = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "noun-serde" }
+ibig = { git = "https://github.com/SWPSCO/nockchain.git", rev = "c88496985c83218ba3100e07031d56371bb02028", package = "ibig" }
+
+[workspace.lints.rust]

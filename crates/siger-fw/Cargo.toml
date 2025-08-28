@@ -25,11 +25,13 @@ bip32 = { version = "0.5", default-features = false, features = ["secp256k1", "a
 k256  = { version = "0.13", default-features = false, features = ["ecdsa"] }
 sha2 = { version = "0.10", default-features = false }        # for fp calc
 ripemd = { version = "0.1", default-features = false }       # for fp calc
+ibig = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
+hmac = { version = "0.12", default-features = false }
 
 # Your shared core lib (keep as you have it; just ensure it's no_std for FW)
 siger-core = { path = "../siger-core", default-features = false }
-nicker = { path = "../nicker", default-features = false }
+# nicker = { path = "../nicker", default-features = false }
 
 
 [profile.release]

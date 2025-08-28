@@ -2,9 +2,11 @@
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 
+mod cheetah;
 use panic_halt as _;
 extern crate alloc;
 
+use crate::cheetah::*;
 use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, main};
@@ -15,7 +17,6 @@ use heapless::Vec;
 
 use siger_core::*;
 use siger_core::alloc_path as pathmod;
-use nicker::signer;
 
 use bip32::{DerivationPath, XPrv, ChildNumber, PublicKey};
 use k256::{EncodedPoint, ecdsa::{SigningKey, signature::hazmat::PrehashSigner, Signature}};
@@ -28,65 +29,6 @@ struct SeedStore {
     seed: [u8; 64],
 }
 static mut SEED_STORE: SeedStore = SeedStore { set: false, seed: [0u8; 64] };
-
-fn set_seed(seed64: &[u8; 64]) {
-    unsafe {
-        SEED_STORE.seed.copy_from_slice(seed64);
-        SEED_STORE.set = true;
-    }
-}
-
-fn wipe_seed() {
-    unsafe {
-        SEED_STORE.seed.zeroize();
-        SEED_STORE.set = false;
-    }
-}
-
-/// Convert our u32s with MSB=hard flag into a bip32 DerivationPath
-fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
-  let mut dp = DerivationPath::default();
-  for &p in path.iter() {
-      let hardened = (p & 0x8000_0000) != 0;
-      let idx = p & 0x7FFF_FFFF;
-      dp.push(ChildNumber::new(idx, hardened).unwrap());
-  }
-  dp
-}
-
-/// Create a k256 SigningKey from master seed + path
-fn derive_signing_key(path: &pathmod::Path) -> Result<SigningKey, ()> {
-  unsafe {
-      if !SEED_STORE.set { return Err(()); }
-      let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
-      
-      // Derive child by child
-      let mut key = xprv;
-      for index in path.iter() {
-          let child_num = ChildNumber::from(*index);
-          key = key.derive_child(child_num).map_err(|_| ())?;
-      }
-      
-      let sk_bytes = key.private_key().to_bytes();
-      let sk = SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())?;
-      Ok(sk)
-  }
-}
-/// BIP32 parent fingerprint (master): first 4 bytes of RIPEMD160(SHA256(compressed pubkey))
-fn master_fingerprint() -> Result<[u8;4], ()> {
-    unsafe {
-        if !SEED_STORE.set { return Err(()); }
-        let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
-        let xpub = xprv.public_key();
-        let comp = xpub.public_key().to_bytes(); // compressed 33 bytes
-        let sha = Sha256::digest(&comp);
-        let ripe = Ripemd160::digest(&sha);
-        let mut fp4 = [0u8;4];
-        fp4.copy_from_slice(&ripe[..4]);
-        Ok(fp4)
-    }
-}
-
 
 // Required by the ESP-IDF bootloader
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -227,19 +169,27 @@ fn handle_request_v1(req: &Request) -> Response {
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
       }
-
+      
       Request::GetCheetahPub { path } => {
-          let sk = derive_child_sk_from_seed_store(path)?;
-          let pk = cheetah::cheetah_pub_from_sk(sk);
-          Response::OkCheetahPub { x: pk[0], y: pk[1] }
+          match derive_child_sk_from_seed_store(path) {
+              Ok(sk_be32) => {
+                  let (x, y) = cheetah::cheetah_pub_from_sk(sk_be32);
+                  Response::OkCheetahPub { x, y }
+              }
+              Err(_) => Response::Err { code: ERR_NO_SEED },
+          }
       }
-    
+
       Request::SignTxId { path, txid5 } => {
-          let sk = derive_child_sk_from_seed_store(path)?;
-          let pk = cheetah::cheetah_pub_from_sk(sk);
-          let hash = Hash { values: txid5 };
-          let (e, s) = cheetah::schnorr_sign_txid(sk, pk, hash);
-          Response::OkCheetahSig { chal: e.values, sig: s.values }
+          match derive_child_sk_from_seed_store(path) {
+              Ok(sk_be32) => {
+                  let (x, y) = cheetah::cheetah_pub_from_sk(sk_be32);
+                  let hash = cheetah::Hash { values: *txid5 };
+                  let (chal, sig) = cheetah::schnorr_sign_txid(sk_be32, (x, y), hash);
+                  Response::OkCheetahSig { chal: chal.values, sig: sig.values }
+              }
+              Err(_) => Response::Err { code: ERR_NO_SEED },
+          }
       }
 
       Request::Health => {
@@ -285,4 +235,79 @@ fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
 
       Ok(Xpub { depth, fp4, child: child_u32, chain_code, pubkey33 })
   }
+}
+
+
+
+fn set_seed(seed64: &[u8; 64]) {
+    unsafe {
+        SEED_STORE.seed.copy_from_slice(seed64);
+        SEED_STORE.set = true;
+    }
+}
+
+fn wipe_seed() {
+    unsafe {
+        SEED_STORE.seed.zeroize();
+        SEED_STORE.set = false;
+    }
+}
+
+/// Convert our u32s with MSB=hard flag into a bip32 DerivationPath
+fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
+  let mut dp = DerivationPath::default();
+  for &p in path.iter() {
+      let hardened = (p & 0x8000_0000) != 0;
+      let idx = p & 0x7FFF_FFFF;
+      dp.push(ChildNumber::new(idx, hardened).unwrap());
+  }
+  dp
+}
+
+/// Create a k256 SigningKey from master seed + path
+fn derive_signing_key(path: &pathmod::Path) -> Result<SigningKey, ()> {
+  unsafe {
+      if !SEED_STORE.set { return Err(()); }
+      let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
+      
+      // Derive child by child
+      let mut key = xprv;
+      for index in path.iter() {
+          let child_num = ChildNumber::from(*index);
+          key = key.derive_child(child_num).map_err(|_| ())?;
+      }
+      
+      let sk_bytes = key.private_key().to_bytes();
+      let sk = SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())?;
+      Ok(sk)
+  }
+}
+/// BIP32 parent fingerprint (master): first 4 bytes of RIPEMD160(SHA256(compressed pubkey))
+fn master_fingerprint() -> Result<[u8;4], ()> {
+    unsafe {
+        if !SEED_STORE.set { return Err(()); }
+        let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
+        let xpub = xprv.public_key();
+        let comp = xpub.public_key().to_bytes(); // compressed 33 bytes
+        let sha = Sha256::digest(&comp);
+        let ripe = Ripemd160::digest(&sha);
+        let mut fp4 = [0u8;4];
+        fp4.copy_from_slice(&ripe[..4]);
+        Ok(fp4)
+    }
+}
+
+fn derive_child_sk_from_seed_store(path: &pathmod::Path) -> core::result::Result<[u8;32], ()> {
+    unsafe {
+        if !SEED_STORE.set { return Err(()); }
+        // SLIP-10 (your curve): seed -> master (sk, cc)
+        let (m_sk, m_cc) = cheetah::master_from_seed(&SEED_STORE.seed);
+
+        // walk the path (hardened allowed); private derivation
+        let mut xk = cheetah::XKey::from_master(m_sk, m_cc);
+        for &i in path.iter() {
+            xk = cheetah::xprv_derive_child(&xk, i);
+        }
+        xk.sk.ok_or(())
+    }
 }

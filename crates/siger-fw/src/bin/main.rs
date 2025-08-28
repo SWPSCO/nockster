@@ -2,9 +2,9 @@
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 
+mod random;
 use panic_halt as _;
 extern crate alloc;
-
 use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, main};

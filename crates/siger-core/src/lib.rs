@@ -1,5 +1,10 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 extern crate alloc;
+
+pub mod math;
+pub mod cheetah;
+pub mod noun;
+pub use cheetah::{Hash, T8, XKey, cheetah_pub_from_sk, schnorr_sign_txid};
 
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};

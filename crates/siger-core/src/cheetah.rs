@@ -1,18 +1,11 @@
-#![cfg_attr(not(test), no_std)]
 extern crate alloc;
-
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-
 use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Sha256, Sha512};
 
-// ---- minimal zkvm_jetpack pulls (no nockapp, no ring) ----------------------
-use zkvm_jetpack::arith::tip5::permute as tip5_permute;
-use zkvm_jetpack::form::math::{badd, bneg, bpegcd};
-use zkvm_jetpack::form::poly::Belt;
+use crate::math::math::{Belt, tip5_permute, bpegcd};
 
-// ---- Public types you already use ------------------------------------------
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hash {
     pub values: [u64; 5],
@@ -23,7 +16,7 @@ pub struct T8 {
     pub values: [u64; 8],
 }
 
-// We represent F_{p^6} tower elements as six Belt “limbs”.
+// F_{p^6} tower elements as six Belt limbs
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct F6lt([Belt; 6]);
 
@@ -34,7 +27,7 @@ struct CheetahPoint {
     inf: bool,
 }
 
-// ---- SLIP-0010-ish master/child derivation ---------------------------------
+// ---- SLIP master/child derivation ---------------------------------
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -200,17 +193,16 @@ fn ser256_be(x: &[u8; 32]) -> [u8; 32] { *x }
 fn ser32_be(i: u32) -> [u8; 4] { i.to_be_bytes() }
 
 /// Serialize affine point limbs (x,y) into 96 little-endian bytes (12 u64s).
-fn ser_a_pt(pt: &[[u64; 6]; 2]) -> [u8; 96] {
-    let mut out = [0u8; 96];
-    // x then y, each limb little-endian u64
-    for (li, limb) in pt[0].iter().enumerate() {
-        out[li * 8..li * 8 + 8].copy_from_slice(&limb.to_le_bytes());
-    }
-    for (li, limb) in pt[1].iter().enumerate() {
-        let o = 48 + li * 8;
-        out[o..o + 8].copy_from_slice(&limb.to_le_bytes());
-    }
-    out
+fn ser_a_pt(pt: &([u64; 6], [u64; 6])) -> [u8; 96] {
+  let mut out = [0u8; 96];
+  for (li, limb) in pt.0.iter().enumerate() {
+      out[li * 8..li * 8 + 8].copy_from_slice(&limb.to_le_bytes());
+  }
+  for (li, limb) in pt.1.iter().enumerate() {
+      let o = 48 + li * 8;
+      out[o..o + 8].copy_from_slice(&limb.to_le_bytes());
+  }
+  out
 }
 
 // ---- Deterministic k (RFC6979-style) ---------------------------------------
@@ -247,12 +239,13 @@ fn tip5_hash_words(words: &[u64]) -> [u64; DIGEST_LENGTH] {
     [state[0], state[1], state[2], state[3], state[4]]
 }
 
-fn pack_point_words(pt: &[[u64; 6]; 2]) -> [u64; 12] {
-    let mut out = [0u64; 12];
-    out[..6].copy_from_slice(&pt[0]);
-    out[6..].copy_from_slice(&pt[1]);
-    out
+fn pack_point_words(pt: &([u64; 6], [u64; 6])) -> [u64; 12] {
+  let mut out = [0u64; 12];
+  out[..6].copy_from_slice(&pt.0);
+  out[6..].copy_from_slice(&pt.1);
+  out
 }
+
 
 // Turn 40-byte (5 words) big-endian into hex ASCII for ibig-less mod; but we
 // already reduce via byte math, so we just keep it as bytes.
@@ -461,7 +454,8 @@ pub struct XKey {
 
 fn fingerprint_from_pk(pk: &([u64; 6], [u64; 6])) -> [u8; 4] {
     // TIP-5 over P, take first 4 bytes of digest[0]
-    let digest = tip5_hash_words(&pack_point_words(pk));
+    let packed = pack_point_words(pk);
+    let digest = tip5_hash_words(&packed);
     digest[0].to_be_bytes()[..4].try_into().unwrap()
 }
 
@@ -514,8 +508,8 @@ pub fn xpub_derive_child(parent: &XKey, i: u32) -> XKey {
     // child P = (il * G) + parent P
     let q = ch_scal_big(&il, &G);
     let p = CheetahPoint {
-        x: F6lt(parent.pk.unwrap().0.map(|w| Belt(w as i128))),
-        y: F6lt(parent.pk.unwrap().1.map(|w| Belt(w as i128))),
+        x: F6lt(parent.pk.unwrap().0.map(|w| Belt(w))),
+        y: F6lt(parent.pk.unwrap().1.map(|w| Belt(w))),
         inf: false,
     };
     let r = ch_add(&q, &p);

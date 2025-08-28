@@ -21,17 +21,13 @@ alloc-path = []
 # Pure, no_std + alloc crypto. No randomness needed for RFC6979 ECDSA.
 k256   = { version = "0.13", default-features = false, features = ["ecdsa", "schnorr", "alloc"] }
 
-# BIP32/BIP39 without rand/getrandom — IMPORTANT: no "rand" feature.
 bip32  = { version = "0.5",  default-features = false, features = ["secp256k1", "alloc"] }
-bip39  = { version = "2",    default-features = false } # uses `alloc` internally, no std required
-
+bip39  = { version = "2",    default-features = false }
 sha2   = { version = "0.10", default-features = false }
 hmac   = { version = "0.12", default-features = false }
 zeroize= { version = "1",    default-features = false }
-
 heapless = { workspace = true, features = ["serde"] }
-serde-big-array = { workspace = true,    default-features = false }
-# base58 encode (turn on alloc, keep std off)
+serde-big-array = { workspace = true, default-features = false }
 bs58   = { version = "0.5",  default-features = false, features = ["alloc"] }
 
 serde  = { workspace = true, default-features = false, features = ["derive"] }

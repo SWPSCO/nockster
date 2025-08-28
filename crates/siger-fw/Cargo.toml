@@ -13,6 +13,7 @@ esp-bootloader-esp-idf = { version = "0.2.0", features = ["esp32s3"] }
 esp-hal = { version = "=1.0.0-rc.0", features = ["esp32s3", "unstable"] }
 esp-alloc = "0.8.0"
 panic-halt = "0.2"
+getrandom = { version = "0.2", default-features = false, features = ["custom"] }
 
 # Protocol (no_std)
 serde = { workspace = true, default-features = false, features = ["derive"] }
@@ -28,8 +29,6 @@ ripemd = { version = "0.1", default-features = false }
 ibig = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 hmac = { version = "0.12", default-features = false }
-
-zkvm-jetpack = { workspace = true }
 
 # Your shared core lib (keep as you have it; just ensure it's no_std for FW)
 siger-core = { path = "../siger-core", default-features = false }

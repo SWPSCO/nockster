@@ -5874,6 +5874,7 @@ dependencies = [
  "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
+ "getrandom 0.2.16",
  "heapless 0.8.0",
  "hmac",
  "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -5887,7 +5888,6 @@ dependencies = [
  "siger-core",
  "signature",
  "zeroize",
- "zkvm-jetpack",
 ]
 
 [[package]]

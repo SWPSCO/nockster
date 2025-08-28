@@ -5887,6 +5887,7 @@ dependencies = [
  "siger-core",
  "signature",
  "zeroize",
+ "zkvm-jetpack",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ members = [
     "crates/siger-cli",
 ]
 resolver = "2"
+default-members = ["crates/siger-fw"] 
 
 [workspace.package]
 edition = "2021"

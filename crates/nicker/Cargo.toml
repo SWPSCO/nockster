@@ -3,6 +3,13 @@ name = "nicker"
 edition.workspace = true
 version.workspace = true
 
+[features]
+default = ["host"]
+host = ["dep:nockapp", "dep:noun-serde", "dep:noun-serde-derive", "dep:nockvm",
+        "dep:nockvm_macros", "dep:nockchain-libp2p-io", "dep:tx-types", "dep:proc-macro2"]
+# firmware = pure no_std core (alloc only)
+fw = []
+
 [dependencies]
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -15,7 +22,6 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 bytes = { workspace = true, features = ["serde"] }
 toml = "0.9.4"
 reqwest = { version = "0.12.22", default-features = false, features = ["rustls-tls", "json"] }
-tx-types = { path = "../tx-types" }
 futures = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
@@ -34,19 +40,17 @@ hmac = "0.12"
 ibig = "0.3"
 
 siger-core = { path = "../siger-core" }
+tx-types = { path = "../tx-types", optional = true }
 
 # Dependencies for Noun/transaction types
-nockapp = { workspace = true }
-noun-serde-derive = { workspace = true }
-noun-serde = { workspace = true }
-nockvm = { workspace = true }
-nockvm_macros = { workspace = true }
-nockchain-libp2p-io = { workspace = true }
-zkvm-jetpack = { workspace = true }
-proc-macro2 = { workspace = true }
-
-[features]
-default = []
+nockapp = { workspace = true, optional = true }
+noun-serde-derive = { workspace = true, optional = true }
+noun-serde = { workspace = true, optional = true }
+nockvm = { workspace = true, optional = true }
+nockvm_macros = { workspace = true, optional = true }
+nockchain-libp2p-io = { workspace = true, optional = true }
+zkvm-jetpack = { workspace = true, optional = true }
+proc-macro2 = { workspace = true, optional = true }
 
 [lints]
 workspace = true

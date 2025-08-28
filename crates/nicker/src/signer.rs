@@ -21,6 +21,27 @@ use zkvm_jetpack::form::math::badd;
 use zkvm_jetpack::form::math::tip5::permute as tip5_permute;
 use zkvm_jetpack::form::poly::Belt;
 
+#![cfg_attr(feature = "fw", no_std)]
+extern crate alloc;
+
+#[cfg(feature = "host")]
+use nockapp::Bytes;
+#[cfg(not(feature = "host"))]
+// not used on firmware, but keep a placeholder if the type name appears in signatures behind cfg(host)
+pub type Bytes = alloc::vec::Vec<u8>;
+
+// host-only glue (jam, tx-types, slab, etc.)
+#[cfg(feature = "host")]
+use {
+    noun_serde::NounEncode,
+    nockapp::noun::slab::NounSlab,
+    tx_types::collections::ZMap,
+    tx_types::transaction_types::*,
+};
+
+// the rest (hmac, sha2, ibig, num_traits, curve code, SLIP-10, RFC6979) is shared
+
+
 // ===========================================================================
 // Public API
 // ===========================================================================

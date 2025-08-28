@@ -2,11 +2,9 @@
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 
-mod cheetah;
 use panic_halt as _;
 extern crate alloc;
 
-use crate::cheetah::*;
 use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, main};
@@ -169,12 +167,12 @@ fn handle_request_v1(req: &Request) -> Response {
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
       }
-      
+
       Request::GetCheetahPub { path } => {
           match derive_child_sk_from_seed_store(path) {
-              Ok(sk_be32) => {
-                  let (x, y) = cheetah::cheetah_pub_from_sk(sk_be32);
-                  Response::OkCheetahPub { x, y }
+              Ok(sk) => {
+                  let pk = cheetah::cheetah_pub_from_sk(sk);
+                  Response::OkCheetahPub { x: pk.0, y: pk.1 }
               }
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
@@ -182,11 +180,11 @@ fn handle_request_v1(req: &Request) -> Response {
 
       Request::SignTxId { path, txid5 } => {
           match derive_child_sk_from_seed_store(path) {
-              Ok(sk_be32) => {
-                  let (x, y) = cheetah::cheetah_pub_from_sk(sk_be32);
-                  let hash = cheetah::Hash { values: *txid5 };
-                  let (chal, sig) = cheetah::schnorr_sign_txid(sk_be32, (x, y), hash);
-                  Response::OkCheetahSig { chal: chal.values, sig: sig.values }
+              Ok(sk) => {
+                  let pk = cheetah::cheetah_pub_from_sk(sk);
+                  let hash = Hash { values: *txid5 };
+                  let (e, s) = cheetah::schnorr_sign_txid(sk, pk, hash);
+                  Response::OkCheetahSig { chal: e.values, sig: s.values }
               }
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
@@ -297,14 +295,12 @@ fn master_fingerprint() -> Result<[u8;4], ()> {
     }
 }
 
-fn derive_child_sk_from_seed_store(path: &pathmod::Path) -> core::result::Result<[u8;32], ()> {
+fn derive_child_sk_from_seed_store(path: &pathmod::Path) -> Result<[u8; 32], ()> {
     unsafe {
         if !SEED_STORE.set { return Err(()); }
-        // SLIP-10 (your curve): seed -> master (sk, cc)
-        let (m_sk, m_cc) = cheetah::master_from_seed(&SEED_STORE.seed);
-
-        // walk the path (hardened allowed); private derivation
-        let mut xk = cheetah::XKey::from_master(m_sk, m_cc);
+        // SLIP-10 master for Cheetah:
+        let (sk, cc) = cheetah::master_from_seed(&SEED_STORE.seed);
+        let mut xk = cheetah::XKey::from_master(sk, cc);
         for &i in path.iter() {
             xk = cheetah::xprv_derive_child(&xk, i);
         }

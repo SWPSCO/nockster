@@ -549,3 +549,33 @@ const GY: F6lt = F6lt([
 
 const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
 const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
+
+impl XKey {
+    /// Construct a master extended private key (depth=0, index=0).
+    /// Parent fingerprint for the master is 0x00000000 (per BIP32-style conv.)
+    pub fn from_master(sk: [u8; 32], chain_code: [u8; 32]) -> Self {
+        let pk = cheetah_pub_from_sk(sk);
+        XKey {
+            depth: 0,
+            index: 0,
+            chain_code,
+            sk: Some(sk),
+            pk: Some(pk),
+            parent_fingerprint: [0u8; 4],
+        }
+    }
+
+    /// convenience for xpub-only view
+    #[allow(dead_code)]
+    pub fn to_xpub(&self) -> Self {
+        let pk = self.pk.expect("xkey must have pk");
+        XKey {
+            depth: self.depth,
+            index: self.index,
+            chain_code: self.chain_code,
+            sk: None,
+            pk: Some(pk),
+            parent_fingerprint: self.parent_fingerprint,
+        }
+    }
+}

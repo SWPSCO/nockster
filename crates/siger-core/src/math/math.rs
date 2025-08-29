@@ -3,6 +3,7 @@
 use core::slice::Iter;
 use alloc::vec::Vec;
 use alloc::vec;
+pub use crate::noun::belt::{Belt, Felt};
 use core::ops::{Add, Mul, Neg, Sub};
 
 pub const PRIME: u64 = 18446744069414584321;
@@ -134,15 +135,6 @@ const MDS_MATRIX_I64: [[i64; STATE_SIZE]; STATE_SIZE] = [
     ],
 ];
 
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct Belt(pub u64);
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
-#[repr(transparent)]
-pub struct Felt(pub [Belt; 3]);
-
 pub trait Element: Clone {
     fn is_zero(&self) -> bool;
     fn zero() -> Self;
@@ -151,37 +143,18 @@ pub trait Element: Clone {
 }
 
 impl Element for Felt {
-  #[inline(always)]
-  fn is_zero(&self) -> bool {
-      self.0.iter().all(|b| b.is_zero())
-  }
-  #[inline(always)]
-  fn zero() -> Self {
-      Felt([Belt(0); 3])
-  }
-  #[inline(always)]
-  fn len() -> usize {
-      3
-  }
-  #[inline(always)]
-  fn one() -> Self {
-      let mut a = [Belt(0); 3];
-      a[0] = Belt(1);
-      Felt(a)
-  }
+    #[inline(always)] fn is_zero(&self) -> bool { self.0.iter().all(|b| b.0 == 0) }
+    #[inline(always)] fn zero() -> Self { Felt([Belt(0); 3]) }
+    #[inline(always)] fn len() -> usize { 3 }
+    #[inline(always)] fn one() -> Self { let mut a=[Belt(0);3]; a[0]=Belt(1); Felt(a) }
 }
 
 impl Element for Belt {
-  #[inline(always)]
-  fn is_zero(&self) -> bool { self.0 == 0 }
-  #[inline(always)]
-  fn zero() -> Self { Belt(0) }
-  #[inline(always)]
-  fn len() -> usize { 1 }
-  #[inline(always)]
-  fn one() -> Self { Belt(1) }
+    #[inline(always)] fn is_zero(&self) -> bool { self.0 == 0 }
+    #[inline(always)] fn zero() -> Self { Belt(0) }
+    #[inline(always)] fn len() -> usize { 1 }
+    #[inline(always)] fn one() -> Self { Belt(1) }
 }
-
 
 impl Element for u64 {
     #[inline(always)]
@@ -331,19 +304,15 @@ impl<T: Element> Poly for PolySliceMut<'_, T> {
     }
 }
 
-// For testing BPolyVec funcs
 impl From<alloc::vec::Vec<u64>> for BPolyVec {
-  fn from(b: alloc::vec::Vec<u64>) -> Self {
-      let belts: alloc::vec::Vec<Belt> = b.into_iter().map(|item| item.into()).collect();
-      PolyVec(belts)
-  }
+    fn from(b: alloc::vec::Vec<u64>) -> Self {
+        PolyVec(b.into_iter().map(Belt::from).collect())
+    }
 }
-
 impl From<BPolyVec> for alloc::vec::Vec<u64> {
-  fn from(b: BPolyVec) -> Self {
-      let belts: alloc::vec::Vec<u64> = b.0.into_iter().map(|item| item.into()).collect();
-      belts
-  }
+    fn from(b: BPolyVec) -> Self {
+        b.0.into_iter().map(u64::from).collect()
+    }
 }
 
 impl From<Felt> for BPolyVec {
@@ -373,17 +342,6 @@ impl quickcheck::Arbitrary for BPolyVec {
 
 pub fn based_check(a: u64) -> bool {
   a < PRIME
-}
-
-#[macro_export]
-macro_rules! based {
-  ( $( $x:expr ),* ) => {
-    {
-        $(
-            debug_assert!(based_check($x), "element must be inside the field\r");
-        )*
-    }
-  };
 }
 
 pub fn bpegcd(a: &[Belt], b: &[Belt]) -> (Vec<Belt>, Vec<Belt>) {
@@ -567,6 +525,17 @@ fn linear_layer(state: &[u64; 16]) -> [u64; 16] {
     result
 }
 
+#[macro_export]
+macro_rules! based {
+    ( $( $x:expr ),* ) => {{
+        $(
+            debug_assert!(
+                $crate::math::math::based_check($x),
+                "element must be inside the field"
+            );
+        )*
+    }};
+}
 
 #[inline(always)]
 pub fn badd(a: u64, b: u64) -> u64 {
@@ -708,65 +677,4 @@ pub fn binv(a: u64) -> u64 {
     based!(a);
     // Fermat's little theorem: a^(p-2) = a^-1 mod p
     bpow(a, PRIME - 2)
-}
-
-impl core::ops::Div for Belt {
-    type Output = Belt;
-    
-    fn div(self, rhs: Belt) -> Belt {
-        Belt(bmul(self.0, binv(rhs.0)))
-    }
-}
-
-impl Belt {
-    pub fn is_zero(&self) -> bool {
-        self.0 == 0
-    }
-    
-    pub fn zero() -> Self {
-        Belt(0)
-    }
-    
-    pub fn one() -> Self {
-        Belt(1)
-    }
-}
-
-impl Add for Belt {
-  type Output = Belt;
-  
-  fn add(self, rhs: Belt) -> Belt {
-      Belt(badd(self.0, rhs.0))
-  }
-}
-
-impl Sub for Belt {
-  type Output = Belt;
-  
-  fn sub(self, rhs: Belt) -> Belt {
-      Belt(bsub(self.0, rhs.0))
-  }
-}
-
-impl Mul for Belt {
-  type Output = Belt;
-  
-  fn mul(self, rhs: Belt) -> Belt {
-      Belt(bmul(self.0, rhs.0))
-  }
-}
-
-impl Neg for Belt {
-  type Output = Belt;
-  
-  fn neg(self) -> Belt {
-      Belt(bneg(self.0))
-  }
-}
-
-// Also add this for the inv() method you're using in cheetah.rs
-impl Belt {
-  pub fn inv(self) -> Belt {
-      Belt(binv(self.0))
-  }
 }

@@ -1,11 +1,12 @@
-#![allow(clippy::len_without_is_empty)]
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
 
+use alloc::vec;
 use core::slice::Iter;
 use alloc::vec::Vec;
-use alloc::vec;
+use core::ops::{Add, Mul, Neg, Sub};
+use crate::math::math::{badd, bsub, bmul, bneg, binv, bpow, PRIME, based_check};
 use super::noun_serde::{NounEncode, NounDecode, NounDecodeError, Noun, NounAllocator};
-
-pub const PRIME: u64 = 18446744069414584321;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -22,7 +23,7 @@ impl NounDecode for Belt {
         let value = noun.as_atom()
             .map_err(|_| NounDecodeError::ExpectedAtom)?;
         
-        if !crate::math::math::based_check(value) {
+        if !based_check(value) {
             return Err(NounDecodeError::Custom("Belt value not based"));
         }
         Ok(Belt(value))
@@ -276,6 +277,62 @@ impl quickcheck::Arbitrary for BPolyVec {
     }
 }
 
-pub fn based_check(a: u64) -> bool {
-  a < PRIME
+impl core::ops::Div for Belt {
+    type Output = Belt;
+    
+    fn div(self, rhs: Belt) -> Belt {
+        Belt(bmul(self.0, binv(rhs.0)))
+    }
+}
+
+impl Belt {
+    pub fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+    
+    pub fn zero() -> Self {
+        Belt(0)
+    }
+    
+    pub fn one() -> Self {
+        Belt(1)
+    }
+}
+
+impl Add for Belt {
+  type Output = Belt;
+  
+  fn add(self, rhs: Belt) -> Belt {
+      Belt(badd(self.0, rhs.0))
+  }
+}
+
+impl Sub for Belt {
+  type Output = Belt;
+  
+  fn sub(self, rhs: Belt) -> Belt {
+      Belt(bsub(self.0, rhs.0))
+  }
+}
+
+impl Mul for Belt {
+  type Output = Belt;
+  
+  fn mul(self, rhs: Belt) -> Belt {
+      Belt(bmul(self.0, rhs.0))
+  }
+}
+
+impl Neg for Belt {
+  type Output = Belt;
+  
+  fn neg(self) -> Belt {
+      Belt(bneg(self.0))
+  }
+}
+
+impl Belt {
+  pub fn inv(self) -> Belt {
+      Belt(binv(self.0))
+  }
 }

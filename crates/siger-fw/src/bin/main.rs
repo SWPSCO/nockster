@@ -182,17 +182,27 @@ fn handle_request_v1(req: &Request) -> Response {
           match derive_child_sk_from_seed_store(path) {
               Ok(sk) => {
                   let pk = cheetah::cheetah_pub_from_sk(sk);
-                  let hash = Hash { values: *txid5 };
+                  let hash = cheetah::Hash { values: *txid5 };
                   let (e, s) = cheetah::schnorr_sign_txid(sk, pk, hash);
                   Response::OkCheetahSig { chal: e.values, sig: s.values }
               }
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
       }
-
       Request::Health => {
-          // TODO sign fixed digest with master key (or m/44'/0'/0'/0/0) and return short code
-          Response::HealthOk
+          // sign well-known digest with m/44'/0'/0'/0/0
+          let path = pathmod::Path::from_iter([0x8000002c, 0x80000000, 0x80000000, 0, 0].into_iter());
+          let digest32 = [0u8; 32];
+          match derive_signing_key(&path) {
+              Ok(sk) => {
+                  let mut sig: Signature = k256::ecdsa::signature::hazmat::PrehashSigner::sign_prehash(&sk, &digest32).unwrap();
+                  if let Some(norm) = sig.normalize_s() { sig = norm; }
+                  let mut out = [0u8; 64];
+                  out.copy_from_slice(&sig.to_bytes());
+                  Response::OkSig { sig64: out }
+              }
+              Err(_) => Response::Err { code: ERR_NO_SEED },
+          }
       }
   }
 }

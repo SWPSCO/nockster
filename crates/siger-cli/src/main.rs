@@ -140,6 +140,28 @@ fn main() -> Result<()> {
       println!("xpub: {xpub}");
   }
 
+  let txid5 = [1u64, 2, 3, 4, 5];
+
+  // cheetah demo
+  // reuse the same path as ECDSA demo
+  let path = vec![0x8000002c, 0x80000000, 0x80000000, 0, 0];
+
+  // GetCheetahPub
+  let req_pub = Msg { v: PROTO_V1, id: 0x5000, msg: Request::GetCheetahPub { path: path.clone() } };
+  let r_pub: Msg<Response> = round_trip(&mut sp, &req_pub)?;
+  if let Response::OkCheetahPub { x, y } = r_pub.msg {
+      println!("Cheetah pub X={x:?}");
+      println!("Cheetah pub Y={y:?}");
+  }
+
+  // SignTxId
+  let req_sig = Msg { v: PROTO_V1, id: 0x5001, msg: Request::SignTxId { path, txid5 } };
+  let r_sig: Msg<Response> = round_trip(&mut sp, &req_sig)?;
+  if let Response::OkCheetahSig { chal, sig } = r_sig.msg {
+      println!("Cheetah chal (e): {:x?}", chal);
+      println!("Cheetah sig  (s): {:x?}", sig);
+  }
+
   Ok(())
 }
 

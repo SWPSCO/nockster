@@ -6,6 +6,33 @@ use sha2::{Sha256, Sha512};
 
 use crate::math::math::{Belt, tip5_permute, bpegcd};
 
+
+// ---- Constants --------------------------------------------------------------
+
+const F6_ZERO: F6lt = F6lt([Belt(0); 6]);
+const F6_ONE:  F6lt = F6lt([Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
+
+const GX: F6lt = F6lt([
+    Belt(2_754_435_735_642_750_112), Belt(1_644_450_330_024_117_627), Belt(10_514_417_644_467_316_420),
+    Belt(14_161_929_407_758_026_907), Belt(14_987_836_057_278_945_216), Belt(6_227_780_353_604_379_289),
+]);
+const GY: F6lt = F6lt([
+    Belt(9_410_740_712_825_754_944), Belt(6_042_221_554_322_127_113), Belt(3_212_109_399_280_097_325),
+    Belt(12_822_852_497_658_382_218), Belt(8_300_084_201_729_938_365), Belt(8_030_207_336_092_068_342),
+]);
+
+/// Domain tag for the seed
+const MASTER_KEY_TAG: &[u8] = b"Nockchain seed";
+
+/// Group order n for Cheetah as big-endian bytes.
+const GROUP_ORDER_BE: [u8; 32] = [
+    0x7a, 0xf2, 0x59, 0x9b, 0x3b, 0x3f, 0x22, 0xd0, 0x56, 0x3f, 0xbf, 0x0f, 0x99, 0x0a, 0x37, 0xb5,
+    0x32, 0x7a, 0xa7, 0x23, 0x30, 0x15, 0x77, 0x22, 0xd4, 0x43, 0x62, 0x3e, 0xae, 0xd4, 0xac, 0xcf,
+];
+
+const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
+const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hash {
     pub values: [u64; 5],
@@ -30,15 +57,6 @@ struct CheetahPoint {
 // ---- SLIP master/child derivation ---------------------------------
 
 type HmacSha512 = Hmac<Sha512>;
-
-/// Domain tag for the seed (matches the host stack)
-const MASTER_KEY_TAG: &[u8] = b"Nockchain seed";
-
-/// Group order n for Cheetah as big-endian bytes.
-const GROUP_ORDER_BE: [u8; 32] = [
-    0x7a, 0xf2, 0x59, 0x9b, 0x3b, 0x3f, 0x22, 0xd0, 0x56, 0x3f, 0xbf, 0x0f, 0x99, 0x0a, 0x37, 0xb5,
-    0x32, 0x7a, 0xa7, 0x23, 0x30, 0x15, 0x77, 0x22, 0xd4, 0x43, 0x62, 0x3e, 0xae, 0xd4, 0xac, 0xcf,
-];
 
 #[inline]
 fn is_zero32(x: &[u8; 32]) -> bool {
@@ -168,7 +186,7 @@ fn hmac_split_512(key: &[u8], data: &[u8]) -> ([u8; 32], [u8; 32]) {
 
 /// Create master (sk, chain_code) from a seed.
 pub fn master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
-    // Loop until left is 0 < left < n (rare to loop)
+    // Loop until left is 0 < left < n
     let mut sk = [0u8; 32];
     let mut cc = [0u8; 32];
     let mut i = 0u8;
@@ -205,7 +223,7 @@ fn ser_a_pt(pt: &([u64; 6], [u64; 6])) -> [u8; 96] {
   out
 }
 
-// ---- Deterministic k (RFC6979-style) ---------------------------------------
+// Deterministic k (RFC6979)
 
 fn rfc6979_k(sk_be: &[u8; 32], personalization: &[u8]) -> [u8; 32] {
     // k = HMAC-SHA256(sk, personalization) mod n, reject 0
@@ -219,8 +237,7 @@ fn rfc6979_k(sk_be: &[u8; 32], personalization: &[u8]) -> [u8; 32] {
     if is_zero32(&k) { [1u8; 32] } else { k }
 }
 
-// ---- TIP-5 hashing helpers --------------------------------------------------
-
+// TIP5 helpers
 const RATE: usize = 8;            // 8 x u64 words absorbed per block
 const DIGEST_LENGTH: usize = 5;   // 5 x u64 output
 
@@ -250,9 +267,7 @@ fn pack_point_words(pt: &([u64; 6], [u64; 6])) -> [u64; 12] {
 // Turn 40-byte (5 words) big-endian into hex ASCII for ibig-less mod; but we
 // already reduce via byte math, so we just keep it as bytes.
 
-// ---- Curve math over F_{p^6} (ported, uses Belt) ---------------------------
-// (Functions: add/sub/neg/mul/square/inv/div; point add/double; scalar mul)
-
+// Curve math over F_{p^6}
 // Field helpers
 #[inline] fn f6_add(a: &F6lt, b: &F6lt) -> F6lt {
     F6lt([
@@ -283,12 +298,11 @@ fn pack_point_words(pt: &([u64; 6], [u64; 6])) -> [u64; 12] {
 #[inline] fn f6_square(a: &F6lt) -> F6lt { f6_mul(a, a) }
 
 fn f6_inv(a: &F6lt) -> F6lt {
-    // Inverse via extended GCD in the tower (ported; depends on zkvm_jetpack math ops)
+    // Inverse via extended GCD in the tower (ported, depends on zkvm_jetpack math)
     // Zero has “inverse” zero by convention.
     if a.0.iter().all(|&x| x == Belt(0)) { return *a; }
 
     // Build polynomial for a and mod polynomial μ; run extended GCD; extract inverse.
-    // (This mirrors the original `signer.rs` version that uses bpegcd/bneg.)
     let mut u = [Belt(0); 7];
     u[..6].copy_from_slice(&a.0);
     let mu = [
@@ -309,7 +323,6 @@ fn f6_inv(a: &F6lt) -> F6lt {
 
 // Curve ops
 fn ch_add_unsafe(p: &CheetahPoint, q: &CheetahPoint) -> CheetahPoint {
-    // Standard EC add in this tower field
     let x1 = p.x; let y1 = p.y; let x2 = q.x; let y2 = q.y;
 
     if p.inf { return *q; }
@@ -350,7 +363,7 @@ fn ch_double(p: &CheetahPoint) -> CheetahPoint { ch_double_unsafe(p) }
 fn ch_scal_big(k_be: &[u8; 32], p: &CheetahPoint) -> CheetahPoint {
     let mut acc = A_ID;
     let mut base = *p;
-    // LSB-first bit walk: iterate over 256 bits (from least-significant).
+    // LSB-first bit walk: iterate over 256 bits from LSB
     for bit in 0..256 {
         let byte = k_be[31 - (bit / 8)];
         if ((byte >> (bit % 8)) & 1) == 1 {
@@ -361,8 +374,8 @@ fn ch_scal_big(k_be: &[u8; 32], p: &CheetahPoint) -> CheetahPoint {
     acc
 }
 
-// ---- Public Cheetah API -----------------------------------------------------
-
+// Public Cheetah API 
+//
 /// Compute affine (x,y) for the secret scalar `sk_be` (big-endian).
 pub fn cheetah_pub_from_sk(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
     let p = ch_scal_big(&sk_be, &G);
@@ -375,7 +388,7 @@ pub fn cheetah_pub_from_sk(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
     (x, y)
 }
 
-/// Schnorr-like signature tuple (challenge, response) over Cheetah.
+/// Schnorr signature (challenge, response) tuple over Cheetah
 /// - `sk_be`: 32-byte big-endian secret
 /// - `pk`:   affine pubkey ([x;6], [y;6]) from `cheetah_pub_from_sk`
 /// - `txid`: TIP-5 hash (5 words)
@@ -533,26 +546,9 @@ pub fn xpub_derive_child(parent: &XKey, i: u32) -> XKey {
     }
 }
 
-// ---- Constants --------------------------------------------------------------
-
-const F6_ZERO: F6lt = F6lt([Belt(0); 6]);
-const F6_ONE:  F6lt = F6lt([Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
-
-const GX: F6lt = F6lt([
-    Belt(2_754_435_735_642_750_112), Belt(1_644_450_330_024_117_627), Belt(10_514_417_644_467_316_420),
-    Belt(14_161_929_407_758_026_907), Belt(14_987_836_057_278_945_216), Belt(6_227_780_353_604_379_289),
-]);
-const GY: F6lt = F6lt([
-    Belt(9_410_740_712_825_754_944), Belt(6_042_221_554_322_127_113), Belt(3_212_109_399_280_097_325),
-    Belt(12_822_852_497_658_382_218), Belt(8_300_084_201_729_938_365), Belt(8_030_207_336_092_068_342),
-]);
-
-const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
-const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
-
 impl XKey {
-    /// Construct a master extended private key (depth=0, index=0).
-    /// Parent fingerprint for the master is 0x00000000 (per BIP32-style conv.)
+    /// Construct a master extended private key (depth=0, index=0)
+    /// Parent fingerprint for the master is 0x00000000
     pub fn from_master(sk: [u8; 32], chain_code: [u8; 32]) -> Self {
         let pk = cheetah_pub_from_sk(sk);
         XKey {

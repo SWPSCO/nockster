@@ -655,8 +655,7 @@ where
     T: NounDecode + NounEncode + DorTip + Clone + Debug + PartialEq,
 {
     /// Decode a node from noun recursively for NounDecode
-    fn node_from_noun<A: NounAllocator>(
-        alloc: &mut A,
+    fn node_from_noun(
         noun: &Noun
     ) -> Result<Option<Box<Node<T>>>, NounDecodeError> {
         // Check if it's empty (~ = 0)
@@ -669,15 +668,15 @@ where
             .map_err(|_| NounDecodeError::ExpectedCell)?;
         
         // First element is the value
-        let value = T::from_noun(alloc, &cell.head())?;
+        let value = T::from_noun(&cell.head())?;
         
         // Second element should be a cell [left right]
         let tail_cell = cell.tail().as_cell()
             .map_err(|_| NounDecodeError::ExpectedCell)?;
         
         // Recursively decode left and right subtrees
-        let left = Self::node_from_noun(alloc, &tail_cell.head())?;
-        let right = Self::node_from_noun(alloc, &tail_cell.tail())?;
+        let left = Self::node_from_noun(&tail_cell.head())?;
+        let right = Self::node_from_noun(&tail_cell.tail())?;
         
         Ok(Some(Box::new(Node {
             value,
@@ -691,9 +690,9 @@ impl<T> NounDecode for ZSet<T>
 where
     T: NounDecode + NounEncode + DorTip + Clone + Debug + PartialEq,
 {
-    fn from_noun<A: NounAllocator>(alloc: &mut A, noun: &Noun) -> Result<Self, NounDecodeError> {
+    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
         // Decode from tree structure matching Hoon's z-set
-        let root = Self::node_from_noun(alloc, noun)?;
+        let root = Self::node_from_noun(noun)?;
         Ok(ZSet { root })
     }
 }

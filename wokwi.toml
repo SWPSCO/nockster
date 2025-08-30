@@ -1,4 +1,4 @@
 [wokwi]
 version = 1
-firmware = "target/riscv32imc-esp-espidf/debug/main"
-elf = "target/riscv32imc-esp-espidf/debug/main"
+firmware = "target/xtensa-esp32s3-none-elf/release/siger-fw"
+elf = "target/xtensa-esp32s3-none-elf/release/siger-fw"

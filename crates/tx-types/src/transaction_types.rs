@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use nockapp::Noun;
 use nockapp::noun::slab::NounSlab;
 use nockapp::noun::AtomExt;
@@ -290,8 +291,8 @@ impl NounEncode for Timelock {
 }
 
 impl NounDecode for Timelock {
-    fn from_noun<A: NounAllocator>(allocator: &mut A, noun: &Noun) -> Result<Self, NounDecodeError> {
-        let intent = TimelockIntent::from_noun(allocator, noun)?;
+    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
+        let intent = TimelockIntent::from_noun(noun)?;
         Timelock::new(intent)
             .map_err(|e| NounDecodeError::Custom(e))
     }
@@ -349,7 +350,7 @@ impl NounEncode for F6LT {
 }
 
 impl NounDecode for F6LT {
-    fn from_noun<A: NounAllocator>(_: &mut A, noun: &Noun) -> Result<Self, NounDecodeError> {
+    fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
         // Extract 6 values from nested cell structure
         let mut values = [0u64; 6];
         let mut current = *noun;
@@ -1013,8 +1014,158 @@ pub struct RawTransaction {
     pub total_fees: Coins,              // sum of all fees paid by all inputs
 }
 
+impl RawTransaction {
+    /// `+.raw-tx` triple:
+    /// [inputs timelock_range total_fees]
+    #[inline(always)]
+    pub fn tail_hashable(&self) -> Hashable {
+        Hashable::triple(
+            self.inputs.to_hashable(),
+            self.timelock_range.to_hashable(),
+            Hashable::leaf_u64(self.total_fees.value),
+        )
+    }
+
+    /// TIP-5 of +.raw-tx
+    #[inline(always)]
+    pub fn compute_id(&self) -> Hash {
+        hash_hashable(&self.tail_hashable())
+    }
+
+    /// check that `self.id` matches the canonical hash
+    #[inline(always)]
+    pub fn is_canonical(&self) -> bool {
+        self.id == self.compute_id()
+    }
+
+    /// recompute and overwrite `self.id` from current fields
+    #[inline(always)]
+    pub fn recompute_id_mut(&mut self) {
+        self.id = self.compute_id();
+    }
+
+    /// construct a RawTransaction and fill `id` correctly
+    #[inline(always)]
+    pub fn new(inputs: Inputs, timelock_range: TimelockRange, total_fees: Coins) -> Self {
+        let mut tx = RawTransaction {
+            id: Hash { values: [0; 5] }, // placeholder
+            inputs,
+            timelock_range,
+            total_fees,
+        };
+        tx.recompute_id_mut();
+        tx
+    }
+
+    #[inline(always)]
+    pub fn with_inputs(mut self, inputs: Inputs) -> Self {
+        self.inputs = inputs;
+        self.recompute_id_mut();
+        self
+    }
+
+    #[inline(always)]
+    pub fn with_timelock_range(mut self, range: TimelockRange) -> Self {
+        self.timelock_range = range;
+        self.recompute_id_mut();
+        self
+    }
+
+    #[inline(always)]
+    pub fn with_total_fees(mut self, fees: Coins) -> Self {
+        self.total_fees = fees;
+        self.recompute_id_mut();
+        self
+    }
+
+    #[inline(always)]
+    pub fn set_inputs(&mut self, inputs: Inputs) {
+        self.inputs = inputs;
+        self.recompute_id_mut();
+    }
+
+    #[inline(always)]
+    pub fn set_timelock_range(&mut self, range: TimelockRange) {
+        self.timelock_range = range;
+        self.recompute_id_mut();
+    }
+
+    #[inline(always)]
+    pub fn set_total_fees(&mut self, fees: Coins) {
+        self.total_fees = fees;
+        self.recompute_id_mut();
+    }
+
+    /// in-place transform to `inputs` and keep `id` correct
+    #[inline(always)]
+    pub fn map_inputs<F: FnOnce(&mut Inputs)>(&mut self, f: F) {
+        f(&mut self.inputs);
+        self.recompute_id_mut();
+    }
+
+    pub fn from_noun<A: nockvm::noun::NounAllocator>(
+        alloc: &mut A,
+        noun: &nockvm::noun::Noun,
+    ) -> Result<Self, noun_serde::NounDecodeError> {
+        <Self as noun_serde::NounDecode>::from_noun(noun)
+    }
+
+    /// encode just the tail `[inputs timelock_range total_fees]` as a Noun
+    #[inline(always)]
+    pub fn tail_noun<A: NounAllocator>(&self, alloc: &mut A) -> Noun {
+        let a = self.inputs.to_noun(alloc);
+        let b = self.timelock_range.to_noun(alloc);
+        let c = self.total_fees.to_noun(alloc);
+        // [a b c] = [a [b c]]
+        let bc = T(alloc, &[b, c]);
+        T(alloc, &[a, bc])
+    }
+
+    pub fn required_signers(&self) -> BTreeMap<NName, RequiredSigners> {
+        let mut out = BTreeMap::<NName, RequiredSigners>::new();
+
+        // Inputs is a ZMap<NName, Input>. We iterate key->value pairs.
+        for (name, input) in self.inputs.p.iter_kv() {
+            let lock = &input.note.lock;
+            let m = lock.m;
+
+            // Collect candidates in deterministic order
+            let mut set = BTreeSet::<SchnorrPubkey>::new();
+            for pk in lock.pubkeys.iter() {
+                set.insert(pk.clone());
+            }
+            let candidates: Vec<SchnorrPubkey> = set.into_iter().collect();
+
+            out.insert(
+                name.clone(),
+                RequiredSigners { m, candidates }
+            );
+        }
+
+        out
+    }
+
+    /// Flatten all candidate pubkeys across inputs (useful to pre-ask the device
+    /// for which keys it has / which derivation paths to use).
+    pub fn all_candidate_pubkeys(&self) -> BTreeSet<SchnorrPubkey> {
+        let mut s = BTreeSet::new();
+        for (_name, input) in self.inputs.p.iter_kv() {
+            for pk in input.note.lock.pubkeys.iter() {
+                s.insert(pk.clone());
+            }
+        }
+        s
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RequiredSigners {
+    pub m: u64,
+    pub candidates: Vec<SchnorrPubkey>, // all candidates for this input
+}
+
 impl NounDecode for T8 {
-    fn from_noun<A: NounAllocator>(_: &mut A, noun: &Noun) -> Result<Self, NounDecodeError> {
+    fn from_noun( noun: &Noun) -> Result<Self, NounDecodeError> {
         let mut ret: [u64; 8] = [0; 8];
         let mut cur = *noun;
         for i in 0..7 {
@@ -1317,7 +1468,7 @@ mod tests {
         println!("Transaction encoded: {:?}", FullDebugCell(&encoded.as_cell().unwrap()));
 
         // Test that we can decode it back
-        let decoded: Transaction = Transaction::from_noun(&mut stack, &encoded).unwrap();
+        let decoded: Transaction = Transaction::from_noun(&encoded).unwrap();
         println!("Transaction name: {}", decoded.name);
         println!("Number of inputs: {}", decoded.p.p.wyt());
     }

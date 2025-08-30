@@ -3,15 +3,27 @@ mod address;
 use address::*;
 use anyhow::{Context, Result, anyhow};
 use postcard::{from_bytes_cobs, to_slice};
-use std::{env, io::Read, io::Write, time::Duration, thread};
+use std::{env, io::Read, io::Write, time::Duration, thread, fmt::Debug};
 use siger_core::{Msg, Request, Response, PROTO_V1};
 use k256::{EncodedPoint};
 use sha2::{Digest, Sha256};
 use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 use bip39::{Language, Mnemonic};
 use num_integer::Integer;
+
 use tx_types::transaction_types::*;
-use tx_types::collections::ZMap;
+use tx_types::collections::{ZMap, ZSet, DorTip};
+use tx_types::transaction_types::Signature as TxSignature;
+use tx_types::RawTransaction;
+
+use nockvm::mem::NockStack;
+use nockvm::noun::{Atom, Noun};
+use nockvm::noun::IndirectAtom;
+use nockvm::serialization::cue;
+use nockapp::noun::slab::NounSlab;
+use noun_serde::{NounEncode};
+
+const NOCK_STACK_1KB: usize = 1 << 7; //1kb
 
 pub trait RW: Read + Write {}
 impl<T: Read + Write> RW for T {}
@@ -110,7 +122,7 @@ fn main() -> Result<()> {
       
       // Verify with uncompressed pubkey
       if let Response::OkPubkey { uncompressed } = &pubkey_resp.msg {
-          let ok = verify_sig(uncompressed, &digest32, sig64)?;
+          let ok = verify_sig(&uncompressed, &digest32, &sig64)?;
           println!("Verify (uncompressed): {}", ok);
       }
       
@@ -124,9 +136,9 @@ fn main() -> Result<()> {
       }
 
       if let Response::OkPubkeyCompressed { compressed } = &pubkey_comp_resp.msg {
-          let addr_p2pkh = p2pkh_address(compressed, true);
-          let addr_p2wpkh = p2wpkh_address(compressed, "bc");
-          let addr_p2tr = p2tr_address(compressed, "bc"); // note: for taproot you normally use a tweaked x-only key (BIP340); this uses the plain x-only as demo
+          let addr_p2pkh = p2pkh_address(&compressed, true);
+          let addr_p2wpkh = p2wpkh_address(&compressed, "bc");
+          let addr_p2tr = p2tr_address(&compressed, "bc"); // note: for taproot you normally use a tweaked x-only key (BIP340); this uses the plain x-only as demo
           println!("P2PKH:   {addr_p2pkh}");
           println!("P2WPKH:  {addr_p2wpkh}");
           println!("P2TR*:   {addr_p2tr} (demo; use tweaked key for real taproot)");
@@ -194,6 +206,15 @@ fn read_cobs_frame(sp: &mut dyn RW, max_len: usize) -> Result<Vec<u8>> {
     }
 }
 
+pub fn schnorr_from_cheetah(x: [u64;6], y: [u64;6]) -> SchnorrPubkey {
+    SchnorrPubkey {
+        x: F6LT { values: x },
+        y: F6LT { values: y },
+        inf: false,
+    }
+}
+
+
 pub fn round_trip(sp: &mut dyn RW, req: &Msg<Request>) -> Result<Msg<Response>> {
     let mut plain = [0u8; 256];
     let used = to_slice(req, &mut plain)?;
@@ -241,6 +262,98 @@ fn vk_from_response(resp: &Response) -> Result<VerifyingKey> {
   }
 }
 
+pub fn sign_draft_with_paths(
+    sp: &mut dyn RW,
+    draft_path: &str,
+    signer_paths: Vec<Vec<u32>>, // derivation paths
+) -> Result<RawTransaction> {
+    let bytes = std::fs::read(draft_path).with_context(|| format!("read {}", draft_path))?;
+    let mut stack = NockStack::new(8 << 20, 0);
+    let mut slab: NounSlab = NounSlab::new();
+    let jam_atom: Atom = unsafe {
+        IndirectAtom::new_raw_bytes_ref(&mut slab, &bytes).normalize_as_atom()
+    };
+    let noun: Noun = cue(&mut stack, jam_atom)
+        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
+    let mut raw: RawTransaction = RawTransaction::from_noun(&mut stack, &noun)
+        .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
+
+    let txid = &raw.compute_id();
+
+    // 3) for each signer path, derive device pubkey (Cheetah)
+    //    cache pk per path to avoid re-querying for every input
+    let mut path_pks: Vec<(Vec<u32>, SchnorrPubkey)> = Vec::new();
+    for path in signer_paths.iter() {
+        let req = Msg { v: PROTO_V1, id: 0x4100, msg: Request::GetCheetahPub { path: path.clone() } };
+        let resp: Msg<Response> = round_trip(sp, &req)?;
+        let pk = match resp.msg {
+            Response::OkCheetahPub { x, y } => schnorr_from_cheetah(x, y),
+            Response::Err { code } => return Err(anyhow!("GetCheetahPub failed: code {}", code)),
+            _ => return Err(anyhow!("unexpected response to GetCheetahPub")),
+        };
+        path_pks.push((path.clone(), pk));
+    }
+
+    // 4) walk inputs and add signatures
+    //    ZMap API: rebuild or update in place depending on your concrete API.
+    let mut new_inputs = ZMap::new();
+    for (name, mut input) in raw.inputs.p.tap() {
+        let lock_pks = &input.note.lock.pubkeys; // ZSet<SchnorrPubkey>
+
+        // create or reuse the signature map
+        let mut sig_map: ZMap<SchnorrPubkey, SchnorrSignature> =
+            input.spend.signature.as_ref().map(|s| s.map.clone()).unwrap_or_else(ZMap::new);
+
+        // try each path’s pk against this input’s lock set
+        for (path, pk_dev) in path_pks.iter() {
+            if !zset_contains(lock_pks, pk_dev) {
+                continue;
+            }
+
+            // Ask device to sign the TIP-5 txid
+            // (Option A: simple API without pubkey echo)
+            let req = Msg {
+                v: PROTO_V1, id: 0x4200,
+                msg: Request::SignTxId { path: path.clone(), txid5: txid.values },
+            };
+            let resp: Msg<Response> = round_trip(sp, &req)?;
+            let (chal, sig) = match resp.msg {
+                Response::OkCheetahSig { chal, sig } => (chal, sig),
+                Response::Err { code } => return Err(anyhow!("SignTxId failed: code {}", code)),
+                _ => return Err(anyhow!("unexpected response to SignTxId")),
+            };
+
+            let schnorr_sig = SchnorrSignature {
+                chal: Chal { values: T8 { values: chal } },
+                sig:  Sig  { values: T8 { values: sig  } },
+            };
+
+            sig_map.put(pk_dev.clone(), schnorr_sig);
+        }
+
+        // if any sigs were added, write back
+        if sig_map.wyt() > 0 {
+            input.spend.signature = Some(TxSignature { map: sig_map });
+        }
+        new_inputs.put(name, input);
+    }
+
+    raw.inputs = Inputs { p: new_inputs };
+
+    Ok(raw)
+}
+
+fn zset_contains_pubkey(zs: &ZSet<SchnorrPubkey>, x: &SchnorrPubkey) -> bool {
+    // SchnorrPubkey already derives Debug + NounEncode in your code
+    zs.iter().any(|t: &SchnorrPubkey| t == x)
+}
+
+fn zset_contains<T>(zs: &ZSet<T>, x: &T) -> bool
+where
+    T: NounEncode + Clone + Debug + PartialEq + Ord,
+{
+    zs.iter().any(|t| t == x)
+}
 
 /// Derive the 64-byte BIP39 seed from a mnemonic + optional passphrase
 pub fn seed64_from_mnemonic(mnemonic: &str, passphrase: &str) -> Result<[u8;64]> {
@@ -328,4 +441,25 @@ fn get_fingerprint(sp: &mut dyn RW) -> Result<[u8;4]> {
       Response::Err { code } => Err(anyhow!("GetFingerprint failed with code {}", code)),
       _ => Err(anyhow!("unexpected response to GetFingerprint")),
   }
+}
+
+fn raw_tx_from_jam_bytes(bytes: &[u8]) -> anyhow::Result<RawTransaction> {
+    let mut stack = NockStack::new(8 << 20, 0);
+    let mut slab: NounSlab = NounSlab::new();
+    let jam_atom: Atom = unsafe {
+        IndirectAtom::new_raw_bytes_ref(&mut slab, &bytes).normalize_as_atom()
+    };
+
+    let noun: Noun = cue(&mut stack, jam_atom)
+        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
+
+
+    let tx = RawTransaction::from_noun(&mut stack, &noun)
+        .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
+    Ok(tx)
+}
+
+pub fn raw_tx_from_draft_file(path: &str) -> anyhow::Result<RawTransaction> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {path}"))?;
+    raw_tx_from_jam_bytes(&bytes)
 }

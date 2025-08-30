@@ -63,15 +63,15 @@ proc-macro2 = "1.0.95"
 either = "1.13"
 
 # nockchain
-nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockchain" }
-nockvm = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockvm" }
-nockapp = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockapp" }
-zkvm-jetpack = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "zkvm-jetpack" }
-nockvm_macros = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockvm_macros" }
-nockchain-libp2p-io = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "nockchain-libp2p-io" }
-kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "kernels" }
-noun-serde-derive = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "noun-serde-derive" }
-noun-serde = { git = "https://github.com/swpsco/nockchain.git", rev = "c53fe9859bbf31fb8a18a830e1a7268bef80fcd4", package = "noun-serde" }
+nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
+nockvm = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockvm" }
+nockapp = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockapp" }
+zkvm-jetpack = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "zkvm-jetpack" }
+nockvm_macros = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockvm_macros" }
+nockchain-libp2p-io = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain-libp2p-io" }
+kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
+noun-serde-derive = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "noun-serde-derive" }
+noun-serde = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "noun-serde" }
 ibig = { git = "https://github.com/SWPSCO/nockchain.git", rev = "c88496985c83218ba3100e07031d56371bb02028", package = "ibig" }
 
 [workspace.lints.rust]

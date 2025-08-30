@@ -1580,6 +1580,42 @@ where
         let children = T(alloc, &[left_noun, right_noun]);
         T(alloc, &[pair, children])
     }
+
+    pub fn iter_kv(&self) -> impl Iterator<Item = (&K, &V)> {
+        // Use tap() but return references instead of clones
+        struct ZMapIter<'a, K, V> {
+            items: Vec<(&'a K, &'a V)>,
+            index: usize,
+        }
+        
+        impl<'a, K, V> Iterator for ZMapIter<'a, K, V> {
+            type Item = (&'a K, &'a V);
+            
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.index < self.items.len() {
+                    let item = self.items[self.index];
+                    self.index += 1;
+                    Some(item)
+                } else {
+                    None
+                }
+            }
+        }
+        
+        let mut items = Vec::new();
+        Self::collect_refs(&self.root, &mut items);
+        
+        ZMapIter { items, index: 0 }
+    }
+    
+    /// Helper to collect references in order
+    fn collect_refs<'a>(node: &'a Option<Box<Node<K, V>>>, result: &mut Vec<(&'a K, &'a V)>) {
+        if let Some(n) = node {
+            Self::collect_refs(&n.left, result);
+            result.push((&n.key, &n.value));
+            Self::collect_refs(&n.right, result);
+        }
+    }
 }
 
 // Implement NounDecode for ZMap
@@ -1588,8 +1624,7 @@ where
     K: noun_serde::NounDecode + DorTip + Clone + NounEncode + Debug,
     V: noun_serde::NounDecode + Clone + Debug,
 {
-    fn from_noun<A: nockvm::noun::NounAllocator>(
-        alloc: &mut A,
+    fn from_noun(
         noun: &nockvm::noun::Noun,
     ) -> Result<Self, noun_serde::NounDecodeError> {
         use nockvm::noun::Noun;
@@ -1605,7 +1640,7 @@ where
         
         // Decode the node recursively
         let mut map = ZMap::new();
-        Self::decode_node_recursive(alloc, noun, &mut map)?;
+        Self::decode_node_recursive(noun, &mut map)?;
         Ok(map)
     }
 }
@@ -1615,8 +1650,7 @@ where
     K: noun_serde::NounDecode + DorTip + Clone + NounEncode + Debug,
     V: noun_serde::NounDecode + Clone + Debug,
 {
-    fn decode_node_recursive<A: nockvm::noun::NounAllocator>(
-        alloc: &mut A,
+    fn decode_node_recursive(
         noun: &nockvm::noun::Noun,
         map: &mut ZMap<K, V>,
     ) -> Result<(), noun_serde::NounDecodeError> {
@@ -1633,8 +1667,8 @@ where
         let pair_cell = cell.head().as_cell()
             .map_err(|_| noun_serde::NounDecodeError::ExpectedCell)?;
         
-        let key = K::from_noun(alloc, &pair_cell.head())?;
-        let value = V::from_noun(alloc, &pair_cell.tail())?;
+        let key = K::from_noun(&pair_cell.head())?;
+        let value = V::from_noun(&pair_cell.tail())?;
         
         // Insert the key-value pair
         map.put(key, value);
@@ -1644,8 +1678,8 @@ where
             .map_err(|_| noun_serde::NounDecodeError::ExpectedCell)?;
         
         // Recursively decode left and right subtrees
-        Self::decode_node_recursive(alloc, &children_cell.head(), map)?;
-        Self::decode_node_recursive(alloc, &children_cell.tail(), map)?;
+        Self::decode_node_recursive(&children_cell.head(), map)?;
+        Self::decode_node_recursive(&children_cell.tail(), map)?;
         
         Ok(())
     }

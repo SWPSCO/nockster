@@ -189,6 +189,23 @@ fn handle_request_v1(req: &Request) -> Response {
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
       }
+
+      Request::SignTxIdFor { path, txid5, pubkey } => {
+          match derive_child_sk_from_seed_store(path) {
+              Ok(sk) => {
+                  let pk_dev = cheetah::cheetah_pub_from_sk(sk);
+                  if &pk_dev != pubkey {
+                      Response::Err { code: ERR_WRONG_PUBKEY }
+                  } else {
+                      let hash = Hash { values: *txid5 };
+                      let (e, s) = cheetah::schnorr_sign_txid(sk, *pubkey, hash);
+                      Response::OkCheetahSig { chal: e.values, sig: s.values }
+                  }
+              }
+              Err(_) => Response::Err { code: ERR_NO_SEED },
+          }
+      }
+
       Request::Health => {
           // sign well-known digest with m/44'/0'/0'/0/0
           let path = pathmod::Path::from_iter([0x8000002c, 0x80000000, 0x80000000, 0, 0].into_iter());

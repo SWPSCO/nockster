@@ -16,6 +16,7 @@ pub use cheetah::{
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
+use crate::alloc_path::Path;
 
 pub enum Curve { Secp256k1 }
 
@@ -38,6 +39,7 @@ pub const ERR_OVERFLOW: u16            = 102;
 pub const ERR_ENCODE_TOO_BIG: u16      = 103;
 pub const ERR_UNSUPPORTED_VERSION: u16 = 110;
 pub const ERR_NO_SEED: u16             = 120;
+pub const ERR_WRONG_PUBKEY: u16        = 0x0103;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Msg<T> {
@@ -75,6 +77,7 @@ pub enum Request {
     SignDigest { path: alloc_path::Path, digest32: [u8; 32] },
     GetCheetahPub { path: alloc_path::Path },
     SignTxId { path: alloc_path::Path, txid5: [u64; 5] },
+    SignTxIdFor { path: Path, txid5: [u64;5], pubkey: ([u64;6],[u64;6]) },
     GetXpub { path: alloc_path::Path },
 }
 

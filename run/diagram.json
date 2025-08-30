@@ -5,5 +5,10 @@
       "type": "board-esp32-s3-devkitc-1",
       "id": "esp32s3"
     }
-  ]
+  ],
+  "connections": [],
+  "serialMonitor": {
+    "display": "terminal",
+    "newline": "lf"
+  }
 }

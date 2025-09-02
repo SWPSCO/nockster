@@ -66,7 +66,7 @@ pub struct Xpub {
 }
 
 // siger-core
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FragKind {
     SetSeed,
     SignDraft,

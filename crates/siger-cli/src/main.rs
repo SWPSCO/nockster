@@ -3,20 +3,23 @@
 
 extern crate alloc;
 
+use std::path::Path;
 use alloc::fmt::Debug;
 use anyhow::{anyhow, Context, Result};
+use bytes::Bytes;
 use clap::{Parser, Subcommand};
 use cobs;
 use hex;
 use postcard::{from_bytes_cobs, to_allocvec};
 use serialport;
-use std::{io::{Read, Write}, time::Duration};
+use std::{fs, io::{Read, Write}, time::Duration};
 use siger_core::{Msg, Request, Response, PROTO_V1, Frame, FragKind, alloc_path as pathmod};
 
+use nockapp::noun::slab::NounSlab;
+use noun_serde::{NounEncode, NounDecode, NounDecodeError};
 use nockvm::mem::NockStack;
-use nockvm::noun::{Atom, IndirectAtom, Noun};
+use nockvm::noun::{Atom, IndirectAtom, Noun, D};
 use nockvm::serialization::cue;
-use noun_serde::NounEncode;
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
@@ -35,7 +38,7 @@ struct Cli {
 enum Cmd {
     /// End-to-end self test (seed -> child key -> self-check signatures)
     Test {
-        #[arg(long, default_value = "/dev/ttyACM0")]
+        #[arg(long, required = true)]
         port: String,
         #[arg(long, default_value_t = 115200)]
         baud: u32,
@@ -49,14 +52,37 @@ enum Cmd {
 
     /// Get basic device info / capabilities
     GetInfo {
-        #[arg(long, default_value = "/dev/ttyACM0")] port: String,
+        #[arg(long, required = true)] port: String,
         #[arg(long, default_value_t = 115200)] baud: u32,
     },
 
     /// Device health (the firmware’s well-known test)
     Health {
-        #[arg(long, default_value = "/dev/ttyACM0")] port: String,
+        #[arg(long, required = true)] port: String,
         #[arg(long, default_value_t = 115200)] baud: u32,
+    },
+
+    /// Set the seed (64-byte hex) using inbound fragments
+    Seed {
+        #[arg(long, required = true)] port: String,
+        #[arg(long, default_value_t = 115200)] baud: u32,
+        #[arg(long, required = true)] seed_hex: String,
+    },
+
+    /// Parse a .draft (jam) and print inputs + signing plans
+    Plan {
+        #[arg(long, required = true)] port: String,     // required by design
+        #[arg(long, default_value_t = 115200)] baud: u32,
+        #[arg(long, required = true)] draft: String,
+    },
+
+    /// Send a .draft (jam) to device as FragKind::SignDraft and receive a blob back
+    SignDraft {
+        #[arg(long, required = true)] port: String,
+        #[arg(long, default_value_t = 115200)] baud: u32,
+        #[arg(long, required = true)] draft: String,
+        /// Where to write the returned blob (defaults to stdout hex if omitted)
+        #[arg(long)] out: Option<String>,
     },
 }
 
@@ -64,8 +90,11 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Test { port, baud, seed_hex, path } => cmd_test(&port, baud, seed_hex.as_deref(), &path),
-        Cmd::GetInfo { port, baud } => cmd_getinfo(&port, baud),
-        Cmd::Health { port, baud } => cmd_health(&port, baud),
+        Cmd::GetInfo { port, baud }              => cmd_getinfo(&port, baud),
+        Cmd::Health { port, baud }               => cmd_health(&port, baud),
+        Cmd::Seed { port, baud, seed_hex }       => cmd_seed(&port, baud, &seed_hex),
+        Cmd::Plan { port, baud, draft }          => cmd_plan(&port, baud, &draft),
+        Cmd::SignDraft { port, baud, draft, out }=> cmd_sign_draft(&port, baud, &draft, out.as_deref()),
     }
 }
 
@@ -87,7 +116,7 @@ fn send_call(sp: &mut dyn serialport::SerialPort, id: u32, req: Request) -> anyh
 fn send_blob(sp: &mut dyn serialport::SerialPort, xid: u16, kind: FragKind, bytes: &[u8]) -> anyhow::Result<()> {
     let total = bytes.len() as u32;
     let _: Response = send_recv(sp, 0xF000_0000 | xid as u32, Frame::FragBegin { id: xid, total_len: total, kind })?;
-    const CHUNK: usize = 200; // 256b budget
+    const CHUNK: usize = 200; // fits in 256B postcard frame
     let mut off = 0u32;
     while (off as usize) < bytes.len() {
         let end = core::cmp::min(bytes.len(), off as usize + CHUNK);
@@ -99,6 +128,44 @@ fn send_blob(sp: &mut dyn serialport::SerialPort, xid: u16, kind: FragKind, byte
         off = end as u32;
     }
     Ok(())
+}
+
+fn send_blob_and_recv_outbound(
+    sp: &mut dyn serialport::SerialPort,
+    xid: u16,
+    kind: FragKind,
+    bytes: &[u8],
+) -> Result<Vec<u8>> {
+    // Inbound frag (host -> device)
+    send_blob(sp, xid, kind, bytes)?;
+
+    // Outbound (device -> host) begins with Response::FragBegin
+    let rb: Msg<Response> = recv_msg(sp, 8 * 1024)?;
+    let (msg_id, total, kind2, frag_id) = match rb.msg {
+        Response::FragBegin { id, total_len, kind } => (rb.id, total_len, kind, id),
+        other => return Err(anyhow!("expected outbound FragBegin, got {:?}", other)),
+    };
+    if kind2 != kind { return Err(anyhow!("outbound kind mismatch")); }
+
+    // Collect parts
+    let mut out = Vec::with_capacity(total as usize);
+    let mut expect_off = 0u32;
+    loop {
+        let rp: Msg<Response> = recv_msg(sp, 8 * 1024)?;
+        if rp.id != msg_id { return Err(anyhow!("msg id changed mid-stream")); }
+        match rp.msg {
+            Response::FragPart { id, offset, chunk, last } => {
+                if id != frag_id { return Err(anyhow!("frag id mismatch")); }
+                if offset != expect_off { return Err(anyhow!("offset mismatch")); }
+                out.extend_from_slice(&chunk);
+                expect_off += chunk.len() as u32;
+                if last { break; }
+            }
+            other => return Err(anyhow!("expected FragPart, got {:?}", other)),
+        }
+    }
+    if out.len() as u32 != total { return Err(anyhow!("truncated outbound frag")); }
+    Ok(out)
 }
 
 fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
@@ -114,7 +181,7 @@ fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
     framed.push(0);
     sp.write_all(&framed)?;
 
-    let mut rx: Vec<u8> = Vec::with_capacity(256);
+    let mut rx: Vec<u8> = Vec::with_capacity(512);
     loop {
         let mut b = [0u8; 1];
         if sp.read_exact(&mut b).is_err() { continue; }
@@ -124,6 +191,28 @@ fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
     let resp: Msg<R> = from_bytes_cobs(&mut rx)?;
     anyhow::ensure!(resp.v == PROTO_V1, "bad protocol version");
     Ok(resp.msg)
+}
+
+// Read a single Msg<Response> from the wire (COBS-delimited)
+fn recv_msg(sp: &mut dyn serialport::SerialPort, max_len: usize) -> Result<Msg<Response>> {
+    let mut rx: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let mut b = [0u8; 1];
+        match sp.read_exact(&mut b) {
+            Ok(()) => {
+                rx.push(b[0]);
+                if rx.len() > max_len {
+                    return Err(anyhow!("frame too large (> {} bytes)", max_len));
+                }
+                if b[0] == 0 { break; }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let resp: Msg<Response> = from_bytes_cobs(&mut rx)?;
+    anyhow::ensure!(resp.v == PROTO_V1, "bad protocol version");
+    Ok(resp)
 }
 
 // ---------- Subcommands ------------------------------------------------------
@@ -147,6 +236,57 @@ fn cmd_health(port: &str, baud: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn cmd_seed(port: &str, baud: u32, seed_hex: &str) -> anyhow::Result<()> {
+    let mut sp = open(port, baud)?;
+    let seed = parse_64(seed_hex)?;
+    let _ = send_blob_and_recv_outbound(&mut *sp, 0x42, FragKind::SetSeed, &seed)?; // device may echo via outbound frag; ignored
+    println!("seed: set ({} bytes via frag)", seed.len());
+    Ok(())
+}
+
+fn cmd_plan(_port: &str, _baud: u32, draft_path: &str) -> anyhow::Result<()> {
+    let raw: Transaction = load_jam_as(&draft_path)?;
+
+    // Summary based on your RawTransaction fields
+    let id_str = fmt_u64x5(&raw.id.values);
+    let inputs_count = raw.inputs.p.wyt();
+    let tl_min = raw.timelock_range.min.as_ref().map(|p| p.value);
+    let tl_max = raw.timelock_range.max.as_ref().map(|p| p.value);
+    let fee = raw.total_fees.value;
+
+    println!("draft: id={}, inputs={}, timelock=[{:?}, {:?}], total_fees={}",
+        id_str, inputs_count, tl_min, tl_max, fee);
+
+    // Per-input m-of-n + combos
+    let plans = enumerate_signing_plans(&raw.inputs);
+    for p in plans {
+        let total_keys = raw.inputs.p.tap()
+            .iter()
+            .find(|(n, _)| *n == p.name)
+            .map(|(_, i)| i.note.lock.pubkeys.wyt())
+            .unwrap_or(0);
+        println!("input {:?}: m-of-n = {} of {}, combos={}", p.name, p.m, total_keys, p.combos.len());
+        for (i, combo) in p.combos.iter().enumerate() {
+            println!("  combo#{i}: {} keys", combo.len());
+        }
+    }
+    Ok(())
+}
+
+fn cmd_sign_draft(port: &str, baud: u32, draft_path: &str, out_path: Option<&str>) -> anyhow::Result<()> {
+    let mut sp = open(port, baud)?;
+    let bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
+    let ret = send_blob_and_recv_outbound(&mut *sp, 0x99, FragKind::SignDraft, &bytes)?;
+    if let Some(p) = out_path {
+        fs::write(p, &ret).with_context(|| format!("write {p}"))?;
+        println!("wrote {} bytes to {}", ret.len(), p);
+    } else {
+        println!("received {} bytes:", ret.len());
+        println!("{}", hex::encode(&ret));
+    }
+    Ok(())
+}
+
 fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> anyhow::Result<()> {
     use siger_core::cheetah;
 
@@ -156,7 +296,7 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
     let caps: Response = send_call(&mut *sp, 1, Request::Hello)?;
     println!("caps: {caps:?}");
 
-    // 2) info BEFORE seed (should show has_seed=false)
+    // 2) info BEFORE seed
     if let Response::Info { proto_v, fw_major, fw_minor, features, has_seed } =
         send_call(&mut *sp, 2, Request::GetInfo)?
     {
@@ -165,10 +305,10 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
 
     // 3) set seed (frag)
     let seed = seed_hex.map(parse_64).transpose()?.unwrap_or([0x11; 64]);
-    send_blob(&mut *sp, 42, FragKind::SetSeed, &seed)?;
+    let _ = send_blob_and_recv_outbound(&mut *sp, 42, FragKind::SetSeed, &seed)?;
     println!("seed: set ({} bytes via frag)", seed.len());
 
-    // 4) info AFTER seed (should show has_seed=true)
+    // 4) info AFTER seed
     if let Response::Info { proto_v, fw_major, fw_minor, features, has_seed } =
         send_call(&mut *sp, 3, Request::GetInfo)?
     {
@@ -196,7 +336,7 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
         other => anyhow::bail!("unexpected: {other:?}"),
     };
 
-    // 8) host-derive same path and compare pk for sanity
+    // 8) host-derive same path and compare pk
     let (sk, cc) = cheetah::master_from_seed(&seed);
     let mut xk = cheetah::XKey::from_master(sk, cc);
     for i in path.iter() { xk = cheetah::xprv_derive_child(&xk, *i); }
@@ -204,7 +344,7 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
     anyhow::ensure!(host_pk.0 == dev_x && host_pk.1 == dev_y, "device pk != host pk");
     println!("pk match: OK");
 
-    // 9) have device sign a known txid (SignTxId) and print it
+    // 9) device sign known txid
     let txid = cheetah::Hash { values: [1, 2, 3, 4, 5] };
     match send_call(
         &mut *sp, 6,
@@ -218,7 +358,7 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
         other => anyhow::bail!("unexpected: {other:?}"),
     }
 
-    // 10) sign-for self-test: compare device vs host for the same txid
+    // 10) sign-for self-test: device vs host
     let (e_host, s_host) = cheetah::schnorr_sign_txid(xk.sk.unwrap(), host_pk, txid);
     let (e_dev, s_dev) = match send_call(
         &mut *sp, 7,
@@ -230,7 +370,7 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
     anyhow::ensure!(e_dev == e_host.values && s_dev == s_host.values, "sign-for mismatch");
     println!("self-test: OK");
 
-    // 11) health (device’s own self-test vector)
+    // 11) health
     match send_call(&mut *sp, 8, Request::Health)? {
         Response::OkCheetahSig { chal, sig } => {
             println!("health: chal e = {}", fmt_u64x8(&chal));
@@ -242,7 +382,7 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
     Ok(())
 }
 
-// helpers
+// ---------- Draft helpers (jam -> RawTransaction, planning, signing) --------
 
 fn raw_tx_from_jam_bytes(bytes: &[u8]) -> anyhow::Result<RawTransaction> {
     // Avoid NounSlab type parameter issues; use NockStack to materialize Atom
@@ -262,6 +402,22 @@ fn raw_tx_from_jam_bytes(bytes: &[u8]) -> anyhow::Result<RawTransaction> {
 pub fn raw_tx_from_draft_file(path: &str) -> anyhow::Result<RawTransaction> {
     let bytes = std::fs::read(path).with_context(|| format!("read {path}"))?;
     raw_tx_from_jam_bytes(&bytes)
+}
+
+pub fn load_jam_noun(path: impl AsRef<Path>) -> Result<Noun> {
+    let data = std::fs::read(&path)
+        .with_context(|| format!("failed to read jam file {}", path.as_ref().display()))?;
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = slab
+        .cue_into(Bytes::from(data))
+        .map_err(|e| anyhow::anyhow!("cue failed: {e}"))?;
+    Ok(noun))
+}
+
+/// Load a jam/draft file and decode it into a typed value.
+pub fn load_jam_as<T: NounDecode>(path: impl AsRef<Path>) -> Result<T> {
+    let noun = load_jam_noun(path)?;
+    T::from_noun(&noun).map_err(|e: NounDecodeError| anyhow::anyhow!(e))
 }
 
 pub struct InputSigningPlan {
@@ -324,7 +480,6 @@ pub fn sign_draft_with_paths(
     for path in signer_paths.iter() {
         let req = Msg { v: PROTO_V1, id: 0x4100, msg: Frame::One(Request::GetCheetahPub { path: path.clone() }) };
         let resp: Msg<Response> = {
-            // send/recv via COBS
             let m = Msg { v: PROTO_V1, id: 0x4100, msg: Frame::One(Request::GetCheetahPub { path: path.clone() }) };
             round_trip_frame(sp, &m)?
         };
@@ -380,15 +535,7 @@ pub fn sign_draft_with_paths(
     Ok(raw)
 }
 
-// safer ZSet contains using tap() (avoids Debug/NounEncode bounds on iter())
-fn zset_contains<T>(zs: &ZSet<T>, x: &T) -> bool
-where
-    T: NounEncode + Clone + Debug + PartialEq + Ord,
-{
-    zs.iter().any(|t| t == x)
-}
-
-// A minimal "round_trip" variant that speaks Msg<Frame> over COBS
+// minimal "round_trip" for Msg<Frame> (used above)
 fn round_trip_frame(sp: &mut dyn RW, req: &Msg<Frame>) -> Result<Msg<Response>> {
     let buf = to_allocvec(req)?;
     write_cobs_frame(sp, &buf)?;
@@ -403,7 +550,7 @@ fn round_trip_frame(sp: &mut dyn RW, req: &Msg<Frame>) -> Result<Msg<Response>> 
     Ok(resp)
 }
 
-// COBS I/O
+// generic COBS helpers for RW (used by round_trip_frame)
 fn write_cobs_frame(sp: &mut dyn RW, payload: &[u8]) -> Result<()> {
     let mut enc = vec![0u8; payload.len() + payload.len() / 254 + 2];
     let n = cobs::encode(payload, &mut enc);
@@ -413,7 +560,7 @@ fn write_cobs_frame(sp: &mut dyn RW, payload: &[u8]) -> Result<()> {
 }
 
 fn read_cobs_frame(sp: &mut dyn RW, max_len: usize) -> Result<Vec<u8>> {
-    let mut rx = Vec::with_capacity(128);
+    let mut rx = Vec::with_capacity(256);
     let mut b = [0u8; 1];
     loop {
         match sp.read(&mut b) {
@@ -431,6 +578,15 @@ fn read_cobs_frame(sp: &mut dyn RW, max_len: usize) -> Result<Vec<u8>> {
     }
 }
 
+// safer ZSet contains using tap()
+fn zset_contains<T>(zs: &ZSet<T>, x: &T) -> bool
+where
+    T: NounEncode + Clone + Debug + PartialEq + Ord,
+{
+    zs.iter().any(|t| t == x)
+}
+
+// ---------- tiny utils -------------------------------------------------------
 
 fn parse_64(s: &str) -> anyhow::Result<[u8; 64]> {
     let mut h = s.trim();
@@ -450,7 +606,6 @@ fn parse_64(s: &str) -> anyhow::Result<[u8; 64]> {
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 
 fn fmt_u64x5(v: &[u64; 5]) -> String {
     v.iter().map(|w| format!("{w:016x}")).collect::<Vec<_>>().join("_")

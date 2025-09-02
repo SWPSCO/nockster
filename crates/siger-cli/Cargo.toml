@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+bytes = "1.10.1"
 clap = { workspace = true, features = ["derive"] }
 serialport = "4"
 postcard   = { workspace = true, features = ["use-std"] } # to_stdvec_cobs

@@ -130,9 +130,13 @@ fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
 
 fn cmd_getinfo(port: &str, baud: u32) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
-    // Assuming firmware maps Hello => Caps
-    let resp: Response = send_recv(&mut *sp, 1, Frame::One(Request::Hello))?;
-    println!("{resp:?}");
+    let resp: Response = send_recv(&mut *sp, 1, Frame::One(Request::GetInfo))?;
+    match resp {
+        Response::Info { proto_v, fw_major, fw_minor, features, has_seed } => {
+            println!("info: proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}");
+        }
+        other => anyhow::bail!("unexpected: {other:?}"),
+    }
     Ok(())
 }
 
@@ -148,47 +152,97 @@ fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> an
 
     let mut sp = open(port, baud)?;
 
-    // hello
+    // 1) hello
     let caps: Response = send_call(&mut *sp, 1, Request::Hello)?;
     println!("caps: {caps:?}");
 
-    // set seed from hex seed
-    let seed = seed_hex.map(parse_64).transpose()?.unwrap_or([0x11;64]);
-    send_blob(&mut *sp, 42, FragKind::SetSeed, &seed)?;
+    // 2) info BEFORE seed (should show has_seed=false)
+    if let Response::Info { proto_v, fw_major, fw_minor, features, has_seed } =
+        send_call(&mut *sp, 2, Request::GetInfo)?
+    {
+        println!("info(before): proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}");
+    }
 
-    // set deriv path
+    // 3) set seed (frag)
+    let seed = seed_hex.map(parse_64).transpose()?.unwrap_or([0x11; 64]);
+    send_blob(&mut *sp, 42, FragKind::SetSeed, &seed)?;
+    println!("seed: set ({} bytes via frag)", seed.len());
+
+    // 4) info AFTER seed (should show has_seed=true)
+    if let Response::Info { proto_v, fw_major, fw_minor, features, has_seed } =
+        send_call(&mut *sp, 3, Request::GetInfo)?
+    {
+        println!("info(after):  proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}");
+    }
+
+    // 5) fingerprint
+    match send_call(&mut *sp, 4, Request::GetFingerprint)? {
+        Response::OkFingerprint { fp4 } => println!("fingerprint: {}", hex::encode(fp4)),
+        other => anyhow::bail!("unexpected: {other:?}"),
+    }
+
+    // 6) parse derivation path
     let path = pathmod::Path::from_iter(
         path_str.split(',').filter(|s| !s.is_empty()).map(|s| s.parse::<u32>().unwrap())
     );
 
-    // cheetah pub
-    let dev_pk_resp: Response = send_call(&mut *sp, 5, Request::GetCheetahPub { path: path.clone() })?;
-    let dev_pk = match dev_pk_resp { Response::OkCheetahPub { x, y } => (x,y), r => anyhow::bail!("unexpected: {r:?}") };
+    // 7) device cheetah pub
+    let (dev_x, dev_y) = match send_call(&mut *sp, 5, Request::GetCheetahPub { path: path.clone() })? {
+        Response::OkCheetahPub { x, y } => {
+            println!("cheetah pub.X = {}", fmt_u64x6(&x));
+            println!("cheetah pub.Y = {}", fmt_u64x6(&y));
+            (x, y)
+        }
+        other => anyhow::bail!("unexpected: {other:?}"),
+    };
 
-    // sign-for self-test
-    let txid = siger_core::cheetah::Hash { values: [1,2,3,4,5] };
-    let host_sig = {
-    let (sk, cc) = siger_core::cheetah::master_from_seed(&seed);
-    let mut xk = siger_core::cheetah::XKey::from_master(sk, cc);
-    for i in path.iter() { xk = siger_core::cheetah::xprv_derive_child(&xk, *i); }
-    let pk = xk.pk.unwrap();
-    anyhow::ensure!(pk == dev_pk, "device pk != host pk");
-    siger_core::cheetah::schnorr_sign_txid(xk.sk.unwrap(), pk, txid)
-    };
-    let dev_sig = match send_call(
-    &mut *sp, 6,
-    Request::SignTxIdFor { path, txid5: txid.values, pubkey: dev_pk }
+    // 8) host-derive same path and compare pk for sanity
+    let (sk, cc) = cheetah::master_from_seed(&seed);
+    let mut xk = cheetah::XKey::from_master(sk, cc);
+    for i in path.iter() { xk = cheetah::xprv_derive_child(&xk, *i); }
+    let host_pk = xk.pk.unwrap();
+    anyhow::ensure!(host_pk.0 == dev_x && host_pk.1 == dev_y, "device pk != host pk");
+    println!("pk match: OK");
+
+    // 9) have device sign a known txid (SignTxId) and print it
+    let txid = cheetah::Hash { values: [1, 2, 3, 4, 5] };
+    match send_call(
+        &mut *sp, 6,
+        Request::SignTxId { path: path.clone(), txid5: txid.values }
     )? {
-    Response::OkCheetahSig { chal, sig } => (chal, sig),
-    r => anyhow::bail!("unexpected: {r:?}"),
+        Response::OkCheetahSig { chal, sig } => {
+            println!("sign: txid   = {}", fmt_u64x5(&txid.values));
+            println!("sign: chal e = {}", fmt_u64x8(&chal));
+            println!("sign: sig  s = {}", fmt_u64x8(&sig));
+        }
+        other => anyhow::bail!("unexpected: {other:?}"),
+    }
+
+    // 10) sign-for self-test: compare device vs host for the same txid
+    let (e_host, s_host) = cheetah::schnorr_sign_txid(xk.sk.unwrap(), host_pk, txid);
+    let (e_dev, s_dev) = match send_call(
+        &mut *sp, 7,
+        Request::SignTxIdFor { path: path.clone(), txid5: txid.values, pubkey: host_pk }
+    )? {
+        Response::OkCheetahSig { chal, sig } => (chal, sig),
+        other => anyhow::bail!("unexpected: {other:?}"),
     };
-    anyhow::ensure!(dev_sig.0 == host_sig.0.values && dev_sig.1 == host_sig.1.values, "sig mismatch");
+    anyhow::ensure!(e_dev == e_host.values && s_dev == s_host.values, "sign-for mismatch");
     println!("self-test: OK");
+
+    // 11) health (device’s own self-test vector)
+    match send_call(&mut *sp, 8, Request::Health)? {
+        Response::OkCheetahSig { chal, sig } => {
+            println!("health: chal e = {}", fmt_u64x8(&chal));
+            println!("health: sig  s = {}", fmt_u64x8(&sig));
+        }
+        other => anyhow::bail!("unexpected: {other:?}"),
+    }
 
     Ok(())
 }
 
-// ---------- Draft helpers (jam -> RawTransaction, planning, signing) --------
+// helpers
 
 fn raw_tx_from_jam_bytes(bytes: &[u8]) -> anyhow::Result<RawTransaction> {
     // Avoid NounSlab type parameter issues; use NockStack to materialize Atom
@@ -375,4 +429,35 @@ fn read_cobs_frame(sp: &mut dyn RW, max_len: usize) -> Result<Vec<u8>> {
             Err(e) => return Err(e.into()),
         }
     }
+}
+
+
+fn parse_64(s: &str) -> anyhow::Result<[u8; 64]> {
+    let mut h = s.trim();
+    if let Some(stripped) = h.strip_prefix("0x") { h = stripped; }
+    let cleaned: String = h.chars().filter(|c| !c.is_whitespace() && *c != '_').collect();
+
+    let bytes = hex::decode(&cleaned)
+        .map_err(|e| anyhow::anyhow!("invalid hex for 64-byte seed: {e}"))?;
+    if bytes.len() != 64 {
+        return Err(anyhow::anyhow!(
+            "seed must be exactly 64 bytes (got {} bytes)",
+            bytes.len()
+        ));
+    }
+
+    let mut out = [0u8; 64];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+
+fn fmt_u64x5(v: &[u64; 5]) -> String {
+    v.iter().map(|w| format!("{w:016x}")).collect::<Vec<_>>().join("_")
+}
+fn fmt_u64x6(v: &[u64; 6]) -> String {
+    v.iter().map(|w| format!("{w:016x}")).collect::<Vec<_>>().join("_")
+}
+fn fmt_u64x8(v: &[u64; 8]) -> String {
+    v.iter().map(|w| format!("{w:016x}")).collect::<Vec<_>>().join("_")
 }

@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow     = "1"
+anyhow = "1"
+clap = { workspace = true, features = ["derive"] }
 serialport = "4"
-postcard   = { workspace = true, features = ["use-std"] }   # to_stdvec_cobs
-serde      = { workspace = true, features = ["std", "derive"] }
+postcard   = { workspace = true, features = ["use-std"] } # to_stdvec_cobs
+serde = { workspace = true, features = ["std", "derive"] }
 serde-big-array = "0.5"
 cobs = { version = "0.4",    default-features = false }
 k256 = { version = "0.13", features = ["ecdsa"] }
@@ -21,6 +22,7 @@ ripemd = "0.1"
 
 nockapp = { workspace = true }
 nockvm = { workspace = true }
+nockvm_macros = { workspace = true }
 noun-serde = { workspace = true }
 
 siger-core = { path = "../siger-core", features = ["alloc-path"] }

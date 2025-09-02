@@ -65,36 +65,56 @@ pub struct Xpub {
     pub pubkey33: [u8;33],
 }
 
+// siger-core
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub enum FragKind {
+    SetSeed,
+    SignDraft,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Frame {
+    One(Request),
+    FragBegin { id: u16, total_len: u32, kind: FragKind },
+    FragPart  { id: u16, offset: u32, chunk: alloc::vec::Vec<u8>, last: bool },
+}
+
+// augment Request/Response just a touch
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Request {
     Hello,
+    GetInfo,
     Ping,
-    Health,
-    SetSeed { #[serde(with = "BigArray")] seed64: [u8; 64] },
     Wipe,
+    SetSeed { seed64: [u8;64] },
     GetFingerprint,
     GetPubkey { path: alloc_path::Path, #[serde(default)] compressed: bool },
-    SignDigest { path: alloc_path::Path, digest32: [u8; 32] },
-    GetCheetahPub { path: alloc_path::Path },
-    SignTxId { path: alloc_path::Path, txid5: [u64; 5] },
-    SignTxIdFor { path: Path, txid5: [u64;5], pubkey: ([u64;6],[u64;6]) },
     GetXpub { path: alloc_path::Path },
+    SignDigest { path: alloc_path::Path, digest32: [u8;32] },
+
+    // Cheetah
+    GetCheetahPub { path: alloc_path::Path },
+    SignTxId      { path: alloc_path::Path, txid5: [u64;5] },
+    SignTxIdFor   { path: alloc_path::Path, txid5: [u64;5], pubkey: ([u64;6],[u64;6]) },
+
+    // self-test
+    Health,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Response {
     Hello(Caps),
+    Info { proto_v: u8, fw_major: u16, fw_minor: u16, features: u32, has_seed: bool },
     Pong,
     Ok,
-    HealthOk,
-    OkFingerprint { fp4: [u8; 4] },
-    OkPubkey { #[serde(with = "BigArray")] uncompressed: [u8; 65] },
-    OkPubkeyCompressed { #[serde(with = "BigArray")] compressed: [u8; 33] },
-    OkSig { #[serde(with = "BigArray")] sig64: [u8; 64] },
+    OkSig { sig64: [u8;64] },
+    OkFingerprint { fp4: [u8;4] },
+    OkPubkey { #[serde(with="BigArray")] uncompressed: [u8;65] },
+    OkPubkeyCompressed { #[serde(with="BigArray")] compressed: [u8;33] },
     OkXpub(Xpub),
-    OkCheetahPub { x: [u64; 6], y: [u64; 6] },
-    OkCheetahSig { chal: [u64; 8], sig: [u64; 8] },
-    Err  { code: u16 },
+    OkCheetahPub { x: [u64;6], y: [u64;6] },
+    OkCheetahSig { chal: [u64;8], sig: [u64;8] },
+    Err { code: u16 },
 }
 
 // Host uses Vec<u32>, firmware uses HVec<u32,16>

@@ -1,182 +1,355 @@
-mod address;
+// NO bitcoin modules
+// mod address;
 
-use address::*;
-use anyhow::{Context, Result, anyhow};
-use postcard::{from_bytes_cobs, to_slice};
-use std::{env, io::Read, io::Write, time::Duration, thread, fmt::Debug};
-use siger_core::{Msg, Request, Response, PROTO_V1};
-use k256::{EncodedPoint};
-use sha2::{Digest, Sha256};
-use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
-use bip39::{Language, Mnemonic};
-use num_integer::Integer;
+extern crate alloc;
 
-use tx_types::transaction_types::*;
-use tx_types::collections::{ZMap, ZSet, DorTip};
-use tx_types::transaction_types::Signature as TxSignature;
-use tx_types::RawTransaction;
+use alloc::fmt::Debug;
+use anyhow::{anyhow, Context, Result};
+use clap::{Parser, Subcommand};
+use cobs;
+use hex;
+use postcard::{from_bytes_cobs, to_allocvec};
+use serialport;
+use std::{io::{Read, Write}, time::Duration};
+use siger_core::{Msg, Request, Response, PROTO_V1, Frame, FragKind, alloc_path as pathmod};
 
 use nockvm::mem::NockStack;
-use nockvm::noun::{Atom, Noun};
-use nockvm::noun::IndirectAtom;
+use nockvm::noun::{Atom, IndirectAtom, Noun};
 use nockvm::serialization::cue;
-use nockapp::noun::slab::NounSlab;
-use noun_serde::{NounEncode};
+use noun_serde::NounEncode;
+use tx_types::collections::{ZMap, ZSet};
+use tx_types::transaction_types::*;
+use tx_types::RawTransaction;
 
-const NOCK_STACK_1KB: usize = 1 << 7; //1kb
+// ---------- CLI --------------------------------------------------------------
+
+#[derive(Parser)]
+#[command(name="siger-cli")]
+#[command(author, version, about)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// End-to-end self test (seed -> child key -> self-check signatures)
+    Test {
+        #[arg(long, default_value = "/dev/ttyACM0")]
+        port: String,
+        #[arg(long, default_value_t = 115200)]
+        baud: u32,
+        /// Optional: 64-byte seed in hex (overrides default)
+        #[arg(long)]
+        seed_hex: Option<String>,
+        /// Derivation path (comma separated uint32, MSB=hard)
+        #[arg(long, default_value = "2147483692,2147483648,2147483648,0,0")] // 44'/0'/0'/0/0
+        path: String,
+    },
+
+    /// Get basic device info / capabilities
+    GetInfo {
+        #[arg(long, default_value = "/dev/ttyACM0")] port: String,
+        #[arg(long, default_value_t = 115200)] baud: u32,
+    },
+
+    /// Device health (the firmware’s well-known test)
+    Health {
+        #[arg(long, default_value = "/dev/ttyACM0")] port: String,
+        #[arg(long, default_value_t = 115200)] baud: u32,
+    },
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.cmd {
+        Cmd::Test { port, baud, seed_hex, path } => cmd_test(&port, baud, seed_hex.as_deref(), &path),
+        Cmd::GetInfo { port, baud } => cmd_getinfo(&port, baud),
+        Cmd::Health { port, baud } => cmd_health(&port, baud),
+    }
+}
+
+// ---------- Serial helpers ---------------------------------------------------
 
 pub trait RW: Read + Write {}
 impl<T: Read + Write> RW for T {}
 
-const DEFAULT_SEED: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-const ALPH: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-fn main() -> Result<()> {
-  let port = env::args().nth(1).unwrap_or_else(|| "/dev/ttyACM0".into());
-  let mut sp = serialport::new(port.clone(), 115_200)
-      .timeout(Duration::from_millis(200))
-      .open()
-      .with_context(|| format!("open {}", port))?;
-
-  thread::sleep(Duration::from_millis(100));
-  flush_serial(&mut sp);
-
-  // Hello
-  let hello_req = Msg {
-      v: PROTO_V1,
-      id: 0x1000,
-      msg: Request::Hello,
-  };
-  let hello: Msg<Response> = round_trip(&mut sp, &hello_req)?;
-  println!("hello: {:?}", hello);
-
-  if let Ok(seed_hex) = std::env::var("BIP39_SEED_HEX") {
-      if !seed_hex.trim().is_empty() {
-          let seed = parse_seed_hex(&seed_hex)?;
-          set_seed(&mut sp, seed)?;
-          println!("Seed set from BIP39_SEED_HEX");
-      } else {
-          println!("BIP39_SEED_HEX is empty, using default seed");
-          let seed64 = seed64_from_mnemonic(
-            DEFAULT_SEED,
-              "",
-          )?;
-          set_seed(&mut sp, seed64)?;
-      }
-  } else {
-      println!("Using default seed");
-      let seed64 = seed64_from_mnemonic(
-        DEFAULT_SEED,
-          "",
-      )?;
-      set_seed(&mut sp, seed64)?;
-  }
-      
-  let fp = get_fingerprint(&mut sp)?;
-  println!("Master fingerprint: {}", hex::encode(&fp));
-  
-  // test pubkey generation
-  let req_msg = Msg {
-      v: PROTO_V1,
-      id: 2,
-      msg: Request::GetPubkey { 
-          path: vec![0x8000002c, 0x80000000, 0x80000000, 0, 0], // m/44'/0'/0'/0/0
-          compressed: false 
-      },
-  };
-  let pubkey_resp: Msg<Response> = round_trip(&mut sp, &req_msg)?;
-  
-  if let Response::OkPubkey { uncompressed } = &pubkey_resp.msg {
-      println!("Pubkey (uncompressed): {}", hex::encode(uncompressed));
-  }
-  
-  // Test compressed pubkey
-  let req_msg = Msg {
-      v: PROTO_V1,
-      id: 3,
-      msg: Request::GetPubkey { 
-          path: vec![0x8000002c, 0x80000000, 0x80000000, 0, 0], // m/44'/0'/0'/0/0
-          compressed: true 
-      },
-  };
-  let pubkey_comp_resp: Msg<Response> = round_trip(&mut sp, &req_msg)?;
-  
-  if let Response::OkPubkeyCompressed { compressed } = &pubkey_comp_resp.msg {
-      println!("Pubkey (compressed): {}", hex::encode(compressed));
-  }
-  
-  // Test signing
-  let digest32 = [0x55; 32];
-  let req_msg = Msg {
-      v: PROTO_V1,
-      id: 4,
-      msg: Request::SignDigest { 
-          path: vec![0x8000002c, 0x80000000, 0x80000000, 0, 0], // m/44'/0'/0'/0/0
-          digest32,
-      },
-  };
-  let sig_resp: Msg<Response> = round_trip(&mut sp, &req_msg)?;
-  
-  if let Response::OkSig { sig64 } = &sig_resp.msg {
-      println!("Signature: {}", hex::encode(sig64));
-      
-      // Verify with uncompressed pubkey
-      if let Response::OkPubkey { uncompressed } = &pubkey_resp.msg {
-          let ok = verify_sig(&uncompressed, &digest32, &sig64)?;
-          println!("Verify (uncompressed): {}", ok);
-      }
-      
-      // Verify with compressed pubkey
-      if let Response::OkPubkeyCompressed { compressed } = &pubkey_comp_resp.msg {
-          let ep = EncodedPoint::from_bytes(&compressed[..])?;
-          let vk = VerifyingKey::from_encoded_point(&ep)?;
-          let sig = Signature::from_slice(sig64)?;
-          let ok = vk.verify_prehash(&digest32, &sig).is_ok();
-          println!("Verify (compressed): {}", ok);
-      }
-
-      if let Response::OkPubkeyCompressed { compressed } = &pubkey_comp_resp.msg {
-          let addr_p2pkh = p2pkh_address(&compressed, true);
-          let addr_p2wpkh = p2wpkh_address(&compressed, "bc");
-          let addr_p2tr = p2tr_address(&compressed, "bc"); // note: for taproot you normally use a tweaked x-only key (BIP340); this uses the plain x-only as demo
-          println!("P2PKH:   {addr_p2pkh}");
-          println!("P2WPKH:  {addr_p2wpkh}");
-          println!("P2TR*:   {addr_p2tr} (demo; use tweaked key for real taproot)");
-      }
-  }
-
-  let req = Msg { v: PROTO_V1, id: 0x3000, msg: Request::GetXpub { path: vec![0x8000002c,0x80000000,0x80000000,0,0] } };
-  let xr: Msg<Response> = round_trip(&mut sp, &req)?;
-  if let Response::OkXpub(x) = xr.msg {
-      let xpub = to_xpub_string(x.depth, x.fp4, x.child, x.chain_code, x.pubkey33);
-      println!("xpub: {xpub}");
-  }
-
-  let txid5 = [1u64, 2, 3, 4, 5];
-
-  // cheetah demo
-  // reuse the same path as ECDSA demo
-  let path = vec![0x8000002c, 0x80000000, 0x80000000, 0, 0];
-
-  // GetCheetahPub
-  let req_pub = Msg { v: PROTO_V1, id: 0x5000, msg: Request::GetCheetahPub { path: path.clone() } };
-  let r_pub: Msg<Response> = round_trip(&mut sp, &req_pub)?;
-  if let Response::OkCheetahPub { x, y } = r_pub.msg {
-      println!("Cheetah pub X={x:?}");
-      println!("Cheetah pub Y={y:?}");
-  }
-
-  // SignTxId
-  let req_sig = Msg { v: PROTO_V1, id: 0x5001, msg: Request::SignTxId { path, txid5 } };
-  let r_sig: Msg<Response> = round_trip(&mut sp, &req_sig)?;
-  if let Response::OkCheetahSig { chal, sig } = r_sig.msg {
-      println!("Cheetah chal (e): {:x?}", chal);
-      println!("Cheetah sig  (s): {:x?}", sig);
-  }
-
-  Ok(())
+fn open(port: &str, baud: u32) -> anyhow::Result<Box<dyn serialport::SerialPort>> {
+    Ok(serialport::new(port, baud)
+        .timeout(Duration::from_millis(200))
+        .open()?)
 }
 
+fn send_call(sp: &mut dyn serialport::SerialPort, id: u32, req: Request) -> anyhow::Result<Response> {
+    send_recv(sp, id, Frame::One(req))
+}
+
+fn send_blob(sp: &mut dyn serialport::SerialPort, xid: u16, kind: FragKind, bytes: &[u8]) -> anyhow::Result<()> {
+    let total = bytes.len() as u32;
+    let _: Response = send_recv(sp, 0xF000_0000 | xid as u32, Frame::FragBegin { id: xid, total_len: total, kind })?;
+    const CHUNK: usize = 200; // 256b budget
+    let mut off = 0u32;
+    while (off as usize) < bytes.len() {
+        let end = core::cmp::min(bytes.len(), off as usize + CHUNK);
+        let last = end == bytes.len();
+        let chunk = bytes[off as usize..end].to_vec();
+        let _: Response = send_recv(sp, 0xF100_0000 | (xid as u32), Frame::FragPart {
+            id: xid, offset: off, chunk, last,
+        })?;
+        off = end as u32;
+    }
+    Ok(())
+}
+
+fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
+    sp: &mut dyn serialport::SerialPort,
+    id: u32,
+    msg: T,
+) -> anyhow::Result<R> {
+    let m = Msg { v: PROTO_V1, id, msg };
+    let buf = to_allocvec(&m)?;
+    let mut framed = vec![0u8; cobs::max_encoding_length(buf.len()) + 1];
+    let n = cobs::encode(&buf, &mut framed);
+    framed.truncate(n);
+    framed.push(0);
+    sp.write_all(&framed)?;
+
+    let mut rx: Vec<u8> = Vec::with_capacity(256);
+    loop {
+        let mut b = [0u8; 1];
+        if sp.read_exact(&mut b).is_err() { continue; }
+        if b[0] == 0 { break; }
+        rx.push(b[0]);
+    }
+    let resp: Msg<R> = from_bytes_cobs(&mut rx)?;
+    anyhow::ensure!(resp.v == PROTO_V1, "bad protocol version");
+    Ok(resp.msg)
+}
+
+// ---------- Subcommands ------------------------------------------------------
+
+fn cmd_getinfo(port: &str, baud: u32) -> anyhow::Result<()> {
+    let mut sp = open(port, baud)?;
+    // Assuming firmware maps Hello => Caps
+    let resp: Response = send_recv(&mut *sp, 1, Frame::One(Request::Hello))?;
+    println!("{resp:?}");
+    Ok(())
+}
+
+fn cmd_health(port: &str, baud: u32) -> anyhow::Result<()> {
+    let mut sp = open(port, baud)?;
+    let resp: Response = send_recv(&mut *sp, 2, Frame::One(Request::Health))?;
+    println!("{resp:?}");
+    Ok(())
+}
+
+fn cmd_test(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> anyhow::Result<()> {
+    use siger_core::cheetah;
+
+    let mut sp = open(port, baud)?;
+
+    // hello
+    let caps: Response = send_call(&mut *sp, 1, Request::Hello)?;
+    println!("caps: {caps:?}");
+
+    // set seed from hex seed
+    let seed = seed_hex.map(parse_64).transpose()?.unwrap_or([0x11;64]);
+    send_blob(&mut *sp, 42, FragKind::SetSeed, &seed)?;
+
+    // set deriv path
+    let path = pathmod::Path::from_iter(
+        path_str.split(',').filter(|s| !s.is_empty()).map(|s| s.parse::<u32>().unwrap())
+    );
+
+    // cheetah pub
+    let dev_pk_resp: Response = send_call(&mut *sp, 5, Request::GetCheetahPub { path: path.clone() })?;
+    let dev_pk = match dev_pk_resp { Response::OkCheetahPub { x, y } => (x,y), r => anyhow::bail!("unexpected: {r:?}") };
+
+    // sign-for self-test
+    let txid = siger_core::cheetah::Hash { values: [1,2,3,4,5] };
+    let host_sig = {
+    let (sk, cc) = siger_core::cheetah::master_from_seed(&seed);
+    let mut xk = siger_core::cheetah::XKey::from_master(sk, cc);
+    for i in path.iter() { xk = siger_core::cheetah::xprv_derive_child(&xk, *i); }
+    let pk = xk.pk.unwrap();
+    anyhow::ensure!(pk == dev_pk, "device pk != host pk");
+    siger_core::cheetah::schnorr_sign_txid(xk.sk.unwrap(), pk, txid)
+    };
+    let dev_sig = match send_call(
+    &mut *sp, 6,
+    Request::SignTxIdFor { path, txid5: txid.values, pubkey: dev_pk }
+    )? {
+    Response::OkCheetahSig { chal, sig } => (chal, sig),
+    r => anyhow::bail!("unexpected: {r:?}"),
+    };
+    anyhow::ensure!(dev_sig.0 == host_sig.0.values && dev_sig.1 == host_sig.1.values, "sig mismatch");
+    println!("self-test: OK");
+
+    Ok(())
+}
+
+// ---------- Draft helpers (jam -> RawTransaction, planning, signing) --------
+
+fn raw_tx_from_jam_bytes(bytes: &[u8]) -> anyhow::Result<RawTransaction> {
+    // Avoid NounSlab type parameter issues; use NockStack to materialize Atom
+    let mut stack = NockStack::new(8 << 20, 0);
+    let (mut atom, mut buf) = unsafe { IndirectAtom::new_raw_mut_bytes(&mut stack, bytes.len()) };
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr(), bytes.len()); }
+    let atom: Atom = unsafe { atom.normalize_as_atom() };
+
+    let noun: Noun = cue(&mut stack, atom)
+        .map_err(|e| anyhow!("cue failed: {e:?}"))?;
+
+    let tx = RawTransaction::from_noun(&mut stack, &noun)
+        .map_err(|e| anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
+    Ok(tx)
+}
+
+pub fn raw_tx_from_draft_file(path: &str) -> anyhow::Result<RawTransaction> {
+    let bytes = std::fs::read(path).with_context(|| format!("read {path}"))?;
+    raw_tx_from_jam_bytes(&bytes)
+}
+
+pub struct InputSigningPlan {
+    pub name: NName,
+    pub m: u64,
+    pub combos: alloc::vec::Vec<alloc::vec::Vec<SchnorrPubkey>>,
+}
+
+pub fn enumerate_signing_plans(inputs: &Inputs) -> alloc::vec::Vec<InputSigningPlan> {
+    let pairs: alloc::vec::Vec<(NName, Input)> = inputs.p.tap();
+    pairs.into_iter().map(|(name, input)| {
+        let m = input.note.lock.m as usize;
+        let mut keys: alloc::vec::Vec<SchnorrPubkey> = input.note.lock.pubkeys.tap();
+        keys.sort(); // needs Ord on SchnorrPubkey
+
+        let mut combos = alloc::vec::Vec::new();
+        if m > 0 && m <= keys.len() {
+            let mut cur = alloc::vec::Vec::with_capacity(m);
+            fn choose(
+                out: &mut alloc::vec::Vec<alloc::vec::Vec<SchnorrPubkey>>,
+                keys: &[SchnorrPubkey],
+                m: usize, start: usize,
+                cur: &mut alloc::vec::Vec<SchnorrPubkey>,
+            ) {
+                if cur.len() == m { out.push(cur.clone()); return; }
+                for i in start..keys.len() {
+                    cur.push(keys[i].clone());
+                    choose(out, keys, m, i + 1, cur);
+                    cur.pop();
+                }
+            }
+            choose(&mut combos, &keys, m, 0, &mut cur);
+        }
+
+        InputSigningPlan { name, m: input.note.lock.m, combos }
+    }).collect()
+}
+
+pub fn sign_draft_with_paths(
+    sp: &mut dyn RW,
+    draft_path: &str,
+    signer_paths: Vec<Vec<u32>>, // derivation paths
+) -> Result<RawTransaction> {
+    let bytes = std::fs::read(draft_path).with_context(|| format!("read {}", draft_path))?;
+    let mut stack = NockStack::new(8 << 20, 0);
+
+    let (mut atom, mut buf) = unsafe { IndirectAtom::new_raw_mut_bytes(&mut stack, bytes.len()) };
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr(), bytes.len()); }
+    let atom = unsafe { atom.normalize_as_atom() };
+
+    let noun: Noun = cue(&mut stack, atom)
+        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
+    let mut raw: RawTransaction = RawTransaction::from_noun(&mut stack, &noun)
+        .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
+
+    let txid = raw.compute_id();
+
+    // cache pk per path
+    let mut path_pks: Vec<(Vec<u32>, SchnorrPubkey)> = Vec::new();
+    for path in signer_paths.iter() {
+        let req = Msg { v: PROTO_V1, id: 0x4100, msg: Frame::One(Request::GetCheetahPub { path: path.clone() }) };
+        let resp: Msg<Response> = {
+            // send/recv via COBS
+            let m = Msg { v: PROTO_V1, id: 0x4100, msg: Frame::One(Request::GetCheetahPub { path: path.clone() }) };
+            round_trip_frame(sp, &m)?
+        };
+        let pk = match resp.msg {
+            Response::OkCheetahPub { x, y } => SchnorrPubkey {
+                x: F6LT { values: x }, y: F6LT { values: y }, inf: false
+            },
+            Response::Err { code } => return Err(anyhow!("GetCheetahPub failed: code {}", code)),
+            _ => return Err(anyhow!("unexpected response to GetCheetahPub")),
+        };
+        path_pks.push((path.clone(), pk));
+    }
+
+    // sign inputs
+    let mut new_inputs = ZMap::new();
+    for (name, mut input) in raw.inputs.p.tap() {
+        let lock_pks = &input.note.lock.pubkeys; // ZSet<SchnorrPubkey>
+
+        // reuse or create signature map
+        let mut sig_map: ZMap<SchnorrPubkey, SchnorrSignature> =
+            input.spend.signature.as_ref().map(|s| s.map.clone()).unwrap_or_else(ZMap::new);
+
+        for (path, pk_dev) in path_pks.iter() {
+            if !zset_contains(lock_pks, pk_dev) {
+                continue;
+            }
+
+            let req = Msg {
+                v: PROTO_V1, id: 0x4200,
+                msg: Frame::One(Request::SignTxId { path: path.clone(), txid5: txid.values }),
+            };
+            let resp: Msg<Response> = round_trip_frame(sp, &req)?;
+            let (chal, sig) = match resp.msg {
+                Response::OkCheetahSig { chal, sig } => (chal, sig),
+                Response::Err { code } => return Err(anyhow!("SignTxId failed: code {}", code)),
+                _ => return Err(anyhow!("unexpected response to SignTxId")),
+            };
+
+            let schnorr_sig = SchnorrSignature {
+                chal: Chal { values: T8 { values: chal } },
+                sig:  Sig  { values: T8 { values: sig  } },
+            };
+            sig_map.put(pk_dev.clone(), schnorr_sig);
+        }
+
+        if sig_map.wyt() > 0 {
+            input.spend.signature = Some(Signature { map: sig_map });
+        }
+        new_inputs.put(name, input);
+    }
+
+    raw.inputs = Inputs { p: new_inputs };
+    Ok(raw)
+}
+
+// safer ZSet contains using tap() (avoids Debug/NounEncode bounds on iter())
+fn zset_contains<T>(zs: &ZSet<T>, x: &T) -> bool
+where
+    T: NounEncode + Clone + Debug + PartialEq + Ord,
+{
+    zs.iter().any(|t| t == x)
+}
+
+// A minimal "round_trip" variant that speaks Msg<Frame> over COBS
+fn round_trip_frame(sp: &mut dyn RW, req: &Msg<Frame>) -> Result<Msg<Response>> {
+    let buf = to_allocvec(req)?;
+    write_cobs_frame(sp, &buf)?;
+    let mut frame = read_cobs_frame(sp, 4 * 1024)?;
+    let resp: Msg<Response> = from_bytes_cobs(&mut frame)?;
+    if resp.v != PROTO_V1 {
+        return Err(anyhow!("unsupported proto version {}", resp.v));
+    }
+    if resp.id != req.id {
+        return Err(anyhow!("mismatched id: got {}, expected {}", resp.id, req.id));
+    }
+    Ok(resp)
+}
+
+// COBS I/O
 fn write_cobs_frame(sp: &mut dyn RW, payload: &[u8]) -> Result<()> {
     let mut enc = vec![0u8; payload.len() + payload.len() / 254 + 2];
     let n = cobs::encode(payload, &mut enc);
@@ -195,271 +368,11 @@ fn read_cobs_frame(sp: &mut dyn RW, max_len: usize) -> Result<Vec<u8>> {
                 if rx.len() > max_len {
                     return Err(anyhow!("frame too large (> {} bytes)", max_len));
                 }
-                if b[0] == 0 {
-                    return Ok(rx);
-                }
+                if b[0] == 0 { return Ok(rx); }
             }
             Ok(_) => continue,
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
             Err(e) => return Err(e.into()),
         }
     }
-}
-
-pub fn schnorr_from_cheetah(x: [u64;6], y: [u64;6]) -> SchnorrPubkey {
-    SchnorrPubkey {
-        x: F6LT { values: x },
-        y: F6LT { values: y },
-        inf: false,
-    }
-}
-
-
-pub fn round_trip(sp: &mut dyn RW, req: &Msg<Request>) -> Result<Msg<Response>> {
-    let mut plain = [0u8; 256];
-    let used = to_slice(req, &mut plain)?;
-
-    write_cobs_frame(sp, used)?;
-
-    let mut frame = read_cobs_frame(sp, 512)?;
-    let resp: Msg<Response> = from_bytes_cobs(&mut frame)?;
-
-    if resp.v != PROTO_V1 {
-        return Err(anyhow!("unsupported proto version {}", resp.v));
-    }
-    if resp.id != req.id {
-        return Err(anyhow!("mismatched id: got {}, expected {}", resp.id, req.id));
-    }
-    Ok(resp)
-}
-
-fn flush_serial(sp: &mut dyn RW) {
-    let mut buf = [0u8; 256];
-    while sp.read(&mut buf).is_ok() {}
-}
-
-trait ReadWrite: Read + Write {}
-impl<T: Read + Write> ReadWrite for T {}
-
-fn verify_sig(uncompressed65: &[u8;65], digest32: &[u8;32], sig64: &[u8;64]) -> Result<bool> {
-    let ep = EncodedPoint::from_bytes(uncompressed65.as_slice())?;
-    let vk = VerifyingKey::from_encoded_point(&ep)?;
-    let sig = Signature::from_slice(sig64)?;
-    Ok(vk.verify_prehash(digest32, &sig).is_ok())
-}
-
-fn vk_from_response(resp: &Response) -> Result<VerifyingKey> {
-  match resp {
-      Response::OkPubkey { uncompressed } => {
-          let ep = EncodedPoint::from_bytes(&uncompressed[..])?;
-          Ok(VerifyingKey::from_encoded_point(&ep)?)
-      }
-      Response::OkPubkeyCompressed { compressed } => {
-          let ep = EncodedPoint::from_bytes(&compressed[..])?;
-          Ok(VerifyingKey::from_encoded_point(&ep)?)
-      }
-      _ => anyhow::bail!("response did not contain a pubkey"),
-  }
-}
-
-pub fn sign_draft_with_paths(
-    sp: &mut dyn RW,
-    draft_path: &str,
-    signer_paths: Vec<Vec<u32>>, // derivation paths
-) -> Result<RawTransaction> {
-    let bytes = std::fs::read(draft_path).with_context(|| format!("read {}", draft_path))?;
-    let mut stack = NockStack::new(8 << 20, 0);
-    let mut slab: NounSlab = NounSlab::new();
-    let jam_atom: Atom = unsafe {
-        IndirectAtom::new_raw_bytes_ref(&mut slab, &bytes).normalize_as_atom()
-    };
-    let noun: Noun = cue(&mut stack, jam_atom)
-        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
-    let mut raw: RawTransaction = RawTransaction::from_noun(&mut stack, &noun)
-        .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
-
-    let txid = &raw.compute_id();
-
-    // 3) for each signer path, derive device pubkey (Cheetah)
-    //    cache pk per path to avoid re-querying for every input
-    let mut path_pks: Vec<(Vec<u32>, SchnorrPubkey)> = Vec::new();
-    for path in signer_paths.iter() {
-        let req = Msg { v: PROTO_V1, id: 0x4100, msg: Request::GetCheetahPub { path: path.clone() } };
-        let resp: Msg<Response> = round_trip(sp, &req)?;
-        let pk = match resp.msg {
-            Response::OkCheetahPub { x, y } => schnorr_from_cheetah(x, y),
-            Response::Err { code } => return Err(anyhow!("GetCheetahPub failed: code {}", code)),
-            _ => return Err(anyhow!("unexpected response to GetCheetahPub")),
-        };
-        path_pks.push((path.clone(), pk));
-    }
-
-    // 4) walk inputs and add signatures
-    //    ZMap API: rebuild or update in place depending on your concrete API.
-    let mut new_inputs = ZMap::new();
-    for (name, mut input) in raw.inputs.p.tap() {
-        let lock_pks = &input.note.lock.pubkeys; // ZSet<SchnorrPubkey>
-
-        // create or reuse the signature map
-        let mut sig_map: ZMap<SchnorrPubkey, SchnorrSignature> =
-            input.spend.signature.as_ref().map(|s| s.map.clone()).unwrap_or_else(ZMap::new);
-
-        // try each path’s pk against this input’s lock set
-        for (path, pk_dev) in path_pks.iter() {
-            if !zset_contains(lock_pks, pk_dev) {
-                continue;
-            }
-
-            // Ask device to sign the TIP-5 txid
-            // (Option A: simple API without pubkey echo)
-            let req = Msg {
-                v: PROTO_V1, id: 0x4200,
-                msg: Request::SignTxId { path: path.clone(), txid5: txid.values },
-            };
-            let resp: Msg<Response> = round_trip(sp, &req)?;
-            let (chal, sig) = match resp.msg {
-                Response::OkCheetahSig { chal, sig } => (chal, sig),
-                Response::Err { code } => return Err(anyhow!("SignTxId failed: code {}", code)),
-                _ => return Err(anyhow!("unexpected response to SignTxId")),
-            };
-
-            let schnorr_sig = SchnorrSignature {
-                chal: Chal { values: T8 { values: chal } },
-                sig:  Sig  { values: T8 { values: sig  } },
-            };
-
-            sig_map.put(pk_dev.clone(), schnorr_sig);
-        }
-
-        // if any sigs were added, write back
-        if sig_map.wyt() > 0 {
-            input.spend.signature = Some(TxSignature { map: sig_map });
-        }
-        new_inputs.put(name, input);
-    }
-
-    raw.inputs = Inputs { p: new_inputs };
-
-    Ok(raw)
-}
-
-fn zset_contains_pubkey(zs: &ZSet<SchnorrPubkey>, x: &SchnorrPubkey) -> bool {
-    // SchnorrPubkey already derives Debug + NounEncode in your code
-    zs.iter().any(|t: &SchnorrPubkey| t == x)
-}
-
-fn zset_contains<T>(zs: &ZSet<T>, x: &T) -> bool
-where
-    T: NounEncode + Clone + Debug + PartialEq + Ord,
-{
-    zs.iter().any(|t| t == x)
-}
-
-/// Derive the 64-byte BIP39 seed from a mnemonic + optional passphrase
-pub fn seed64_from_mnemonic(mnemonic: &str, passphrase: &str) -> Result<[u8;64]> {
-  let m = Mnemonic::parse_in(Language::English, mnemonic)
-      .map_err(|e| anyhow!("bad mnemonic: {e}"))?;
-  Ok(m.to_seed(passphrase))
-}
-
-fn verify_sig_with_vk(vk: &VerifyingKey, digest32: &[u8;32], sig64: &[u8;64]) -> Result<bool> {
-  let sig = Signature::from_slice(sig64)?;
-  Ok(vk.verify_prehash(digest32, &sig).is_ok())
-}
-
-fn parse_path(s: &str) -> anyhow::Result<Vec<u32>> {
-    let s = s.trim();
-    let rest = s.strip_prefix("m/").unwrap_or(s);
-    let mut out = Vec::new();
-    for seg in rest.split('/') {
-        if seg.is_empty() { continue; }
-        let hardened = seg.ends_with('\'');
-        let n: u32 = seg.trim_end_matches('\'').parse()?;
-        out.push(if hardened { n | 0x8000_0000 } else { n });
-    }
-    Ok(out)
-}
-
-fn b58check(payload: &[u8]) -> String {
-  let chk = Sha256::digest(&Sha256::digest(payload));
-  let mut buf = payload.to_vec();
-  buf.extend_from_slice(&chk[..4]);
-
-  // count leading zeroes for '1' prefix
-  let zeros = buf.iter().take_while(|&&b| b == 0).count();
-
-  // big integer base58 encode
-  let mut num = num_bigint::BigUint::from_bytes_be(&buf);
-  let mut out = Vec::new();
-  while num > num_bigint::BigUint::from(0u8) {
-      let (q, r) = num.div_rem(&num_bigint::BigUint::from(58u32));
-      let digits = r.to_u32_digits();
-      let digit = digits.get(0).copied().unwrap_or(0) as usize;
-      out.push(ALPH[digit]);
-      num = q;
-  }
-  for _ in 0..zeros { out.push(b'1'); }
-  out.reverse();
-  String::from_utf8(out).unwrap()
-}
-
-pub fn to_xpub_string(depth: u8, fp4: [u8;4], child: u32, chain_code: [u8;32], pubkey33: [u8;33]) -> String {
-  let mut ser = Vec::with_capacity(78);
-  ser.extend_from_slice(&0x0488B21Eu32.to_be_bytes()); // xpub mainnet
-  ser.push(depth);
-  ser.extend_from_slice(&fp4);
-  ser.extend_from_slice(&child.to_be_bytes());
-  ser.extend_from_slice(&chain_code);
-  ser.extend_from_slice(&pubkey33);
-  b58check(&ser)
-}
-
-
-fn parse_seed_hex(s: &str) -> Result<[u8;64]> {
-  let bytes = hex::decode(s.trim())?;
-  if bytes.len() != 64 { return Err(anyhow!("seed must be 64 bytes (128 hex chars)")); }
-  let mut out = [0u8;64];
-  out.copy_from_slice(&bytes);
-  Ok(out)
-}
-
-fn set_seed(sp: &mut dyn RW, seed64: [u8;64]) -> Result<()> {
-  let req = Msg { v: PROTO_V1, id: 0x2000, msg: Request::SetSeed { seed64 } };
-  let resp: Msg<Response> = round_trip(sp, &req)?;
-  match resp.msg {
-      Response::Ok => Ok(()),
-      Response::Err { code } => Err(anyhow!("SetSeed failed with code {}", code)),
-      _ => Err(anyhow!("unexpected response to SetSeed")),
-  }
-}
-
-fn get_fingerprint(sp: &mut dyn RW) -> Result<[u8;4]> {
-  let req = Msg { v: PROTO_V1, id: 0x2001, msg: Request::GetFingerprint };
-  let resp: Msg<Response> = round_trip(sp, &req)?;
-  match resp.msg {
-      Response::OkFingerprint { fp4 } => Ok(fp4),
-      Response::Err { code } => Err(anyhow!("GetFingerprint failed with code {}", code)),
-      _ => Err(anyhow!("unexpected response to GetFingerprint")),
-  }
-}
-
-fn raw_tx_from_jam_bytes(bytes: &[u8]) -> anyhow::Result<RawTransaction> {
-    let mut stack = NockStack::new(8 << 20, 0);
-    let mut slab: NounSlab = NounSlab::new();
-    let jam_atom: Atom = unsafe {
-        IndirectAtom::new_raw_bytes_ref(&mut slab, &bytes).normalize_as_atom()
-    };
-
-    let noun: Noun = cue(&mut stack, jam_atom)
-        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
-
-
-    let tx = RawTransaction::from_noun(&mut stack, &noun)
-        .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
-    Ok(tx)
-}
-
-pub fn raw_tx_from_draft_file(path: &str) -> anyhow::Result<RawTransaction> {
-    let bytes = std::fs::read(path).with_context(|| format!("read {path}"))?;
-    raw_tx_from_jam_bytes(&bytes)
 }

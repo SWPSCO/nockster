@@ -22,15 +22,67 @@ use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
+const DEMO_SK: [u8; 32] = [0x11; 32];
+const FW_MAJOR: u16 = 0;
+const FW_MINOR: u16 = 1;
+// feature masks
+const FEAT_CHEETAH: u32 = 1 << 0;
+const FEAT_FRAG:    u32 = 1 << 1;
+const FEAT_XPUB:    u32 = 1 << 2;
+
+const MAX_FRAG: usize = 4096; //idk
+
 struct SeedStore {
     set: bool,
     seed: [u8; 64],
 }
 static mut SEED_STORE: SeedStore = SeedStore { set: false, seed: [0u8; 64] };
 
-// Required by the ESP-IDF bootloader
 esp_bootloader_esp_idf::esp_app_desc!();
-const DEMO_SK: [u8; 32] = [0x11; 32];
+
+
+struct FragState {
+    id: u16,
+    kind: siger_core::FragKind,
+    total_len: u32,
+    next_off: u32,
+    buf: HVec<u8, MAX_FRAG>,
+}
+
+static mut FRAG: Option<FragState> = None;
+
+/// cobs test
+#[cfg(any(test, feature = "fw-test"))]
+pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
+    let mut out = alloc::vec::Vec::with_capacity(512);
+    match postcard::from_bytes_cobs::<Msg<Frame>>(frame) {
+        Ok(m) if m.v == PROTO_V1 => {
+            let body = handle_frame_v1(&m.msg);
+            let resp = Msg { v: PROTO_V1, id: m.id, msg: body };
+            let tmp = postcard::to_allocvec(&resp).unwrap();
+            let used = cobs::encode(&tmp, &mut out);
+            out.truncate(used);
+            out.push(0); // delimiter
+        }
+        Ok(_) => {
+            let err = Msg { v: PROTO_V1, id: 0, msg: Response::Err { code: siger_core::ERR_UNSUPPORTED_VERSION } };
+            let mut tmp = alloc::vec::Vec::new();
+            postcard::to_allocvec(&err, &mut tmp).unwrap();
+            let used = cobs::encode(&tmp, &mut out);
+            out.truncate(used);
+            out.push(0);
+        }
+        Err(_) => {
+            let err = Msg { v: PROTO_V1, id: 0, msg: Response::Err { code: siger_core::ERR_BAD_COBS_OR_POSTCARD } };
+            let mut tmp = alloc::vec::Vec::new();
+            postcard::to_allocvec(&err, &mut tmp).unwrap();
+            let used = cobs::encode(&tmp, &mut out);
+            out.truncate(used);
+            out.push(0);
+        }
+    }
+    out
+}
 
 #[main]
 fn main() -> ! {
@@ -39,7 +91,14 @@ fn main() -> ! {
     esp_alloc::heap_allocator!(size: 64 * 1024);
 
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
-    let _ = usb.write(b"siger-fw v1 online\r\n");
+    let _ = usb.write(b".________.___ ._____  ._______.______\r\n");
+    let _ = usb.write(b"|    ___/: __|:_ ___\\ : .____/: __   \\\r\n"); 
+    let _ = usb.write(b"|___    \\| : ||   |___| : _/\\ |  \\____|\r\n");
+    let _ = usb.write(b"|       /|   ||   /  ||   /  \\|   :  \\ \r\n");
+    let _ = usb.write(b"|__:___/ |   ||. __  ||_.: __/|   |___\\\r\n");
+    let _ = usb.write(b"   :     |___| :/ |. |   :/   |___|\r\n");
+    let _ = usb.write(b"               :   :/\r\n");
+    let _ = usb.write(b"                   :\r\n");
 
     // Reusable buffers
     let mut rx: HVec<u8, 256> = HVec::new();
@@ -48,41 +107,28 @@ fn main() -> ! {
 
     'run: loop {
         if let Ok(b) = usb.read_byte() {
-            // Resync-friendly: ignore leading delimiters
-            if b == 0 && rx.is_empty() {
-                continue;
-            }
-
-            if rx.push(b).is_err() {
-                // Overflow before delimiter — drop frame and notify
-                rx.clear();
-                send_err(&mut usb, ERR_OVERFLOW, &mut enc);
-                continue;
-            }
+            if b == 0 && rx.is_empty() { continue; }
+            if rx.push(b).is_err() { rx.clear(); send_err(&mut usb, ERR_OVERFLOW, &mut enc); continue; }
 
             if b == 0 {
-                // Decode Msg<Request> from COBS (expects trailing 0x00 present)
-                let resp_msg = match postcard::from_bytes_cobs::<Msg<Request>>(rx.as_mut()) {
+                // decode outer Msg<Request>
+                let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
                     Ok(m) if m.v == PROTO_V1 => {
-                        let body = handle_request_v1(&m.msg);
+                        let body = handle_frame_v1(&m.msg);
                         Msg { v: PROTO_V1, id: m.id, msg: body }
                     }
                     Ok(_m) => Msg { v: PROTO_V1, id: 0, msg: Response::Err { code: ERR_UNSUPPORTED_VERSION } },
                     Err(_) => Msg { v: PROTO_V1, id: 0, msg: Response::Err { code: ERR_BAD_COBS_OR_POSTCARD } },
                 };
 
-                // Serialize + COBS + 0x00
                 match postcard::to_slice(&resp_msg, &mut plain) {
                     Ok(used) => {
                         let n = encode(used, &mut enc);
                         let _ = usb.write(&enc[..n]);
                         let _ = usb.write(&[0]);
                     }
-                    Err(_) => {
-                        send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
-                    }
+                    Err(_) => { send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc); }
                 }
-
                 rx.clear();
             }
         }
@@ -103,43 +149,47 @@ fn pk_compressed_33(sk: &SigningKey) -> [u8;33] {
   out
 }
 
-fn handle_request_v1(req: &Request) -> Response {
+// change handler to accept Frame
+fn handle_frame_v1(req: &Frame) -> Response {
+    match frame {
+        siger_core::Frame::One(req) => handle_request_v1(req);
+    }
+}
+
+fn handle_request_v1(req: &Request, frag: &mut FragRx) -> Response {
   match req {
       Request::Hello =>
           Response::Hello(Caps { proto_v: PROTO_V1, compressed_pk: true }),
 
+      Request::GetInfo => Response::Info {
+          proto_v: PROTO_V1,
+          fw_major: FW_MAJOR,
+          fw_minor: FW_MINOR,
+          features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
+          has_seed: unsafe { SEED_STORE.set },
+      },
+
       Request::Ping => Response::Pong,
 
-      Request::SetSeed { seed64 } => {
-          set_seed(seed64);
-          Response::Ok
-      }
+      Request::SetSeed { seed64 } => { set_seed(seed64); Response::Ok }
+      Request::Wipe              => { wipe_seed();      Response::Ok }
 
-      Request::Wipe => {
-          wipe_seed();
-          Response::Ok
-      }
-
-      Request::GetFingerprint => {
-          match master_fingerprint() {
-              Ok(fp4) => Response::OkFingerprint { fp4 },
-              Err(_)  => Response::Err { code: ERR_NO_SEED },
-          }
-      }
+      Request::GetFingerprint => match master_fingerprint() {
+          Ok(fp4) => Response::OkFingerprint { fp4 },
+          Err(_)  => Response::Err { code: ERR_NO_SEED },
+      },
 
       Request::GetPubkey { path, compressed } => {
           match derive_signing_key(path) {
               Ok(sk) => {
                   let vk = sk.verifying_key();
                   if *compressed {
-                      let ep = vk.to_encoded_point(true);
                       let mut out = [0u8; 33];
-                      out.copy_from_slice(ep.as_bytes());
+                      out.copy_from_slice(vk.to_encoded_point(true).as_bytes());
                       Response::OkPubkeyCompressed { compressed: out }
                   } else {
-                      let ep = vk.to_encoded_point(false);
                       let mut out = [0u8; 65];
-                      out.copy_from_slice(ep.as_bytes());
+                      out.copy_from_slice(vk.to_encoded_point(false).as_bytes());
                       Response::OkPubkey { uncompressed: out }
                   }
               }
@@ -150,8 +200,7 @@ fn handle_request_v1(req: &Request) -> Response {
       Request::SignDigest { path, digest32 } => {
           match derive_signing_key(path) {
               Ok(sk) => {
-                  let mut sig: Signature =
-                      PrehashSigner::sign_prehash(&sk, digest32).unwrap();
+                  let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
                   if let Some(norm) = sig.normalize_s() { sig = norm; }
                   let mut out = [0u8; 64];
                   out.copy_from_slice(&sig.to_bytes());
@@ -161,12 +210,10 @@ fn handle_request_v1(req: &Request) -> Response {
           }
       }
 
-      Request::GetXpub { path } => {
-          match get_xpub(path) {
-              Ok(x) => Response::OkXpub(x),
-              Err(_) => Response::Err { code: ERR_NO_SEED },
-          }
-      }
+      Request::GetXpub { path } => match get_xpub(path) {
+          Ok(x)  => Response::OkXpub(x),
+          Err(_) => Response::Err { code: ERR_NO_SEED },
+      },
 
       Request::GetCheetahPub { path } => {
           match derive_child_sk_from_seed_store(path) {
@@ -197,7 +244,7 @@ fn handle_request_v1(req: &Request) -> Response {
                   if &pk_dev != pubkey {
                       Response::Err { code: ERR_WRONG_PUBKEY }
                   } else {
-                      let hash = Hash { values: *txid5 };
+                      let hash = cheetah::Hash { values: *txid5 };
                       let (e, s) = cheetah::schnorr_sign_txid(sk, *pubkey, hash);
                       Response::OkCheetahSig { chal: e.values, sig: s.values }
                   }
@@ -206,17 +253,15 @@ fn handle_request_v1(req: &Request) -> Response {
           }
       }
 
+      // CHANGED: health = cheetah self-test (no ECDSA)
       Request::Health => {
-          // sign well-known digest with m/44'/0'/0'/0/0
           let path = pathmod::Path::from_iter([0x8000002c, 0x80000000, 0x80000000, 0, 0].into_iter());
-          let digest32 = [0u8; 32];
-          match derive_signing_key(&path) {
+          match derive_child_sk_from_seed_store(&path) {
               Ok(sk) => {
-                  let mut sig: Signature = k256::ecdsa::signature::hazmat::PrehashSigner::sign_prehash(&sk, &digest32).unwrap();
-                  if let Some(norm) = sig.normalize_s() { sig = norm; }
-                  let mut out = [0u8; 64];
-                  out.copy_from_slice(&sig.to_bytes());
-                  Response::OkSig { sig64: out }
+                  let pk = cheetah::cheetah_pub_from_sk(sk);
+                  let hash = cheetah::Hash { values: [0,0,0,0,0] };
+                  let (e, s) = cheetah::schnorr_sign_txid(sk, pk, hash);
+                  Response::OkCheetahSig { chal: e.values, sig: s.values }
               }
               Err(_) => Response::Err { code: ERR_NO_SEED },
           }
@@ -224,10 +269,10 @@ fn handle_request_v1(req: &Request) -> Response {
   }
 }
 
+
 fn signing_key_demo() -> k256::ecdsa::SigningKey {
   k256::ecdsa::SigningKey::from_bytes((&DEMO_SK).into()).unwrap()
 }
-
 
 // Frame Response::Err quickly without allocating `plain`
 fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut [u8; 300]) {

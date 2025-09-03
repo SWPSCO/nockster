@@ -15,7 +15,7 @@ use num_traits::Zero;
 use ibig::UBig;
 use serde::{Serialize, Deserialize};
 
-use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child, ser_a_pt, master_from_seed, hmac_split_512, derive_path_transcript};
+use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child, ser_a_pt, ser_a_pt_rep104, master_from_seed, hmac_split_512, derive_path_transcript};
 
 /// 97-byte serialization of a-pt (6×u64 X, 6×u64 Y, 1 byte inf=0)
 const SER_LIMBS_BIG_ENDIAN: bool = false;
@@ -186,7 +186,7 @@ pub fn import_from_mnemonic(phrase: &str, passphrase: &str, path: &str) -> Resul
     dump_key_material("derived:", sk, cc, pk_xy);
     println!("path: {path}");
 
-    let pk_b58 = pubkey_to_b58(pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_xy);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -212,7 +212,7 @@ pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_
 
     dump_key_material("raw:", sk, cc, pk_xy);
 
-    let pk_b58 = pubkey_to_b58(pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_xy);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -235,7 +235,7 @@ pub fn import_from_hex_priv(hex_sk: &str) -> Result<(ImportedKey, [u8; DEVICE_BL
 
     dump_key_material("raw:", sk, cc, pk_xy);
 
-    let pk_b58 = pubkey_to_b58(pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_xy);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -257,7 +257,7 @@ pub fn import_from_seed(seed64: &[u8; 64], path: &str) -> Result<(ImportedKey, [
 
     dump_key_material("raw:", sk, cc, pk_xy);
 
-    let pk_b58 = pubkey_to_b58(pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_xy);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -291,8 +291,14 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
 }
 
 /// Cheetah a-pt to base58
-fn pubkey_to_b58(pk: ([u64; 6], [u64; 6])) -> String {
-    bs58::encode(ser_a_pt(&pk)).into_string()
+// pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
+//     let ser = ser_a_pt_rep104(pk);
+//     bs58::encode(ser).into_string()
+// }
+
+pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
+  let ser97 = ser_a_pt(pk); // sentinel-first LE Y||X
+  bs58::encode(ser97).into_string()
 }
 
 fn sk_to_b58(sk: [u8; 32]) -> String {
@@ -300,10 +306,21 @@ fn sk_to_b58(sk: [u8; 32]) -> String {
 }
 
 fn dump_key_material(prefix: &str, sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6])) {
-    let ser = ser_a_pt(&pk_xy); // BE limbs + trailing 0x01
+    let ser = ser_a_pt_rep104(&pk_xy);
+    eprintln!("pubkey-ser len: {} (rep104 parity)", ser.len()); // expect 104
+    eprintln!("FINAL ser_a_pt(rep104) = {}", hex::encode(&ser));
+    eprintln!("FINAL Base58 = {}", bs58::encode(&ser).into_string());
     println!("{prefix} privkey (hex):  {}", hex::encode(sk));
     println!("{prefix} privkey (b58):  {}", sk_to_b58(sk));
     println!("{prefix} chaincode (hex): {}", hex::encode(cc));
     println!("{prefix} pubkey  (b58):  {}", bs58::encode(&ser).into_string());
     println!("{prefix} pubkey-ser len: {}  sentinel: 0x{:02x}", ser.len(), ser[96]);
+    let ser97 = ser_a_pt(&pk_xy);
+    let ser104 = ser_a_pt_rep104(&pk_xy);
+
+    eprintln!("pubkey-ser(97)  = {}", hex::encode(&ser97));
+    eprintln!("Base58(97)      = {}", bs58::encode(&ser97).into_string()); // should match Keygen "New Public Key"
+
+    eprintln!("pubkey-ser(104) = {}", hex::encode(&ser104));
+    eprintln!("Base58(104)     = {}", bs58::encode(&ser104).into_string());
 }

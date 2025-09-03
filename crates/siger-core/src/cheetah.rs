@@ -227,14 +227,15 @@ fn ser256_be(x: &[u8; 32]) -> [u8; 32] { *x }
 /// big integer (Hoon `rep 6`), then emit that integer in canonical
 /// **big-endian** bytes (104 bytes).
 pub fn ser_a_pt(pk: &([u64; 6], [u64; 6])) -> [u8; 97] {
-    let mut out = [0u8; 97];
-    let mut off = 0;
-    for &w in pk.0.iter().chain(pk.1.iter()) {
-        out[off..off + 8].copy_from_slice(&w.to_be_bytes());
-        off += 8;
-    }
-    out[96] = 0x01; // sentinel byte
-    out
+  let mut out = [0u8; 97];
+  out[0] = 0x01;
+  let mut off = 1;
+  // Keygen: Y first, then X; limbs serialized little-endian
+  for &w in pk.1.iter().chain(pk.0.iter()) {
+      out[off..off + 8].copy_from_slice(&w.to_le_bytes());
+      off += 8;
+  }
+  out
 }
 
 pub fn ser_a_pt_rep104(pk: &([u64; 6], [u64; 6])) -> [u8; 104] {
@@ -817,7 +818,7 @@ pub fn xprv_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink
 
 pub fn xpub_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink) -> XKey {
     assert_eq!(i & 0x8000_0000, 0);
-    const APT_SER_LEN: usize = 97;
+    const APT_SER_LEN: usize = 104;
 
     // data = ser_a_pt(P) || ser32(i)
     let pub_ser = ser_a_pt_rep104(parent.pk.as_ref().unwrap());

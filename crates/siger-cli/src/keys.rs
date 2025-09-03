@@ -15,7 +15,7 @@ use num_traits::Zero;
 use ibig::UBig;
 use serde::{Serialize, Deserialize};
 
-use siger_core::cheetah::cheetah_pub_from_sk;
+use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child};
 
 /// 97-byte serialization of a-pt (6×u64 X, 6×u64 Y, 1 byte inf=0)
 const SER_LIMBS_BIG_ENDIAN: bool = false;
@@ -112,20 +112,10 @@ pub fn master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
     }
 }
 
-#[derive(Clone)]
-pub struct XKey {
-    pub sk: Option<[u8; 32]>,
-    pub pk_xy: ([u64; 6], [u64; 6]),
-    pub cc: [u8; 32],
-    pub depth: u8,
-    pub index: u32,
-    pub parent_fp: [u8; 4],
-}
-
 pub fn xkey_from_seed(seed64: &[u8; 64]) -> XKey {
     let (sk, cc) = master_from_seed(seed64);
     let pk_xy = cheetah_pub_from_sk(sk);
-    XKey { sk: Some(sk), pk_xy, cc, depth: 0, index: 0, parent_fp: [0u8; 4] }
+    XKey { sk: Some(sk), pk: Some(pk_xy), chain_code: cc, depth: 0, index: 0, parent_fingerprint: [0u8; 4] }
 }
 
 #[inline]
@@ -166,43 +156,6 @@ fn cheetah_order() -> UBig {
     UBig::from_str_radix(GROUP_ORDER_HEX, 16).expect("valid group order")
 }
 
-pub fn xprv_derive_child(parent: &XKey, i: u32) -> XKey {
-    let n = cheetah_order();
-
-    let (prv, cc) = (parent.sk.expect("need private key"), parent.cc);
-    let prv_int = UBig::from_be_bytes(&prv);
-
-    let pub_ser = ser_a_pt(&parent.pk_xy);
-
-    let mut data = Vec::with_capacity(1 + 32 + 4 + 97);
-    if is_hardened(i) {
-        data.push(0u8);
-        data.extend_from_slice(&ser256_be(&prv));
-        data.extend_from_slice(&ser32_be(i));
-    } else {
-        data.extend_from_slice(&pub_ser);
-        data.extend_from_slice(&ser32_be(i));
-    }
-
-    let (left, right) = hmac_split_512(&cc, &data);
-    let mut left_int = UBig::from_be_bytes(&left);
-    let mut child_sk_int = (&left_int + &prv_int) % &n;
-
-    if !(left_int < n) || child_sk_int.is_zero() {
-        let mut red = Vec::with_capacity(1 + 32 + 4);
-        red.push(0x01);
-        red.extend_from_slice(&right);
-        red.extend_from_slice(&ser32_be(i));
-        let (left2, right2) = hmac_split_512(&cc, &red);
-        left_int = UBig::from_be_bytes(&left2);
-        child_sk_int = (&left_int + &prv_int) % &n;
-        assert!(!child_sk_int.is_zero() && left_int < n, "invalid after retry");
-        return xkey_from_child_int(child_sk_int, right2, parent, i);
-    }
-
-    xkey_from_child_int(child_sk_int, right, parent, i)
-}
-
 fn xkey_from_child_int(child_sk: UBig, cc: [u8; 32], parent: &XKey, i: u32) -> XKey {
     let mut be = child_sk.to_be_bytes();
     if be.len() < 32 {
@@ -213,7 +166,7 @@ fn xkey_from_child_int(child_sk: UBig, cc: [u8; 32], parent: &XKey, i: u32) -> X
     let mut sk = [0u8; 32];
     sk.copy_from_slice(&be[be.len() - 32..]);
     let pk_xy = cheetah_pub_from_sk(sk);
-    XKey { sk: Some(sk), pk_xy, cc, depth: parent.depth + 1, index: i, parent_fp: [0u8; 4] }
+    XKey { sk: Some(sk), pk: Some(pk_xy), chain_code: cc, depth: parent.depth + 1, index: i, parent_fingerprint: [0u8; 4] }
 }
 
 /// --- Derivation path parsing ----------------------------------------------
@@ -252,8 +205,8 @@ pub fn import_from_mnemonic(phrase: &str, passphrase: &str, path: &str) -> Resul
     let xk0 = xkey_from_seed(&seed64);
     let child = derive_xprv_path(xk0, path)?;
     let sk = child.sk.ok_or("derived node has no private key")?;
-    let cc = child.cc;
-    let pk_xy = child.pk_xy;
+    let cc = child.chain_code;
+    let pk_xy = child.pk.ok_or("derived node has no public key")?;
 
     let pk_b58 = pubkey_to_b58(pk_xy);
     let key = ImportedKey {
@@ -314,8 +267,8 @@ pub fn import_from_seed(seed64: &[u8; 64], path: &str) -> Result<(ImportedKey, [
     let xk0 = xkey_from_seed(seed64);
     let child = derive_xprv_path(xk0, path)?;
     let sk = child.sk.ok_or("derived node has no private key")?;
-    let cc = child.cc;
-    let pk_xy = child.pk_xy;
+    let cc = child.chain_code;
+    let pk_xy = child.pk.ok_or("derived node has no public key")?;
 
     let pk_b58 = pubkey_to_b58(pk_xy);
     let key = ImportedKey {

@@ -30,6 +30,8 @@ const GROUP_ORDER_BE: [u8; 32] = [
     0x32, 0x7a, 0xa7, 0x23, 0x30, 0x15, 0x77, 0x22, 0xd4, 0x43, 0x62, 0x3e, 0xae, 0xd4, 0xac, 0xcf,
 ];
 
+const NOCKCHAIN_SLIP10_KEY: &[u8] = b"Nockchain seed"; 
+
 const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
 const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
 
@@ -186,40 +188,41 @@ fn hmac_split_512(key: &[u8], data: &[u8]) -> ([u8; 32], [u8; 32]) {
 
 /// Create master (sk, chain_code) from a seed.
 pub fn master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
-    // Loop until left is 0 < left < n
-    let mut sk = [0u8; 32];
-    let mut cc = [0u8; 32];
-    let mut i = 0u8;
+    let mut mac = HmacSha512::new_from_slice(NOCKCHAIN_SLIP10_KEY).unwrap();
+    mac.update(seed);
+    let mut i = mac.finalize().into_bytes(); // 64 bytes
+
     loop {
-        let mut msg = Vec::with_capacity(seed.len() + 1);
-        msg.extend_from_slice(seed);
-        msg.push(i);
-        let (left, right) = hmac_split_512(MASTER_KEY_TAG, &msg);
-        if !is_zero32(&left) && cmp_be32(&left, &GROUP_ORDER_BE) == Ordering::Less {
-            sk = left;
-            cc = right;
-            break;
+        let mut left  = [0u8; 32];
+        let mut right = [0u8; 32];
+        left.copy_from_slice(&i[..32]);
+        right.copy_from_slice(&i[32..]);
+
+        if !be32_is_zero(&left) && be32_lt(&left, &CHEETAH_N) {
+            return (left, right);
         }
-        i = i.wrapping_add(1);
+
+        // rehash whole 64B per Hoon parity
+        let mut mac = HmacSha512::new_from_slice(NOCKCHAIN_SLIP10_KEY).unwrap();
+        mac.update(&i);
+        i = mac.finalize().into_bytes();
     }
-    (sk, cc)
 }
 
 /// Serialize a 256-bit scalar (big-endian) to bytes.
 fn ser256_be(x: &[u8; 32]) -> [u8; 32] { *x }
 
-fn ser32_be(i: u32) -> [u8; 4] { i.to_be_bytes() }
-
 /// Serialize affine point limbs (x,y) into 96 little-endian bytes (12 u64s).
-fn ser_a_pt(pt: &([u64; 6], [u64; 6])) -> [u8; 96] {
-  let mut out = [0u8; 96];
-  for (li, limb) in pt.0.iter().enumerate() {
-      out[li * 8..li * 8 + 8].copy_from_slice(&limb.to_le_bytes());
+fn ser_a_pt(pt: &([u64; 6], [u64; 6])) -> [u8; 97] {
+  let mut out = [0u8; 97];
+  for (i, &w) in pt.0.iter().enumerate() { // X
+      out[i*8..i*8+8].copy_from_slice(&w.to_le_bytes());
   }
-  for (li, limb) in pt.1.iter().enumerate() {
-      let o = 48 + li * 8;
-      out[o..o + 8].copy_from_slice(&limb.to_le_bytes());
+  for (i, &w) in pt.1.iter().enumerate() { // Y
+      let o = 48 + i*8;
+      out[o..o+8].copy_from_slice(&w.to_le_bytes());
   }
+  out[96] = 0; // inf = false for real points
   out
 }
 
@@ -473,37 +476,120 @@ fn fingerprint_from_pk(pk: &([u64; 6], [u64; 6])) -> [u8; 4] {
 }
 
 pub fn xprv_derive_child(parent: &XKey, i: u32) -> XKey {
-    let hardened = (i & 0x8000_0000) != 0;
-    let mut data = Vec::with_capacity(1 + 32 + 4 + 96);
-    if hardened {
-        data.push(0);
-        data.extend_from_slice(&ser256_be(&parent.sk.unwrap()));
-    } else {
-        let pk = parent.pk.as_ref().expect("parent pk");
-        data.extend_from_slice(&ser_a_pt(pk));
-    }
-    data.extend_from_slice(&ser32_be(i));
+  let prv = parent.sk.expect("need private key");
+  let cc  = parent.chain_code;
 
-    let (il, ir) = hmac_split_512(&parent.chain_code, &data);
+  const APT_SER_LEN: usize = 97;
 
-    // child sk = (il + parent_sk) mod n; reject il==0 or child==0
-    if is_zero32(&il) || cmp_be32(&il, &GROUP_ORDER_BE) != Ordering::Less {
-        return xprv_derive_child(parent, i.wrapping_add(1)); // rare retry
-    }
-    let child_sk = add_mod_n(&il, &parent.sk.unwrap());
-    if is_zero32(&child_sk) {
-        return xprv_derive_child(parent, i.wrapping_add(1));
-    }
+  let (mut left, mut right) = if is_hardened(i) {
+      // data = 0x00 || ser256(prv) || ser32(i)
+      let mut data = [0u8; 1 + 32 + 4];
+      data[0] = 0;
+      data[1..33].copy_from_slice(&prv);
+      data[33..].copy_from_slice(&ser32_be(i));
+      hmac_split_512(&cc, &data)
+  } else {
+      // data = ser_a_pt(P) || ser32(i)
+      let pk_xy   = parent.pk.unwrap_or_else(|| cheetah_pub_from_sk(prv));
+      let pub_ser = ser_a_pt(&pk_xy);              // 97 bytes (X||Y||inf)
+      let mut data = [0u8; APT_SER_LEN + 4];
+      data[..APT_SER_LEN].copy_from_slice(&pub_ser);
+      data[APT_SER_LEN..].copy_from_slice(&ser32_be(i));
+      hmac_split_512(&cc, &data)
+  };
 
-    let child_pk = cheetah_pub_from_sk(child_sk);
-    XKey {
-        depth: parent.depth.saturating_add(1),
-        index: i,
-        chain_code: ir,
-        sk: Some(child_sk),
-        pk: Some(child_pk),
-        parent_fingerprint: fingerprint_from_pk(&parent.pk.unwrap()),
+
+  // Retry until 0 < left < n and child != 0 using 0x01 || right || i
+  for _ in 0..1024 {
+      if !be32_is_zero(&left) && be32_lt(&left, &CHEETAH_N) {
+          let child_sk = be32_add_mod_n(&left, &prv);
+          if !be32_is_zero(&child_sk) {
+              let child_pk = cheetah_pub_from_sk(child_sk);
+              return XKey {
+                  sk: Some(child_sk),
+                  pk: Some(child_pk),
+                  chain_code: right,
+                  depth: parent.depth + 1,
+                  index: i,
+                  parent_fingerprint: parent.parent_fingerprint, // or recompute if you use it
+              };
+          }
+      }
+
+      // Next attempt seed: 0x01 || right || ser32(i)
+      let mut red = [0u8; 1 + 32 + 4];
+      red[0] = 0x01;
+      red[1..33].copy_from_slice(&right);
+      red[33..].copy_from_slice(&ser32_be(i));
+      let (l2, r2) = hmac_split_512(&cc, &red);
+      left = l2;
+      right = r2;
+  }
+
+  panic!("xprv_derive_child: too many retries at index {}", i);
+}
+
+
+fn xkey_from_child_bytes(child_sk: [u8; 32], cc: [u8; 32], parent: &XKey, i: u32) -> XKey {
+  let pk_xy = cheetah_pub_from_sk(child_sk);
+  XKey {
+      sk: Some(child_sk),
+      pk: Some(pk_xy),
+      chain_code: cc,
+      depth: parent.depth + 1,
+      index: i,
+      parent_fingerprint: [0u8; 4],
+  }
+}
+
+//////////
+// --- Scalar math over 32-byte big-endian arrays (no_std friendly) ------------
+
+/// Cheetah group order n as 32-byte big-endian
+const CHEETAH_N: [u8; 32] = [
+    0x7a,0xf2,0x59,0x9b,0x3b,0x3f,0x22,0xd0,0x56,0x3f,0xbf,0x0f,0x99,0x0a,0x37,0xb5,
+    0x32,0x7a,0xa7,0x23,0x30,0x15,0x77,0x22,0xd4,0x43,0x62,0x3e,0xae,0xd4,0xac,0xcf,
+];
+
+#[inline] fn is_hardened(i: u32) -> bool { i & 0x8000_0000 != 0 }
+#[inline] fn ser32_be(i: u32) -> [u8; 4] { i.to_be_bytes() }
+
+#[inline] fn be32_is_zero(a: &[u8; 32]) -> bool { a.iter().fold(0u8, |acc, &b| acc | b) == 0 }
+
+#[inline]
+fn be32_lt(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    for k in 0..32 { if a[k] != b[k] { return a[k] < b[k]; } }
+    false
+}
+
+#[inline]
+fn be32_add(a: &[u8; 32], b: &[u8; 32]) -> ([u8; 32], u8) {
+    let mut out = [0u8; 32];
+    let mut c: u16 = 0;
+    for k in (0..32).rev() {
+        let s = a[k] as u16 + b[k] as u16 + c;
+        out[k] = (s & 0xff) as u8;
+        c = s >> 8;
     }
+    (out, c as u8)
+}
+
+#[inline]
+fn be32_sub_inplace(a: &mut [u8; 32], b: &[u8; 32]) {
+    let mut brw: i16 = 0;
+    for k in (0..32).rev() {
+        let v = a[k] as i16 - b[k] as i16 - brw;
+        if v < 0 { a[k] = (v + 256) as u8; brw = 1; } else { a[k] = v as u8; brw = 0; }
+    }
+}
+
+#[inline]
+fn be32_add_mod_n(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let (mut sum, carry) = be32_add(a, b);
+    if carry == 1 || !be32_lt(&sum, &CHEETAH_N) {
+        be32_sub_inplace(&mut sum, &CHEETAH_N);
+    }
+    sum
 }
 
 pub fn xpub_derive_child(parent: &XKey, i: u32) -> XKey {

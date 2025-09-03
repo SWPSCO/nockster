@@ -2549,6 +2549,12 @@ checksum = "212ab92002354b4819390025006c897e8140934349e8635c9b077f47b4dcbd20"
 
 [[package]]
 name = "hex-literal"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
+
+[[package]]
+name = "hex-literal"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcaaec4551594c969335c98c903c1397853d4198408ea609190f420500f6be71"
@@ -5748,6 +5754,7 @@ dependencies = [
  "bip39",
  "bs58",
  "heapless 0.8.0",
+ "hex-literal 0.4.1",
  "hmac",
  "k256",
  "postcard",
@@ -7716,7 +7723,7 @@ dependencies = [
  "bs58",
  "bytes",
  "either",
- "hex-literal",
+ "hex-literal 1.0.0",
  "ibig 0.3.6 (git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd)",
  "nockapp",
  "nockvm",

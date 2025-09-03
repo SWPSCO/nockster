@@ -15,7 +15,7 @@ use num_traits::Zero;
 use ibig::UBig;
 use serde::{Serialize, Deserialize};
 
-use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child};
+use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child, ser_a_pt, master_from_seed, hmac_split_512, derive_path_transcript};
 
 /// 97-byte serialization of a-pt (6×u64 X, 6×u64 Y, 1 byte inf=0)
 const SER_LIMBS_BIG_ENDIAN: bool = false;
@@ -56,21 +56,15 @@ pub struct ImportedKey {
 ///   72..169: ser-a-pt (97 bytes; inf=0)
 pub const DEVICE_BLOB_V1_SIZE: usize = 169;
 
-pub fn device_blob_v1(sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6])) -> [u8; DEVICE_BLOB_V1_SIZE] {
-  let mut out = [0u8; DEVICE_BLOB_V1_SIZE];
-  out[0..8].copy_from_slice(b"NCKEYV1\0");
-  out[8..40].copy_from_slice(&sk);
-  out[40..72].copy_from_slice(&cc);
-
-  // ser-a-pt (x limbs then y limbs, little-endian per limb by default, inf=0)
-  let mut off = 72usize;
-  for limb in pk_xy.0.iter().chain(pk_xy.1.iter()) {  // Use .0 and .1 instead of [0] and [1]
-      let b = if SER_LIMBS_BIG_ENDIAN { limb.to_be_bytes() } else { limb.to_le_bytes() };
-      out[off..off + 8].copy_from_slice(&b);
-      off += 8;
-  }
-  out[72 + 12 * 8] = 0; // inf = false
-  out
+pub fn device_blob_v1(sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6]))
+-> [u8; DEVICE_BLOB_V1_SIZE] {
+    let mut out = [0u8; DEVICE_BLOB_V1_SIZE];
+    out[0..8].copy_from_slice(b"NCKEYV1\0");
+    out[8..40].copy_from_slice(&sk);
+    out[40..72].copy_from_slice(&cc);
+    let ser = ser_a_pt(&pk_xy);
+    out[72..72+97].copy_from_slice(&ser);
+    out
 }
 
 /// mnemo+pass → 64B BIP39 seed
@@ -87,34 +81,10 @@ pub fn bip39_seed_from_mnemonic(mnemonic: &str, passphrase: &str) -> [u8; 64] {
 type HmacSha512 = hmac::Hmac<Sha512>;
 const NOCKCHAIN_SLIP10_KEY: &[u8] = b"Nockchain seed";
 
-/// Hoon parity: rehash the whole 64B if left==0 or >=n
-pub fn master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
-    let n = cheetah_order();
-
-    let mut mac = HmacSha512::new_from_slice(NOCKCHAIN_SLIP10_KEY).unwrap();
-    mac.update(seed);
-    let mut i = mac.finalize().into_bytes().to_vec();
-
-    loop {
-        let mut left = [0u8; 32];
-        let mut right = [0u8; 32];
-        left.copy_from_slice(&i[..32]);
-        right.copy_from_slice(&i[32..]);
-
-        let sk = UBig::from_be_bytes(&left);
-        if !sk.is_zero() && sk < n {
-            return (left, right);
-        }
-
-        let mut mac = HmacSha512::new_from_slice(NOCKCHAIN_SLIP10_KEY).unwrap();
-        mac.update(&i);
-        i = mac.finalize().into_bytes().to_vec();
-    }
-}
-
 pub fn xkey_from_seed(seed64: &[u8; 64]) -> XKey {
     let (sk, cc) = master_from_seed(seed64);
     let pk_xy = cheetah_pub_from_sk(sk);
+    dump_key_material("raw:", sk, cc, pk_xy);
     XKey { sk: Some(sk), pk: Some(pk_xy), chain_code: cc, depth: 0, index: 0, parent_fingerprint: [0u8; 4] }
 }
 
@@ -124,31 +94,6 @@ fn is_hardened(i: u32) -> bool { i >= (1 << 31) }
 fn ser32_be(i: u32) -> [u8; 4] { i.to_be_bytes() }
 #[inline]
 fn ser256_be(sk: &[u8; 32]) -> [u8; 32] { *sk }
-
-// 97 bytes: 6×u64 X, 6×u64 Y, 1 byte inf
-fn ser_a_pt(pk_xy: &([u64; 6], [u64; 6])) -> [u8; 97] {
-  let mut out = [0u8; 97];
-  let mut off = 0usize;
-  for limb in pk_xy.0.iter().chain(pk_xy.1.iter()) {  // Use .0 and .1
-      let b = if SER_LIMBS_BIG_ENDIAN { limb.to_be_bytes() } else { limb.to_le_bytes() };
-      out[off..off + 8].copy_from_slice(&b);
-      off += 8;
-  }
-  out[96] = 0;
-  out
-}
-
-#[inline]
-fn hmac_split_512(key: &[u8; 32], data: &[u8]) -> ([u8; 32], [u8; 32]) {
-    let mut mac = HmacSha512::new_from_slice(key).unwrap();
-    mac.update(data);
-    let i = mac.finalize().into_bytes();
-    let mut left = [0u8; 32];
-    let mut right = [0u8; 32];
-    left.copy_from_slice(&i[..32]);
-    right.copy_from_slice(&i[32..]);
-    (left, right)
-}
 
 fn cheetah_order() -> UBig {
     const GROUP_ORDER_HEX: &str =
@@ -166,6 +111,7 @@ fn xkey_from_child_int(child_sk: UBig, cc: [u8; 32], parent: &XKey, i: u32) -> X
     let mut sk = [0u8; 32];
     sk.copy_from_slice(&be[be.len() - 32..]);
     let pk_xy = cheetah_pub_from_sk(sk);
+    dump_key_material("raw:", sk, cc, pk_xy);
     XKey { sk: Some(sk), pk: Some(pk_xy), chain_code: cc, depth: parent.depth + 1, index: i, parent_fingerprint: [0u8; 4] }
 }
 
@@ -189,12 +135,41 @@ fn parse_path(s: &str) -> Result<Vec<PathElem>, String> {
     Ok(out)
 }
 
+fn path_to_indices(path: &str) -> Result<Vec<u32>, String> {
+    let elems = parse_path(path)?;
+    let mut out = Vec::with_capacity(elems.len());
+    for e in elems {
+        let mut i = e.index;
+        if e.hardened { i |= 1 << 31; }
+        out.push(i);
+    }
+    Ok(out)
+}
+
 fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
     for e in parse_path(path)? {
         let i = if e.hardened { e.index | (1<<31) } else { e.index };
         xk = xprv_derive_child(&xk, i);
     }
     Ok(xk)
+}
+
+pub fn derivation_transcript_from_mnemonic(
+    phrase: &str,
+    passphrase: &str,
+    path: &str,
+) -> Result<String, String> {
+    let seed64 = bip39_seed_from_mnemonic(phrase, passphrase);
+    let idxs = path_to_indices(path)?;
+    let (_xk, transcript) = derive_path_transcript(&seed64, &idxs);
+    Ok(transcript)
+}
+
+/// Same, but if you already have the 64-byte seed.
+pub fn derivation_transcript_from_seed(seed64: &[u8; 64], path: &str) -> Result<String, String> {
+    let idxs = path_to_indices(path)?;
+    let (_xk, transcript) = derive_path_transcript(seed64, &idxs);
+    Ok(transcript)
 }
 
 /// --- Public helpers used by CLI commands -----------------------------------
@@ -208,6 +183,9 @@ pub fn import_from_mnemonic(phrase: &str, passphrase: &str, path: &str) -> Resul
     let cc = child.chain_code;
     let pk_xy = child.pk.ok_or("derived node has no public key")?;
 
+    dump_key_material("derived:", sk, cc, pk_xy);
+    println!("path: {path}");
+
     let pk_b58 = pubkey_to_b58(pk_xy);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
@@ -220,6 +198,9 @@ pub fn import_from_mnemonic(phrase: &str, passphrase: &str, path: &str) -> Resul
         },
     };
     let blob = device_blob_v1(sk, cc, pk_xy);
+    if let Ok(t) = derivation_transcript_from_seed(&seed64, path) {
+        println!("{t}");
+    }
     Ok((key, blob))
 }
 
@@ -228,6 +209,8 @@ pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_
     let sk = sk_from_b58(b58)?;
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);
+
+    dump_key_material("raw:", sk, cc, pk_xy);
 
     let pk_b58 = pubkey_to_b58(pk_xy);
     let key = ImportedKey {
@@ -250,6 +233,8 @@ pub fn import_from_hex_priv(hex_sk: &str) -> Result<(ImportedKey, [u8; DEVICE_BL
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);
 
+    dump_key_material("raw:", sk, cc, pk_xy);
+
     let pk_b58 = pubkey_to_b58(pk_xy);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
@@ -269,6 +254,8 @@ pub fn import_from_seed(seed64: &[u8; 64], path: &str) -> Result<(ImportedKey, [
     let sk = child.sk.ok_or("derived node has no private key")?;
     let cc = child.chain_code;
     let pk_xy = child.pk.ok_or("derived node has no public key")?;
+
+    dump_key_material("raw:", sk, cc, pk_xy);
 
     let pk_b58 = pubkey_to_b58(pk_xy);
     let key = ImportedKey {
@@ -304,22 +291,19 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
 }
 
 /// Cheetah a-pt to base58
-fn pubkey_to_b58(pk_xy: ([u64; 6], [u64; 6])) -> String {
-  use num_bigint::BigUint;
-  use num_traits::{Zero, One};
+fn pubkey_to_b58(pk: ([u64; 6], [u64; 6])) -> String {
+    bs58::encode(ser_a_pt(&pk)).into_string()
+}
 
-  fn pack_le(words: &[u64]) -> BigUint {
-      let mut n = BigUint::zero();
-      for (i, &w) in words.iter().enumerate() {
-          n += BigUint::from(w) << (64 * i);
-      }
-      n
-  }
+fn sk_to_b58(sk: [u8; 32]) -> String {
+    bs58::encode(sk).into_string() // raw 32 bytes → Base58 (no version/checksum)
+}
 
-  let x = pack_le(&pk_xy.0);  // Use .0
-  let y = pack_le(&pk_xy.1);  // Use .1
-  let mut n: BigUint = (y << (64 * 6)) | x;
-  n = (n << 1) | BigUint::one();
-
-  bs58::encode(n.to_bytes_be()).into_string()
+fn dump_key_material(prefix: &str, sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6])) {
+    let ser = ser_a_pt(&pk_xy); // BE limbs + trailing 0x01
+    println!("{prefix} privkey (hex):  {}", hex::encode(sk));
+    println!("{prefix} privkey (b58):  {}", sk_to_b58(sk));
+    println!("{prefix} chaincode (hex): {}", hex::encode(cc));
+    println!("{prefix} pubkey  (b58):  {}", bs58::encode(&ser).into_string());
+    println!("{prefix} pubkey-ser len: {}  sentinel: 0x{:02x}", ser.len(), ser[96]);
 }

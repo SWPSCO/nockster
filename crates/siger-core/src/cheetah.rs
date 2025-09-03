@@ -13,13 +13,22 @@ const F6_ZERO: F6lt = F6lt([Belt(0); 6]);
 const F6_ONE:  F6lt = F6lt([Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
 
 const GX: F6lt = F6lt([
-    Belt(2_754_435_735_642_750_112), Belt(1_644_450_330_024_117_627), Belt(10_514_417_644_467_316_420),
-    Belt(14_161_929_407_758_026_907), Belt(14_987_836_057_278_945_216), Belt(6_227_780_353_604_379_289),
+    Belt(2_754_611_494_552_410_273),
+    Belt(8_599_518_745_794_843_693),
+    Belt(10_526_511_002_404_673_680),
+    Belt(4_830_863_958_577_994_148),
+    Belt(375_185_138_577_093_320),
+    Belt(12_938_930_721_685_970_739),
 ]);
 const GY: F6lt = F6lt([
-    Belt(9_410_740_712_825_754_944), Belt(6_042_221_554_322_127_113), Belt(3_212_109_399_280_097_325),
-    Belt(12_822_852_497_658_382_218), Belt(8_300_084_201_729_938_365), Belt(8_030_207_336_092_068_342),
+    Belt(15_384_029_202_802_550_068),
+    Belt(2_774_812_795_997_841_935),
+    Belt(14_375_303_400_746_062_753),
+    Belt(10_708_493_419_890_101_954),
+    Belt(13_187_678_623_570_541_764),
+    Belt(9_990_732_138_772_505_951),
 ]);
+
 
 /// Domain tag for the seed
 const MASTER_KEY_TAG: &[u8] = b"Nockchain seed";
@@ -175,7 +184,7 @@ fn mod_n_from_be_bytes(bytes_be: &[u8]) -> [u8; 32] {
     rem
 }
 
-fn hmac_split_512(key: &[u8], data: &[u8]) -> ([u8; 32], [u8; 32]) {
+pub fn hmac_split_512(key: &[u8], data: &[u8]) -> ([u8; 32], [u8; 32]) {
     let mut mac = HmacSha512::new_from_slice(key).expect("HMAC key");
     mac.update(data);
     let out = mac.finalize().into_bytes();
@@ -213,17 +222,36 @@ pub fn master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
 fn ser256_be(x: &[u8; 32]) -> [u8; 32] { *x }
 
 /// Serialize affine point limbs (x,y) into 96 little-endian bytes (12 u64s).
-fn ser_a_pt(pt: &([u64; 6], [u64; 6])) -> [u8; 97] {
-  let mut out = [0u8; 97];
-  for (i, &w) in pt.0.iter().enumerate() { // X
-      out[i*8..i*8+8].copy_from_slice(&w.to_le_bytes());
-  }
-  for (i, &w) in pt.1.iter().enumerate() { // Y
-      let o = 48 + i*8;
-      out[o..o+8].copy_from_slice(&w.to_le_bytes());
-  }
-  out[96] = 0; // inf = false for real points
-  out
+/// Serialize affine point into the exact Hoon/Tip5 parity format:
+/// Treat [x0..x5, y0..y5, 1] as 13 little-endian 64-bit limbs of a single
+/// big integer (Hoon `rep 6`), then emit that integer in canonical
+/// **big-endian** bytes (104 bytes).
+pub fn ser_a_pt(pk: &([u64; 6], [u64; 6])) -> [u8; 97] {
+    let mut out = [0u8; 97];
+    let mut off = 0;
+    for &w in pk.0.iter().chain(pk.1.iter()) {
+        out[off..off + 8].copy_from_slice(&w.to_be_bytes());
+        off += 8;
+    }
+    out[96] = 0x01; // sentinel byte
+    out
+}
+
+pub fn ser_a_pt_rep104(pk: &([u64; 6], [u64; 6])) -> [u8; 104] {
+    let mut limbs = [0u64; 13];
+    limbs[0] = 1;                           // LS limb = sentinel
+    // Y first, then X (each y0/x0 is the LS limb within that coordinate)
+    limbs[1..7].copy_from_slice(&pk.1);     // y0..y5
+    limbs[7..13].copy_from_slice(&pk.0);    // x0..x5
+
+    // Write MS→LS limbs as big-endian bytes.
+    let mut out = [0u8; 104];
+    let mut off = 0;
+    for i in (0..13).rev() {
+        out[off..off + 8].copy_from_slice(&limbs[i].to_be_bytes());
+        off += 8;
+    }
+    out
 }
 
 // Deterministic k (RFC6979)
@@ -287,18 +315,81 @@ fn pack_point_words(pt: &([u64; 6], [u64; 6])) -> [u64; 12] {
     F6lt([ a.0[0]*s, a.0[1]*s, a.0[2]*s, a.0[3]*s, a.0[4]*s, a.0[5]*s ])
 }
 
-#[inline] fn f6_mul(a: &F6lt, b: &F6lt) -> F6lt {
-    // Karatsuba-3 per the original
-    let t0 = a.0[0]*b.0[0] + a.0[2]*b.0[4] + a.0[4]*b.0[2];
-    let t1 = a.0[1]*b.0[1] + a.0[3]*b.0[5] + a.0[5]*b.0[3];
-    let t2 = a.0[0]*b.0[2] + a.0[2]*b.0[0] + a.0[4]*b.0[4];
-    let t3 = a.0[1]*b.0[3] + a.0[3]*b.0[1] + a.0[5]*b.0[5];
-    let t4 = a.0[0]*b.0[4] + a.0[2]*b.0[2] + a.0[4]*b.0[0];
-    let t5 = a.0[1]*b.0[5] + a.0[3]*b.0[3] + a.0[5]*b.0[1];
-    F6lt([t0,t1,t2,t3,t4,t5])
+#[inline]
+fn karat3(a0: Belt, a1: Belt, a2: Belt, b0: Belt, b1: Belt, b2: Belt)
+-> (Belt,Belt,Belt,Belt,Belt) {
+    let m0 = a0*b0;
+    let m1 = a1*b1;
+    let m2 = a2*b2;
+    let t0 = (a0+a1)*(b0+b1) - (m0+m1);
+    let t1 = (a0+a2)*(b0+b2) - (m0+m2);
+    let t2 = (a1+a2)*(b1+b2) - (m1+m2);
+    (m0, t0, t1 - m1, t2, m2)
 }
 
-#[inline] fn f6_square(a: &F6lt) -> F6lt { f6_mul(a, a) }
+#[inline]
+fn karat3_square(a0: Belt, a1: Belt, a2: Belt)
+-> (Belt,Belt,Belt,Belt,Belt) {
+    let m0  = a0*a0;
+    let m2  = a2*a2;
+    let n01 = (a0*a1)*Belt(2);
+    let n12 = (a1*a2)*Belt(2);
+    let tri = (a0 + a1 + a2);
+    let tri2 = tri*tri;
+    let coeff2 = tri2 - (m0 + m2 + n01 + n12);
+    (m0, n01, coeff2, n12, m2)
+}
+
+#[inline]
+fn f6_mul(a: &F6lt, b: &F6lt) -> F6lt {
+    let (a0,a1,a2,a3,a4,a5) = (a.0[0],a.0[1],a.0[2],a.0[3],a.0[4],a.0[5]);
+    let (b0,b1,b2,b3,b4,b5) = (b.0[0],b.0[1],b.0[2],b.0[3],b.0[4],b.0[5]);
+
+    let (f00,f01,f02,f03,f04) = karat3(a0,a1,a2, b0,b1,b2);
+    let (f10,f11,f12,f13,f14) = karat3(a3,a4,a5, b3,b4,b5);
+    let (g00,g01,g02,g03,g04) = karat3(a0+a3,a1+a4,a2+a5, b0+b3,b1+b4,b2+b5);
+
+    // cross = foil - (f0g0 + f1g1)
+    let c0 = g00 - (f00 + f10);
+    let c1 = g01 - (f01 + f11);
+    let c2 = g02 - (f02 + f12);
+    let c3 = g03 - (f03 + f13);
+    let c4 = g04 - (f04 + f14);
+
+    // reduction mod x^6 - 7 (wrap with factor 7)
+    F6lt([
+        f00 + Belt(7)*(c3 + f10),
+        f01 + Belt(7)*(c4 + f11),
+        f02 + Belt(7)*f12,
+        f03 + c0 + Belt(7)*f13,
+        f04 + c1 + Belt(7)*f14,
+        c2,
+    ])
+}
+
+#[inline]
+fn f6_square(a: &F6lt) -> F6lt {
+    let (a0,a1,a2,a3,a4,a5) = (a.0[0],a.0[1],a.0[2],a.0[3],a.0[4],a.0[5]);
+    let (lo0,lo1,lo2,lo3,lo4) = karat3_square(a0,a1,a2);
+    let (hi0,hi1,hi2,hi3,hi4) = karat3_square(a3,a4,a5);
+    let (fd0,fd1,fd2,fd3,fd4) = karat3_square(a0+a3, a1+a4, a2+a5);
+
+    // cross = folded2 - (lo2 + hi2)
+    let c0 = fd0 - (lo0 + hi0);
+    let c1 = fd1 - (lo1 + hi1);
+    let c2 = fd2 - (lo2 + hi2);
+    let c3 = fd3 - (lo3 + hi3);
+    let c4 = fd4 - (lo4 + hi4);
+
+    F6lt([
+        lo0 + Belt(7)*c3 + Belt(7)*hi0,
+        lo1 + Belt(7)*c4 + Belt(7)*hi1,
+        lo2 + Belt(7)*hi2,
+        lo3 + c0 + Belt(7)*hi3,
+        lo4 + c1 + Belt(7)*hi4,
+        c2,
+    ])
+}
 
 fn f6_inv(a: &F6lt) -> F6lt {
     // Inverse via extended GCD in the tower (ported, depends on zkvm_jetpack math)
@@ -347,20 +438,23 @@ fn ch_add(p: &CheetahPoint, q: &CheetahPoint) -> CheetahPoint { ch_add_unsafe(p,
 fn ch_double_unsafe(p: &CheetahPoint) -> CheetahPoint {
     if p.inf { return *p; }
     let x = p.x; let y = p.y;
-
     if y == F6_ZERO { return A_ID; }
 
-    // λ = (3x^2 + a) / (2y), but a = 0 here per curve form used
     let three = Belt(3);
-    let two = Belt(2);
+    let two   = Belt(2);
 
-    let s = f6_div(&f6_scal(&f6_square(&x), three), &f6_scal(&y, two));
+    // slope = (3*x^2 + 1) / (2*y)
+    let num  = f6_add(&f6_scal(&f6_square(&x), three), &F6_ONE);
+    let den  = f6_scal(&y, two);
+    let s    = f6_div(&num, &den);
+
     let s2 = f6_square(&s);
     let x3 = f6_sub(&f6_sub(&s2, &x), &x);
     let y3 = f6_sub(&f6_mul(&s, &f6_sub(&x, &x3)), &y);
 
     CheetahPoint { x: x3, y: y3, inf: false }
 }
+
 fn ch_double(p: &CheetahPoint) -> CheetahPoint { ch_double_unsafe(p) }
 
 fn ch_scal_big(k_be: &[u8; 32], p: &CheetahPoint) -> CheetahPoint {
@@ -398,7 +492,7 @@ pub fn cheetah_pub_from_sk(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
 pub fn schnorr_sign_txid(sk_be: [u8; 32], pk: ([u64; 6], [u64; 6]), txid: Hash) -> (T8, T8) {
     // Deterministic nonce personalization = ser(P) || txid (bytes)
     let p_words = pack_point_words(&pk);
-    let p_ser = ser_a_pt(&pk);
+    let p_ser = ser_a_pt_rep104(&pk);
     let mut personalization = Vec::with_capacity(96 + 40);
     personalization.extend_from_slice(&p_ser);
     {
@@ -479,7 +573,7 @@ pub fn xprv_derive_child(parent: &XKey, i: u32) -> XKey {
   let prv = parent.sk.expect("need private key");
   let cc  = parent.chain_code;
 
-  const APT_SER_LEN: usize = 97;
+  const APT_SER_LEN: usize = 104;
 
   let (mut left, mut right) = if is_hardened(i) {
       // data = 0x00 || ser256(prv) || ser32(i)
@@ -491,7 +585,7 @@ pub fn xprv_derive_child(parent: &XKey, i: u32) -> XKey {
   } else {
       // data = ser_a_pt(P) || ser32(i)
       let pk_xy   = parent.pk.unwrap_or_else(|| cheetah_pub_from_sk(prv));
-      let pub_ser = ser_a_pt(&pk_xy);              // 97 bytes (X||Y||inf)
+      let pub_ser = ser_a_pt_rep104(&pk_xy);              // 97 bytes (X||Y||inf)
       let mut data = [0u8; APT_SER_LEN + 4];
       data[..APT_SER_LEN].copy_from_slice(&pub_ser);
       data[APT_SER_LEN..].copy_from_slice(&ser32_be(i));
@@ -593,44 +687,45 @@ fn be32_add_mod_n(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
 }
 
 pub fn xpub_derive_child(parent: &XKey, i: u32) -> XKey {
-    // Non-hardened only (per SLIP-10 rules)
     assert_eq!(i & 0x8000_0000, 0);
-    let mut data = Vec::with_capacity(96 + 4);
+
+    let mut data = Vec::with_capacity(104 + 4);
     data.extend_from_slice(&ser_a_pt(parent.pk.as_ref().unwrap()));
     data.extend_from_slice(&ser32_be(i));
-    let (il, ir) = hmac_split_512(&parent.chain_code, &data);
 
-    if is_zero32(&il) || cmp_be32(&il, &GROUP_ORDER_BE) != Ordering::Less {
-        return xpub_derive_child(parent, i.wrapping_add(1));
-    }
+    let (mut left, mut right) = hmac_split_512(&parent.chain_code, &data);
 
-    // child P = (il * G) + parent P
-    let q = ch_scal_big(&il, &G);
-    let p = CheetahPoint {
-        x: F6lt(parent.pk.unwrap().0.map(|w| Belt(w))),
-        y: F6lt(parent.pk.unwrap().1.map(|w| Belt(w))),
-        inf: false,
-    };
-    let r = ch_add(&q, &p);
-    let child_pk = {
-        let mut x = [0u64; 6];
-        let mut y = [0u64; 6];
-        for j in 0..6 {
-            x[j] = r.x.0[j].0 as u64;
-            y[j] = r.y.0[j].0 as u64;
+    loop {
+        if !is_zero32(&left) && cmp_be32(&left, &GROUP_ORDER_BE) == Ordering::Less {
+            // child P = (left * G) + parent P
+            let q  = ch_scal_big(&left, &G);
+            let pp = parent.pk.unwrap();
+            let p  = CheetahPoint { x: F6lt(pp.0.map(Belt)), y: F6lt(pp.1.map(Belt)), inf: false };
+            let r  = ch_add(&q, &p);
+            let child_pk = {
+                let mut x = [0u64; 6]; let mut y = [0u64; 6];
+                for j in 0..6 { x[j] = r.x.0[j].0 as u64; y[j] = r.y.0[j].0 as u64; }
+                (x, y)
+            };
+            return XKey {
+                depth: parent.depth.saturating_add(1),
+                index: i,
+                chain_code: right,
+                sk: None,
+                pk: Some(child_pk),
+                parent_fingerprint: fingerprint_from_pk(&pp),
+            };
         }
-        (x, y)
-    };
 
-    XKey {
-        depth: parent.depth.saturating_add(1),
-        index: i,
-        chain_code: ir,
-        sk: None,
-        pk: Some(child_pk),
-        parent_fingerprint: fingerprint_from_pk(&parent.pk.unwrap()),
+        // retry seed: 0x01 || right || ser32(i)
+        let mut red = [0u8; 1 + 32 + 4];
+        red[0] = 0x01;
+        red[1..33].copy_from_slice(&right);
+        red[33..].copy_from_slice(&ser32_be(i));
+        (left, right) = hmac_split_512(&parent.chain_code, &red);
     }
 }
+
 
 impl XKey {
     /// Construct a master extended private key (depth=0, index=0)
@@ -661,3 +756,295 @@ impl XKey {
         }
     }
 }
+
+
+pub fn xprv_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink) -> XKey {
+    let prv = parent.sk.expect("need private key");
+    let cc  = parent.chain_code;
+    const APT_SER_LEN: usize = 104;
+
+    let hardened = is_hardened(i);
+    let (mut left, mut right) = if hardened {
+        // data = 0x00 || ser256(prv) || ser32(i)
+        let mut data = [0u8; 1 + 32 + 4];
+        data[0] = 0x00;
+        data[1..33].copy_from_slice(&prv);
+        data[33..].copy_from_slice(&ser32_be(i));
+        sink.log(&format!("i={} mode=hardened HMAC_msg = {}", i, hex(&data)));
+        hmac_split_512(&cc, &data)
+    } else {
+        // data = ser_a_pt(P) || ser32(i)
+        let pk_xy   = parent.pk.unwrap_or_else(|| cheetah_pub_from_sk(prv));
+        let pub_ser = ser_a_pt_rep104(&pk_xy); // 97 bytes (X||Y||0x01)
+        let mut data = [0u8; APT_SER_LEN + 4];
+        data[..APT_SER_LEN].copy_from_slice(&pub_ser);
+        data[APT_SER_LEN..].copy_from_slice(&ser32_be(i));
+        sink.log(&format!("i={} mode=normal   HMAC_msg = {}", i, hex(&data)));
+        hmac_split_512(&cc, &data)
+    };
+
+    loop {
+        sink.log(&format!("i={} IL = {}", i, hex(&left)));
+        sink.log(&format!("i={} IR = {}", i, hex(&right)));
+
+        if !be32_is_zero(&left) && be32_lt(&left, &CHEETAH_N) {
+            let child_sk = be32_add_mod_n(&left, &prv);
+            if !be32_is_zero(&child_sk) {
+                let child_pk = cheetah_pub_from_sk(child_sk);
+                let ser = ser_a_pt(&child_pk);
+                sink.log(&format!("i={} child_sk = {}", i, hex(&child_sk)));
+                sink.log(&format!("i={} child_P_ser97 = {}", i, hex(&ser)));
+                return XKey {
+                    sk: Some(child_sk),
+                    pk: Some(child_pk),
+                    chain_code: right,
+                    depth: parent.depth.saturating_add(1),
+                    index: i,
+                    parent_fingerprint: parent.parent_fingerprint,
+                };
+            }
+        }
+
+        // retry: 0x01 || right || ser32(i)
+        let mut red = [0u8; 1 + 32 + 4];
+        red[0] = 0x01;
+        red[1..33].copy_from_slice(&right);
+        red[33..].copy_from_slice(&ser32_be(i));
+        sink.log(&format!("i={} retry_seed = {}", i, hex(&red)));
+        (left, right) = hmac_split_512(&cc, &red);
+    }
+}
+
+pub fn xpub_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink) -> XKey {
+    assert_eq!(i & 0x8000_0000, 0);
+    const APT_SER_LEN: usize = 97;
+
+    // data = ser_a_pt(P) || ser32(i)
+    let pub_ser = ser_a_pt_rep104(parent.pk.as_ref().unwrap());
+    let mut data = [0u8; APT_SER_LEN + 4];
+    data[..APT_SER_LEN].copy_from_slice(&pub_ser);
+    data[APT_SER_LEN..].copy_from_slice(&ser32_be(i));
+    sink.log(&format!("i={} mode=normal   HMAC_msg = {}", i, hex(&data)));
+
+    let mut cc = parent.chain_code;
+    let (mut left, mut right) = hmac_split_512(&cc, &data);
+
+    loop {
+        sink.log(&format!("i={} IL = {}", i, hex(&left)));
+        sink.log(&format!("i={} IR = {}", i, hex(&right)));
+
+        if !is_zero32(&left) && cmp_be32(&left, &GROUP_ORDER_BE) == core::cmp::Ordering::Less {
+            // child P = (IL * G) + parent P
+            let q = ch_scal_big(&left, &G);
+            let pp = parent.pk.unwrap();
+            let p = CheetahPoint {
+                x: F6lt(pp.0.map(Belt)),
+                y: F6lt(pp.1.map(Belt)),
+                inf: false,
+            };
+            let r = ch_add(&q, &p);
+            let mut x = [0u64; 6]; let mut y = [0u64; 6];
+            for j in 0..6 { x[j] = r.x.0[j].0 as u64; y[j] = r.y.0[j].0 as u64; }
+            let child_pk = (x, y);
+            let ser = ser_a_pt(&child_pk);
+            sink.log(&format!("i={} child_P_ser97 = {}", i, hex(&ser)));
+
+            return XKey {
+                depth: parent.depth.saturating_add(1),
+                index: i,
+                chain_code: right,
+                sk: None,
+                pk: Some(child_pk),
+                parent_fingerprint: fingerprint_from_pk(&parent.pk.unwrap()),
+            };
+        }
+
+        // retry with 0x01 || IR || ser32(i)
+        let mut red = [0u8; 1 + 32 + 4];
+        red[0] = 0x01;
+        red[1..33].copy_from_slice(&right);
+        red[33..].copy_from_slice(&ser32_be(i));
+        sink.log(&format!("i={} retry_seed = {}", i, hex(&red)));
+        let out = hmac_split_512(&cc, &red);
+        left = out.0; right = out.1;
+    }
+}
+
+pub fn derive_path_with_trace(seed: &[u8], path: &[u32], sink: &mut impl TraceSink)
+-> (XKey, String /*base58 of final ser_a_pt*/) {
+    let (sk, cc) = master_from_seed_traced(seed, sink);
+    let mut xk = XKey::from_master(sk, cc);
+
+    for &i in path {
+        xk = if is_hardened(i) {
+            xprv_derive_child_traced(&xk, i, sink)
+        } else if xk.sk.is_some() {
+            // have xprv → stay in private space
+            xprv_derive_child_traced(&xk, i, sink)
+        } else {
+            // xpub only
+            xpub_derive_child_traced(&xk, i, sink)
+        };
+    }
+
+    let pk = xk.pk.expect("final key must have pk");
+    let ser = ser_a_pt(&pk);
+    sink.log(&format!("FINAL ser_a_pt(97B) = {}", hex(&ser)));
+    let b58 = base58_encode(&ser);
+    sink.log(&format!("FINAL Base58 = {}", b58));
+    (xk, b58)
+}
+
+
+////////// test below// --- Add this block ----------------------------------------------------------
+use alloc::string::String;
+use alloc::format;
+
+// Simple tracing that doesn't require std I/O.
+pub trait TraceSink { fn log(&mut self, s: &str); }
+
+pub struct StringSink { buf: String }
+impl StringSink {
+    pub fn new() -> Self { Self { buf: String::new() } }
+    pub fn into_string(self) -> String { self.buf }
+}
+impl TraceSink for StringSink {
+    fn log(&mut self, s: &str) {
+        self.buf.push_str(s);
+        self.buf.push('\n');
+    }
+}
+
+// Hex helper (alloc-only).
+const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+pub fn hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX_CHARS[(b >> 4) as usize] as char);
+        out.push(HEX_CHARS[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+// Base58 (Bitcoin alphabet), alloc-only, no std.
+const B58_ALPHABET: &[u8] =
+    b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+pub fn base58_encode(bytes: &[u8]) -> String {
+    // Count leading zeros
+    let mut zeros = 0;
+    for &b in bytes {
+        if b == 0 { zeros += 1; } else { break; }
+    }
+
+    // Make a mutable copy for in-place base256 -> base58 conversion
+    let mut input = bytes.to_vec();
+    let mut encoded: Vec<u8> = Vec::new();
+
+    let mut start = zeros;
+    while start < input.len() {
+        let mut carry: u32 = 0;
+        for i in start..input.len() {
+            let val = (carry << 8) + input[i] as u32;
+            input[i] = (val / 58) as u8;
+            carry = val % 58;
+        }
+        encoded.push(B58_ALPHABET[carry as usize]);
+        while start < input.len() && input[start] == 0 {
+            start += 1;
+        }
+    }
+
+    let mut out = String::with_capacity(zeros + encoded.len());
+    for _ in 0..zeros { out.push('1'); }           // leading zero -> '1'
+    for ch in encoded.iter().rev() { out.push(*ch as char); }
+    out
+}
+
+// Traced master-from-seed (alloc-only logging).
+pub fn master_from_seed_traced(seed: &[u8], sink: &mut impl TraceSink)
+-> ([u8; 32], [u8; 32]) {
+    let mut mac = HmacSha512::new_from_slice(NOCKCHAIN_SLIP10_KEY).unwrap();
+    mac.update(seed);
+    let mut i = mac.finalize().into_bytes(); // 64 bytes
+    sink.log(&format!(
+        "MASTER: I = HMAC-SHA512(key='Nockchain seed', seed) = {}",
+        hex(&i)
+    ));
+
+    loop {
+        let mut left  = [0u8; 32];
+        let mut right = [0u8; 32];
+        left.copy_from_slice(&i[..32]);
+        right.copy_from_slice(&i[32..]);
+
+        sink.log(&format!("MASTER: IL = {}", hex(&left)));
+        sink.log(&format!("MASTER: IR = {}", hex(&right)));
+
+        if !be32_is_zero(&left) && be32_lt(&left, &CHEETAH_N) {
+            return (left, right);
+        }
+
+        // rehash whole 64B per spec
+        let mut mac = HmacSha512::new_from_slice(NOCKCHAIN_SLIP10_KEY).unwrap();
+        mac.update(&i);
+        i = mac.finalize().into_bytes();
+        sink.log("MASTER: invalid IL (zero or ≥n), rehashing I.");
+    }
+}
+
+// Pretty printer for an XKey you can show in CLI.
+pub fn format_xkey(xk: &XKey) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "depth={} index={}{}",
+        xk.depth,
+        xk.index & 0x7fff_ffff,
+        if (xk.index & 0x8000_0000) != 0 { " (hardened)" } else { "" }
+    ));
+    s.push('\n');
+
+    s.push_str("chain_code = ");
+    s.push_str(&hex(&xk.chain_code));
+    s.push('\n');
+
+    if let Some(sk) = xk.sk {
+        s.push_str("sk         = ");
+        s.push_str(&hex(&sk));
+        s.push('\n');
+    } else {
+        s.push_str("sk         = <none>\n");
+    }
+
+    if let Some((x, y)) = xk.pk {
+        s.push_str("pk.x       = [");
+        for (i, w) in x.iter().enumerate() {
+            if i > 0 { s.push_str(", "); }
+            s.push_str(&format!("{}", w));
+        }
+        s.push_str("]\n");
+        s.push_str("pk.y       = [");
+        for (i, w) in y.iter().enumerate() {
+            if i > 0 { s.push_str(", "); }
+            s.push_str(&format!("{}", w));
+        }
+        s.push_str("]\n");
+    } else {
+        s.push_str("pk         = <none>\n");
+    }
+
+    s
+}
+
+// Convenience: run the traced derivation and return a single printable blob.
+pub fn derive_path_transcript(seed: &[u8], path: &[u32]) -> (XKey, String) {
+    let mut sink = StringSink::new();
+    let (xk, b58) = derive_path_with_trace(seed, path, &mut sink);
+    let mut out = sink.into_string();
+    out.push_str("----- SUMMARY -----\n");
+    out.push_str(&format_xkey(&xk));
+    out.push_str("base58(P)  = ");
+    out.push_str(&b58);
+    out.push('\n');
+    (xk, out)
+}
+// ---------------------------------------------------------------------------

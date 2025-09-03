@@ -4547,6 +4547,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+ "hmac",
+]
+
+[[package]]
 name = "pem"
 version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5702,10 +5712,13 @@ dependencies = [
  "anyhow",
  "bech32",
  "bip39",
+ "bs58",
  "bytes",
  "clap",
  "cobs 0.4.0",
  "hex",
+ "hmac",
+ "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "k256",
  "nockapp",
  "nockvm",
@@ -5713,14 +5726,18 @@ dependencies = [
  "noun-serde",
  "num-bigint",
  "num-integer",
+ "num-traits",
+ "pbkdf2",
  "postcard",
  "ripemd",
  "serde",
  "serde-big-array",
+ "serde_json",
  "serialport",
  "sha2",
  "siger-core",
  "tx-types",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -5732,7 +5749,9 @@ dependencies = [
  "bs58",
  "heapless 0.8.0",
  "hmac",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=c88496985c83218ba3100e07031d56371bb02028)",
  "k256",
+ "num-traits",
  "postcard",
  "serde",
  "serde-big-array",
@@ -5753,7 +5772,6 @@ dependencies = [
  "getrandom 0.2.16",
  "heapless 0.8.0",
  "hmac",
- "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "k256",
  "panic-halt",
  "postcard",

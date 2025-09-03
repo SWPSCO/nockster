@@ -374,7 +374,7 @@ impl NounDecode for F6LT {
 }
 
 // Schnorr signature structure a a-pt:cheta
-#[derive(Debug, Clone, NounEncode, NounDecode, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SchnorrPubkey {
     pub x: F6LT,
     pub y: F6LT,
@@ -385,6 +385,17 @@ use num_bigint::BigUint;
 use num_traits::{Zero};
 
 impl SchnorrPubkey {
+    #[inline]
+    fn f6lt_words_be_desc(a: &F6LT, out: &mut Vec<u8>) {
+        // a5...a0 as big-endian u64s
+        out.extend_from_slice(&a.values[5].to_be_bytes());
+        out.extend_from_slice(&a.values[4].to_be_bytes());
+        out.extend_from_slice(&a.values[3].to_be_bytes());
+        out.extend_from_slice(&a.values[2].to_be_bytes());
+        out.extend_from_slice(&a.values[1].to_be_bytes());
+        out.extend_from_slice(&a.values[0].to_be_bytes());
+    }
+
     pub fn to_hashable(&self) -> Hashable {
         // In Hoon, this is [%leaf form] where form is the pubkey noun.
         // Since our Hashable::Leaf only supports bytes (not arbitrary nouns),
@@ -411,85 +422,115 @@ impl SchnorrPubkey {
     /// ++  from-b58  |=(=cord `form`(base58-to-a-pt:cheetah cord))
     /// 
     /// The base58 encoding represents a compressed elliptic curve point
-    pub fn from_b58(base58: &str) -> Result<Self, String> {
-        use bs58;
-        use num_bigint::BigUint;
-        
-        // Decode base58 to bytes
-        let bytes = bs58::decode(base58)
-            .into_vec()
-            .map_err(|e| format!("Invalid base58: {}", e))?;
-        
-        // Convert to BigUint
-        let big_num = BigUint::from_bytes_be(&bytes);
-        
-        // For elliptic curve points in Nockchain/cheetah:
-        // The encoding is a 384-bit value (2 * 192 bits for x and y coordinates)
-        // Each coordinate has 6 field elements (6 * 64 bits = 384 bits)
-        // Plus 1 bit for the infinity flag
-        
-        // Extract the infinity flag (least significant bit)
-        let inf = (&big_num & BigUint::from(1u32)) == BigUint::from(1u32);
-        let mut point_data = big_num >> 1; // Remove the infinity bit
-        
-        // Extract y coordinate (next 384 bits)
-        let mut y_values = [0u64; 6];
-        for i in 0..6 {
-            y_values[i] = (&point_data & BigUint::from(u64::MAX)).try_into().unwrap_or(0);
-            point_data >>= 64;
+    pub fn from_b58(s: &str) -> Result<Self, String> {
+        if s == "inf" {
+            return Ok(SchnorrPubkey {
+                x: F6LT { values: [0; 6] },
+                y: F6LT { values: [0; 6] },
+                inf: true,
+            });
         }
-        
-        // Extract x coordinate (next 384 bits)
-        let mut x_values = [0u64; 6];
-        for i in 0..6 {
-            x_values[i] = (&point_data & BigUint::from(u64::MAX)).try_into().unwrap_or(0);
-            point_data >>= 64;
+        let bytes = bs58::decode(s).into_vec()
+            .map_err(|e| format!("invalid base58: {e}"))?;
+        if bytes.len() != 97 || bytes[0] != 0x01 {
+            return Err("a-pt b58: expected 97 bytes with 0x01 prefix".into());
+        }
+        // Y: a5..a0 (BE u64s), then X: a5..a0
+        let mut rd = &bytes[1..];
+
+        fn take_u64_be(rd: &mut &[u8]) -> u64 {
+            let (head, tail) = rd.split_at(8);
+            *rd = tail;
+            u64::from_be_bytes(head.try_into().unwrap())
         }
 
+        let mut y = [0u64; 6];
+        let mut x = [0u64; 6];
+
+        // note: file format stores a5..a0; our struct keeps [a0..a5]
+        y[5] = take_u64_be(&mut rd);
+        y[4] = take_u64_be(&mut rd);
+        y[3] = take_u64_be(&mut rd);
+        y[2] = take_u64_be(&mut rd);
+        y[1] = take_u64_be(&mut rd);
+        y[0] = take_u64_be(&mut rd);
+
+        x[5] = take_u64_be(&mut rd);
+        x[4] = take_u64_be(&mut rd);
+        x[3] = take_u64_be(&mut rd);
+        x[2] = take_u64_be(&mut rd);
+        x[1] = take_u64_be(&mut rd);
+        x[0] = take_u64_be(&mut rd);
+
         Ok(SchnorrPubkey {
-            x: F6LT { values: x_values },
-            y: F6LT { values: y_values },
-            inf,
+            x: F6LT { values: x },
+            y: F6LT { values: y },
+            inf: false,
         })
+    }
+
+    fn pack_le(words: &[u64]) -> BigUint {
+        use num_bigint::BigUint;
+        use num_traits::{Zero, One};
+        let mut n = BigUint::zero();
+        for (i, &w) in words.iter().enumerate() {
+            n += BigUint::from(w) << (64 * i);
+        }
+        n
+    }
+
+    pub fn to_base58(&self) -> String {
+        use num_bigint::BigUint;
+        use num_traits::One;
+        let mut n = BigUint::from(0u32);
+
+        // N = ((y_le << (64*6)) | x_le) << 1 | inf
+        let x = Self::pack_le(&self.x.values);
+        let y = Self::pack_le(&self.y.values);
+        n = (y << (64 * 6)) | x;
+        n = (n << 1) | if self.inf { BigUint::one() } else { BigUint::from(0u32) };
+
+        bs58::encode(n.to_bytes_be()).into_string()
     }
     
     /// Convert SchnorrPubkey to base58 encoded string
     /// Implements the Hoon to-b58 function:
     /// ++  to-b58  |=(sop=form `cord`(a-pt-to-base58:cheetah sop))
     pub fn to_b58(&self) -> String {
-        use num_bigint::BigUint;
-        use bs58;
-        
-        // Build the encoding: x coordinates + y coordinates + infinity flag
-        let mut result = BigUint::from(0u32);
-        
-        // Add x coordinate (most significant)
-        for i in (0..6).rev() {
-            result <<= 64;
-            result |= BigUint::from(self.x.values[i]);
-        }
-        
-        // Add y coordinate
-        for i in (0..6).rev() {
-            result <<= 64;
-            result |= BigUint::from(self.y.values[i]);
-        }
-        
-        // Add infinity flag (least significant bit)
-        result <<= 1;
         if self.inf {
-            result |= BigUint::from(1u32);
+            return "inf".to_string();
         }
-        
-        bs58::encode(result.to_bytes_be()).into_string()
+        let mut bytes = Vec::with_capacity(1 + 6*8 + 6*8);
+        bytes.push(1u8);                        // fixed prefix
+        Self::f6lt_words_be_desc(&self.y, &mut bytes); // Y first
+        Self::f6lt_words_be_desc(&self.x, &mut bytes); // then X
+        bs58::encode(bytes).into_string()
     }
 
     pub fn from_base58(s: &str) -> Self {
-        let pk_vec = Self::rip64(&Self::de_base58(s));
-        let x = F6LT { values: [pk_vec[0], pk_vec[1], pk_vec[2], pk_vec[3], pk_vec[4], pk_vec[5]] };
-        let y = F6LT { values: [pk_vec[6], pk_vec[7], pk_vec[8], pk_vec[9], pk_vec[10], pk_vec[11]] };
-        SchnorrPubkey { x, y, inf: false }
+        use num_bigint::BigUint;
+        use num_traits::{Zero, One};
+
+        let mut n = Self::de_base58(s);
+        let inf = (&n & BigUint::one()) == BigUint::one();
+        n >>= 1;
+
+        // pull x (low 6 words) then y (next 6 words)
+        let mask_6 = (BigUint::one() << (64 * 6)) - BigUint::one();
+        let x_big = &n & &mask_6;
+        let y_big = n >> (64 * 6);
+
+        let mut x_vals = Self::rip64(&x_big);
+        let mut y_vals = Self::rip64(&y_big);
+        x_vals.resize(6, 0);
+        y_vals.resize(6, 0);
+
+        let x = F6LT { values: [x_vals[0], x_vals[1], x_vals[2], x_vals[3], x_vals[4], x_vals[5]] };
+        let y = F6LT { values: [y_vals[0], y_vals[1], y_vals[2], y_vals[3], y_vals[4], y_vals[5]] };
+
+        SchnorrPubkey { x, y, inf }
     }
+
     fn de_base58(s: &str) -> BigUint {
         const ALPH: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
         let mut n = BigUint::zero();
@@ -512,6 +553,33 @@ impl SchnorrPubkey {
         if out.is_empty() { out.push(0); }
         out
     }
+}
+
+impl NounEncode for SchnorrPubkey {
+  fn to_noun<A: NounAllocator>(&self, a: &mut A) -> Noun {
+      let x = self.x.to_noun(a);
+      let y = self.y.to_noun(a);
+      let inf_atom = Atom::new(a, if self.inf { 0 } else { 1 }).as_noun();
+      let y_inf = T(a, &[y, inf_atom]);
+      T(a, &[x, y_inf])
+  }
+}
+
+impl NounDecode for SchnorrPubkey {
+  fn from_noun(n: &Noun) -> Result<Self, NounDecodeError> {
+      let xy = n.as_cell().map_err(|_| NounDecodeError::ExpectedCell)?;
+      let x = F6LT::from_noun(&xy.head())?;
+      let yi = xy.tail().as_cell().map_err(|_| NounDecodeError::ExpectedCell)?;
+      let y = F6LT::from_noun(&yi.head())?;
+      let b = yi.tail().as_atom().map_err(|_| NounDecodeError::ExpectedAtom)?;
+      let v = b.as_u64()?;
+      let inf = match v {
+          0 => true,  // %.y
+          1 => false, // %.n
+          _ => return Err(NounDecodeError::Custom("invalid a-pt inf bit".into())),
+      };
+      Ok(SchnorrPubkey { x, y, inf })
+  }
 }
 
 // Implement PartialOrd and Ord manually to avoid conflict with DorTip

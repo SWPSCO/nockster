@@ -21,6 +21,14 @@ num-integer = "0.1.46"
 bech32 = "0.9"
 ripemd = "0.1"
 
+bs58 = "0.5"
+pbkdf2 = "0.12"
+unicode-normalization = "0.1"
+serde_json = { workspace = true }
+ibig = "0.3"
+num-traits = "0.2"
+hmac = "0.12"
+
 nockapp = { workspace = true }
 nockvm = { workspace = true }
 nockvm_macros = { workspace = true }

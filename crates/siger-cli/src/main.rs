@@ -55,7 +55,7 @@ enum Cmd {
         #[arg(long)]
         seed_hex: Option<String>,
         /// Derivation path (comma separated uint32, MSB=hard)
-        #[arg(long, default_value = "2147483692,2147483648,2147483648,0,0")] // 44'/0'/0'/0/0
+        #[arg(long, default_value = "m")] // 44'/0'/0'/0/0
         path: String,
     },
 

@@ -4,7 +4,7 @@ use core::cmp::Ordering;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512};
 
-use crate::math::math::{Belt, tip5_permute, bpegcd};
+use crate::math::math::{Belt, tip5_permute, bpegcd_full};
 
 
 // ---- Constants --------------------------------------------------------------
@@ -14,24 +14,28 @@ const F6_ONE:  F6lt = F6lt([Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)
 const B: F6lt = F6lt([Belt(395), Belt(1), Belt(0), Belt(0), Belt(0), Belt(0)]);
 const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
 const NOCKCHAIN_SLIP10_KEY: &[u8] = b"Nockchain seed"; 
-const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
+const NONRES: Belt = Belt(16807);
 
-const GX: F6lt = F6lt([
-    Belt(2_754_611_494_552_410_273),
-    Belt(8_599_518_745_794_843_693),
-    Belt(10_526_511_002_404_673_680),
-    Belt(4_830_863_958_577_994_148),
-    Belt(375_185_138_577_093_320),
-    Belt(12_938_930_721_685_970_739),
+pub const GX: F6lt = F6lt([
+  Belt(2_754_611_494_552_410_273),
+  Belt(8_599_518_745_794_843_693),
+  Belt(10_526_511_002_404_673_680),
+  Belt(4_830_863_958_577_994_148),
+  Belt(375_185_138_577_093_320),
+  Belt(12_938_930_721_685_970_739),
 ]);
-const GY: F6lt = F6lt([
-    Belt(15_384_029_202_802_550_068),
-    Belt(2_774_812_795_997_841_935),
-    Belt(14_375_303_400_746_062_753),
-    Belt(10_708_493_419_890_101_954),
-    Belt(13_187_678_623_570_541_764),
-    Belt(9_990_732_138_772_505_951),
+pub const GY: F6lt = F6lt([
+  Belt(15_384_029_202_802_550_068),
+  Belt(2_774_812_795_997_841_935),
+  Belt(14_375_303_400_746_062_753),
+  Belt(10_708_493_419_890_101_954),
+  Belt(13_187_678_623_570_541_764),
+  Belt(9_990_732_138_772_505_951),
 ]);
+
+pub const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
+
+const A: F6lt = F6lt([Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
 
 /// Group order n for Cheetah as big-endian bytes.
 const GROUP_ORDER_BE: [u8; 32] = [
@@ -51,13 +55,13 @@ pub struct T8 {
 
 // F_{p^6} tower elements as six Belt limbs
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct F6lt([Belt; 6]);
+pub struct F6lt([Belt; 6]);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CheetahPoint {
-    x: F6lt,
-    y: F6lt,
-    inf: bool,
+pub struct CheetahPoint {
+    pub x: F6lt,
+    pub y: F6lt,
+    pub inf: bool,
 }
 
 // ---- SLIP master/child derivation ---------------------------------
@@ -218,37 +222,38 @@ fn ser256_be(x: &[u8; 32]) -> [u8; 32] { *x }
 
 /// Serialize affine point limbs (x,y) into 96 big-endian bytes (12 u64s).
 pub fn ser_a_pt(pk: &([u64; 6], [u64; 6])) -> [u8; 97] {
+      {
+        let Gc = basepoint();
+        assert!(is_on_curve(&Gc), "G not on curve");
+
+        // n·G must be ∞
+        assert!(ch_scal_big(&GROUP_ORDER_BE, &Gc).inf, "n·G != ∞");
+
+        // Field inverse sanity: for random-ish a (nonzero), a * a^-1 = 1
+        let a = F6lt([Belt(5), Belt(123), Belt(0), Belt(77), Belt(2), Belt(9999)]);
+        let ainv = f6_inv(&a);
+        let id = f6_mul(&a, &ainv);
+        assert_eq!(id, F6_ONE, "f6_inv is wrong");
+    }
     let (x, y) = pk;
     let mut out = [0u8; 97];
-    out[0] = 0x01; // 1-byte sentinel
-
+    out[0] = 0x01;
     let mut off = 1;
-    for &w in x.iter() {                       // ← no .rev()
-        out[off..off+8].copy_from_slice(&w.to_be_bytes());
-        off += 8;
-    }
-    for &w in y.iter() {                       // ← no .rev()
-        out[off..off+8].copy_from_slice(&w.to_be_bytes());
-        off += 8;
-    }
+
+    // pk limbs should be MSW..LSW already; write Y then X to match Hoon.
+    for &w in y.iter() { out[off..off+8].copy_from_slice(&w.to_be_bytes()); off += 8; }
+    for &w in x.iter() { out[off..off+8].copy_from_slice(&w.to_be_bytes()); off += 8; }
+
     out
 }
 
 pub fn ser_a_pt_rep104(pk: &([u64; 6], [u64; 6])) -> [u8; 104] {
     let (x, y) = pk;
     let mut out = [0u8; 104];
-
     out[0..8].copy_from_slice(&1u64.to_be_bytes()); // 8-byte sentinel
-
     let mut off = 8;
-    for &w in x.iter() {                       // ← no .rev()
-        out[off..off+8].copy_from_slice(&w.to_be_bytes());
-        off += 8;
-    }
-    for &w in y.iter() {                       // ← no .rev()
-        out[off..off+8].copy_from_slice(&w.to_be_bytes());
-        off += 8;
-    }
+    for &w in x.iter() { out[off..off+8].copy_from_slice(&w.to_be_bytes()); off += 8; }
+    for &w in y.iter() { out[off..off+8].copy_from_slice(&w.to_be_bytes()); off += 8; }
     out
 }
 
@@ -342,81 +347,35 @@ fn karat3_square(a0: Belt, a1: Belt, a2: Belt)
 
 #[inline]
 fn f6_mul(a: &F6lt, b: &F6lt) -> F6lt {
-    let (a0,a1,a2,a3,a4,a5) = (a.0[0],a.0[1],a.0[2],a.0[3],a.0[4],a.0[5]);
-    let (b0,b1,b2,b3,b4,b5) = (b.0[0],b.0[1],b.0[2],b.0[3],b.0[4],b.0[5]);
-
-    let (f00,f01,f02,f03,f04) = karat3(a0,a1,a2, b0,b1,b2);
-    let (f10,f11,f12,f13,f14) = karat3(a3,a4,a5, b3,b4,b5);
-    let (g00,g01,g02,g03,g04) = karat3(a0+a3,a1+a4,a2+a5, b0+b3,b1+b4,b2+b5);
-
-    // cross = foil - (f0g0 + f1g1)
-    let c0 = g00 - (f00 + f10);
-    let c1 = g01 - (f01 + f11);
-    let c2 = g02 - (f02 + f12);
-    let c3 = g03 - (f03 + f13);
-    let c4 = g04 - (f04 + f14);
-
-    // reduction mod x^6 - 7 (wrap with factor 7)
-    F6lt([
-        f00 + Belt(7)*(c3 + f10),
-        f01 + Belt(7)*(c4 + f11),
-        f02 + Belt(7)*f12,
-        f03 + c0 + Belt(7)*f13,
-        f04 + c1 + Belt(7)*f14,
-        c2,
-    ])
+    let mut h = [Belt(0); 11];
+    for i in 0..6 {
+        for j in 0..6 {
+            h[i + j] = h[i + j] + (a.0[i] * b.0[j]);
+        }
+    }
+    // u^6 ≡ +7  → fold highs down with +7
+    for k in 6..=10 {
+        h[k - 6] = h[k - 6] + (Belt(7) * h[k]);
+    }
+    F6lt([h[0], h[1], h[2], h[3], h[4], h[5]])
 }
 
 #[inline]
-fn f6_square(a: &F6lt) -> F6lt {
-    let (a0,a1,a2,a3,a4,a5) = (a.0[0],a.0[1],a.0[2],a.0[3],a.0[4],a.0[5]);
-    let (lo0,lo1,lo2,lo3,lo4) = karat3_square(a0,a1,a2);
-    let (hi0,hi1,hi2,hi3,hi4) = karat3_square(a3,a4,a5);
-    let (fd0,fd1,fd2,fd3,fd4) = karat3_square(a0+a3, a1+a4, a2+a5);
+fn f6_square(a: &F6lt) -> F6lt { f6_mul(a, a) }
 
-    // cross = folded2 - (lo2 + hi2)
-    let c0 = fd0 - (lo0 + hi0);
-    let c1 = fd1 - (lo1 + hi1);
-    let c2 = fd2 - (lo2 + hi2);
-    let c3 = fd3 - (lo3 + hi3);
-    let c4 = fd4 - (lo4 + hi4);
-
-    F6lt([
-        lo0 + Belt(7)*c3 + Belt(7)*hi0,
-        lo1 + Belt(7)*c4 + Belt(7)*hi1,
-        lo2 + Belt(7)*hi2,
-        lo3 + c0 + Belt(7)*hi3,
-        lo4 + c1 + Belt(7)*hi4,
-        c2,
-    ])
-}
-
+// ----- inverse: modulus μ(t) = t^6 + 7
 fn f6_inv(a: &F6lt) -> F6lt {
-    // Inverse via extended GCD in the tower (ported, depends on zkvm_jetpack math)
-    // Zero has “inverse” zero by convention.
-    if a.0.iter().all(|&x| x == Belt(0)) { return *a; }
+  if a.0.iter().all(|&x| x == Belt(0)) { return *a; }
 
-    // Build polynomial for a and mod polynomial μ; run extended GCD; extract inverse.
-    let mut u = [Belt(0); 7];
-    u[..6].copy_from_slice(&a.0);
-    let mu = [
-        -Belt(7),  // t^6 - 7
-        Belt(0),
-        Belt(0),
-        Belt(0),
-        Belt(0),
-        Belt(0),
-        Belt(1),
-    ];
+  let mut u = [Belt(0); 7];
+  u[..6].copy_from_slice(&a.0);
 
-    // Extended GCD over polynomials in Belt
-    let (s, v) = bpegcd(&u, &mu);
-    // Scalar inverses
-    let inv_v0 = v[0].inv();
-    let inv_v1 = v[1].inv();
-    let s0 = f6_scal(&F6lt([s[0], s[1], s[2], s[3], s[4], s[5]]), inv_v0);
-    let s1 = f6_scal(&F6lt([s[6], s[7], s[8], s[9], s[10], s[11]]), inv_v1);
-    f6_sub(&s0, &s1)
+  // μ(t) = t^6 - 7
+  let mu = [-Belt(7), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0), Belt(1)];
+
+  let (s, _t, d0) = bpegcd_full(&u, &mu);
+  let inv_d0 = d0.inv();
+  F6lt([ s[0]*inv_d0, s[1]*inv_d0, s[2]*inv_d0, s[3]*inv_d0, s[4]*inv_d0, s[5]*inv_d0 ])
 }
 
 #[inline] fn f6_div(a: &F6lt, b: &F6lt) -> F6lt { f6_mul(a, &f6_inv(b)) }
@@ -443,23 +402,23 @@ fn ch_add(p: &CheetahPoint, q: &CheetahPoint) -> CheetahPoint { ch_add_unsafe(p,
 
 
 fn ch_double_unsafe(p: &CheetahPoint) -> CheetahPoint {
-    if p.inf { return *p; }
-    let x = p.x; let y = p.y;
-    if y == F6_ZERO { return A_ID; }
+  if p.inf { return *p; }
+  let x = p.x; let y = p.y;
+  if y == F6_ZERO { return A_ID; }
 
-    let three = Belt(3);
-    let two   = Belt(2);
+  let three = Belt(3);
+  let two   = Belt(2);
 
-    // a = 0  → slope = (3*x^2) / (2*y)
-    let num  = f6_scal(&f6_square(&x), three);   // 3*x^2
-    let den  = f6_scal(&y, two);                 // 2*y
-    let s    = f6_div(&num, &den);
+  // a = 1  → slope = (3*x^2 + A) / (2*y)
+  let num  = f6_add(&f6_scal(&f6_square(&x), three), &A);
+  let den  = f6_scal(&y, two);
+  let s    = f6_div(&num, &den);
 
-    let s2 = f6_square(&s);
-    let x3 = f6_sub(&f6_sub(&s2, &x), &x);
-    let y3 = f6_sub(&f6_mul(&s, &f6_sub(&x, &x3)), &y);
+  let s2 = f6_square(&s);
+  let x3 = f6_sub(&f6_sub(&s2, &x), &x);
+  let y3 = f6_sub(&f6_mul(&s, &f6_sub(&x, &x3)), &y);
 
-    CheetahPoint { x: x3, y: y3, inf: false }
+  CheetahPoint { x: x3, y: y3, inf: false }
 }
 
 fn ch_double(p: &CheetahPoint) -> CheetahPoint { ch_double_unsafe(p) }
@@ -478,18 +437,19 @@ fn ch_scal_big(k_be: &[u8; 32], p: &CheetahPoint) -> CheetahPoint {
     acc
 }
 
-// Public Cheetah API 
-//
 /// Compute affine (x,y) for the secret scalar `sk_be` (big-endian).
+/// Internal limbs are LSW..MSW; wire/serialized limbs must be MSW..LSW.
 pub fn cheetah_pub_from_sk(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
-    let p = ch_scal_big(&sk_be, &G);
-    let mut x = [0u64; 6];
-    let mut y = [0u64; 6];
-    for i in 0..6 {
-        x[i] = p.x.0[i].0 as u64;
-        y[i] = p.y.0[i].0 as u64;
-    }
-    (x, y)
+  let p = ch_scal_big(&sk_be, &basepoint());
+  let mut x = [0u64; 6];
+  let mut y = [0u64; 6];
+
+  // internal limbs are LSW..MSW, wire format must be MSW..LSW
+  for i in 0..6 {
+      x[5 - i] = p.x.0[i].0 as u64;
+      y[5 - i] = p.y.0[i].0 as u64;
+  }
+  (x, y)
 }
 
 /// Schnorr signature (challenge, response) tuple over Cheetah
@@ -580,7 +540,7 @@ pub fn xprv_derive_child(parent: &XKey, i: u32) -> XKey {
   let prv = parent.sk.expect("need private key");
   let cc  = parent.chain_code;
 
-  const APT_SER_LEN: usize = 104;
+  const APT_SER_LEN: usize = 97;
 
   let (mut left, mut right) = if is_hardened(i) {
       // data = 0x00 || ser256(prv) || ser32(i)
@@ -592,7 +552,7 @@ pub fn xprv_derive_child(parent: &XKey, i: u32) -> XKey {
   } else {
       // data = ser_a_pt(P) || ser32(i)
       let pk_xy   = parent.pk.unwrap_or_else(|| cheetah_pub_from_sk(prv));
-      let pub_ser = ser_a_pt_rep104(&pk_xy);              // 97 bytes (X||Y||inf)
+      let pub_ser = ser_a_pt(&pk_xy);              // 97 bytes (X||Y||inf)
       let mut data = [0u8; APT_SER_LEN + 4];
       data[..APT_SER_LEN].copy_from_slice(&pub_ser);
       data[APT_SER_LEN..].copy_from_slice(&ser32_be(i));
@@ -705,7 +665,7 @@ pub fn xpub_derive_child(parent: &XKey, i: u32) -> XKey {
     loop {
         if !is_zero32(&left) && cmp_be32(&left, &GROUP_ORDER_BE) == Ordering::Less {
             // child P = (left * G) + parent P
-            let q  = ch_scal_big(&left, &G);
+            let q  = ch_scal_big(&left, &basepoint());
             let pp = parent.pk.unwrap();
             let p  = CheetahPoint { x: F6lt(pp.0.map(Belt)), y: F6lt(pp.1.map(Belt)), inf: false };
             let r  = ch_add(&q, &p);
@@ -768,7 +728,7 @@ impl XKey {
 pub fn xprv_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink) -> XKey {
     let prv = parent.sk.expect("need private key");
     let cc  = parent.chain_code;
-    const APT_SER_LEN: usize = 104;
+    const APT_SER_LEN: usize = 97;
 
     let hardened = is_hardened(i);
     let (mut left, mut right) = if hardened {
@@ -782,7 +742,7 @@ pub fn xprv_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink
     } else {
         // data = ser_a_pt(P) || ser32(i)
         let pk_xy   = parent.pk.unwrap_or_else(|| cheetah_pub_from_sk(prv));
-        let pub_ser = ser_a_pt_rep104(&pk_xy); // 97 bytes (X||Y||0x01)
+        let pub_ser = ser_a_pt(&pk_xy); // 97 bytes (X||Y||0x01)
         let mut data = [0u8; APT_SER_LEN + 4];
         data[..APT_SER_LEN].copy_from_slice(&pub_ser);
         data[APT_SER_LEN..].copy_from_slice(&ser32_be(i));
@@ -842,7 +802,7 @@ pub fn xpub_derive_child_traced(parent: &XKey, i: u32, sink: &mut impl TraceSink
 
         if !is_zero32(&left) && cmp_be32(&left, &GROUP_ORDER_BE) == core::cmp::Ordering::Less {
             // child P = (IL * G) + parent P
-            let q = ch_scal_big(&left, &G);
+            let q = ch_scal_big(&left, &basepoint());
             let pp = parent.pk.unwrap();
             let p = CheetahPoint {
                 x: F6lt(pp.0.map(Belt)),
@@ -1014,6 +974,10 @@ pub fn format_xkey(xk: &XKey) -> String {
     s.push_str(&hex(&xk.chain_code));
     s.push('\n');
 
+    s.push_str("chain_code (b58) = ");
+    s.push_str(&base58_encode(&xk.chain_code));
+    s.push('\n');
+
     if let Some(sk) = xk.sk {
         s.push_str("sk         = ");
         s.push_str(&hex(&sk));
@@ -1055,3 +1019,106 @@ pub fn derive_path_transcript(seed: &[u8], path: &[u32]) -> (XKey, String) {
     (xk, out)
 }
 // ---------------------------------------------------------------------------
+
+#[inline]
+fn is_on_curve(p: &CheetahPoint) -> bool {
+  let y2 = f6_square(&p.y);
+  let x2 = f6_square(&p.x);
+  let x3 = f6_mul(&x2, &p.x);
+  let ax = f6_mul(&A, &p.x);
+  let rhs = f6_add(&f6_add(&x3, &ax), &B);   // y^2 = x^3 + A*x + B
+  y2 == rhs
+}
+
+
+#[inline]
+fn rev(x: &F6lt) -> F6lt { F6lt([x.0[5], x.0[4], x.0[3], x.0[2], x.0[1], x.0[0]]) }
+
+#[inline]
+fn dbg_f6(a: &F6lt) -> String {
+    format!(
+        "[{}, {}, {}, {}, {}, {}]",
+        a.0[0].0, a.0[1].0, a.0[2].0, a.0[3].0, a.0[4].0, a.0[5].0
+    )
+}
+
+fn basepoint() -> CheetahPoint {
+  // Accumulate diagnostics in a no_std-friendly String
+  let mut diag = String::new();
+
+  // 0) Detect which tower relation your f6_mul/f6_inv actually implements.
+  {
+      // u = t (the polynomial variable), i.e., element with only the highest limb = 1
+      let u = F6lt([Belt(0), Belt(1), Belt(0), Belt(0), Belt(0), Belt(0)]);
+      let mut u6 = F6_ONE;
+      for _ in 0..6 { u6 = f6_mul(&u6, &u); }
+      
+      let minus7 = F6lt([-Belt(7), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
+      let plus7  = F6lt([ Belt(7), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
+      let sign = if u6 == minus7 { "-7" } else if u6 == plus7 { "+7" } else { "??" };
+      diag.push_str(&format!("FIELD: detected relation u^6 = {}\n", sign));
+      diag.push_str(&format!("FIELD: u^6 = {}\n", dbg_f6(&u6)));
+
+      // Also compare constant term against ±7 / ±16807 modulo Goldilocks
+      let p: u128 = ((1u128<<64) - (1u128<<32) + 1);
+      let u6c = u6.0[0].0 as u128; // constant term
+      let expect = [
+          ("+7",       7u128),
+          ("-7",       p - 7),
+          ("+16807",   16807u128),
+          ("-16807",   p - 16807),
+      ];
+      for (name, val) in expect {
+          if u6c == val {
+              diag.push_str(&format!("FIELD: u^6 constant matches {}\n", name));
+          }
+      }
+  }
+
+  // 1) Try all permutations of limb-reversal and Y sign
+  let xs = [GX, rev(&GX)];
+  let ys = [GY, rev(&GY)];
+
+  let mut printed_b_needed = false;
+
+  for &x in &xs {
+      for &y_raw in &ys {
+          for flip_y in [false, true] {
+              let y = if flip_y { f6_neg(&y_raw) } else { y_raw };
+              let g = CheetahPoint { x, y, inf: false };
+
+              // curve check
+              let y2  = f6_square(&g.y);
+              let x3  = f6_mul(&f6_square(&g.x), &g.x);
+              let ax  = f6_mul(&A, &g.x);
+              let x3ab = f6_add(&f6_add(&x3, &ax), &B);
+              let on_curve = (y2 == x3ab);
+              
+
+              // On the first candidate, show what B *would need to be*.
+              if !printed_b_needed {
+                  let b_need = f6_sub(&f6_sub(&y2, &x3), &ax);  // B_needed = y^2 - x^3 - A*x
+                  diag.push_str(&format!("B_needed (for first candidate) = {}\n", dbg_f6(&b_need)));
+                  diag.push_str(&format!("B_given                      = {}\n", dbg_f6(&B)));
+                  printed_b_needed = true;
+              }
+
+              // order check
+              let order_ok = ch_scal_big(&GROUP_ORDER_BE, &g).inf;
+
+              diag.push_str(&format!(
+                  "CANDIDATE x={} y={} (flip_y={}) -> on_curve={} order_ok={}\n  y^2={}\n  x^3+AB={}\n",
+                  if x.0[0] == GX.0[0] { "X" } else { "revX" },
+                  if y_raw.0[0] == GY.0[0] { "Y" } else { "revY" },
+                  flip_y, on_curve, order_ok, dbg_f6(&y2), dbg_f6(&x3ab)
+              ));
+
+              if on_curve && order_ok {
+                  return g;
+              }
+          }
+      }
+  }
+
+  panic!("no basepoint matches curve/order; diagnostics:\n{}", diag);
+}

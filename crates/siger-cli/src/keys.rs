@@ -10,12 +10,9 @@ use bs58;
 use pbkdf2::pbkdf2_hmac;
 use sha2::Sha512;
 use unicode_normalization::UnicodeNormalization;
-use hmac::Mac;
-use num_traits::Zero;
-use ibig::UBig;
 use serde::{Serialize, Deserialize};
 
-use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child, ser_a_pt, ser_a_pt_rep104, master_from_seed, hmac_split_512, derive_path_transcript};
+use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child, ser_a_pt, ser_a_pt_rep104, master_from_seed, derive_path_transcript};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
@@ -72,82 +69,38 @@ pub fn bip39_seed_from_mnemonic(mnemonic: &str, passphrase: &str) -> [u8; 64] {
     out
 }
 
-/// --- SLIP-10 (Hoon parity) -------------------------------------------------
-
-type HmacSha512 = hmac::Hmac<Sha512>;
-const NOCKCHAIN_SLIP10_KEY: &[u8] = b"Nockchain seed";
-
 pub fn xkey_from_seed(seed64: &[u8; 64]) -> XKey {
     let (sk, cc) = master_from_seed(seed64);
     let pk_xy = cheetah_pub_from_sk(sk);
+    probe_master_variants(seed64, KNOWN_GOOD_MASTER_SER97_HEX);
+    check_known_good_from_pk(&pk_xy, KNOWN_GOOD_MASTER_SER97_HEX);
     dump_key_material("raw:", sk, cc, pk_xy);
     XKey { sk: Some(sk), pk: Some(pk_xy), chain_code: cc, depth: 0, index: 0, parent_fingerprint: [0u8; 4] }
 }
 
-#[inline]
-fn is_hardened(i: u32) -> bool { i >= (1 << 31) }
-#[inline]
-fn ser32_be(i: u32) -> [u8; 4] { i.to_be_bytes() }
-#[inline]
-fn ser256_be(sk: &[u8; 32]) -> [u8; 32] { *sk }
-
-fn cheetah_order() -> UBig {
-    const GROUP_ORDER_HEX: &str =
-        "7af2599b3b3f22d0563fbf0f990a37b5327aa72330157722d443623eaed4accf";
-    UBig::from_str_radix(GROUP_ORDER_HEX, 16).expect("valid group order")
-}
-
-fn xkey_from_child_int(child_sk: UBig, cc: [u8; 32], parent: &XKey, i: u32) -> XKey {
-    let mut be = child_sk.to_be_bytes();
-    if be.len() < 32 {
-        let mut pad = vec![0u8; 32 - be.len()];
-        pad.extend_from_slice(&be);
-        be = pad;
-    }
-    let mut sk = [0u8; 32];
-    sk.copy_from_slice(&be[be.len() - 32..]);
-    let pk_xy = cheetah_pub_from_sk(sk);
-    dump_key_material("raw:", sk, cc, pk_xy);
-    XKey { sk: Some(sk), pk: Some(pk_xy), chain_code: cc, depth: parent.depth + 1, index: i, parent_fingerprint: [0u8; 4] }
-}
-
 /// --- Derivation path parsing ----------------------------------------------
 
-#[derive(Debug, Clone, Copy)]
-struct PathElem { index: u32, hardened: bool }
-
-fn parse_path(s: &str) -> Result<Vec<PathElem>, String> {
-    let s = s.trim();
-    if s.is_empty() { return Err("empty derivation path".into()); }
-    if s == "m" { return Ok(vec![]); }
-    let rest = s.strip_prefix("m/").ok_or_else(|| "path must start with 'm'".to_string())?;
-    let mut out = Vec::new();
-    for part in rest.split('/') {
-        let hardened = part.ends_with('\'');
-        let num_str = if hardened { &part[..part.len()-1] } else { part };
-        let idx: u32 = num_str.parse().map_err(|_| format!("bad index: {part}"))?;
-        out.push(PathElem { index: idx, hardened });
-    }
-    Ok(out)
-}
-
-fn path_to_indices(path: &str) -> Result<Vec<u32>, String> {
-    let elems = parse_path(path)?;
-    let mut out = Vec::with_capacity(elems.len());
-    for e in elems {
-        let mut i = e.index;
-        if e.hardened { i |= 1 << 31; }
-        out.push(i);
-    }
-    Ok(out)
+pub fn parse_path(path: &str) -> Result<alloc::vec::Vec<u32>, String> {
+  let p = path.trim();
+  if p.is_empty() { return Err("empty path".into()); }
+  if !p.starts_with('m') { return Err("path must start with 'm'".into()); }
+  let mut out = Vec::new();
+  for comp in p.split('/').skip(1) {
+      if comp.is_empty() { continue; }
+      let hardened = comp.ends_with('\'') || comp.ends_with('h') || comp.ends_with('H');
+      let num_str = if hardened { &comp[..comp.len() - 1] } else { comp };
+      let idx: u32 = num_str.parse().map_err(|_| format!("bad index: {comp}"))?;
+      let val = if hardened { idx | 0x8000_0000 } else { idx };
+      out.push(val);
+  }
+  Ok(out)
 }
 
 fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
-    for e in parse_path(path)? {
-        let i = if e.hardened { e.index | (1<<31) } else { e.index };
-        xk = xprv_derive_child(&xk, i);
-    }
-    Ok(xk)
+  for i in parse_path(path)? {
+      xk = xprv_derive_child(&xk, i);
+  }
+  Ok(xk)
 }
 
 pub fn derivation_transcript_from_mnemonic(
@@ -156,14 +109,14 @@ pub fn derivation_transcript_from_mnemonic(
     path: &str,
 ) -> Result<String, String> {
     let seed64 = bip39_seed_from_mnemonic(phrase, passphrase);
-    let idxs = path_to_indices(path)?;
+    let idxs = parse_path(path)?;
     let (_xk, transcript) = derive_path_transcript(&seed64, &idxs);
     Ok(transcript)
 }
 
 /// Same, but if you already have the 64-byte seed.
 pub fn derivation_transcript_from_seed(seed64: &[u8; 64], path: &str) -> Result<String, String> {
-    let idxs = path_to_indices(path)?;
+    let idxs = parse_path(path)?;
     let (_xk, transcript) = derive_path_transcript(seed64, &idxs);
     Ok(transcript)
 }
@@ -286,34 +239,222 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
     Ok(sk)
 }
 
-/// Cheetah a-pt to base58
-// pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
-//     let ser = ser_a_pt_rep104(pk);
-//     bs58::encode(ser).into_string()
-// }
-
 pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
-    // 104 bytes: X[6]*u64 || Y[6]*u64 || 1u64, big-endian bytes for Base58.
+  // 97 bytes: 0x01 + 12 u64 limbs (big-endian)
+  let ser = ser_a_pt(pk);
+  bs58::encode(ser).into_string()
+}
+
+fn dump_key_material(prefix: &str, sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6],[u64; 6])) {
+  let ser97  = ser_a_pt(&pk_xy);
+  let b58_97 = bs58::encode(&ser97).into_string();
+
+  let ser104  = ser_a_pt_rep104(&pk_xy);
+  let b58_104 = bs58::encode(&ser104).into_string();
+
+  println!("{prefix} pubkey  (b58)       : {b58_97}");
+  eprintln!("pubkey-ser(97)  = {}", hex::encode(&ser97));
+  eprintln!("Base58(97)      = {b58_97}");
+
+  eprintln!("pubkey-ser(104) = {}", hex::encode(&ser104));
+  eprintln!("Base58(104)     = {b58_104}");
+
+  println!("{prefix} privkey (hex):  {}", hex::encode(sk));
+  println!("{prefix} privkey (b58):  {}", bs58::encode(sk).into_string());
+  println!("{prefix} chaincode (hex): {}", hex::encode(cc));
+}
+
+
+// ---------- KNOWN-GOOD MASTER CHECK + DIAGNOSTICS ----------------------------
+
+const KNOWN_GOOD_MASTER_SER97_HEX: &str =
+    "01fbd221c97b1e6eeabb439d13f38b6861896c79a6a1881dec43c0f6573bb188\
+     b76144934507d6b8e4bb9e68f772f6533b852b45f2db4683a9d5490c12ddc5ad\
+     d1752aabf3cc3dca40b216d2241c9fdb6e8973ee61568f06794cebd558d1939624";
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len()*2);
+    for &b in bytes { s.push_str(&format!("{:02x}", b)); }
+    s
+}
+
+#[derive(Clone, Copy)]
+struct SerFlags { swap_xy: bool, rev_x: bool, rev_y: bool, le64: bool, rep104: bool }
+
+fn ser_with_flags(pk: &([u64;6],[u64;6]), f: SerFlags) -> Vec<u8> {
+    let (mut x, mut y) = *pk;
+    if f.swap_xy { core::mem::swap(&mut x, &mut y); }
+    if f.rev_x   { x.reverse(); }
+    if f.rev_y   { y.reverse(); }
+
+    let mut out = Vec::with_capacity(if f.rep104 { 104 } else { 97 });
+    if f.rep104 { out.extend_from_slice(&1u64.to_be_bytes()); } else { out.push(0x01); }
+
+    for w in x.into_iter().chain(y.into_iter()) {
+        let be = w.to_be_bytes();
+        let le = w.to_le_bytes();
+        out.extend_from_slice(if f.le64 { &le } else { &be });
+    }
+    out
+}
+
+fn try_all_serializations(pk: &([u64;6],[u64;6]), known_hex: &str) -> bool {
+    let modes = [
+        SerFlags{swap_xy:false,rev_x:false,rev_y:false,le64:false,rep104:false},
+        SerFlags{swap_xy:false,rev_x:true ,rev_y:false,le64:false,rep104:false},
+        SerFlags{swap_xy:false,rev_x:false,rev_y:true ,le64:false,rep104:false},
+        SerFlags{swap_xy:false,rev_x:true ,rev_y:true ,le64:false,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:false,rev_y:false,le64:false,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:true ,rev_y:false,le64:false,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:false,rev_y:true ,le64:false,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:true ,rev_y:true ,le64:false,rep104:false},
+
+        // unlikely but helpful for debugging accidental LE writes
+        SerFlags{swap_xy:false,rev_x:false,rev_y:false,le64:true ,rep104:false},
+        SerFlags{swap_xy:false,rev_x:true ,rev_y:false,le64:true ,rep104:false},
+        SerFlags{swap_xy:false,rev_x:false,rev_y:true ,le64:true ,rep104:false},
+        SerFlags{swap_xy:false,rev_x:true ,rev_y:true ,le64:true ,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:false,rev_y:false,le64:true ,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:true ,rev_y:false,le64:true ,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:false,rev_y:true ,le64:true ,rep104:false},
+        SerFlags{swap_xy:true ,rev_x:true ,rev_y:true ,le64:true ,rep104:false},
+
+        // 104B formats, for visibility (shouldn’t match the 97B reference)
+        SerFlags{swap_xy:false,rev_x:false,rev_y:false,le64:false,rep104:true},
+        SerFlags{swap_xy:false,rev_x:true ,rev_y:false,le64:false,rep104:true},
+        SerFlags{swap_xy:false,rev_x:false,rev_y:true ,le64:false,rep104:true},
+        SerFlags{swap_xy:false,rev_x:true ,rev_y:true ,le64:false,rep104:true},
+        SerFlags{swap_xy:true ,rev_x:false,rev_y:false,le64:false,rep104:true},
+        SerFlags{swap_xy:true ,rev_x:true ,rev_y:false,le64:false,rep104:true},
+        SerFlags{swap_xy:true ,rev_x:false,rev_y:true ,le64:false,rep104:true},
+        SerFlags{swap_xy:true ,rev_x:true ,rev_y:true ,le64:false,rep104:true},
+    ];
+
+    let target = known_hex.replace(char::is_whitespace, "").to_ascii_lowercase();
+    for (i, m) in modes.iter().enumerate() {
+        let hex = to_hex(&ser_with_flags(pk, *m));
+        if hex == target {
+            eprintln!(
+                "🎯 known-good matched with variant #{i}: \
+                 swap_xy={} rev_x={} rev_y={} le64={} rep104={}",
+                m.swap_xy, m.rev_x, m.rev_y, m.le64, m.rep104
+            );
+            return true;
+        }
+    }
+    false
+}
+
+fn check_known_good_from_pk(pk: &([u64;6],[u64;6]), known_hex: &str) {
     let ser = ser_a_pt(pk);
-    bs58::encode(ser).into_string()
+    let got = to_hex(&ser);
+    eprintln!("MASTER ser_a_pt = {}", got);
+
+    let expect = known_hex.replace(char::is_whitespace, "");
+    if got.eq_ignore_ascii_case(&expect) {
+        eprintln!("✅ matches known good");
+    } else {
+        eprintln!("❌ mismatch ({} vs {})", got.len(), expect.len());
+        // Help find common mistakes
+        if !try_all_serializations(pk, known_hex) {
+            eprintln!("(No serializer variant matched — if the core flip in \
+                       cheetah_pub_from_sk is applied, the scalar ladder or base point \
+                       is likely wrong.)");
+        }
+    }
 }
 
-fn sk_to_b58(sk: [u8; 32]) -> String {
-    bs58::encode(sk).into_string() // raw 32 bytes → Base58 (no version/checksum)
+// -------- PROBE MASTER KDF VARIANTS (label × rehash) ------------------------
+use hmac::Hmac;
+use hmac::Mac;
+type HmacSha512 = Hmac<Sha512>;
+
+fn hmac512(key: &[u8], data: &[u8]) -> [u8; 64] {
+    let mut mac = HmacSha512::new_from_slice(key).unwrap();
+    mac.update(data);
+    let out = mac.finalize().into_bytes();
+    let mut b = [0u8; 64];
+    b.copy_from_slice(&out);
+    b
 }
 
-fn dump_key_material(prefix: &str, sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6])) {
-    let ser = ser_a_pt(&pk_xy);
-    let b58    = bs58::encode(&ser).into_string();
-
-    println!("{prefix} privkey (hex):  {}", hex::encode(sk));
-    println!("{prefix} privkey (b58):  {}", sk_to_b58(sk));
-    println!("{prefix} chaincode (hex): {}", hex::encode(cc));
-    println!("{prefix} pubkey  (b58):  {b58}");
-
-    eprintln!("pubkey-ser(104) = {}", hex::encode(&ser));
-    eprintln!("Base58(104)     = {b58}");
-    eprintln!("len={} sentinel_u64=0x{}", ser.len(), hex::encode(&ser));
+fn master_once(label: &[u8], seed64: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
+    let i = hmac512(label, seed64);
+    let mut il = [0u8; 32];
+    let mut ir = [0u8; 32];
+    il.copy_from_slice(&i[..32]);
+    ir.copy_from_slice(&i[32..]);
+    (il, ir)
 }
 
+fn master_with_rehash(label: &[u8], seed64: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
+    // loop until 0 < IL < n ; rehash whole 64B each time
+    let mut i = hmac512(label, seed64);
+    loop {
+        let mut il = [0u8; 32];
+        let mut ir = [0u8; 32];
+        il.copy_from_slice(&i[..32]);
+        ir.copy_from_slice(&i[32..]);
 
+        let ok = {
+            // 0 < IL < n
+            let zero = il.iter().all(|&b| b == 0);
+            let ge_n = {
+                const N: [u8;32] = [0x7a,0xf2,0x59,0x9b,0x3b,0x3f,0x22,0xd0,0x56,0x3f,0xbf,0x0f,0x99,0x0a,0x37,0xb5,
+                                    0x32,0x7a,0xa7,0x23,0x30,0x15,0x77,0x22,0xd4,0x43,0x62,0x3e,0xae,0xd4,0xac,0xcf];
+                let mut ge = false;
+                for k in 0..32 {
+                    if il[k] != N[k] { ge = il[k] > N[k]; break; }
+                }
+                ge || il == N
+            };
+            !zero && !ge_n
+        };
+
+        if ok { return (il, ir); }
+        i = hmac512(label, &i);
+    }
+}
+
+fn ser97_hex_of_priv(sk_be: &[u8; 32]) -> String {
+    let pk = cheetah_pub_from_sk(*sk_be);
+    let ser = ser_a_pt(&pk);
+    to_hex(&ser)
+}
+
+fn probe_master_variants(seed64: &[u8;64], known_hex: &str) {
+    let known = known_hex.replace(char::is_whitespace, "").to_ascii_lowercase();
+
+    const LABELS: &[(&str, &[u8])] = &[
+        ("Nockchain seed", b"Nockchain seed"),
+        ("Nockchain seed", b"dees niahckcoN"),
+    ];
+
+    println!("-- Probing master KDF variants --");
+    for (lname, lbytes) in LABELS {
+        // Variant A: single pass (no rehash even if IL >= n)
+        let (il0, ir0) = master_once(lbytes, seed64);
+        let got0 = ser97_hex_of_priv(&il0);
+        let tag0 = format!("label='{}', mode=single-pass", lname);
+        println!("{}: pk = {}", tag0, got0);
+        if got0.eq_ignore_ascii_case(&known) {
+            println!("🎯 MATCH: {}", tag0);
+            return;
+        }
+
+        // Variant B: rehash-until-valid (your current behavior for Nockchain)
+        let (il1, ir1) = master_with_rehash(lbytes, seed64);
+        let got1 = ser97_hex_of_priv(&il1);
+        let tag1 = format!("label='{}', mode=rehash-until-valid", lname);
+        println!("{}: pk = {}", tag1, got1);
+        if got1.eq_ignore_ascii_case(&known) {
+            println!("🎯 MATCH: {}", tag1);
+            return;
+        }
+
+        // (Optional) print the chain codes so you can compare too
+        println!("{}: IR(single) = {}", lname, hex::encode(ir0));
+        println!("{}: IR(rehash) = {}", lname, hex::encode(ir1));
+    }
+    println!("⛔ No master-KDF variant matched the known-good.");
+}

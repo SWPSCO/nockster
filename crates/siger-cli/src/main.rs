@@ -55,7 +55,7 @@ enum Cmd {
         #[arg(long)]
         seed_hex: Option<String>,
         /// Derivation path (comma separated uint32, MSB=hard)
-        #[arg(long, default_value = "2147483692,2147483648,2147483648,0,0")] // 44'/0'/0'/0/0
+        #[arg(long, default_value = "m")] // 44'/0'/0'/0/0
         path: String,
     },
 
@@ -135,8 +135,8 @@ struct ImportArgs {
     #[arg(long, default_value="")]
     passphrase: String,
 
-    /// Derivation path (only used with --mnemonic). Default m/44'/0'/0'/0/0
-    #[arg(long, default_value="m/44'/0'/0'/0/0")]
+    /// Derivation path (only used with --mnemonic)
+    #[arg(long, default_value="m")]
     path: String,
 
     /// Base58-encoded 32-byte private key (conflicts with --mnemonic and --sk-hex)

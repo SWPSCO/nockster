@@ -358,6 +358,19 @@ pub fn bpegcd(a: &[Belt], b: &[Belt]) -> (Vec<Belt>, Vec<Belt>) {
   (s, v_out)
 }
 
+pub fn bpegcd_full(a: &[Belt], b: &[Belt]) -> (Vec<Belt>, Vec<Belt>, Belt) {
+  let mut d = vec![Belt(0); core::cmp::max(a.len(), b.len())];
+  let mut u = vec![Belt(0); a.len() + b.len()];
+  let mut v = vec![Belt(0); a.len() + b.len()];
+  bpegcd_impl(a, b, &mut d, &mut u, &mut v);
+
+  // gcd is the constant polynomial in d; S in first 12 of u; T in first 2 of v
+  let s = u[..12].to_vec();
+  let t = v[..2].to_vec();
+  let d0 = d[0];
+  (s, t, d0)
+}
+
 #[inline(always)]
 pub fn bpegcd_impl(a: &[Belt], b: &[Belt], d: &mut [Belt], u: &mut [Belt], v: &mut [Belt]) {
     let mut m1_u = vec![Belt(0)];

@@ -135,8 +135,8 @@ struct ImportArgs {
     #[arg(long, default_value="")]
     passphrase: String,
 
-    /// Derivation path (only used with --mnemonic). Default m/44'/0'/0'/0/0
-    #[arg(long, default_value="m/44'/0'/0'/0/0")]
+    /// Derivation path (only used with --mnemonic)
+    #[arg(long, default_value="m")]
     path: String,
 
     /// Base58-encoded 32-byte private key (conflicts with --mnemonic and --sk-hex)

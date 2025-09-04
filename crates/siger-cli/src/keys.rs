@@ -17,9 +17,6 @@ use serde::{Serialize, Deserialize};
 
 use siger_core::cheetah::{XKey, cheetah_pub_from_sk, xprv_derive_child, ser_a_pt, ser_a_pt_rep104, master_from_seed, hmac_split_512, derive_path_transcript};
 
-/// 97-byte serialization of a-pt (6×u64 X, 6×u64 Y, 1 byte inf=0)
-const SER_LIMBS_BIG_ENDIAN: bool = false;
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
 pub enum KeyOrigin {
@@ -47,14 +44,12 @@ pub struct ImportedKey {
     pub origin: KeyOrigin,
 }
 
-/// Blob format for ESP32. Fixed-size to keep flashing/simple transport easy.
-///
-/// Layout (169 bytes):
-///   0..8   : magic "NCKEYV1\0"
-///   8..40  : sk (32 bytes BE)
-///   40..72 : chain code (32 bytes; may be zeroed)
-///   72..169: ser-a-pt (97 bytes; inf=0)
-pub const DEVICE_BLOB_V1_SIZE: usize = 169;
+/// Layout (176 bytes):
+///   0..8    : magic "NCKEYV1\0"
+///   8..40   : sk (32 bytes BE)
+///   40..72  : chain code (32 bytes; may be zeroed)
+///   72..176 : ser-a-pt (104 bytes: X[6], Y[6], 1u64)
+pub const DEVICE_BLOB_V1_SIZE: usize = 176;
 
 pub fn device_blob_v1(sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6]))
 -> [u8; DEVICE_BLOB_V1_SIZE] {
@@ -62,10 +57,11 @@ pub fn device_blob_v1(sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6]))
     out[0..8].copy_from_slice(b"NCKEYV1\0");
     out[8..40].copy_from_slice(&sk);
     out[40..72].copy_from_slice(&cc);
-    let ser = ser_a_pt(&pk_xy);
-    out[72..72+97].copy_from_slice(&ser);
+    let ser = ser_a_pt_rep104(&pk_xy);
+    out[72..176].copy_from_slice(&ser); // 104 bytes
     out
 }
+
 
 /// mnemo+pass → 64B BIP39 seed
 pub fn bip39_seed_from_mnemonic(mnemonic: &str, passphrase: &str) -> [u8; 64] {
@@ -297,8 +293,9 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
 // }
 
 pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
-  let ser97 = ser_a_pt(pk); // sentinel-first LE Y||X
-  bs58::encode(ser97).into_string()
+    // 104 bytes: X[6]*u64 || Y[6]*u64 || 1u64, big-endian bytes for Base58.
+    let ser = ser_a_pt(pk);
+    bs58::encode(ser).into_string()
 }
 
 fn sk_to_b58(sk: [u8; 32]) -> String {
@@ -306,21 +303,17 @@ fn sk_to_b58(sk: [u8; 32]) -> String {
 }
 
 fn dump_key_material(prefix: &str, sk: [u8; 32], cc: [u8; 32], pk_xy: ([u64; 6], [u64; 6])) {
-    let ser = ser_a_pt_rep104(&pk_xy);
-    eprintln!("pubkey-ser len: {} (rep104 parity)", ser.len()); // expect 104
-    eprintln!("FINAL ser_a_pt(rep104) = {}", hex::encode(&ser));
-    eprintln!("FINAL Base58 = {}", bs58::encode(&ser).into_string());
+    let ser = ser_a_pt(&pk_xy);
+    let b58    = bs58::encode(&ser).into_string();
+
     println!("{prefix} privkey (hex):  {}", hex::encode(sk));
     println!("{prefix} privkey (b58):  {}", sk_to_b58(sk));
     println!("{prefix} chaincode (hex): {}", hex::encode(cc));
-    println!("{prefix} pubkey  (b58):  {}", bs58::encode(&ser).into_string());
-    println!("{prefix} pubkey-ser len: {}  sentinel: 0x{:02x}", ser.len(), ser[96]);
-    let ser97 = ser_a_pt(&pk_xy);
-    let ser104 = ser_a_pt_rep104(&pk_xy);
+    println!("{prefix} pubkey  (b58):  {b58}");
 
-    eprintln!("pubkey-ser(97)  = {}", hex::encode(&ser97));
-    eprintln!("Base58(97)      = {}", bs58::encode(&ser97).into_string()); // should match Keygen "New Public Key"
-
-    eprintln!("pubkey-ser(104) = {}", hex::encode(&ser104));
-    eprintln!("Base58(104)     = {}", bs58::encode(&ser104).into_string());
+    eprintln!("pubkey-ser(104) = {}", hex::encode(&ser));
+    eprintln!("Base58(104)     = {b58}");
+    eprintln!("len={} sentinel_u64=0x{}", ser.len(), hex::encode(&ser));
 }
+
+

@@ -11,6 +11,10 @@ use crate::math::math::{Belt, tip5_permute, bpegcd};
 
 const F6_ZERO: F6lt = F6lt([Belt(0); 6]);
 const F6_ONE:  F6lt = F6lt([Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0)]);
+const B: F6lt = F6lt([Belt(395), Belt(1), Belt(0), Belt(0), Belt(0), Belt(0)]);
+const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
+const NOCKCHAIN_SLIP10_KEY: &[u8] = b"Nockchain seed"; 
+const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
 
 const GX: F6lt = F6lt([
     Belt(2_754_611_494_552_410_273),
@@ -29,20 +33,11 @@ const GY: F6lt = F6lt([
     Belt(9_990_732_138_772_505_951),
 ]);
 
-
-/// Domain tag for the seed
-const MASTER_KEY_TAG: &[u8] = b"Nockchain seed";
-
 /// Group order n for Cheetah as big-endian bytes.
 const GROUP_ORDER_BE: [u8; 32] = [
     0x7a, 0xf2, 0x59, 0x9b, 0x3b, 0x3f, 0x22, 0xd0, 0x56, 0x3f, 0xbf, 0x0f, 0x99, 0x0a, 0x37, 0xb5,
     0x32, 0x7a, 0xa7, 0x23, 0x30, 0x15, 0x77, 0x22, 0xd4, 0x43, 0x62, 0x3e, 0xae, 0xd4, 0xac, 0xcf,
 ];
-
-const NOCKCHAIN_SLIP10_KEY: &[u8] = b"Nockchain seed"; 
-
-const G: CheetahPoint = CheetahPoint { x: GX, y: GY, inf: false };
-const A_ID: CheetahPoint = CheetahPoint { x: F6_ZERO, y: F6_ONE, inf: true };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hash {
@@ -221,39 +216,42 @@ pub fn master_from_seed(seed: &[u8]) -> ([u8; 32], [u8; 32]) {
 /// Serialize a 256-bit scalar (big-endian) to bytes.
 fn ser256_be(x: &[u8; 32]) -> [u8; 32] { *x }
 
-/// Serialize affine point limbs (x,y) into 96 little-endian bytes (12 u64s).
-/// Serialize affine point into the exact Hoon/Tip5 parity format:
-/// Treat [x0..x5, y0..y5, 1] as 13 little-endian 64-bit limbs of a single
-/// big integer (Hoon `rep 6`), then emit that integer in canonical
-/// **big-endian** bytes (104 bytes).
+/// Serialize affine point limbs (x,y) into 96 big-endian bytes (12 u64s).
 pub fn ser_a_pt(pk: &([u64; 6], [u64; 6])) -> [u8; 97] {
-  let mut out = [0u8; 97];
-  out[0] = 0x01;
-  let mut off = 1;
-  // Keygen: Y first, then X; limbs serialized little-endian
-  for &w in pk.1.iter().chain(pk.0.iter()) {
-      out[off..off + 8].copy_from_slice(&w.to_le_bytes());
-      off += 8;
-  }
-  out
-}
+    let (x, y) = pk;
+    let mut out = [0u8; 97];
+    out[0] = 0x01; // 1-byte sentinel
 
-pub fn ser_a_pt_rep104(pk: &([u64; 6], [u64; 6])) -> [u8; 104] {
-    let mut limbs = [0u64; 13];
-    limbs[0] = 1;                           // LS limb = sentinel
-    // Y first, then X (each y0/x0 is the LS limb within that coordinate)
-    limbs[1..7].copy_from_slice(&pk.1);     // y0..y5
-    limbs[7..13].copy_from_slice(&pk.0);    // x0..x5
-
-    // Write MS→LS limbs as big-endian bytes.
-    let mut out = [0u8; 104];
-    let mut off = 0;
-    for i in (0..13).rev() {
-        out[off..off + 8].copy_from_slice(&limbs[i].to_be_bytes());
+    let mut off = 1;
+    for &w in x.iter() {                       // ← no .rev()
+        out[off..off+8].copy_from_slice(&w.to_be_bytes());
+        off += 8;
+    }
+    for &w in y.iter() {                       // ← no .rev()
+        out[off..off+8].copy_from_slice(&w.to_be_bytes());
         off += 8;
     }
     out
 }
+
+pub fn ser_a_pt_rep104(pk: &([u64; 6], [u64; 6])) -> [u8; 104] {
+    let (x, y) = pk;
+    let mut out = [0u8; 104];
+
+    out[0..8].copy_from_slice(&1u64.to_be_bytes()); // 8-byte sentinel
+
+    let mut off = 8;
+    for &w in x.iter() {                       // ← no .rev()
+        out[off..off+8].copy_from_slice(&w.to_be_bytes());
+        off += 8;
+    }
+    for &w in y.iter() {                       // ← no .rev()
+        out[off..off+8].copy_from_slice(&w.to_be_bytes());
+        off += 8;
+    }
+    out
+}
+
 
 // Deterministic k (RFC6979)
 
@@ -288,13 +286,14 @@ fn tip5_hash_words(words: &[u64]) -> [u64; DIGEST_LENGTH] {
     [state[0], state[1], state[2], state[3], state[4]]
 }
 
-fn pack_point_words(pt: &([u64; 6], [u64; 6])) -> [u64; 12] {
-  let mut out = [0u64; 12];
-  out[..6].copy_from_slice(&pt.0);
-  out[6..].copy_from_slice(&pt.1);
-  out
-}
 
+fn pack_point_words(pt: &([u64; 6], [u64; 6])) -> [u64; 12] {
+    // Match the same MSW..LSW order used by serialization
+    let mut out = [0u64; 12];
+    out[..6].copy_from_slice(&pt.0);  // X MSW..LSW
+    out[6..].copy_from_slice(&pt.1);  // Y MSW..LSW
+    out
+}
 
 // Turn 40-byte (5 words) big-endian into hex ASCII for ibig-less mod; but we
 // already reduce via byte math, so we just keep it as bytes.
@@ -401,7 +400,13 @@ fn f6_inv(a: &F6lt) -> F6lt {
     let mut u = [Belt(0); 7];
     u[..6].copy_from_slice(&a.0);
     let mu = [
-        Belt(1), Belt(0), Belt(0), Belt(0), Belt(0), Belt(0), Belt(1)
+        -Belt(7),  // t^6 - 7
+        Belt(0),
+        Belt(0),
+        Belt(0),
+        Belt(0),
+        Belt(0),
+        Belt(1),
     ];
 
     // Extended GCD over polynomials in Belt
@@ -436,6 +441,7 @@ fn ch_add_unsafe(p: &CheetahPoint, q: &CheetahPoint) -> CheetahPoint {
 }
 fn ch_add(p: &CheetahPoint, q: &CheetahPoint) -> CheetahPoint { ch_add_unsafe(p, q) }
 
+
 fn ch_double_unsafe(p: &CheetahPoint) -> CheetahPoint {
     if p.inf { return *p; }
     let x = p.x; let y = p.y;
@@ -444,9 +450,9 @@ fn ch_double_unsafe(p: &CheetahPoint) -> CheetahPoint {
     let three = Belt(3);
     let two   = Belt(2);
 
-    // slope = (3*x^2 + 1) / (2*y)
-    let num  = f6_add(&f6_scal(&f6_square(&x), three), &F6_ONE);
-    let den  = f6_scal(&y, two);
+    // a = 0  → slope = (3*x^2) / (2*y)
+    let num  = f6_scal(&f6_square(&x), three);   // 3*x^2
+    let den  = f6_scal(&y, two);                 // 2*y
     let s    = f6_div(&num, &den);
 
     let s2 = f6_square(&s);
@@ -691,7 +697,7 @@ pub fn xpub_derive_child(parent: &XKey, i: u32) -> XKey {
     assert_eq!(i & 0x8000_0000, 0);
 
     let mut data = Vec::with_capacity(104 + 4);
-    data.extend_from_slice(&ser_a_pt(parent.pk.as_ref().unwrap()));
+    data.extend_from_slice(&ser_a_pt_rep104(parent.pk.as_ref().unwrap()));
     data.extend_from_slice(&ser32_be(i));
 
     let (mut left, mut right) = hmac_split_512(&parent.chain_code, &data);

@@ -1,11 +1,8 @@
-//! cheetah.rs — consolidated, cleaned, no_std-friendly
-
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::cmp::Ordering;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512};
 
@@ -190,7 +187,6 @@ fn ch_scal_big(k_be: &[u8; 32], p: &CheetahPoint) -> CheetahPoint {
 
 #[inline]
 fn basepoint() -> CheetahPoint {
-    // cheap in prod; thorough in debug
     debug_assert!(is_on_curve(&G), "G not on curve");
     #[cfg(debug_assertions)]
     {
@@ -290,7 +286,7 @@ fn add_mod_n(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
 
 #[inline]
 fn mul_mod_n(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
-    // schoolbook 256x256 -> 512 then mod n
+    // 256x256 -> 512 then mod n
     let mut prod = [0u8; 64];
     for i in 0..32 {
         let mut carry: u32 = 0;
@@ -327,7 +323,7 @@ fn mod_n_from_be_bytes(bytes_be: &[u8]) -> [u8; 32] {
             rem[i] = (t & 0xff) as u8;
             carry = (t >> 8) as u16;
         }
-        // reduce while rem >= n (usually at most once)
+        // reduce while rem >= n
         while !be32_lt(&rem, &CHEETAH_N) {
             be32_sub_inplace(&mut rem, &CHEETAH_N);
         }
@@ -335,7 +331,7 @@ fn mod_n_from_be_bytes(bytes_be: &[u8]) -> [u8; 32] {
     rem
 }
 
-// ---- RFC6979-ish deterministic k (HMAC-SHA256) -----------------------------
+// ---- deterministic k (HMAC-SHA256) -----------------------------
 
 fn rfc6979_k(sk_be: &[u8; 32], personalization: &[u8]) -> [u8; 32] {
     // k = HMAC-SHA256(sk, personalization) mod n, reject 0
@@ -348,7 +344,7 @@ fn rfc6979_k(sk_be: &[u8; 32], personalization: &[u8]) -> [u8; 32] {
     if is_zero32(&k) { [1u8; 32] } else { k }
 }
 
-// ---- HMAC split (for SLIP-10) ----------------------------------------------
+// ---- HMAC split for SLIP-10 ----------------------------------------------
 
 pub fn hmac_split_512(key: &[u8], data: &[u8]) -> ([u8; 32], [u8; 32]) {
     let mut mac = HmacSha512::new_from_slice(key).expect("HMAC key");

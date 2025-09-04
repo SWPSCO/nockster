@@ -1,4 +1,4 @@
-//! Key import/derivation for CLI (no signing here).
+//! Key import/derivation for CLI
 //! - BIP39 mnemonic (+ passphrase) → 64B seed → SLIP-10 master → path derivation
 //! - Base58 or hex raw private key (32B big-endian scalar)
 //! - Exports a compact device blob for the ESP32 key-store.

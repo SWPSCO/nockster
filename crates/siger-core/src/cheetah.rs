@@ -741,18 +741,21 @@ fn trunc_g_order_to_be32(digest5: [u64; 5]) -> [u8; 32] {
   }
 }
 
-// Convert a 32-byte big-endian atom to T8 = 8×u64 little-endian limbs, pad zeros.
 fn be32_atom_to_t8_le(be: &[u8; 32]) -> T8 {
+  // Convert big-endian 32B -> little-endian byte order
   let mut le = [0u8; 32];
-  for i in 0..32 {
-      le[i] = be[31 - i];
-  }
+  for i in 0..32 { le[i] = be[31 - i]; }
+
+  // Split into eight 4-byte LE words; store each in the low 32 bits of a u64.
   let mut v = [0u64; 8];
-  for i in 0..4 {
-      v[i] = u64::from_le_bytes([
-          le[i*8+0], le[i*8+1], le[i*8+2], le[i*8+3],
-          le[i*8+4], le[i*8+5], le[i*8+6], le[i*8+7],
-      ]);
+  for i in 0..8 {
+      let w = u32::from_le_bytes([
+          le[i*4 + 0],
+          le[i*4 + 1],
+          le[i*4 + 2],
+          le[i*4 + 3],
+      ]) as u64;
+      v[i] = w; // upper 32 bits zero
   }
   T8 { values: v }
 }

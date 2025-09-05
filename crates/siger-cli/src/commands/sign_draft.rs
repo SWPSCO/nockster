@@ -17,7 +17,7 @@ use tx_types::RawTransaction;
 use siger_core::{Msg, Frame, Request, Response, PROTO_V1};
 
 use crate::serial::{open, round_trip_frame};
-use crate::util::{debug_shape, transaction_to_raw};
+use crate::util::{debug_shape, transaction_to_raw, sig_hash_for_input};
 use crate::keys;
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
@@ -166,8 +166,8 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
         for (path, pk_dev) in dev_keys.iter() {
             let dev_hash = pk_dev.to_hash();
             if let Some(pk_lock) = lock.pubkeys.iter().find(|pk| pk.to_hash() == dev_hash) {
-                // ask device to sign the txid for this path
-                let msg5: [u64; 5] = input.spend.to_hash().values; 
+                // ask device to sign the tx sig hash for this path
+                let msg5: [u64; 5] = sig_hash_for_input(&raw, &name);
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,

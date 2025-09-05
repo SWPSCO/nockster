@@ -10,7 +10,7 @@ use hex;
 use postcard::{from_bytes_cobs, to_allocvec};
 use std::{fs};
 use siger_core::{Msg, Request, Response, PROTO_V1, Frame};
-
+use nockvm::noun::T;
 use nockapp::noun::slab::NounSlab;
 use noun_serde::{NounEncode, NounDecode};
 use nockvm::mem::NockStack;
@@ -18,6 +18,7 @@ use nockvm::noun::{Atom, IndirectAtom, Noun};
 use nockapp::AtomExt;
 use nockvm::serialization::cue;
 use tx_types::collections::{ZMap, ZSet};
+use tx_types::Tip5Hasher;
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
 use crate::keys::{LockKey};
@@ -419,6 +420,21 @@ pub fn sign_draft_with_paths(
 
     raw.inputs = Inputs { p: new_inputs };
     Ok(raw)
+}
+
+pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> [u64; 5] {
+    // clone + strip sigs from the target spend
+    let mut spend = raw.inputs.p.get(name).expect("input missing").spend.clone();
+    spend.signature = None;
+
+    // build a canonical noun for signing: [tx.timelock, name, spend]
+    let mut slab: NounSlab = NounSlab::new();
+    let n_timelock = raw.timelock_range.to_noun(&mut slab);
+    let n_name     = name.to_noun(&mut slab);
+    let n_spend    = spend.to_noun(&mut slab);
+    let signing_n  = T(&mut slab, &[n_timelock, n_name, n_spend]);
+
+    Tip5Hasher::hash_noun(signing_n).unwrap().values // -> [u64;5]
 }
 
 // minimal "round_trip" for Msg<Frame> (used above)

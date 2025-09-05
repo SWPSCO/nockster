@@ -1,3 +1,4 @@
+// src/cmd/sign_tx.rs
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -58,7 +59,7 @@ fn fetch_device_pks(
         let resp: Msg<Response> = round_trip_frame(sp, &req)?;
         match resp.msg {
             Response::OkCheetahPub { x, y } => {
-                // reverse endianness
+                // reverse the endians ヽ༼ຈل͜ຈ༽ﾉ
                 let mut xr = x;
                 let mut yr = y;
                 xr.reverse();
@@ -73,7 +74,7 @@ fn fetch_device_pks(
                 ));
             }
             Response::Err { code } => return Err(anyhow!("GetCheetahPub failed (code {code})")),
-            _ => return Err(anyhow!("unexpected response to GetCheetahPub")),
+            _ => return Err(anyhow!("unrecognized response to GetCheetahPub")),
         }
     }
     Ok(out)
@@ -86,27 +87,21 @@ enum Outer {
 }
 
 fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
-    // try wallet transaction wrapper
+  let mut slab: NounSlab = NounSlab::new();
+  let noun: Noun = slab
+      .cue_into(Bytes::from(bytes.to_vec()))
+      .map_err(|e| anyhow!("cue failed: {e:?}"))?;
+
+    // try wallet transaction
     if let Ok(tx) = Transaction::from_noun(&noun) {
         let raw = transaction_to_raw(&tx);
         return Ok((Outer::WalletTx(tx), raw, noun));
     }
 
-    // failovers:
-    // try bare raw-tx
-    let mut slab: NounSlab = NounSlab::new();
-    let noun: Noun = slab
-        .cue_into(Bytes::from(bytes.to_vec()))
-        .map_err(|e| anyhow!("cue failed: {e:?}"))?;
-
-    if let Ok(r) = RawTransaction::from_noun(&mut slab, &noun) {
-        return Ok((Outer::RawTx, r, noun));
-    }
-
-    // Try [raw-tx tail]
+    // try [raw-tx tail]
     if let Ok(cell) = noun.as_cell() {
         if let Ok(r) = RawTransaction::from_noun(&mut slab, &cell.head()) {
-            // capture tail as jam for round-trip later
+            // capture tail as jam for perfect round-trip later
             let mut s2: NounSlab = NounSlab::new();
             let copied_tail = s2.copy_into(cell.tail());
             s2.copy_into(copied_tail);
@@ -115,15 +110,19 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
         }
     }
 
+    // try bare raw-tx
+    if let Ok(r) = RawTransaction::from_noun(&mut slab, &noun) {
+        return Ok((Outer::RawTx, r, noun));
+    }
+
     Err(anyhow!(
         "unrecognized noun shape; cannot decode as wallet transaction, [raw-tx tail], or raw-tx"
     ))
 }
 
 pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
-    // 1) Load and detect outer shape
     let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
-    let (outer, mut raw, noun_before) = detect_outer(&in_bytes)?;
+    let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
 
     println!("file:  {draft_path}");
     println!("shape: {}", debug_shape(&noun_before));
@@ -163,6 +162,7 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
             .map(|s| s.map.clone())
             .unwrap_or_else(ZMap::new);
 
+        // match by pubkey
         for (path, pk_dev) in dev_keys.iter() {
             let dev_hash = pk_dev.to_hash();
             if let Some(pk_lock) = lock.pubkeys.iter().find(|pk| pk.to_hash() == dev_hash) {
@@ -202,10 +202,19 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
         new_inputs.put(name, input);
     }
 
-    // update inputs
+    
+    let old_id_b58 = raw.id.to_base58();
     let updated = raw.with_inputs(Inputs { p: new_inputs });
 
-    // create output slab
+    // Sanity: id should not change (signing commits to txid).
+    if updated.id.to_base58() != old_id_b58 {
+        eprintln!(
+            "warning: raw.id changed after attaching signatures ({} -> {})",
+            old_id_b58,
+            updated.id.to_base58()
+        );
+    }
+
     let out_bytes = match outer {
         Outer::RawTx => {
             let mut out_slab: NounSlab = NounSlab::new();
@@ -225,7 +234,7 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
             out_slab.jam()
         }
         Outer::WalletTx(mut tx) => {
-            // wallet transaction wrapper: [name=@t p=inputs]
+            // wallet transaction wrapper [name=@t p=inputs]
             tx.p = updated.inputs.clone();
             let mut out_slab: NounSlab = NounSlab::new();
             let n = tx.to_noun(&mut out_slab);
@@ -234,6 +243,7 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
         }
     };
 
+    // write output
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes)
         .with_context(|| format!("write {}", out_path.display()))?;

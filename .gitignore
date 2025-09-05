@@ -20,3 +20,5 @@ target
 
 *.draft
 *.tx
+./*.bin
+./*.json

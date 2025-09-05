@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Result, Context, bail};
 use postcard::{from_bytes_cobs, to_allocvec};
-use serialport;
+use serialport::{SerialPort};
+use std::io::ErrorKind;
 use std::io::{Read, Write};
-use std::time::Duration;
-
+use std::time::{Duration, Instant};
 use cobs;
 use siger_core::{Msg, Request, Response, Frame, PROTO_V1};
 
@@ -12,7 +12,7 @@ impl<T: Read + Write> RW for T {}
 
 pub fn open(port: &str, baud: u32) -> anyhow::Result<Box<dyn serialport::SerialPort>> {
     Ok(serialport::new(port, baud)
-        .timeout(Duration::from_millis(200))
+        .timeout(Duration::from_millis(30000))
         .open()?)
 }
 
@@ -111,11 +111,94 @@ pub fn recv_msg(sp: &mut dyn serialport::SerialPort, max_len: usize) -> Result<M
                 }
                 if b[0] == 0 { break; }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+            Err(ref e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => return Err(e.into()),
         }
     }
     let resp: Msg<Response> = from_bytes_cobs(&mut rx)?;
     anyhow::ensure!(resp.v == PROTO_V1, "bad protocol version");
     Ok(resp)
+}
+
+
+/// send one postcard-COBS Msg<Frame> and receive one Msg<Response>
+/// - writes the request (already COBS-framed by postcard, includes trailing 0x00)
+/// - reads until a full COBS frame (ends with 0x00) or overall deadline expires
+pub fn round_trip_frame(
+    sp: &mut dyn SerialPort,
+    req: &Msg<Frame>,
+) -> Result<Msg<Response>> {
+    round_trip_frame_with_deadline(sp, req, Duration::from_secs(30))
+}
+
+/// Same as above, but with a caller-specified overall timeout.
+pub fn round_trip_frame_with_deadline(
+    sp: &mut dyn SerialPort,
+    req: &Msg<Frame>,
+    max_wait: Duration,
+) -> Result<Msg<Response>> {
+    // (A) Clear any stale bytes that might be sitting in the RX buffer.
+    // We do this by doing non-fatal reads with a tiny timeout for ~50ms.
+    let old_to = sp.timeout();
+    sp.set_timeout(Duration::from_millis(50)).ok();
+    let mut drain = [0u8; 256];
+    for _ in 0..4 {
+        match sp.read(&mut drain) {
+            Ok(0) => break,
+            Ok(_) => continue,
+            Err(e) if e.kind() == ErrorKind::TimedOut => break,
+            Err(_) => break,
+        }
+    }
+    // restore caller’s timeout (if any). If you manage the timeout elsewhere, you can skip this.
+    if let t = old_to {
+        sp.set_timeout(t).ok();
+    } else {
+        // give a short per-read timeout so TimedOut is frequent and cheap
+        sp.set_timeout(Duration::from_millis(150)).ok();
+    }
+
+    // (B) Encode + send request
+    let buf = postcard::to_allocvec_cobs(req).context("encode COBS request")?;
+    sp.write_all(&buf).context("write request")?;
+    sp.flush().ok();
+
+    // (C) Read until a complete COBS frame (ends with 0x00) or deadline.
+    let start = Instant::now();
+    let mut rx = Vec::<u8>::with_capacity(256);
+    let mut tmp = [0u8; 256];
+
+    loop {
+        // overall deadline?
+        if start.elapsed() > max_wait {
+            bail!("serial read: timed out waiting for COBS frame ({} ms)", max_wait.as_millis());
+        }
+
+        match sp.read(&mut tmp) {
+            Ok(n) if n > 0 => {
+                rx.extend_from_slice(&tmp[..n]);
+                // postcard COBS frames end with 0x00
+                if rx.iter().any(|&b| b == 0) {
+                    // keep everything up to and including the first 0x00 in case esp pipelined multiple frames
+                    if let Some(pos) = rx.iter().position(|&b| b == 0) {
+                        let mut frame = rx[..=pos].to_vec();
+                        let resp: Msg<Response> =
+                            postcard::from_bytes_cobs(&mut frame).context("decode COBS response")?;
+                        return Ok(resp);
+                    }
+                }
+                if rx.len() > (1 << 20) {
+                    bail!("response too large");
+                }
+            }
+            Ok(_) => {
+                // n == 0: nothing this tick; loop
+            }
+            Err(e) if e.kind() == ErrorKind::TimedOut => {
+                // per-read timeout: harmless; keep waiting until overall deadline
+                continue;
+            }
+            Err(e) => return Err(anyhow!("serial read: {e}")),
+        }
+    }
 }

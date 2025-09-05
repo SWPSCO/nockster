@@ -348,7 +348,6 @@ pub fn sign_draft_with_paths(
     signer_paths: Vec<Vec<u32>>,
 ) -> Result<RawTransaction> {
     let mut raw = load_draft_as_raw(Path::new(draft_path))?;
-    let txid = raw.compute_id();
     let bytes = std::fs::read(draft_path).with_context(|| format!("read {}", draft_path))?;
     let mut stack = NockStack::new(8 << 20, 0);
 
@@ -360,8 +359,6 @@ pub fn sign_draft_with_paths(
         .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
     let mut raw: RawTransaction = RawTransaction::from_noun(&mut stack, &noun)
         .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
-
-    let txid = raw.compute_id();
 
     // cache pk per path
     let mut path_pks: Vec<(Vec<u32>, SchnorrPubkey)> = Vec::new();
@@ -395,15 +392,16 @@ pub fn sign_draft_with_paths(
                 continue;
             }
 
+            let msg5: [u64; 5] = input.spend.to_hash().values; 
             let req = Msg {
                 v: PROTO_V1, id: 0x4200,
-                msg: Frame::One(Request::SignTxId { path: path.clone(), txid5: txid.values }),
+                msg: Frame::One(Request::SignSpendHash { path: path.clone(), msg5 }),
             };
             let resp: Msg<Response> = round_trip_frame(sp, &req)?;
             let (chal, sig) = match resp.msg {
                 Response::OkCheetahSig { chal, sig } => (chal, sig),
-                Response::Err { code } => return Err(anyhow!("SignTxId failed: code {}", code)),
-                _ => return Err(anyhow!("unexpected response to SignTxId")),
+                Response::Err { code } => return Err(anyhow!("SignSpendHash failed: code {}", code)),
+                _ => return Err(anyhow!("unexpected response to SignSpendHash")),
             };
 
             let schnorr_sig = SchnorrSignature {

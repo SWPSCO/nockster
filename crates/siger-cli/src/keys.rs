@@ -119,38 +119,6 @@ fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
     Ok(xk)
 }
 
-/// Import from mnemonic (and path), returning structures for storage + device blob.
-pub fn import_from_mnemonic(
-    phrase: &str,
-    passphrase: &str,
-    path: &str,
-) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
-    let seed64 = bip39_seed_from_mnemonic(phrase, passphrase);
-    let xk0 = xkey_from_seed(&seed64);
-    let child = derive_xprv_path(xk0, path)?;
-    let sk = child
-        .sk
-        .ok_or_else(|| "derived node has no private key".to_string())?;
-    let cc = child.chain_code;
-    let pk_xy = child
-        .pk
-        .ok_or_else(|| "derived node has no public key".to_string())?;
-
-    let pk_b58 = pubkey_to_b58(&pk_xy);
-    let key = ImportedKey {
-        sk_be32_hex: hex::encode(sk),
-        cc_hex: hex::encode(cc),
-        pk_b58,
-        path: Some(path.to_string()),
-        origin: KeyOrigin::Mnemonic {
-            path: path.to_string(),
-            passphrase: passphrase.to_string(),
-        },
-    };
-    let blob = device_blob_v1(sk, cc, pk_xy);
-    Ok((key, blob))
-}
-
 /// Import from base58 32-byte scalar (raw), no chain-code/path.
 pub fn import_from_b58_priv(
     b58: &str,

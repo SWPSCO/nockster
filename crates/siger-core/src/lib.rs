@@ -8,7 +8,7 @@ pub use cheetah::{
     Hash, T8, XKey,
     master_from_seed,
     cheetah_pub_from_sk,
-    schnorr_sign_txid,
+    schnorr_sign_tx,
     xprv_derive_child,
     xpub_derive_child,
 };
@@ -94,8 +94,8 @@ pub enum Request {
 
     // Cheetah
     GetCheetahPub { path: alloc_path::Path },
-    SignTxId      { path: alloc_path::Path, txid5: [u64;5] },
-    SignTxIdFor   { path: alloc_path::Path, txid5: [u64;5], pubkey: ([u64;6],[u64;6]) },
+    SignSpendHash      { path: alloc_path::Path, msg5: [u64;5] },
+    SignSpendHashFor   { path: alloc_path::Path, msg5: [u64;5], pubkey: ([u64;6],[u64;6]) },
 
     // self-test
     Health,

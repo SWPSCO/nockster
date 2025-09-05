@@ -7,6 +7,7 @@ pub use crate::noun::belt::{Belt, Felt};
 use core::ops::{Add, Mul, Neg, Sub};
 
 pub const PRIME: u64 = 18446744069414584321;
+pub const GOLDILOCKS_P: u64 = 0xffff_ffff_0000_0001;
 pub const PRIME_128: u128 = 18446744069414584321;
 pub const STATE_SIZE: usize = 16;
 pub const NUM_SPLIT_AND_LOOKUP: usize = 4;

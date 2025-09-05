@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512};
 
-use crate::math::math::{Belt, tip5_permute, bpegcd_full};
+use crate::math::math::{Belt, tip5_permute, bpegcd_full, GOLDILOCKS_P};
 
 // ---- Constants --------------------------------------------------------------
 
@@ -423,70 +423,54 @@ pub fn cheetah_pub_from_sk(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
     (x, y)
 }
 
-/// Schnorr signature (challenge, response) tuple over Cheetah
-/// - `sk_be`: 32-byte big-endian secret
-/// - `pk`:   affine pubkey ([x;6], [y;6]) from `cheetah_pub_from_sk`
-/// - `txid`: TIP-5 hash (5 words)
-pub fn schnorr_sign_txid(sk_be: [u8; 32], pk: ([u64; 6], [u64; 6]), txid: Hash) -> (T8, T8) {
-    // Deterministic nonce personalization = ser(P) || txid (bytes)
-    let p_words = pack_point_words(&pk);
-    let p_ser = ser_a_pt_rep104(&pk);
-    let mut personalization = Vec::with_capacity(96 + 40);
-    personalization.extend_from_slice(&p_ser);
-    {
-        let mut tmp = [0u8; 40];
-        // txid words are u64 little-endian each
-        for (i, w) in txid.values.iter().enumerate() {
-            tmp[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());
-        }
-        personalization.extend_from_slice(&tmp);
-    }
+/// Sign a TIP-5 digest m (5×u64) with Schnorr over Cheetah, Hoon-compatible:
+/// - R = k·G  (k from RFC6979 or any nonzero source)
+/// - chal = trunc_g_order( TIP5([xR,yR,xP,yP,m]) )
+/// - s = (k + chal*sk) mod n
+/// - return chal/s as T8 (little-endian limbs), padded to 8 u64.
+pub fn schnorr_sign_tx(
+  sk_be: [u8; 32],
+  pk: ([u64; 6], [u64; 6]),
+  m5: [u64; 5],
+) -> (T8, T8) {
+  // 1) Deterministic k (any nonzero mod n is fine for verify; keep RFC6979)
+  //    Personalize with ser_a_pt_rep104(P) || m5 (like you had).
+  let personalization = {
+      let ser = ser_a_pt_rep104(&pk); // 8B sentinel || X || Y
+      let mut v = alloc::vec::Vec::with_capacity(104 + 40);
+      v.extend_from_slice(&ser);
+      let mut tmp = [0u8; 40];
+      for (i, w) in m5.iter().enumerate() {
+          tmp[i * 8..i * 8 + 8].copy_from_slice(&w.to_le_bytes());
+      }
+      v.extend_from_slice(&tmp);
+      v
+  };
+  let k_be = rfc6979_k(&sk_be, &personalization);
+  let r_pt = cheetah_pub_from_sk(k_be);
 
-    let k_be = rfc6979_k(&sk_be, &personalization);
-    let r_pt = cheetah_pub_from_sk(k_be);
-    let r_words = pack_point_words(&r_pt);
+  // 2) chal = trunc_g_order( TIP5( xR,yR,xP,yP,m ) )
+  let r_words = pack_point_words(&r_pt); // [x(6), y(6)]
+  let p_words = pack_point_words(&pk);
+  let mut words = [0u64; 24 + 5];
+  words[..12].copy_from_slice(&r_words);
+  words[12..24].copy_from_slice(&p_words);
+  words[24..].copy_from_slice(&m5);
+  let digest5 = tip5_hash_words(&words);
 
-    // e = TIP5( R || P || txid )
-    let mut words = Vec::with_capacity(24 + 24 + 5);
-    words.extend_from_slice(&r_words);
-    words.extend_from_slice(&p_words);
-    words.extend_from_slice(&txid.values);
-    let e_words = tip5_hash_words(&words);
+  let c_be = trunc_g_order_to_be32(digest5);   // <-- Hoon-accurate chal (big-endian 32B)
+  let e = c_be;                                 // alias
 
-    // Turn 5-word digest -> 40 bytes big-endian -> reduce mod n to 32-bytes
-    let mut e_be40 = [0u8; 40];
-    for (i, w) in e_words.iter().enumerate() {
-        e_be40[i * 8..i * 8 + 8].copy_from_slice(&w.to_be_bytes());
-    }
-    let e_be = mod_n_from_be_bytes(&e_be40);
+  // 3) s = (k + e*sk) mod n
+  let e_times_sk = mul_mod_n(&e, &sk_be);
+  let s_be = add_mod_n(&k_be, &e_times_sk);
 
-    // s = (k + e*sk) mod n
-    let e_times_sk = mul_mod_n(&e_be, &sk_be);
-    let s_be = add_mod_n(&k_be, &e_times_sk);
+  // 4) Pack chal/s into T8 as little-endian limbs (rip-correct 5), pad zeros
+  let chal_t8 = be32_atom_to_t8_le(&e);
+  let sig_t8  = be32_atom_to_t8_le(&s_be);
 
-    // Pack outputs:
-    // challenge T8 := [e_words (5 u64)] || ZERO (pad to 8)
-    // response  T8 := big-endian s into 4 u64 (top-padded) || ZERO (pad to 8)
-    let chal = {
-        let mut v = [0u64; 8];
-        v[..5].copy_from_slice(&e_words);
-        T8 { values: v }
-    };
-    let sig = {
-        let mut v = [0u64; 8];
-        for i in 0..4 {
-            let off = i * 8;
-            v[i] = u64::from_be_bytes([
-                s_be[off], s_be[off + 1], s_be[off + 2], s_be[off + 3],
-                s_be[off + 4], s_be[off + 5], s_be[off + 6], s_be[off + 7],
-            ]);
-        }
-        T8 { values: v }
-    };
-
-    (chal, sig)
+  (chal_t8, sig_t8)
 }
-
 // ---- SLIP-10 child derivation (xprv/xpub) ----------------------------------
 
 #[derive(Clone, Debug)]
@@ -652,4 +636,123 @@ fn be32_add_mod_n(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
         be32_sub_inplace(&mut sum, &CHEETAH_N);
     }
     sum
+}
+
+fn trunc_g_order_to_be32(digest5: [u64; 5]) -> [u8; 32] {
+  let a0 = digest5[0];
+  let a1 = digest5[1];
+  let a2 = digest5[2];
+  let a3 = digest5[3];
+
+  // Build v = a0 + P*a1 + P^2*a2 + P^3*a3 as 256-bit little-endian limbs.
+  let (p2_hi, p2_lo) = {
+      let p2 = (GOLDILOCKS_P as u128) * (GOLDILOCKS_P as u128);
+      ((p2 >> 64) as u64, (p2 & 0xffff_ffff_ffff_ffff) as u64)
+  };
+  // p3 = p2 * P (192-bit) => 3 limbs (lo, mid, hi)
+  let (p3_0, p3_1, p3_2) = mul_u128_by_u64_to_192(p2_hi, p2_lo, GOLDILOCKS_P);
+
+  // Accumulator (little-endian 4-limb 256-bit)
+  let mut v = [0u64; 4];
+
+  // v += a0
+  add64_into(&mut v, 0, a0);
+
+  // v += a1 * P
+  {
+      let (lo, hi) = mul_u64x64(a1, GOLDILOCKS_P);
+      add64_into(&mut v, 0, lo);
+      add64_into(&mut v, 1, hi);
+  }
+
+  // v += a2 * P^2
+  {
+      let (lo0, lo1, lo2) = mul_u64_by_u128_to_192(a2, p2_hi, p2_lo);
+      add64_into(&mut v, 0, lo0);
+      add64_into(&mut v, 1, lo1);
+      add64_into(&mut v, 2, lo2);
+  }
+
+  // v += a3 * P^3
+  {
+      let (w0, w1, w2, w3) = mul_u64_by_192_to_256(a3, p3_0, p3_1, p3_2);
+      add64_into(&mut v, 0, w0);
+      add64_into(&mut v, 1, w1);
+      add64_into(&mut v, 2, w2);
+      add64_into(&mut v, 3, w3);
+  }
+
+  // Convert v (LE limbs) to big-endian bytes and reduce mod n.
+  let mut be = [0u8; 32];
+  for i in 0..4 {
+      be[8*(3-i) .. 8*(3-i)+8].copy_from_slice(&v[i].to_be_bytes());
+  }
+  mod_n_from_be_bytes(&be)
+}
+
+// ----- small limb helpers -----
+
+#[inline] fn mul_u64x64(a: u64, b: u64) -> (u64, u64) {
+  let p = (a as u128) * (b as u128);
+  ((p & 0xffff_ffff_ffff_ffff) as u64, (p >> 64) as u64)
+}
+
+#[inline] fn mul_u64_by_u128_to_192(a: u64, hi: u64, lo: u64) -> (u64, u64, u64) {
+  // a * (hi<<64 | lo)
+  let (l0, l1) = mul_u64x64(a, lo); // 128-bit
+  let (h0, h1) = mul_u64x64(a, hi); // 128-bit
+  // (h0,h1)<<64 + (l0,l1)
+  let (m, carry) = l1.overflowing_add(h0);
+  (l0, m, h1 + (carry as u64))
+}
+
+#[inline] fn mul_u128_by_u64_to_192(hi: u64, lo: u64, b: u64) -> (u64, u64, u64) {
+  // (hi<<64 | lo) * b
+  let (l0, l1) = mul_u64x64(lo, b);
+  let (h0, h1) = mul_u64x64(hi, b);
+  let (m, carry) = l1.overflowing_add(h0);
+  (l0, m, h1 + (carry as u64))
+}
+
+#[inline] fn mul_u64_by_192_to_256(a: u64, w0: u64, w1: u64, w2: u64) -> (u64, u64, u64, u64) {
+  // a * (w2<<128 | w1<<64 | w0)
+  let (p0_lo, p0_hi) = mul_u64x64(a, w0);
+  let (p1_lo, p1_hi) = mul_u64x64(a, w1);
+  let (p2_lo, p2_hi) = mul_u64x64(a, w2);
+
+  let (r1, c1) = p1_lo.overflowing_add(p0_hi);
+  let (r2a, c2a) = p2_lo.overflowing_add(p1_hi + (c1 as u64));
+  let r3 = p2_hi + (c2a as u64);
+
+  (p0_lo, r1, r2a, r3)
+}
+
+#[inline] fn add64_into(acc: &mut [u64; 4], idx: usize, addend: u64) {
+  let (s, c) = acc[idx].overflowing_add(addend);
+  acc[idx] = s;
+  if c && idx + 1 < 4 {
+      let mut k = idx + 1;
+      while k < 4 {
+          let (s2, c2) = acc[k].overflowing_add(1);
+          acc[k] = s2;
+          if !c2 { break; }
+          k += 1;
+      }
+  }
+}
+
+// Convert a 32-byte big-endian atom to T8 = 8×u64 little-endian limbs, pad zeros.
+fn be32_atom_to_t8_le(be: &[u8; 32]) -> T8 {
+  let mut le = [0u8; 32];
+  for i in 0..32 {
+      le[i] = be[31 - i];
+  }
+  let mut v = [0u64; 8];
+  for i in 0..4 {
+      v[i] = u64::from_le_bytes([
+          le[i*8+0], le[i*8+1], le[i*8+2], le[i*8+3],
+          le[i*8+4], le[i*8+5], le[i*8+6], le[i*8+7],
+      ]);
+  }
+  T8 { values: v }
 }

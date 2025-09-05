@@ -356,27 +356,27 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
 
-        Request::SignTxId { path, txid5 } => {
+        Request::SignSpendHash { path, msg5 } => {
             match derive_child_sk_from_seed_store(path) {
                 Ok(sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
-                    let hash = cheetah::Hash { values: *txid5 };
-                    let (e, s) = cheetah::schnorr_sign_txid(sk, pk, hash);
+                    let hash = cheetah::Hash { values: *msg5 };
+                    let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
                     Response::OkCheetahSig { chal: e.values, sig: s.values }
                 }
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
 
-        Request::SignTxIdFor { path, txid5, pubkey } => {
+        Request::SignSpendHashFor { path, msg5, pubkey } => {
             match derive_child_sk_from_seed_store(path) {
                 Ok(sk) => {
                     let pk_dev = cheetah::cheetah_pub_from_sk(sk);
                     if &pk_dev != pubkey {
                         Response::Err { code: ERR_WRONG_PUBKEY }
                     } else {
-                        let hash = cheetah::Hash { values: *txid5 };
-                        let (e, s) = cheetah::schnorr_sign_txid(sk, *pubkey, hash);
+                        let hash = cheetah::Hash { values: *msg5 };
+                        let (e, s) = cheetah::schnorr_sign_tx(sk, *pubkey, hash.values);
                         Response::OkCheetahSig { chal: e.values, sig: s.values }
                     }
                 }
@@ -390,7 +390,7 @@ fn handle_request_v1(req: &Request) -> Response {
                 Ok(sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
                     let hash = cheetah::Hash { values: [0,0,0,0,0] };
-                    let (e, s) = cheetah::schnorr_sign_txid(sk, pk, hash);
+                    let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
                     Response::OkCheetahSig { chal: e.values, sig: s.values }
                 }
                 Err(_) => Response::Err { code: ERR_NO_SEED },

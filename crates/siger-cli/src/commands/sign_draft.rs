@@ -167,21 +167,19 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
             let dev_hash = pk_dev.to_hash();
             if let Some(pk_lock) = lock.pubkeys.iter().find(|pk| pk.to_hash() == dev_hash) {
                 // ask device to sign the txid for this path
+                let msg5: [u64; 5] = input.spend.to_hash().values; 
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,
-                    msg: Frame::One(Request::SignTxId {
-                        path: path.clone(),
-                        txid5,
-                    }),
+                    msg: Frame::One(Request::SignSpendHash { path: path.clone(), msg5 }),
                 };
                 let resp: Msg<Response> = round_trip_frame(&mut *sp, &req)?;
                 let (chal, sig) = match resp.msg {
                     Response::OkCheetahSig { chal, sig } => (chal, sig),
                     Response::Err { code } => {
-                        return Err(anyhow!("SignTxId failed (code {code})"));
+                        return Err(anyhow!("SignSpendHash failed (code {code})"));
                     }
-                    _ => return Err(anyhow!("unexpected response to SignTxId")),
+                    _ => return Err(anyhow!("unexpected response to SignSpendHash")),
                 };
 
                 let schnorr_sig = SchnorrSignature {

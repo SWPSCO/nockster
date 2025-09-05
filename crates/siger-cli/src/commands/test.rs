@@ -80,14 +80,14 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
   anyhow::ensure!(host_pk.0 == dev_x && host_pk.1 == dev_y, "device pk != host pk");
   println!("pk match: OK");
 
-  // 10) device sign known txid
-  let txid = cheetah::Hash { values: [1, 2, 3, 4, 5] };
+  // 10) device sign dummy hash
+  let dummy = cheetah::Hash { values: [1, 2, 3, 4, 5] };
   match send_call(
       &mut *sp, 6,
-      Request::SignTxId { path: path.clone(), txid5: txid.values }
+      Request::SignSpendHash { path: path.clone(), msg5: dummy.values }
   )? {
       Response::OkCheetahSig { chal, sig } => {
-          println!("sign: txid   = {}", fmt_u64x5(&txid.values));
+          println!("sign: spend  = {}", fmt_u64x5(&dummy.values));
           println!("sign: chal e = {}", fmt_u64x8(&chal));
           println!("sign: sig  s = {}", fmt_u64x8(&sig));
       }
@@ -95,10 +95,10 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
   }
 
   // 11) sign-for self-test: device vs host
-  let (e_host, s_host) = cheetah::schnorr_sign_txid(xk.sk.unwrap(), host_pk, txid);
+  let (e_host, s_host) = cheetah::schnorr_sign_tx(xk.sk.unwrap(), host_pk, dummy.values);
   let (e_dev, s_dev) = match send_call(
       &mut *sp, 7,
-      Request::SignTxIdFor { path: path.clone(), txid5: txid.values, pubkey: host_pk }
+      Request::SignSpendHash { path: path.clone(), msg5: dummy.values }
   )? {
       Response::OkCheetahSig { chal, sig } => (chal, sig),
       other => anyhow::bail!("unexpected: {other:?}"),

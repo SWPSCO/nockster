@@ -25,7 +25,10 @@ pub enum KeyOrigin {
     SeedBytes,
 }
 
-/// What we persist for the device + for human/debug views
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LockKey(pub tx_types::transaction_types::Lock);
+
+/// Persisted data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedKey {
     /// 32-byte BE secret scalar

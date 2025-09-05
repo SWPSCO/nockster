@@ -1,8 +1,7 @@
-use anyhow::Context;
-use siger_core::{Request, Response, PROTO_V1};
+use siger_core::{Request, Response};
 use crate::serial::{open, send_call, send_blob};
-use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8, parse_64};
-use crate::keys::{self, pubkey_to_b58, bip39_seed_from_mnemonic};
+use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8};
+use crate::keys::{pubkey_to_b58, bip39_seed_from_mnemonic};
 use siger_core::alloc_path as pathmod;
 use siger_core::FragKind;
 
@@ -12,7 +11,7 @@ const TEST_MNEMONIC: &str =
 const TEST_EXPECT_B58: &str =
     "32bePYRuJ3heGVEbznc6xSCaTymgz9bGFREaZ2dtJdnepjc6RX7cMSP8ATeT8bHTfxFmS7StDTmFHfvt9GP1PUq99pN7DcEFat9SDBpQwJbnwmhn5JHcGpLsRKp4fxfHSRy5";
 
-pub fn run(port: &str, baud: u32, seed_hex: Option<&str>, path_str: &str) -> anyhow::Result<()> {
+pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> anyhow::Result<()> {
   use siger_core::cheetah;
 
   let mut sp = open(port, baud)?;

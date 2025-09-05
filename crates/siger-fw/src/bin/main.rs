@@ -58,7 +58,7 @@ struct FragState {
 
 static mut FRAG: Option<FragState> = None;
 
-// iutbound fragment queue
+// outbound fragment queue
 struct OutFrag {
     msg_id: u32,
     id: u16,
@@ -75,7 +75,7 @@ pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
     let mut out = alloc::vec::Vec::new();
     match postcard::from_bytes_cobs::<Msg<Frame>>(frame) {
         Ok(m) if m.v == PROTO_V1 => {
-            let body = handle_frame_v1(&m.msg);
+            let body = handle_frame_v1(m.id, &m.msg);
             let resp = Msg {
                 v: PROTO_V1,
                 id: m.id,
@@ -277,13 +277,28 @@ fn handle_request_v1(req: &Request) -> Response {
         Request::Hello =>
             Response::Hello(Caps { proto_v: PROTO_V1, compressed_pk: true }),
 
-        Request::GetInfo => Response::Info {
-            proto_v: PROTO_V1,
-            fw_major: FW_MAJOR,
-            fw_minor: FW_MINOR,
-            features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
-            has_seed: unsafe { SEED_STORE.set },
-        },
+            Request::GetInfo => {
+              let (has_seed, cheetah_x, cheetah_y) = unsafe {
+                  if SEED_STORE.set {
+                      let (sk, _cc) = cheetah::master_from_seed(&SEED_STORE.seed);
+                      let pk = cheetah::cheetah_pub_from_sk(sk);
+                      (true, pk.0, pk.1)
+                  } else {
+                      (false, [0u64; 6], [0u64; 6])
+                  }
+              };
+  
+              Response::Info {
+                  proto_v: PROTO_V1,
+                  fw_major: FW_MAJOR,
+                  fw_minor: FW_MINOR,
+                  features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
+                  has_seed,
+                  cheetah_x,
+                  cheetah_y,
+              }
+          }
+  
 
         Request::Ping => Response::Pong,
 

@@ -134,6 +134,26 @@ pub fn print_outputs(tx: &RawTransaction) {
   }
 }
 
+#[inline]
+pub fn t8_from_device(words: [u64; 8]) -> T8 {
+    // Case 1: device gave 4x64 (MSW..LSW) and left the top half zeroed.
+    if words[4..].iter().all(|&w| w == 0) {
+        let mut v = [0u64; 8];
+        // words[3] is least-significant 64 bits if device sent MSW..LSW
+        for i in 0..4 {
+            let w = words[i];
+            v[i*2 + 0] = (w & 0xffff_ffff) as u64;        // low 32 bits
+            v[i*2 + 1] = (w >> 32) as u64;                // high 32 bits
+        }
+        T8 { values: v }
+    } else {
+        // Case 2: device already gave 8 limbs; ensure high halves are zero.
+        let mut v = [0u64; 8];
+        for i in 0..8 { v[i] = words[i] & 0xffff_ffff; }
+        T8 { values: v }
+    }
+}
+
 pub fn pretty_noun(n: &Noun, max_depth: usize, max_items: usize) -> String {
   fn is_printable_ascii(bytes: &[u8]) -> bool {
       bytes.iter().all(|&b| (b == 0x09) || (b == 0x0A) || (b == 0x0D) || (0x20..=0x7E).contains(&b))

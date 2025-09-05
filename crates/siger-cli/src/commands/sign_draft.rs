@@ -17,7 +17,7 @@ use tx_types::RawTransaction;
 use siger_core::{Msg, Frame, Request, Response, PROTO_V1};
 
 use crate::serial::{open, round_trip_frame};
-use crate::util::{debug_shape, transaction_to_raw, sig_hash_for_input};
+use crate::util::{debug_shape, transaction_to_raw, sig_hash_for_input, t8_from_device};
 use crate::keys;
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
@@ -147,7 +147,6 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
     println!("device keys: {}", dev_keys.len());
 
     // sign each input whose lock contains a device key
-    let txid5 = raw.id.values;
     let mut new_inputs: ZMap<NName, Input> = ZMap::new();
     let mut signed_count = 0usize;
 
@@ -174,17 +173,15 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
                     msg: Frame::One(Request::SignSpendHash { path: path.clone(), msg5 }),
                 };
                 let resp: Msg<Response> = round_trip_frame(&mut *sp, &req)?;
-                let (chal, sig) = match resp.msg {
+                let (chal_words, sig_words) = match resp.msg {
                     Response::OkCheetahSig { chal, sig } => (chal, sig),
-                    Response::Err { code } => {
-                        return Err(anyhow!("SignSpendHash failed (code {code})"));
-                    }
+                    Response::Err { code } => return Err(anyhow!("SignSpendHash failed (code {code})")),
                     _ => return Err(anyhow!("unexpected response to SignSpendHash")),
                 };
-
+                
                 let schnorr_sig = SchnorrSignature {
-                    chal: Chal { values: T8 { values: chal } },
-                    sig: Sig { values: T8 { values: sig } },
+                    chal: Chal { values: t8_from_device(chal_words) },
+                    sig:  Sig  { values: t8_from_device(sig_words)  },
                 };
 
                 // attach signature keyed by the lock's pubkey object

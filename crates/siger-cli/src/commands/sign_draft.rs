@@ -13,7 +13,9 @@ use noun_serde::{NounDecode, NounEncode};
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
-
+use tx_types::Hashable;
+use tx_types::hashing::hasher::hash_hashable;
+use tx_types::signer::sign_tx;
 use siger_core::{Msg, Frame, Request, Response, PROTO_V1};
 
 use crate::serial::{open, round_trip_frame};
@@ -93,7 +95,7 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
       .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
     // try wallet transaction
-    if let Ok(tx) = Transaction::from_noun(&noun) {
+    if let Ok(tx) = Transaction::from_noun(&mut slab, &noun) {
         let raw = transaction_to_raw(&tx);
         return Ok((Outer::WalletTx(tx), raw, noun));
     }
@@ -120,13 +122,13 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     ))
 }
 
-pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
+pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
     let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
     let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
 
     println!("file:  {draft_path}");
     println!("shape: {}", debug_shape(&noun_before));
-    println!("txid:  {}", raw.id.to_base58());
+    println!("txid:  {}", raw.id.to_b58());
 
     // collect desired signer derivation paths
     let path_list: Vec<String> = std::env::var("SIGER_PATHS")
@@ -198,15 +200,22 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
     }
 
     
-    let old_id_b58 = raw.id.to_base58();
-    let updated = raw.with_inputs(Inputs { p: new_inputs });
+    let old_id_b58 = raw.id.to_b58();
+    let mut updated = raw.clone();
+    updated.inputs = Inputs { p: new_inputs };
+    let tail_hashable = Hashable::triple(
+        updated.inputs.to_hashable(),
+        updated.timelock_range.to_hashable(),
+        Hashable::leaf_u64(updated.total_fees.value),
+    );
+    updated.id = hash_hashable(&tail_hashable);
 
     // Sanity: id should not change (signing commits to txid).
-    if updated.id.to_base58() != old_id_b58 {
+    if updated.id.to_b58() != old_id_b58 {
         eprintln!(
             "warning: raw.id changed after attaching signatures ({} -> {})",
             old_id_b58,
-            updated.id.to_base58()
+            updated.id.to_b58()
         );
     }
 
@@ -239,6 +248,92 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
     };
 
     // write output
+    let out_path = default_out_path_for(draft_path, out_opt);
+    fs::write(&out_path, &out_bytes)
+        .with_context(|| format!("write {}", out_path.display()))?;
+
+    println!(
+        "wrote {} bytes to {} (added {} signature{})",
+        out_bytes.len(),
+        out_path.display(),
+        signed_count,
+        if signed_count == 1 { "" } else { "s" }
+    );
+
+    Ok(())
+}
+
+
+pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
+    use tx_types::crypto::slip10::master::master_from_mnemonic;
+    
+    let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
+    let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
+
+    println!("file:  {draft_path}");
+    println!("shape: {}", debug_shape(&noun_before));
+    println!("txid:  {}", raw.id.to_b58());
+
+    let mnemonic = std::env::var("SIGER_MNEMONIC")
+        .context("SIGER_MNEMONIC environment variable not set. Set it with your BIP39 mnemonic.")?;
+    
+    let passphrase = std::env::var("SIGER_PASSPHRASE").unwrap_or_default();
+
+    println!("Deriving key from mnemonic...");
+    
+    let master_key = master_from_mnemonic(&mnemonic, &passphrase)
+        .context("Failed to derive master key from mnemonic")?;
+    
+    let private_key_bytes = master_key.private_key_bytes()
+        .context("Master key should have private key")?;
+    
+    let mut t8_values = [0u64; 8];
+    for i in 0..8 {
+        let offset = 32 - (i + 1) * 4;
+        let limb_bytes = &private_key_bytes[offset..offset + 4];
+        t8_values[i] = u32::from_be_bytes([
+            limb_bytes[0], limb_bytes[1], limb_bytes[2], limb_bytes[3]
+        ]) as u64;
+    }
+    
+    let secret_key = T8 { values: t8_values };
+    
+    println!("Signing transaction...");
+    let signed_tx = sign_tx(raw, secret_key);
+    
+    println!("Signed txid: {}", signed_tx.id.to_b58());
+
+    let signed_count = signed_tx.inputs.p.tap()
+        .iter()
+        .filter(|(_, input)| input.spend.signature.is_some())
+        .count();
+
+    let out_bytes = match outer {
+        Outer::RawTx => {
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = signed_tx.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+        Outer::TxTransact { tail_jam } => {
+            let mut out_slab: NounSlab = NounSlab::new();
+            let head = signed_tx.to_noun(&mut out_slab);
+            let tail = out_slab
+                .cue_into(Bytes::from(tail_jam))
+                .expect("cue original tail");
+            let cell = T(&mut out_slab, &[head, tail]);
+            out_slab.copy_into(cell);
+            out_slab.jam()
+        }
+        Outer::WalletTx(mut tx) => {
+            tx.p = signed_tx.inputs.clone();
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = tx.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+    };
+
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes)
         .with_context(|| format!("write {}", out_path.display()))?;

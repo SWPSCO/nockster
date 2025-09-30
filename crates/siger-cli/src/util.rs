@@ -19,6 +19,7 @@ use nockapp::AtomExt;
 use nockvm::serialization::cue;
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::Tip5Hasher;
+use tx_types::Hashable;
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
 use crate::keys::{LockKey};
@@ -46,7 +47,7 @@ pub fn print_raw_details(raw: &RawTransaction) {
   let fee = raw.total_fees.value;
 
   println!("raw-tx:");
-  println!("  id           = {}", raw.id.to_base58());
+  println!("  id           = {}", raw.id.to_b58());
   println!("  inputs       = {}", inputs_count);
   println!("  timelock     = [{:?}, {:?}]", tl_min, tl_max);
   println!("  total_fees   = {}", fee);
@@ -57,8 +58,8 @@ pub fn print_raw_details(raw: &RawTransaction) {
       if name.p.len() >= 2 {
           println!(
               "      name        = [{:?} {:?}]",
-              name.p[0].to_base58(),
-              name.p[1].to_base58()
+              name.p[0].to_b58(),
+              name.p[1].to_b58()
           );
       } else {
           println!("      name        = <unexpected arity {}>", name.p.len());
@@ -102,7 +103,7 @@ pub fn print_raw_details(raw: &RawTransaction) {
 pub fn summarize_outputs(tx: &RawTransaction) -> BTreeMap<LockKey, u128> {
   let mut by_lock: BTreeMap<LockKey, u128> = BTreeMap::new();
 
-  for (_name, input) in tx.inputs.p.iter_kv() {
+  for (_name, input) in tx.inputs.p.tap().into_iter() {
       for seed in input.spend.seeds.set.iter() {
           *by_lock.entry(LockKey(seed.recipient.clone()))
               .or_insert(0) += seed.gift.value as u128;
@@ -118,7 +119,7 @@ pub fn print_input_seeds(input: &Input) {
       for (j, pk) in pks_b58.iter().enumerate() {
           println!("        pk[{j}] = {pk}");
       }
-      println!("        parent = {}", seed.parent_hash.to_base58());
+      println!("        parent = {}", seed.parent_hash.to_b58());
   }
 }
 
@@ -261,13 +262,13 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
   }
 
   // wallet transaction:wt (`p` (inputs) and `name`)
-  if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
+  if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
       return Ok(transaction_to_raw(&tx_wallet));
   }
 
   // 4) Naked pair: [name inputs]
   if let Ok(cell) = noun.as_cell() {
-      if let Ok(inputs) = Inputs::from_noun(&cell.tail()) {
+      if let Ok(inputs) = Inputs::from_noun(&mut slab, &cell.tail()) {
           let raw = raw_from_inputs(inputs);
           return Ok(raw);
       }
@@ -281,18 +282,23 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
 
 
 pub fn raw_from_inputs(inputs: Inputs) -> RawTransaction {
-  let total_fees = sum_inputs_fees(&inputs);
-  let tl = TimelockRange { min: None, max: None };
-
-  // No Default for Hash → seed zeros, then compute real id.
-  let mut raw = RawTransaction {
-      id: Hash { values: [0u64; 5] },
-      inputs,
-      timelock_range: tl,
-      total_fees: Coins { value: total_fees },
-  };
-  raw.id = raw.compute_id();
-  raw
+    let total_fees = sum_inputs_fees(&inputs);
+    let tl = TimelockRange { min: None, max: None };
+    
+    let mut raw = RawTransaction {
+        id: Hash { values: [0u64; 5] },
+        inputs,
+        timelock_range: tl,
+        total_fees: Coins { value: total_fees },
+    };
+    
+    let tail_hashable = Hashable::triple(
+        raw.inputs.to_hashable(),
+        raw.timelock_range.to_hashable(),
+        Hashable::leaf_u64(raw.total_fees.value),
+    );
+    raw.id = tx_types::hashing::hasher::hash_hashable(&tail_hashable);
+    raw
 }
 
 pub fn decode_cord_like(n: Noun) -> Option<String> {
@@ -302,12 +308,25 @@ pub fn decode_cord_like(n: Noun) -> Option<String> {
       .map(|b| String::from_utf8_lossy(&b).to_string())
 }
 
-
 pub fn transaction_to_raw(tx: &Transaction) -> RawTransaction {
-  let inputs = tx.p.clone();
-  let total_fees = sum_inputs_fees(&inputs);
-  let tl = union_inputs_timelock_range(&inputs);
-  RawTransaction::new(inputs, tl, Coins { value: total_fees })
+    let inputs = tx.p.clone();
+    let total_fees = sum_inputs_fees(&inputs);
+    let tl = union_inputs_timelock_range(&inputs);
+    
+    let mut raw = RawTransaction {
+        id: Hash { values: [0u64; 5] },
+        inputs,
+        timelock_range: tl,
+        total_fees: Coins { value: total_fees },
+    };
+    
+    let tail_hashable = Hashable::triple(
+        raw.inputs.to_hashable(),
+        raw.timelock_range.to_hashable(),
+        Hashable::leaf_u64(raw.total_fees.value),
+    );
+    raw.id = tx_types::hashing::hasher::hash_hashable(&tail_hashable);
+    raw
 }
 
 pub fn sum_inputs_fees(inputs: &Inputs) -> u64 {
@@ -454,7 +473,7 @@ pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> [u64; 5] {
     let n_spend    = spend.to_noun(&mut slab);
     let signing_n  = T(&mut slab, &[n_timelock, n_name, n_spend]);
 
-    Tip5Hasher::hash_noun(signing_n).unwrap().values // -> [u64;5]
+    Tip5Hasher::hash_noun_varlen(signing_n).unwrap().values // -> [u64;5]
 }
 
 // minimal "round_trip" for Msg<Frame> (used above)

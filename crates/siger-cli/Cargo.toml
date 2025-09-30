@@ -29,10 +29,11 @@ ibig = "0.3"
 num-traits = "0.2"
 hmac = "0.12"
 
-nockapp = { workspace = true }
-nockvm = { workspace = true }
-nockvm_macros = { workspace = true }
-noun-serde = { workspace = true }
+noun-serde = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad" }
+nockapp = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad", default-features = false }
+nockvm = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad" }
+nockvm_macros = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad" }
+
 
 siger-core = { path = "../siger-core", features = ["alloc-path"] }
-tx-types = { path = "../tx-types", default-features = false }
+tx-types = { git = "https://github.com/swpsco/tx-types.git", rev = "6c48639e265bddd419cf3a3a234d8d745b121448", package = "tx-types" }

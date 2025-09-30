@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/siger-core",
-    "crates/nicker",
     "crates/siger-fw",
     "crates/siger-cli",
 ]

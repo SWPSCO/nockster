@@ -39,12 +39,12 @@ pub fn run(draft_path: &str, dump_noun: bool, max_depth: usize, max_items: usize
                     r
                 } else {
                     // wallet transaction:wt
-                    if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
+                    if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
                         transaction_to_raw(&tx_wallet)
                     } else {
                         // bare [name inputs]
                         if let Ok(cell2) = noun.as_cell() {
-                            if let Ok(inputs) = Inputs::from_noun(&cell2.tail()) {
+                            if let Ok(inputs) = Inputs::from_noun(&mut slab, &cell2.tail()) {
                                 raw_from_inputs(inputs)
                             } else {
                                 return Err(anyhow!("unrecognized noun shape; cannot decode as any transaction form"));
@@ -56,7 +56,7 @@ pub fn run(draft_path: &str, dump_noun: bool, max_depth: usize, max_items: usize
                 }
             } else {
                 // not a cell; try wallet or give up
-                if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
+                if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
                     transaction_to_raw(&tx_wallet)
                 } else {
                     return Err(anyhow!("unrecognized noun shape; cannot decode as any transaction form"));

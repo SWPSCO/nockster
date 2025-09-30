@@ -184,11 +184,27 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "asn1-rs"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5493c3bedbacf7fd7382c6346bbd66687d12bbaad3a89a2d2c303ee6cf20b048"
+dependencies = [
+ "asn1-rs-derive 0.5.1",
+ "asn1-rs-impl",
+ "displaydoc",
+ "nom",
+ "num-traits",
+ "rusticata-macros",
+ "thiserror 1.0.69",
+ "time",
+]
+
+[[package]]
+name = "asn1-rs"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56624a96882bb8c26d61312ae18cb45868e5a9992ea73c58e45c3101e56a1e60"
 dependencies = [
- "asn1-rs-derive",
+ "asn1-rs-derive 0.6.0",
  "asn1-rs-impl",
  "displaydoc",
  "nom",
@@ -196,6 +212,18 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.16",
  "time",
+]
+
+[[package]]
+name = "asn1-rs-derive"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "965c2d33e53cb6b267e148a4cb0760bc01f4904c1cd4bb4002a085bb016d1490"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
 ]
 
 [[package]]
@@ -262,6 +290,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -283,15 +333,6 @@ dependencies = [
  "futures-util",
  "memchr",
  "pin-project-lite",
-]
-
-[[package]]
-name = "atomic-polyfill"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cf2bce30dfe09ef0bfaef228b9d414faaf7e563035494d7fe092dba54b300f4"
-dependencies = [
- "critical-section",
 ]
 
 [[package]]
@@ -352,11 +393,38 @@ dependencies = [
 
 [[package]]
 name = "axum"
+version = "0.7.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
+dependencies = [
+ "async-trait",
+ "axum-core 0.4.5",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "itoa",
+ "matchit 0.7.3",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustversion",
+ "serde",
+ "sync_wrapper",
+ "tower 0.5.2",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "021e862c184ae977658b36c4500f7feac3221ca5da43e3f25bd04ab6c79a29b5"
 dependencies = [
- "axum-core",
+ "axum-core 0.5.2",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -366,7 +434,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
- "matchit",
+ "matchit 0.8.4",
  "memchr",
  "mime",
  "percent-encoding",
@@ -378,10 +446,30 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tower",
+ "tower 0.5.2",
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "rustversion",
+ "sync_wrapper",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -1303,11 +1391,25 @@ dependencies = [
 
 [[package]]
 name = "der-parser"
+version = "9.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cd0a5c643689626bec213c4d8bd4d96acc8ffdb4ad4bb6bc16abf27d5f4b553"
+dependencies = [
+ "asn1-rs 0.6.2",
+ "displaydoc",
+ "nom",
+ "num-bigint",
+ "num-traits",
+ "rusticata-macros",
+]
+
+[[package]]
+name = "der-parser"
 version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
 dependencies = [
- "asn1-rs",
+ "asn1-rs 0.7.1",
  "displaydoc",
  "nom",
  "num-bigint",
@@ -1581,7 +1683,7 @@ dependencies = [
  "embedded-io-async",
  "futures-sink",
  "futures-util",
- "heapless 0.8.0",
+ "heapless",
 ]
 
 [[package]]
@@ -1595,7 +1697,7 @@ dependencies = [
  "embedded-io-async",
  "futures-core",
  "futures-sink",
- "heapless 0.8.0",
+ "heapless",
 ]
 
 [[package]]
@@ -1830,7 +1932,7 @@ dependencies = [
  "esp-config",
  "esp-rom-sys",
  "jiff",
- "strum",
+ "strum 0.27.2",
 ]
 
 [[package]]
@@ -1893,7 +1995,7 @@ dependencies = [
  "rand_core 0.9.3",
  "riscv",
  "serde",
- "strum",
+ "strum 0.27.2",
  "ufmt-write",
  "xtensa-lx",
  "xtensa-lx-rt",
@@ -1923,11 +2025,11 @@ checksum = "a6fbc1d166be84c0750f121e95c8989ddebd7e7bdd86af3594a6cfb34f039650"
 dependencies = [
  "anyhow",
  "basic-toml",
- "indexmap",
+ "indexmap 2.11.0",
  "proc-macro2",
  "quote",
  "serde",
- "strum",
+ "strum 0.27.2",
 ]
 
 [[package]]
@@ -2432,20 +2534,11 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http",
- "indexmap",
+ "indexmap 2.11.0",
  "slab",
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "hash32"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0c35f58762feb77d74ebe43bdbc3210f09be9fe6742234d573bacc26ed92b67"
-dependencies = [
- "byteorder",
 ]
 
 [[package]]
@@ -2456,6 +2549,12 @@ checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
 dependencies = [
  "byteorder",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
@@ -2500,25 +2599,11 @@ dependencies = [
 
 [[package]]
 name = "heapless"
-version = "0.7.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdc6457c0eb62c71aac4bc17216026d8410337c4126773b9c5daba343f17964f"
-dependencies = [
- "atomic-polyfill",
- "hash32 0.2.1",
- "rustc_version",
- "serde",
- "spin",
- "stable_deref_trait",
-]
-
-[[package]]
-name = "heapless"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
 dependencies = [
- "hash32 0.3.1",
+ "hash32",
  "serde",
  "stable_deref_trait",
 ]
@@ -2723,7 +2808,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
 ]
 
 [[package]]
@@ -2802,18 +2886,7 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
-dependencies = [
- "cfg-if",
- "num-traits",
- "rand 0.9.2",
- "static_assertions",
-]
-
-[[package]]
-name = "ibig"
-version = "0.3.6"
-source = "git+https://github.com/SWPSCO/nockchain.git?rev=c88496985c83218ba3100e07031d56371bb02028#c88496985c83218ba3100e07031d56371bb02028"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "cfg-if",
  "num-traits",
@@ -2986,6 +3059,16 @@ dependencies = [
  "tokio",
  "url",
  "xmltree",
+]
+
+[[package]]
+name = "indexmap"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
+dependencies = [
+ "autocfg",
+ "hashbrown 0.12.3",
 ]
 
 [[package]]
@@ -3624,12 +3707,12 @@ dependencies = [
  "futures-rustls",
  "libp2p-core",
  "libp2p-identity",
- "rcgen 0.13.2",
+ "rcgen",
  "ring",
  "rustls",
  "rustls-webpki",
  "thiserror 2.0.16",
- "x509-parser",
+ "x509-parser 0.17.0",
  "yasna",
 ]
 
@@ -3778,6 +3861,12 @@ checksum = "8263075bb86c5a1b1427b5ae862e8889656f126e9f77c484496e8b47cf5c5558"
 dependencies = [
  "regex-automata 0.1.10",
 ]
+
+[[package]]
+name = "matchit"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "matchit"
@@ -3949,7 +4038,7 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.5.2"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 
 [[package]]
 name = "nb"
@@ -4031,49 +4120,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nicker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bip32",
- "bip39",
- "bs58",
- "bytes",
- "chrono",
- "clap",
- "futures",
- "hex",
- "hmac",
- "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "k256",
- "nockapp",
- "nockchain-libp2p-io",
- "nockvm",
- "nockvm_macros",
- "noun-serde",
- "noun-serde-derive",
- "num-traits",
- "postcard",
- "proc-macro2",
- "rand 0.8.5",
- "rand_chacha 0.3.1",
- "reqwest",
- "serde",
- "serde_json",
- "serialport",
- "sha2",
- "siger-core",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tx-types",
- "uuid",
- "zeroize",
- "zkvm-jetpack",
-]
-
-[[package]]
 name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4093,11 +4139,11 @@ checksum = "b93853da6d84c2e3c7d730d6473e8817692dd89be387eb01b94d7f108ecb5b8c"
 [[package]]
 name = "nockapp"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
+ "axum 0.8.4",
  "axum-server",
  "bincode",
  "bitvec",
@@ -4110,9 +4156,9 @@ dependencies = [
  "dirs",
  "either",
  "futures",
- "getrandom 0.3.3",
+ "getrandom 0.2.16",
  "gnort",
- "ibig 0.3.6 (git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad)",
  "instant-acme",
  "intmap",
  "nockvm",
@@ -4120,8 +4166,8 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "rand 0.9.2",
- "rcgen 0.14.3",
+ "rand 0.8.5",
+ "rcgen",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -4134,22 +4180,22 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-util",
- "tonic 0.14.1",
+ "tonic",
  "tower-http",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
  "tracing-test",
  "tracing-tracy",
- "webpki-roots",
- "x509-parser",
+ "webpki-roots 0.26.11",
+ "x509-parser 0.16.0",
  "yaque",
 ]
 
 [[package]]
 name = "nockchain-libp2p-io"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "bs58",
  "bytes",
@@ -4161,31 +4207,29 @@ dependencies = [
  "gnort",
  "hickory-proto",
  "hickory-resolver",
- "ibig 0.3.6 (git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad)",
  "libp2p",
  "nockapp",
  "nockvm",
  "nockvm_macros",
- "noun-serde",
- "rand 0.9.2",
+ "rand 0.8.5",
  "serde",
  "serde_bytes",
  "tokio",
  "tracing",
  "void",
- "zkvm-jetpack",
 ]
 
 [[package]]
 name = "nockvm"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "autotools",
  "bitvec",
  "cc",
  "either",
- "ibig 0.3.6 (git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad)",
  "intmap",
  "json",
  "lazy_static",
@@ -4196,7 +4240,7 @@ dependencies = [
  "nockvm_macros",
  "num-derive",
  "num-traits",
- "rand 0.9.2",
+ "rand 0.8.5",
  "signal-hook",
  "slotmap",
  "static_assertions",
@@ -4208,13 +4252,13 @@ dependencies = [
 [[package]]
 name = "nockvm_crypto"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "aes",
  "aes-siv",
  "curve25519-dalek",
  "ed25519-dalek",
- "ibig 0.3.6 (git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad)",
  "sha1",
  "sha2",
  "x25519-dalek",
@@ -4223,7 +4267,7 @@ dependencies = [
 [[package]]
 name = "nockvm_macros"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "quote",
  "syn",
@@ -4266,19 +4310,18 @@ dependencies = [
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "nockapp",
  "nockvm",
  "noun-serde-derive",
  "thiserror 2.0.16",
- "tracing",
 ]
 
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "nockvm",
  "proc-macro2",
@@ -4371,11 +4414,20 @@ dependencies = [
 
 [[package]]
 name = "oid-registry"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8d8034d9489cdaf79228eb9f6a3b8d7bb32ba00d6645ebd48eef4077ceb5bd9"
+dependencies = [
+ "asn1-rs 0.6.2",
+]
+
+[[package]]
+name = "oid-registry"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
 dependencies = [
- "asn1-rs",
+ "asn1-rs 0.7.1",
 ]
 
 [[package]]
@@ -4398,23 +4450,23 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "opentelemetry"
-version = "0.30.0"
+version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf416e4cb72756655126f7dd7bb0af49c674f4c1b9903e80c009e0c37e552e6"
+checksum = "ab70038c28ed37b97d8ed414b6429d343a8bbf44c9f79ec854f3a643029ba6d7"
 dependencies = [
  "futures-core",
  "futures-sink",
  "js-sys",
  "pin-project-lite",
- "thiserror 2.0.16",
+ "thiserror 1.0.69",
  "tracing",
 ]
 
 [[package]]
 name = "opentelemetry-http"
-version = "0.30.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50f6639e842a97dbea8886e3439710ae463120091e2e064518ba8e716e6ac36d"
+checksum = "10a8a7f5f6ba7c1b286c2fbca0454eaba116f63bbe69ed250b642d36fbb04d80"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4425,10 +4477,12 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-otlp"
-version = "0.30.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbee664a43e07615731afc539ca60c6d9f1a9425e25ca09c57bc36c87c55852b"
+checksum = "91cf61a1868dacc576bf2b2a1c3e9ab150af7272909e80085c3173384fe11f76"
 dependencies = [
+ "async-trait",
+ "futures-core",
  "http",
  "opentelemetry",
  "opentelemetry-http",
@@ -4436,40 +4490,43 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "reqwest",
- "thiserror 2.0.16",
+ "thiserror 1.0.69",
  "tokio",
- "tonic 0.13.1",
+ "tonic",
  "tracing",
 ]
 
 [[package]]
 name = "opentelemetry-proto"
-version = "0.30.0"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e046fd7660710fe5a05e8748e70d9058dc15c94ba914e7c4faa7c728f0e8ddc"
+checksum = "a6e05acbfada5ec79023c85368af14abd0b307c015e9064d249b2a950ef459a6"
 dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "prost",
- "tonic 0.13.1",
+ "tonic",
 ]
 
 [[package]]
 name = "opentelemetry_sdk"
-version = "0.30.0"
+version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f644aa9e5e31d11896e024305d7e3c98a88884d9f8919dbf37a9991bc47a4b"
+checksum = "231e9d6ceef9b0b2546ddf52335785ce41252bc7474ee8ba05bfad277be13ab8"
 dependencies = [
+ "async-trait",
  "futures-channel",
  "futures-executor",
  "futures-util",
+ "glob",
  "opentelemetry",
  "percent-encoding",
- "rand 0.9.2",
+ "rand 0.8.5",
  "serde_json",
- "thiserror 2.0.16",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tracing",
 ]
 
 [[package]]
@@ -4708,7 +4765,6 @@ dependencies = [
  "cobs 0.3.0",
  "embedded-io 0.4.0",
  "embedded-io 0.6.1",
- "heapless 0.7.17",
  "serde",
 ]
 
@@ -5070,19 +5126,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rcgen"
-version = "0.14.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0068c5b3cab1d4e271e0bb6539c87563c43411cad90b057b15c79958fbeb41f7"
-dependencies = [
- "pem",
- "ring",
- "rustls-pki-types",
- "time",
- "yasna",
-]
-
-[[package]]
 name = "redox_syscall"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5161,29 +5204,23 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls",
  "hyper-util",
  "js-sys",
  "log",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
- "rustls",
- "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-rustls",
- "tower",
+ "tower 0.5.2",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
 ]
 
 [[package]]
@@ -5648,7 +5685,7 @@ version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
- "indexmap",
+ "indexmap 2.11.0",
  "itoa",
  "ryu",
  "serde",
@@ -5753,7 +5790,7 @@ dependencies = [
  "bip32",
  "bip39",
  "bs58",
- "heapless 0.8.0",
+ "heapless",
  "hex-literal 0.4.1",
  "hmac",
  "k256",
@@ -5775,7 +5812,7 @@ dependencies = [
  "esp-bootloader-esp-idf",
  "esp-hal",
  "getrandom 0.2.16",
- "heapless 0.8.0",
+ "heapless",
  "hmac",
  "k256",
  "panic-halt",
@@ -5883,15 +5920,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-dependencies = [
- "lock_api",
-]
-
-[[package]]
 name = "spinning_top"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5936,11 +5964,33 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
+version = "0.26.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+dependencies = [
+ "strum_macros 0.26.4",
+]
+
+[[package]]
+name = "strum"
 version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.27.2",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn",
 ]
 
 [[package]]
@@ -6077,9 +6127,9 @@ dependencies = [
 
 [[package]]
 name = "termimad"
-version = "0.33.0"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b23646cdde4c2e9d6f2621424751b48653e5755f50163b2ff5ce3b32ebf17104"
+checksum = "7301d9c2c4939c97f25376b70d3c13311f8fefdee44092fc361d2a98adc2cbb6"
 dependencies = [
  "coolor",
  "crokey",
@@ -6222,7 +6272,6 @@ dependencies = [
  "slab",
  "socket2 0.6.0",
  "tokio-macros",
- "tracing",
  "windows-sys 0.59.0",
 ]
 
@@ -6278,12 +6327,10 @@ version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75129e1dc5000bfbaa9fee9d1b21f974f9fbad9daec557a521ee6e080825f6e8"
 dependencies = [
- "indexmap",
  "serde",
  "serde_spanned",
  "toml_datetime 0.7.0",
  "toml_parser",
- "toml_writer",
  "winnow",
 ]
 
@@ -6308,7 +6355,7 @@ version = "0.22.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
 dependencies = [
- "indexmap",
+ "indexmap 2.11.0",
  "toml_datetime 0.6.11",
  "winnow",
 ]
@@ -6323,45 +6370,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_writer"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc842091f2def52017664b53082ecbbeb5c7731092bad69d2c63050401dfd64"
-
-[[package]]
 name = "tonic"
-version = "0.13.1"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e581ba15a835f4d9ea06c55ab1bd4dce26fc53752c69a04aac00703bfb49ba9"
+checksum = "877c5b330756d856ffcc4553ab34a5684481ade925ecc54bcd1bf02b1d0d4d52"
 dependencies = [
+ "async-stream",
  "async-trait",
- "base64 0.22.1",
- "bytes",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-timeout",
- "hyper-util",
- "percent-encoding",
- "pin-project",
- "prost",
- "tokio",
- "tokio-stream",
- "tower",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tonic"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67ac5a8627ada0968acec063a4746bf79588aa03ccb66db2f75d7dce26722a40"
-dependencies = [
- "async-trait",
- "axum",
+ "axum 0.7.9",
  "base64 0.22.1",
  "bytes",
  "h2",
@@ -6373,11 +6389,31 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2 0.6.0",
- "sync_wrapper",
+ "prost",
+ "socket2 0.5.10",
  "tokio",
  "tokio-stream",
- "tower",
+ "tower 0.4.13",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tower"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "indexmap 1.9.3",
+ "pin-project",
+ "pin-project-lite",
+ "rand 0.8.5",
+ "slab",
+ "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -6391,12 +6427,9 @@ checksum = "d039ad9159c98b70ecfd540b2573b97f7f52c3e8d9f8ad57a24b916a536975f9"
 dependencies = [
  "futures-core",
  "futures-util",
- "indexmap",
  "pin-project-lite",
- "slab",
  "sync_wrapper",
  "tokio",
- "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -6424,7 +6457,7 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tokio-util",
- "tower",
+ "tower 0.5.2",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -6488,9 +6521,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-opentelemetry"
-version = "0.31.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddcf5959f39507d0d04d6413119c04f33b623f4f951ebcbdddddfad2d0623a9c"
+checksum = "97a971f6058498b5c0f1affa23e7ea202057a7301dbff68e968b2d578bcbd053"
 dependencies = [
  "js-sys",
  "once_cell",
@@ -6572,7 +6605,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "319c70195101a93f56db4c74733e272d720768e13471f400c78406a326b172b0"
 dependencies = [
  "cc",
- "windows-targets 0.52.6",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -6590,19 +6623,27 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tx-types"
 version = "0.1.0"
+source = "git+https://github.com/swpsco/tx-types.git?rev=6c48639e265bddd419cf3a3a234d8d745b121448#6c48639e265bddd419cf3a3a234d8d745b121448"
 dependencies = [
  "anyhow",
+ "bip39",
  "bs58",
+ "chrono",
  "either",
- "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=c88496985c83218ba3100e07031d56371bb02028)",
+ "getrandom 0.2.16",
+ "hmac",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad)",
  "nockapp",
  "nockchain-libp2p-io",
  "nockvm",
  "noun-serde",
  "num-bigint",
  "num-traits",
+ "pbkdf2",
  "serde",
  "serde_json",
+ "sha2",
+ "zeroize",
  "zkvm-jetpack",
 ]
 
@@ -6732,7 +6773,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98816b1accafbb09085168b90f27e93d790b4bfa19d883466b5e53315b5f06a6"
 dependencies = [
- "heapless 0.8.0",
+ "heapless",
  "portable-atomic",
 ]
 
@@ -6756,7 +6797,6 @@ checksum = "f33196643e165781c20a5ead5582283a7dacbb87855d867fbc2df3f81eddc1be"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
- "serde",
  "wasm-bindgen",
 ]
 
@@ -6924,6 +6964,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.2",
 ]
 
 [[package]]
@@ -7511,16 +7560,33 @@ dependencies = [
 
 [[package]]
 name = "x509-parser"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcbc162f30700d6f3f82a24bf7cc62ffe7caea42c0b2cba8bf7f3ae50cf51f69"
+dependencies = [
+ "asn1-rs 0.6.2",
+ "data-encoding",
+ "der-parser 9.0.0",
+ "lazy_static",
+ "nom",
+ "oid-registry 0.7.1",
+ "rusticata-macros",
+ "thiserror 1.0.69",
+ "time",
+]
+
+[[package]]
+name = "x509-parser"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4569f339c0c402346d4a75a9e39cf8dad310e287eef1ff56d4c68e5067f53460"
 dependencies = [
- "asn1-rs",
+ "asn1-rs 0.7.1",
  "data-encoding",
- "der-parser",
+ "der-parser 10.0.0",
  "lazy_static",
  "nom",
- "oid-registry",
+ "oid-registry 0.8.1",
  "rusticata-macros",
  "thiserror 2.0.16",
  "time",
@@ -7715,24 +7781,21 @@ dependencies = [
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd#a7daa6d5a5c85106428bab76132eb28218828dfd"
+source = "git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad#e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad"
 dependencies = [
  "argon2",
  "arrayref",
  "bitvec",
- "bs58",
  "bytes",
  "either",
  "hex-literal 1.0.0",
- "ibig 0.3.6 (git+https://github.com/swpsco/nockchain.git?rev=a7daa6d5a5c85106428bab76132eb28218828dfd)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/nockchain.git?rev=e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad)",
  "nockapp",
  "nockvm",
  "nockvm_macros",
- "noun-serde",
  "num-traits",
- "once_cell",
  "quickcheck",
  "smallvec",
- "strum",
+ "strum 0.26.3",
  "tracing",
 ]

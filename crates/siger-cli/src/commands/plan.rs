@@ -32,7 +32,7 @@ pub fn run(_port: &str, _baud: u32, draft_path: &str) -> anyhow::Result<()> {
             .unwrap_or(0);
         println!(
             "input {:?}: m-of-n = {} of {}, combos={}",
-            p.name.to_hash().to_base58(), p.m, total_keys, p.combos.len()
+            p.name.to_hash().to_b58(), p.m, total_keys, p.combos.len()
         );
         for (i, combo) in p.combos.iter().enumerate() {
             println!("  combo#{i}: {} keys", combo.len());

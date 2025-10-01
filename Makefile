@@ -43,7 +43,7 @@ test:
 		TARGET=x86_64-unknown-linux-gnu; \
 		DEVICE=/dev/ttyACM0; \
 	fi; \
-	cargo +nightly run -p siger-cli --target $$TARGET -- test --port $$DEVICE
+	cargo +nightly run -p siger-cli --bin siger-cli --target $$TARGET -- test --port $$DEVICE
 
 cli:
 	@if [[ "$$OSTYPE" == "darwin"* ]]; then \

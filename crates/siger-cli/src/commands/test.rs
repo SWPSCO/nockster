@@ -1,6 +1,13 @@
+use crate::commands::sign_draft;
 use crate::keys::{bip39_seed_from_mnemonic, pubkey_to_b58};
 use crate::serial::{open, send_blob, send_call};
-use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8};
+use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8, load_draft_as_raw};
+use bytes::Bytes;
+use nockapp::noun::slab::NounSlab;
+use nockapp::AtomExt;
+use nockvm::noun::Noun;
+use std::fs;
+use std::path::Path;
 use siger_core::alloc_path as pathmod;
 use siger_core::FragKind;
 use siger_core::{Request, Response};
@@ -10,6 +17,8 @@ const TEST_MNEMONIC: &str =
     gate critic child claim outer detect plug market visual stuff finish crime abuse";
 const TEST_EXPECT_B58: &str =
     "32bePYRuJ3heGVEbznc6xSCaTymgz9bGFREaZ2dtJdnepjc6RX7cMSP8ATeT8bHTfxFmS7StDTmFHfvt9GP1PUq99pN7DcEFat9SDBpQwJbnwmhn5JHcGpLsRKp4fxfHSRy5";
+const EXPECTED_TX_ID: &str =
+    "8VKtRMuQRJNjCLgyGi2c6XtjDfinFKChfVENEZQiRPRfp5cVHPhVSSg";
 
 pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> anyhow::Result<()> {
     use siger_core::cheetah;
@@ -147,5 +156,49 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
         other => anyhow::bail!("unexpected: {other:?}"),
     }
 
+    drop(sp);
+
+    // 13) End-to-end sign known-good draft and verify transaction ID matches reference.
+    let draft_path = "known-good.draft";
+    let signed_path = "kg.tx";
+    sign_draft::run(port, baud, draft_path, Some(signed_path))?;
+
+    let tx_name = transaction_name_from_file(signed_path)?;
+    anyhow::ensure!(
+        tx_name == EXPECTED_TX_ID,
+        "signed tx id mismatch\n  expected: {}\n       got: {}",
+        EXPECTED_TX_ID,
+        tx_name
+    );
+    println!("sign-draft: tx id {tx_name}");
+
+    let raw = load_draft_as_raw(Path::new(signed_path))?;
+    let mut signed_inputs = 0usize;
+    for (_, input) in raw.inputs.p.tap() {
+        if let Some(sigmap) = &input.spend.signature {
+            signed_inputs += sigmap.map.wyt();
+        }
+    }
+    anyhow::ensure!(signed_inputs > 0, "device produced zero signatures");
+    println!("sign-draft: signatures attached = {signed_inputs}");
+
     Ok(())
+}
+
+fn transaction_name_from_file(path: &str) -> anyhow::Result<String> {
+    let data = fs::read(path)?;
+    let mut slab: NounSlab = NounSlab::new();
+    let noun: Noun = slab
+        .cue_into(Bytes::from(data))
+        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
+
+    let cell = noun.as_cell().map_err(|_| anyhow::anyhow!("expected cell"))?;
+    let name_atom = cell
+        .head()
+        .as_atom()
+        .map_err(|_| anyhow::anyhow!("expected atom"))?;
+    let bytes = name_atom
+        .to_bytes_until_nul()
+        .map_err(|_| anyhow::anyhow!("name not cord"))?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
 }

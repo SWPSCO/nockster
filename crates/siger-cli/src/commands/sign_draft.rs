@@ -13,7 +13,6 @@ use noun_serde::{NounDecode, NounEncode};
 use siger_core::{Frame, Msg, Request, Response, PROTO_V1};
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::hashing::hasher::hash_hashable;
-use tx_types::signer::sign_tx;
 use tx_types::transaction_types::*;
 use tx_types::Hashable;
 use tx_types::RawTransaction;
@@ -61,19 +60,12 @@ fn fetch_device_pks(
         let resp: Msg<Response> = round_trip_frame(sp, &req)?;
         match resp.msg {
             Response::OkCheetahPub { x, y } => {
-                // reverse the endians ヽ༼ຈل͜ຈ༽ﾉ
-                let mut xr = x;
-                let mut yr = y;
-                xr.reverse();
-                yr.reverse();
-                out.push((
-                    path.clone(),
-                    SchnorrPubkey {
-                        x: F6LT { values: xr },
-                        y: F6LT { values: yr },
-                        inf: false,
-                    },
-                ));
+                let pk = SchnorrPubkey {
+                    x: F6LT { values: x },
+                    y: F6LT { values: y },
+                    inf: false,
+                };
+                out.push((path.clone(), pk));
             }
             Response::Err { code } => return Err(anyhow!("GetCheetahPub failed (code {code})")),
             _ => return Err(anyhow!("unrecognized response to GetCheetahPub")),
@@ -122,7 +114,7 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     ))
 }
 
-pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
+fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
     let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
     let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
 
@@ -271,90 +263,7 @@ pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> R
 }
 
 pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
-    use tx_types::crypto::slip10::master::master_from_mnemonic;
-
-    let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
-    let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
-
-    println!("file:  {draft_path}");
-    println!("shape: {}", debug_shape(&noun_before));
-    println!("txid:  {}", raw.id.to_b58());
-
-    let mnemonic = std::env::var("SIGER_MNEMONIC")
-        .context("SIGER_MNEMONIC environment variable not set. Set it with your BIP39 mnemonic.")?;
-
-    let passphrase = std::env::var("SIGER_PASSPHRASE").unwrap_or_default();
-
-    println!("Deriving key from mnemonic...");
-
-    let master_key = master_from_mnemonic(&mnemonic, &passphrase)
-        .context("Failed to derive master key from mnemonic")?;
-
-    let private_key_bytes = master_key
-        .private_key_bytes()
-        .context("Master key should have private key")?;
-
-    let mut t8_values = [0u64; 8];
-    for i in 0..8 {
-        let offset = 32 - (i + 1) * 4;
-        let limb_bytes = &private_key_bytes[offset..offset + 4];
-        t8_values[i] =
-            u32::from_be_bytes([limb_bytes[0], limb_bytes[1], limb_bytes[2], limb_bytes[3]]) as u64;
-    }
-
-    let secret_key = T8 { values: t8_values };
-
-    println!("Signing transaction...");
-    let signed_tx = sign_tx(raw, secret_key);
-
-    println!("Signed txid: {}", signed_tx.id.to_b58());
-
-    let signed_count = signed_tx
-        .inputs
-        .p
-        .tap()
-        .iter()
-        .filter(|(_, input)| input.spend.signature.is_some())
-        .count();
-
-    let out_bytes = match outer {
-        Outer::RawTx => {
-            let mut out_slab: NounSlab = NounSlab::new();
-            let n = signed_tx.to_noun(&mut out_slab);
-            out_slab.copy_into(n);
-            out_slab.jam()
-        }
-        Outer::TxTransact { tail_jam } => {
-            let mut out_slab: NounSlab = NounSlab::new();
-            let head = signed_tx.to_noun(&mut out_slab);
-            let tail = out_slab
-                .cue_into(Bytes::from(tail_jam))
-                .expect("cue original tail");
-            let cell = T(&mut out_slab, &[head, tail]);
-            out_slab.copy_into(cell);
-            out_slab.jam()
-        }
-        Outer::WalletTx(mut tx) => {
-            tx.p = signed_tx.inputs.clone();
-            let mut out_slab: NounSlab = NounSlab::new();
-            let n = tx.to_noun(&mut out_slab);
-            out_slab.copy_into(n);
-            out_slab.jam()
-        }
-    };
-
-    let out_path = default_out_path_for(draft_path, out_opt);
-    fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
-
-    println!(
-        "wrote {} bytes to {} (added {} signature{})",
-        out_bytes.len(),
-        out_path.display(),
-        signed_count,
-        if signed_count == 1 { "" } else { "s" }
-    );
-
-    Ok(())
+    run_device(port, baud, draft_path, out_opt)
 }
 
 #[allow(dead_code)]

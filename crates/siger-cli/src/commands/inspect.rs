@@ -31,7 +31,7 @@ pub fn run(
     println!("shape: {}", debug_shape(&noun));
 
     // Try all known shapes → RawTransaction
-    let raw = match RawTransaction::from_noun(&mut slab, &noun) {
+    let raw = match RawTransaction::from_noun(&noun) {
         Ok(r) => {
             println!("detected: raw-tx:transact");
             r
@@ -39,17 +39,17 @@ pub fn run(
         Err(_) => {
             // tx:transact — head is raw
             if let Ok(cell) = noun.as_cell() {
-                if let Ok(r) = RawTransaction::from_noun(&mut slab, &cell.head()) {
+                if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
                     println!("detected: tx:transact (head is raw-tx)");
                     r
                 } else {
                     // wallet transaction:wt
-                    if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
+                    if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
                         transaction_to_raw(&tx_wallet)
                     } else {
                         // bare [name inputs]
                         if let Ok(cell2) = noun.as_cell() {
-                            if let Ok(inputs) = Inputs::from_noun(&mut slab, &cell2.tail()) {
+                            if let Ok(inputs) = Inputs::from_noun(&cell2.tail()) {
                                 raw_from_inputs(inputs)
                             } else {
                                 return Err(anyhow!("unrecognized noun shape; cannot decode as any transaction form"));
@@ -63,7 +63,7 @@ pub fn run(
                 }
             } else {
                 // not a cell; try wallet or give up
-                if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
+                if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
                     transaction_to_raw(&tx_wallet)
                 } else {
                     return Err(anyhow!(

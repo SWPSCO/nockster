@@ -276,25 +276,25 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
     // raw-tx
-    if let Ok(raw) = RawTransaction::from_noun(&mut slab, &noun) {
+    if let Ok(raw) = RawTransaction::from_noun(&noun) {
         return Ok(raw);
     }
 
     // tx:transact — head is raw-tx
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(raw) = RawTransaction::from_noun(&mut slab, &cell.head()) {
+        if let Ok(raw) = RawTransaction::from_noun(&cell.head()) {
             return Ok(raw);
         }
     }
 
     // wallet transaction:wt (`p` (inputs) and `name`)
-    if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
+    if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
         return Ok(transaction_to_raw(&tx_wallet));
     }
 
     // 4) Naked pair: [name inputs]
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(inputs) = Inputs::from_noun(&mut slab, &cell.tail()) {
+        if let Ok(inputs) = Inputs::from_noun(&cell.tail()) {
             let raw = raw_from_inputs(inputs);
             return Ok(raw);
         }
@@ -440,7 +440,7 @@ pub fn sign_draft_with_paths(
     let atom = unsafe { atom.normalize_as_atom() };
 
     let noun: Noun = cue(&mut stack, atom).map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
-    let mut raw: RawTransaction = RawTransaction::from_noun(&mut stack, &noun)
+    let mut raw: RawTransaction = RawTransaction::from_noun(&noun)
         .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
 
     // cache pk per path

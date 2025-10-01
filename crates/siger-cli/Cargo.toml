@@ -29,11 +29,11 @@ ibig = "0.3"
 num-traits = "0.2"
 hmac = "0.12"
 
-noun-serde = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad" }
-nockapp = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad", default-features = false }
-nockvm = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad" }
-nockvm_macros = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96bc8421b724ca84c4e93aad6e97ee9b7f4ad" }
+noun-serde = { workspace = true }
+nockapp = { workspace = true, default-features = false }
+nockvm = { workspace = true }
+nockvm_macros = { workspace = true }
 
 
 siger-core = { path = "../siger-core", features = ["alloc-path"] }
-tx-types = { workspace = true }
+tx-types = { workspace = true, features = ["std"] }

@@ -95,14 +95,14 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
     // try wallet transaction
-    if let Ok(tx) = Transaction::from_noun(&mut slab, &noun) {
+    if let Ok(tx) = Transaction::from_noun(&noun) {
         let raw = transaction_to_raw(&tx);
         return Ok((Outer::WalletTx(tx), raw, noun));
     }
 
     // try [raw-tx tail]
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(r) = RawTransaction::from_noun(&mut slab, &cell.head()) {
+        if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
             // capture tail as jam for perfect round-trip later
             let mut s2: NounSlab = NounSlab::new();
             let copied_tail = s2.copy_into(cell.tail());
@@ -113,7 +113,7 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     }
 
     // try bare raw-tx
-    if let Ok(r) = RawTransaction::from_noun(&mut slab, &noun) {
+    if let Ok(r) = RawTransaction::from_noun(&noun) {
         return Ok((Outer::RawTx, r, noun));
     }
 

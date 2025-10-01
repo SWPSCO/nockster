@@ -1,4 +1,6 @@
-use crate::util::{debug_shape, pretty_noun, raw_from_inputs, transaction_to_raw};
+use crate::util::{
+    debug_shape, pretty_noun, raw_from_inputs, transaction_name_from_noun, transaction_to_raw,
+};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
@@ -29,6 +31,10 @@ pub fn run(
     // Basic shape
     println!("file: {draft_path}");
     println!("shape: {}", debug_shape(&noun));
+
+    if let Ok(name) = transaction_name_from_noun(&noun) {
+        println!("txid: {name}");
+    }
 
     // Try all known shapes → RawTransaction
     let raw = match RawTransaction::from_noun(&noun) {

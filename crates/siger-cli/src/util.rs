@@ -39,6 +39,46 @@ pub fn debug_shape(n: &Noun) -> String {
     }
 }
 
+pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
+    if let Ok(tx) = Transaction::from_noun(noun) {
+        return Ok(tx.name);
+    }
+
+    if let Ok(raw) = RawTransaction::from_noun(noun) {
+        return Ok(raw.id.to_b58());
+    }
+
+    if let Ok(cell) = noun.as_cell() {
+        let head = cell.head();
+
+        if let Ok(raw_head) = RawTransaction::from_noun(&head) {
+            return Ok(raw_head.id.to_b58());
+        }
+
+        if let Ok(tx_head) = Transaction::from_noun(&head) {
+            return Ok(tx_head.name);
+        }
+
+        if let Ok(atom) = head.as_atom() {
+            if let Ok(bytes) = atom.to_bytes_until_nul() {
+                if !bytes.is_empty() {
+                    return Ok(String::from_utf8_lossy(&bytes).to_string());
+                }
+            }
+        }
+    }
+
+    Err(anyhow!("unable to extract transaction identifier"))
+}
+
+pub fn transaction_name_from_bytes(bytes: &[u8]) -> Result<String> {
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = slab
+        .cue_into(Bytes::from(bytes.to_vec()))
+        .map_err(|e| anyhow!("cue failed: {e:?}"))?;
+    transaction_name_from_noun(&noun)
+}
+
 pub fn print_raw_details(raw: &RawTransaction) {
     let id_str = fmt_u64x5(&raw.id.values);
     let inputs_count = raw.inputs.p.wyt();

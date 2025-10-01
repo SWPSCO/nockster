@@ -1,11 +1,9 @@
 use crate::commands::sign_draft;
 use crate::keys::{bip39_seed_from_mnemonic, pubkey_to_b58};
 use crate::serial::{open, send_blob, send_call};
-use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8, load_draft_as_raw};
-use bytes::Bytes;
-use nockapp::noun::slab::NounSlab;
-use nockapp::AtomExt;
-use nockvm::noun::Noun;
+use crate::util::{
+    fmt_u64x5, fmt_u64x6, fmt_u64x8, load_draft_as_raw, transaction_name_from_bytes,
+};
 use std::fs;
 use std::path::Path;
 use siger_core::alloc_path as pathmod;
@@ -163,7 +161,8 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
     let signed_path = "kg.tx";
     sign_draft::run(port, baud, draft_path, Some(signed_path))?;
 
-    let tx_name = transaction_name_from_file(signed_path)?;
+    let signed_bytes = fs::read(signed_path)?;
+    let tx_name = transaction_name_from_bytes(&signed_bytes)?;
     anyhow::ensure!(
         tx_name == EXPECTED_TX_ID,
         "signed tx id mismatch\n  expected: {}\n       got: {}",
@@ -183,22 +182,4 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
     println!("sign-draft: signatures attached = {signed_inputs}");
 
     Ok(())
-}
-
-fn transaction_name_from_file(path: &str) -> anyhow::Result<String> {
-    let data = fs::read(path)?;
-    let mut slab: NounSlab = NounSlab::new();
-    let noun: Noun = slab
-        .cue_into(Bytes::from(data))
-        .map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
-
-    let cell = noun.as_cell().map_err(|_| anyhow::anyhow!("expected cell"))?;
-    let name_atom = cell
-        .head()
-        .as_atom()
-        .map_err(|_| anyhow::anyhow!("expected atom"))?;
-    let bytes = name_atom
-        .to_bytes_until_nul()
-        .map_err(|_| anyhow::anyhow!("name not cord"))?;
-    Ok(String::from_utf8_lossy(&bytes).to_string())
 }

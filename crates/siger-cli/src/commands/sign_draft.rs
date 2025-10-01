@@ -12,14 +12,15 @@ use noun_serde::{NounDecode, NounEncode};
 
 use siger_core::{Frame, Msg, Request, Response, PROTO_V1};
 use tx_types::collections::{ZMap, ZSet};
-use tx_types::hashing::hasher::hash_hashable;
 use tx_types::transaction_types::*;
-use tx_types::Hashable;
 use tx_types::RawTransaction;
 
 use crate::keys;
 use crate::serial::{open, round_trip_frame};
-use crate::util::{debug_shape, sig_hash_for_input, t8_from_device, transaction_to_raw};
+use crate::util::{
+    debug_shape, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
+    transaction_name_from_noun, transaction_to_raw,
+};
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
     match explicit {
@@ -118,9 +119,12 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
     let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
 
+    let tx_name_before =
+        transaction_name_from_noun(&noun_before).unwrap_or_else(|_| raw.id.to_b58());
+
     println!("file:  {draft_path}");
     println!("shape: {}", debug_shape(&noun_before));
-    println!("txid:  {}", raw.id.to_b58());
+    println!("txid:  {tx_name_before}");
 
     // collect desired signer derivation paths
     let path_list: Vec<String> = std::env::var("SIGER_PATHS")
@@ -200,24 +204,8 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
         new_inputs.put(name, input);
     }
 
-    let old_id_b58 = raw.id.to_b58();
     let mut updated = raw.clone();
     updated.inputs = Inputs { p: new_inputs };
-    let tail_hashable = Hashable::triple(
-        updated.inputs.to_hashable(),
-        updated.timelock_range.to_hashable(),
-        Hashable::leaf_u64(updated.total_fees.value),
-    );
-    updated.id = hash_hashable(&tail_hashable);
-
-    // Sanity: id should not change (signing commits to txid).
-    if updated.id.to_b58() != old_id_b58 {
-        eprintln!(
-            "warning: raw.id changed after attaching signatures ({} -> {})",
-            old_id_b58,
-            updated.id.to_b58()
-        );
-    }
 
     let out_bytes = match outer {
         Outer::RawTx => {
@@ -250,6 +238,15 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     // write output
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
+
+    let tx_name_after =
+        transaction_name_from_bytes(&out_bytes).unwrap_or_else(|_| updated.id.to_b58());
+    if tx_name_after != tx_name_before {
+        eprintln!(
+            "warning: tx identifier changed after attaching signatures ({} -> {})",
+            tx_name_before, tx_name_after
+        );
+    }
 
     println!(
         "wrote {} bytes to {} (added {} signature{})",

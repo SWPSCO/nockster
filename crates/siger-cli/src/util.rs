@@ -21,10 +21,17 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use tx_types::collections::{ZMap, ZSet};
+use tx_types::hashing::hasher::hash_hashable;
 use tx_types::transaction_types::*;
+use tx_types::Hash;
 use tx_types::Hashable;
 use tx_types::RawTransaction;
-use tx_types::Tip5Hasher;
+
+fn is_printable_ascii(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .all(|&b| (b == 0x09) || (b == 0x0A) || (b == 0x0D) || (0x20..=0x7E).contains(&b))
+}
 
 pub fn debug_shape(n: &Noun) -> String {
     if let Ok(cell) = n.as_cell() {
@@ -61,7 +68,7 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
 
         if let Ok(atom) = head.as_atom() {
             if let Ok(bytes) = atom.to_bytes_until_nul() {
-                if !bytes.is_empty() {
+                if !bytes.is_empty() && is_printable_ascii(&bytes) {
                     return Ok(String::from_utf8_lossy(&bytes).to_string());
                 }
             }
@@ -77,6 +84,19 @@ pub fn transaction_name_from_bytes(bytes: &[u8]) -> Result<String> {
         .cue_into(Bytes::from(bytes.to_vec()))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
     transaction_name_from_noun(&noun)
+}
+
+pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Hash {
+    let mut spend = raw.inputs.p.get(name).expect("input missing").spend.clone();
+    spend.signature = None;
+
+    let signing_hashable = Hashable::triple(
+        raw.timelock_range.to_hashable(),
+        name.to_hashable(),
+        spend.to_hashable(),
+    );
+
+    hash_hashable(&signing_hashable)
 }
 
 pub fn print_raw_details(raw: &RawTransaction) {
@@ -216,12 +236,6 @@ pub fn t8_from_device(words: [u64; 8]) -> T8 {
 }
 
 pub fn pretty_noun(n: &Noun, max_depth: usize, max_items: usize) -> String {
-    fn is_printable_ascii(bytes: &[u8]) -> bool {
-        bytes
-            .iter()
-            .all(|&b| (b == 0x09) || (b == 0x0A) || (b == 0x0D) || (0x20..=0x7E).contains(&b))
-    }
-
     fn fmt_atom(atom: &Atom) -> String {
         // cord if it has a terminating NUL and is printable
         if let Ok(bytes) = atom.to_bytes_until_nul() {
@@ -566,21 +580,6 @@ pub fn sign_draft_with_paths(
 
     raw.inputs = Inputs { p: new_inputs };
     Ok(raw)
-}
-
-pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> [u64; 5] {
-    // clone + strip sigs from the target spend
-    let mut spend = raw.inputs.p.get(name).expect("input missing").spend.clone();
-    spend.signature = None;
-
-    // build a canonical noun for signing: [tx.timelock, name, spend]
-    let mut slab: NounSlab = NounSlab::new();
-    let n_timelock = raw.timelock_range.to_noun(&mut slab);
-    let n_name = name.to_noun(&mut slab);
-    let n_spend = spend.to_noun(&mut slab);
-    let signing_n = T(&mut slab, &[n_timelock, n_name, n_spend]);
-
-    Tip5Hasher::hash_noun_varlen(signing_n).unwrap().values // -> [u64;5]
 }
 
 // minimal "round_trip" for Msg<Frame> (used above)

@@ -18,7 +18,7 @@ use tx_types::RawTransaction;
 use crate::keys;
 use crate::serial::{open, round_trip_frame};
 use crate::util::{
-    debug_shape, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
+    debug_shape, fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
     transaction_name_from_noun, transaction_to_raw,
 };
 
@@ -164,7 +164,13 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
             let dev_hash = pk_dev.to_hash();
             if let Some(pk_lock) = lock.pubkeys.iter().find(|pk| pk.to_hash() == dev_hash) {
                 // ask device to sign the tx sig hash for this path
-                let msg5: [u64; 5] = sig_hash_for_input(&raw, &name);
+                let msg_hash = sig_hash_for_input(&raw, &name);
+                let msg5: [u64; 5] = msg_hash.values;
+                println!(
+                    "    signing hash for {:?}: {}",
+                    name,
+                    fmt_u64x5(&msg5)
+                );
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,

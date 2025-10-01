@@ -73,5 +73,6 @@ kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c8
 noun-serde-derive = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "noun-serde-derive" }
 noun-serde = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "noun-serde" }
 ibig = { git = "https://github.com/SWPSCO/nockchain.git", rev = "c88496985c83218ba3100e07031d56371bb02028", package = "ibig" }
+tx-types = { path = "../tx-types/tx-types" }
 
 [workspace.lints.rust]

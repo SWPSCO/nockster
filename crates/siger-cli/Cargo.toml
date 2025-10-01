@@ -36,4 +36,4 @@ nockvm_macros = { git = "https://github.com/SWPSCO/nockchain.git", rev = "e2d96b
 
 
 siger-core = { path = "../siger-core", features = ["alloc-path"] }
-tx-types = { git = "https://github.com/swpsco/tx-types.git", rev = "6c48639e265bddd419cf3a3a234d8d745b121448", package = "tx-types" }
+tx-types = { workspace = true }

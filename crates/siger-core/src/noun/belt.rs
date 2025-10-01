@@ -1,12 +1,12 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
 
+use super::noun_serde::{Noun, NounAllocator, NounDecode, NounDecodeError, NounEncode};
+use crate::math::math::{badd, based_check, binv, bmul, bneg, bpow, bsub, PRIME};
 use alloc::vec;
-use core::slice::Iter;
 use alloc::vec::Vec;
 use core::ops::{Add, Mul, Neg, Sub};
-use crate::math::math::{badd, bsub, bmul, bneg, binv, bpow, PRIME, based_check};
-use super::noun_serde::{NounEncode, NounDecode, NounDecodeError, Noun, NounAllocator};
+use core::slice::Iter;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -20,9 +20,8 @@ impl NounEncode for Belt {
 
 impl NounDecode for Belt {
     fn from_noun(noun: &Noun) -> Result<Self, NounDecodeError> {
-        let value = noun.as_atom()
-            .map_err(|_| NounDecodeError::ExpectedAtom)?;
-        
+        let value = noun.as_atom().map_err(|_| NounDecodeError::ExpectedAtom)?;
+
         if !based_check(value) {
             return Err(NounDecodeError::Custom("Belt value not based"));
         }
@@ -42,13 +41,17 @@ pub trait Element: Clone {
 }
 
 impl From<u64> for Belt {
-  #[inline(always)]
-  fn from(x: u64) -> Self { Belt(if x >= PRIME { x % PRIME } else { x }) }
+    #[inline(always)]
+    fn from(x: u64) -> Self {
+        Belt(if x >= PRIME { x % PRIME } else { x })
+    }
 }
 
 impl From<Belt> for u64 {
-  #[inline(always)]
-  fn from(b: Belt) -> u64 { b.0 }
+    #[inline(always)]
+    fn from(b: Belt) -> u64 {
+        b.0
+    }
 }
 
 impl Element for Felt {
@@ -279,7 +282,7 @@ impl quickcheck::Arbitrary for BPolyVec {
 
 impl core::ops::Div for Belt {
     type Output = Belt;
-    
+
     fn div(self, rhs: Belt) -> Belt {
         Belt(bmul(self.0, binv(rhs.0)))
     }
@@ -289,50 +292,50 @@ impl Belt {
     pub fn is_zero(&self) -> bool {
         self.0 == 0
     }
-    
+
     pub fn zero() -> Self {
         Belt(0)
     }
-    
+
     pub fn one() -> Self {
         Belt(1)
     }
 }
 
 impl Add for Belt {
-  type Output = Belt;
-  
-  fn add(self, rhs: Belt) -> Belt {
-      Belt(badd(self.0, rhs.0))
-  }
+    type Output = Belt;
+
+    fn add(self, rhs: Belt) -> Belt {
+        Belt(badd(self.0, rhs.0))
+    }
 }
 
 impl Sub for Belt {
-  type Output = Belt;
-  
-  fn sub(self, rhs: Belt) -> Belt {
-      Belt(bsub(self.0, rhs.0))
-  }
+    type Output = Belt;
+
+    fn sub(self, rhs: Belt) -> Belt {
+        Belt(bsub(self.0, rhs.0))
+    }
 }
 
 impl Mul for Belt {
-  type Output = Belt;
-  
-  fn mul(self, rhs: Belt) -> Belt {
-      Belt(bmul(self.0, rhs.0))
-  }
+    type Output = Belt;
+
+    fn mul(self, rhs: Belt) -> Belt {
+        Belt(bmul(self.0, rhs.0))
+    }
 }
 
 impl Neg for Belt {
-  type Output = Belt;
-  
-  fn neg(self) -> Belt {
-      Belt(bneg(self.0))
-  }
+    type Output = Belt;
+
+    fn neg(self) -> Belt {
+        Belt(bneg(self.0))
+    }
 }
 
 impl Belt {
-  pub fn inv(self) -> Belt {
-      Belt(binv(self.0))
-  }
+    pub fn inv(self) -> Belt {
+        Belt(binv(self.0))
+    }
 }

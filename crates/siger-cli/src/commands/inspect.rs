@@ -1,18 +1,23 @@
-use crate::util::{debug_shape, pretty_noun, transaction_to_raw, raw_from_inputs};
-use nockapp::noun::slab::NounSlab;
-use bytes::Bytes;
+use crate::util::{debug_shape, pretty_noun, raw_from_inputs, transaction_to_raw};
 use anyhow::{anyhow, Context};
-use std::fs;
+use bytes::Bytes;
+use nockapp::noun::slab::NounSlab;
 use nockvm::noun::Noun;
+use noun_serde::NounDecode;
+use std::fs;
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
-use noun_serde::NounDecode;
 
 fn print_raw_details(raw: &RawTransaction) {
     crate::util::print_raw_details(raw)
 }
 
-pub fn run(draft_path: &str, dump_noun: bool, max_depth: usize, max_items: usize) -> anyhow::Result<()> {
+pub fn run(
+    draft_path: &str,
+    dump_noun: bool,
+    max_depth: usize,
+    max_items: usize,
+) -> anyhow::Result<()> {
     let data = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
 
     // Keep allocator alive while noun is in scope
@@ -50,7 +55,9 @@ pub fn run(draft_path: &str, dump_noun: bool, max_depth: usize, max_items: usize
                                 return Err(anyhow!("unrecognized noun shape; cannot decode as any transaction form"));
                             }
                         } else {
-                            return Err(anyhow!("unrecognized noun shape; not a cell and not raw-tx"));
+                            return Err(anyhow!(
+                                "unrecognized noun shape; not a cell and not raw-tx"
+                            ));
                         }
                     }
                 }
@@ -59,7 +66,9 @@ pub fn run(draft_path: &str, dump_noun: bool, max_depth: usize, max_items: usize
                 if let Ok(tx_wallet) = Transaction::from_noun(&mut slab, &noun) {
                     transaction_to_raw(&tx_wallet)
                 } else {
-                    return Err(anyhow!("unrecognized noun shape; cannot decode as any transaction form"));
+                    return Err(anyhow!(
+                        "unrecognized noun shape; cannot decode as any transaction form"
+                    ));
                 }
             }
         }

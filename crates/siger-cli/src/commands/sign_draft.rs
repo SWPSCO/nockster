@@ -10,17 +10,17 @@ use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
 
+use siger_core::{Frame, Msg, Request, Response, PROTO_V1};
 use tx_types::collections::{ZMap, ZSet};
-use tx_types::transaction_types::*;
-use tx_types::RawTransaction;
-use tx_types::Hashable;
 use tx_types::hashing::hasher::hash_hashable;
 use tx_types::signer::sign_tx;
-use siger_core::{Msg, Frame, Request, Response, PROTO_V1};
+use tx_types::transaction_types::*;
+use tx_types::Hashable;
+use tx_types::RawTransaction;
 
-use crate::serial::{open, round_trip_frame};
-use crate::util::{debug_shape, transaction_to_raw, sig_hash_for_input, t8_from_device};
 use crate::keys;
+use crate::serial::{open, round_trip_frame};
+use crate::util::{debug_shape, sig_hash_for_input, t8_from_device, transaction_to_raw};
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
     match explicit {
@@ -89,10 +89,10 @@ enum Outer {
 }
 
 fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
-  let mut slab: NounSlab = NounSlab::new();
-  let noun: Noun = slab
-      .cue_into(Bytes::from(bytes.to_vec()))
-      .map_err(|e| anyhow!("cue failed: {e:?}"))?;
+    let mut slab: NounSlab = NounSlab::new();
+    let noun: Noun = slab
+        .cue_into(Bytes::from(bytes.to_vec()))
+        .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
     // try wallet transaction
     if let Ok(tx) = Transaction::from_noun(&mut slab, &noun) {
@@ -172,18 +172,27 @@ pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> R
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,
-                    msg: Frame::One(Request::SignSpendHash { path: path.clone(), msg5 }),
+                    msg: Frame::One(Request::SignSpendHash {
+                        path: path.clone(),
+                        msg5,
+                    }),
                 };
                 let resp: Msg<Response> = round_trip_frame(&mut *sp, &req)?;
                 let (chal_words, sig_words) = match resp.msg {
                     Response::OkCheetahSig { chal, sig } => (chal, sig),
-                    Response::Err { code } => return Err(anyhow!("SignSpendHash failed (code {code})")),
+                    Response::Err { code } => {
+                        return Err(anyhow!("SignSpendHash failed (code {code})"))
+                    }
                     _ => return Err(anyhow!("unexpected response to SignSpendHash")),
                 };
-                
+
                 let schnorr_sig = SchnorrSignature {
-                    chal: Chal { values: t8_from_device(chal_words) },
-                    sig:  Sig  { values: t8_from_device(sig_words)  },
+                    chal: Chal {
+                        values: t8_from_device(chal_words),
+                    },
+                    sig: Sig {
+                        values: t8_from_device(sig_words),
+                    },
                 };
 
                 // attach signature keyed by the lock's pubkey object
@@ -199,7 +208,6 @@ pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> R
         new_inputs.put(name, input);
     }
 
-    
     let old_id_b58 = raw.id.to_b58();
     let mut updated = raw.clone();
     updated.inputs = Inputs { p: new_inputs };
@@ -249,8 +257,7 @@ pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> R
 
     // write output
     let out_path = default_out_path_for(draft_path, out_opt);
-    fs::write(&out_path, &out_bytes)
-        .with_context(|| format!("write {}", out_path.display()))?;
+    fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
 
     println!(
         "wrote {} bytes to {} (added {} signature{})",
@@ -263,10 +270,9 @@ pub fn _run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> R
     Ok(())
 }
 
-
 pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
     use tx_types::crypto::slip10::master::master_from_mnemonic;
-    
+
     let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
     let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
 
@@ -276,34 +282,37 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
 
     let mnemonic = std::env::var("SIGER_MNEMONIC")
         .context("SIGER_MNEMONIC environment variable not set. Set it with your BIP39 mnemonic.")?;
-    
+
     let passphrase = std::env::var("SIGER_PASSPHRASE").unwrap_or_default();
 
     println!("Deriving key from mnemonic...");
-    
+
     let master_key = master_from_mnemonic(&mnemonic, &passphrase)
         .context("Failed to derive master key from mnemonic")?;
-    
-    let private_key_bytes = master_key.private_key_bytes()
+
+    let private_key_bytes = master_key
+        .private_key_bytes()
         .context("Master key should have private key")?;
-    
+
     let mut t8_values = [0u64; 8];
     for i in 0..8 {
         let offset = 32 - (i + 1) * 4;
         let limb_bytes = &private_key_bytes[offset..offset + 4];
-        t8_values[i] = u32::from_be_bytes([
-            limb_bytes[0], limb_bytes[1], limb_bytes[2], limb_bytes[3]
-        ]) as u64;
+        t8_values[i] =
+            u32::from_be_bytes([limb_bytes[0], limb_bytes[1], limb_bytes[2], limb_bytes[3]]) as u64;
     }
-    
+
     let secret_key = T8 { values: t8_values };
-    
+
     println!("Signing transaction...");
     let signed_tx = sign_tx(raw, secret_key);
-    
+
     println!("Signed txid: {}", signed_tx.id.to_b58());
 
-    let signed_count = signed_tx.inputs.p.tap()
+    let signed_count = signed_tx
+        .inputs
+        .p
+        .tap()
         .iter()
         .filter(|(_, input)| input.spend.signature.is_some())
         .count();
@@ -335,8 +344,7 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
     };
 
     let out_path = default_out_path_for(draft_path, out_opt);
-    fs::write(&out_path, &out_bytes)
-        .with_context(|| format!("write {}", out_path.display()))?;
+    fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
 
     println!(
         "wrote {} bytes to {} (added {} signature{})",

@@ -213,6 +213,13 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     let mut updated = raw.clone();
     updated.inputs = Inputs { p: new_inputs };
 
+    // Recalculate the transaction ID with the signed inputs (like reference implementation does)
+    updated.id = tx_types::hashing::tx_id::compute_tx_id(
+        &updated.inputs,
+        &updated.timelock_range,
+        updated.total_fees
+    );
+
     let out_bytes = match outer {
         Outer::RawTx => {
             let mut out_slab: NounSlab = NounSlab::new();

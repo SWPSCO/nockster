@@ -87,16 +87,13 @@ pub fn transaction_name_from_bytes(bytes: &[u8]) -> Result<String> {
 }
 
 pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Hash {
+    // clone + strip sigs from the target spend
     let mut spend = raw.inputs.p.get(name).expect("input missing").spend.clone();
     spend.signature = None;
 
-    let signing_hashable = Hashable::triple(
-        raw.timelock_range.to_hashable(),
-        name.to_hashable(),
-        spend.to_hashable(),
-    );
-
-    hash_hashable(&signing_hashable)
+    // Use spend.sig_hash() to match reference implementation
+    // This computes: hash([seeds.to_sig_hashable(), fee])
+    spend.sig_hash()
 }
 
 pub fn print_raw_details(raw: &RawTransaction) {
@@ -215,18 +212,24 @@ pub fn print_outputs(tx: &RawTransaction) {
 
 #[inline]
 pub fn t8_from_device(words: [u64; 8]) -> T8 {
-    // Case 1: device gave 4x64 (MSW..LSW) and left the top half zeroed.
+    // The ESP firmware returns T8 values which may be in two different formats:
+    // Case 1: 4x64-bit words (MSW..LSW) with upper 4 words zeroed
+    //         This happens when the device sends fewer than 8 limbs
+    // Case 2: 8x limbs, each containing a 32-bit value in the low bits
+    //         This is the standard T8 format from be32_atom_to_t8_le
+
+    // Case 1: device gave 4x64 (MSW..LSW) and left the top half zeroed
     if words[4..].iter().all(|&w| w == 0) {
         let mut v = [0u64; 8];
         // words[3] is least-significant 64 bits if device sent MSW..LSW
         for i in 0..4 {
             let w = words[i];
-            v[i * 2 + 0] = (w & 0xffff_ffff) as u64; // low 32 bits
-            v[i * 2 + 1] = (w >> 32) as u64; // high 32 bits
+            v[i*2 + 0] = (w & 0xffff_ffff) as u64;        // low 32 bits
+            v[i*2 + 1] = (w >> 32) as u64;                // high 32 bits
         }
         T8 { values: v }
     } else {
-        // Case 2: device already gave 8 limbs; ensure high halves are zero.
+        // Case 2: device already gave 8 limbs; ensure high halves are zero
         let mut v = [0u64; 8];
         for i in 0..8 {
             v[i] = words[i] & 0xffff_ffff;
@@ -543,7 +546,7 @@ pub fn sign_draft_with_paths(
                 continue;
             }
 
-            let msg5: [u64; 5] = input.spend.to_hash().values;
+            let msg5: [u64; 5] = sig_hash_for_input(&raw, &name).values;
             let req = Msg {
                 v: PROTO_V1,
                 id: 0x4200,
@@ -682,4 +685,91 @@ pub fn fmt_u64x8(v: &[u64; 8]) -> String {
         .map(|w| format!("{w:016x}"))
         .collect::<Vec<_>>()
         .join("_")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tx_types::collections::zset::ZSet;
+    use tx_types::transaction_types::*;
+
+    #[test]
+    fn test_sig_hash_for_input_matches_spend_sig_hash() {
+        // Create a test spend with some seeds
+        let seed = Seed {
+            output_source: Some(Source {
+                p: Hash { values: [1, 2, 3, 4, 5] },
+                is_coinbase: false,
+            }),
+            recipient: Lock {
+                m: 1,
+                pubkeys: ZSet::new(),
+            },
+            timelock_intent: None,
+            gift: Coins { value: 100 },
+            parent_hash: Hash { values: [10, 11, 12, 13, 14] },
+        };
+
+        let mut seeds_set = ZSet::new();
+        seeds_set.put(seed);
+
+        let spend = Spend {
+            signature: None,
+            seeds: Seeds { set: seeds_set },
+            fee: Coins { value: 10 },
+        };
+
+        // Create a minimal RawTransaction with this spend
+        let input = Input {
+            note: NNote {
+                meta: NNoteHead {
+                    version: 1,
+                    origin_page: PageNumber { value: 1 },
+                    timelock: Timelock { intent: None },
+                },
+                name: NName {
+                    p: vec![Hash { values: [1, 0, 0, 0, 0] }],
+                },
+                lock: Lock {
+                    m: 1,
+                    pubkeys: ZSet::new(),
+                },
+                source: Source {
+                    p: Hash { values: [0; 5] },
+                    is_coinbase: false,
+                },
+                assets: Coins { value: 1000 },
+            },
+            spend: spend.clone(),
+        };
+
+        let name = NName {
+            p: vec![Hash { values: [1, 0, 0, 0, 0] }],
+        };
+
+        let mut inputs_map = ZMap::new();
+        inputs_map.put(name.clone(), input);
+
+        let raw = RawTransaction {
+            id: Hash { values: [0; 5] },
+            inputs: Inputs { p: inputs_map },
+            timelock_range: TimelockRange {
+                min: None,
+                max: None,
+            },
+            total_fees: Coins { value: 10 },
+        };
+
+        // Test that sig_hash_for_input returns the same as spend.sig_hash()
+        let hash_from_util = sig_hash_for_input(&raw, &name);
+        let hash_from_spend = spend.sig_hash();
+
+        assert_eq!(
+            hash_from_util.values, hash_from_spend.values,
+            "sig_hash_for_input should return the same hash as spend.sig_hash()"
+        );
+
+        println!("✓ sig_hash_for_input correctly matches spend.sig_hash()");
+        println!("  Hash: {:016x?}", hash_from_util.values);
+    }
 }

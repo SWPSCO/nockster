@@ -10,15 +10,17 @@ use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
 
+use siger_core::{Frame, Msg, Request, Response, PROTO_V1};
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
 
-use siger_core::{Msg, Frame, Request, Response, PROTO_V1};
-
-use crate::serial::{open, round_trip_frame};
-use crate::util::{debug_shape, transaction_to_raw, sig_hash_for_input, t8_from_device};
 use crate::keys;
+use crate::serial::{open, round_trip_frame};
+use crate::util::{
+    debug_shape, fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
+    transaction_name_from_noun, transaction_to_raw,
+};
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
     match explicit {
@@ -59,19 +61,12 @@ fn fetch_device_pks(
         let resp: Msg<Response> = round_trip_frame(sp, &req)?;
         match resp.msg {
             Response::OkCheetahPub { x, y } => {
-                // reverse the endians ヽ༼ຈل͜ຈ༽ﾉ
-                let mut xr = x;
-                let mut yr = y;
-                xr.reverse();
-                yr.reverse();
-                out.push((
-                    path.clone(),
-                    SchnorrPubkey {
-                        x: F6LT { values: xr },
-                        y: F6LT { values: yr },
-                        inf: false,
-                    },
-                ));
+                let pk = SchnorrPubkey {
+                    x: F6LT { values: x },
+                    y: F6LT { values: y },
+                    inf: false,
+                };
+                out.push((path.clone(), pk));
             }
             Response::Err { code } => return Err(anyhow!("GetCheetahPub failed (code {code})")),
             _ => return Err(anyhow!("unrecognized response to GetCheetahPub")),
@@ -87,10 +82,10 @@ enum Outer {
 }
 
 fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
-  let mut slab: NounSlab = NounSlab::new();
-  let noun: Noun = slab
-      .cue_into(Bytes::from(bytes.to_vec()))
-      .map_err(|e| anyhow!("cue failed: {e:?}"))?;
+    let mut slab: NounSlab = NounSlab::new();
+    let noun: Noun = slab
+        .cue_into(Bytes::from(bytes.to_vec()))
+        .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
     // try wallet transaction
     if let Ok(tx) = Transaction::from_noun(&noun) {
@@ -100,7 +95,7 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
 
     // try [raw-tx tail]
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(r) = RawTransaction::from_noun(&mut slab, &cell.head()) {
+        if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
             // capture tail as jam for perfect round-trip later
             let mut s2: NounSlab = NounSlab::new();
             let copied_tail = s2.copy_into(cell.tail());
@@ -111,7 +106,7 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     }
 
     // try bare raw-tx
-    if let Ok(r) = RawTransaction::from_noun(&mut slab, &noun) {
+    if let Ok(r) = RawTransaction::from_noun(&noun) {
         return Ok((Outer::RawTx, r, noun));
     }
 
@@ -120,13 +115,16 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     ))
 }
 
-pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
+fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
     let in_bytes = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
     let (outer, raw, noun_before) = detect_outer(&in_bytes)?;
 
+    let tx_name_before =
+        transaction_name_from_noun(&noun_before).unwrap_or_else(|_| raw.id.to_b58());
+
     println!("file:  {draft_path}");
     println!("shape: {}", debug_shape(&noun_before));
-    println!("txid:  {}", raw.id.to_base58());
+    println!("txid:  {tx_name_before}");
 
     // collect desired signer derivation paths
     let path_list: Vec<String> = std::env::var("SIGER_PATHS")
@@ -166,22 +164,37 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
             let dev_hash = pk_dev.to_hash();
             if let Some(pk_lock) = lock.pubkeys.iter().find(|pk| pk.to_hash() == dev_hash) {
                 // ask device to sign the tx sig hash for this path
-                let msg5: [u64; 5] = sig_hash_for_input(&raw, &name);
+                let msg_hash = sig_hash_for_input(&raw, &name);
+                let msg5: [u64; 5] = msg_hash.values;
+                println!(
+                    "    signing hash for {:?}: {}",
+                    name,
+                    fmt_u64x5(&msg5)
+                );
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,
-                    msg: Frame::One(Request::SignSpendHash { path: path.clone(), msg5 }),
+                    msg: Frame::One(Request::SignSpendHash {
+                        path: path.clone(),
+                        msg5,
+                    }),
                 };
                 let resp: Msg<Response> = round_trip_frame(&mut *sp, &req)?;
                 let (chal_words, sig_words) = match resp.msg {
                     Response::OkCheetahSig { chal, sig } => (chal, sig),
-                    Response::Err { code } => return Err(anyhow!("SignSpendHash failed (code {code})")),
+                    Response::Err { code } => {
+                        return Err(anyhow!("SignSpendHash failed (code {code})"))
+                    }
                     _ => return Err(anyhow!("unexpected response to SignSpendHash")),
                 };
-                
+
                 let schnorr_sig = SchnorrSignature {
-                    chal: Chal { values: t8_from_device(chal_words) },
-                    sig:  Sig  { values: t8_from_device(sig_words)  },
+                    chal: Chal {
+                        values: t8_from_device(chal_words),
+                    },
+                    sig: Sig {
+                        values: t8_from_device(sig_words),
+                    },
                 };
 
                 // attach signature keyed by the lock's pubkey object
@@ -197,18 +210,15 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
         new_inputs.put(name, input);
     }
 
-    
-    let old_id_b58 = raw.id.to_base58();
-    let updated = raw.with_inputs(Inputs { p: new_inputs });
+    let mut updated = raw.clone();
+    updated.inputs = Inputs { p: new_inputs };
 
-    // Sanity: id should not change (signing commits to txid).
-    if updated.id.to_base58() != old_id_b58 {
-        eprintln!(
-            "warning: raw.id changed after attaching signatures ({} -> {})",
-            old_id_b58,
-            updated.id.to_base58()
-        );
-    }
+    // Recalculate the transaction ID with the signed inputs (like reference implementation does)
+    updated.id = tx_types::hashing::tx_id::compute_tx_id(
+        &updated.inputs,
+        &updated.timelock_range,
+        updated.total_fees
+    );
 
     let out_bytes = match outer {
         Outer::RawTx => {
@@ -240,8 +250,16 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
 
     // write output
     let out_path = default_out_path_for(draft_path, out_opt);
-    fs::write(&out_path, &out_bytes)
-        .with_context(|| format!("write {}", out_path.display()))?;
+    fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
+
+    let tx_name_after =
+        transaction_name_from_bytes(&out_bytes).unwrap_or_else(|_| updated.id.to_b58());
+    if tx_name_after != tx_name_before {
+        eprintln!(
+            "warning: tx identifier changed after attaching signatures ({} -> {})",
+            tx_name_before, tx_name_after
+        );
+    }
 
     println!(
         "wrote {} bytes to {} (added {} signature{})",
@@ -252,6 +270,10 @@ pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Re
     );
 
     Ok(())
+}
+
+pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
+    run_device(port, baud, draft_path, out_opt)
 }
 
 #[allow(dead_code)]

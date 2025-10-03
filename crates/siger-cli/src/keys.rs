@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 
 use bs58;
 use pbkdf2::pbkdf2_hmac;
+use serde::{Deserialize, Serialize};
 use sha2::Sha512;
 use unicode_normalization::UnicodeNormalization;
-use serde::{Deserialize, Serialize};
 
 use siger_core::cheetah::{
-    XKey, cheetah_pub_from_sk, master_from_seed, ser_a_pt, ser_a_pt_rep104, xprv_derive_child,
+    cheetah_pub_from_sk, master_from_seed, ser_a_pt, ser_a_pt_rep104, xprv_derive_child, XKey,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,10 +102,12 @@ pub fn parse_path(path: &str) -> Result<Vec<u32>, String> {
             continue;
         }
         let hardened = comp.ends_with('\'') || comp.ends_with('h') || comp.ends_with('H');
-        let num_str = if hardened { &comp[..comp.len() - 1] } else { comp };
-        let idx: u32 = num_str
-            .parse()
-            .map_err(|_| format!("bad index: {comp}"))?;
+        let num_str = if hardened {
+            &comp[..comp.len() - 1]
+        } else {
+            comp
+        };
+        let idx: u32 = num_str.parse().map_err(|_| format!("bad index: {comp}"))?;
         let val = if hardened { idx | 0x8000_0000 } else { idx };
         out.push(val);
     }
@@ -120,9 +122,7 @@ fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
 }
 
 /// Import from base58 32-byte scalar (raw), no chain-code/path.
-pub fn import_from_b58_priv(
-    b58: &str,
-) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
+pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
     let sk = sk_from_b58(b58)?;
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);
@@ -211,7 +211,10 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
         .into_vec()
         .map_err(|e| format!("base58 decode: {e}"))?;
     if v.len() < 32 {
-        return Err(format!("base58 key too short: {} bytes (need >=32)", v.len()));
+        return Err(format!(
+            "base58 key too short: {} bytes (need >=32)",
+            v.len()
+        ));
     }
     let mut sk = [0u8; 32];
     // take last 32 as big-endian scalar

@@ -29,10 +29,11 @@ ibig = "0.3"
 num-traits = "0.2"
 hmac = "0.12"
 
-nockapp = { workspace = true }
+noun-serde = { workspace = true }
+nockapp = { workspace = true, default-features = false }
 nockvm = { workspace = true }
 nockvm_macros = { workspace = true }
-noun-serde = { workspace = true }
 
-siger-core = { path = "../siger-core", features = ["alloc-path"] }
-tx-types = { path = "../tx-types", default-features = false }
+
+siger-core = { path = "../siger-core", features = ["std", "alloc-path"] }
+tx-types = { workspace = true }

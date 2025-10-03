@@ -1,5 +1,5 @@
-use siger_core::{Request, Response};
 use crate::serial::{open, send_recv};
+use siger_core::{Request, Response};
 
 pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;

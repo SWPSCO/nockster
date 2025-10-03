@@ -13,8 +13,8 @@ use heapless::Vec;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use siger_core::*;
 use siger_core::alloc_path as pathmod;
+use siger_core::*;
 
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use k256::{
@@ -46,7 +46,6 @@ static mut SEED_STORE: SeedStore = SeedStore {
 };
 
 esp_bootloader_esp_idf::esp_app_desc!();
-
 
 struct FragState {
     id: u16,
@@ -127,7 +126,6 @@ pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
     out
 }
 
-
 #[main]
 fn main() -> ! {
     let cfg = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -140,7 +138,7 @@ fn main() -> ! {
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; 512];
-    let mut enc   = [0u8; 640];
+    let mut enc = [0u8; 640];
 
     'run: loop {
         // 1) Proactive outbound frag, if any
@@ -177,7 +175,9 @@ fn main() -> ! {
 
         // 2) RX path
         if let Ok(b) = usb.read_byte() {
-            if b == 0 && rx.is_empty() { continue; }
+            if b == 0 && rx.is_empty() {
+                continue;
+            }
             if rx.push(b).is_err() {
                 rx.clear();
                 send_err(&mut usb, ERR_OVERFLOW, &mut enc);
@@ -189,10 +189,26 @@ fn main() -> ! {
                 let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
                     Ok(m) if m.v == PROTO_V1 => {
                         let body = handle_frame_v1(m.id, &m.msg);
-                        Msg { v: PROTO_V1, id: m.id, msg: body }
+                        Msg {
+                            v: PROTO_V1,
+                            id: m.id,
+                            msg: body,
+                        }
                     }
-                    Ok(_)  => Msg { v: PROTO_V1, id: 0, msg: Response::Err { code: ERR_UNSUPPORTED_VERSION } },
-                    Err(_) => Msg { v: PROTO_V1, id: 0, msg: Response::Err { code: ERR_BAD_COBS_OR_POSTCARD } },
+                    Ok(_) => Msg {
+                        v: PROTO_V1,
+                        id: 0,
+                        msg: Response::Err {
+                            code: ERR_UNSUPPORTED_VERSION,
+                        },
+                    },
+                    Err(_) => Msg {
+                        v: PROTO_V1,
+                        id: 0,
+                        msg: Response::Err {
+                            code: ERR_BAD_COBS_OR_POSTCARD,
+                        },
+                    },
                 };
 
                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
@@ -212,7 +228,11 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
     match frame {
         Frame::One(req) => handle_request_v1(req),
 
-        Frame::FragBegin { id, total_len, kind } => {
+        Frame::FragBegin {
+            id,
+            total_len,
+            kind,
+        } => {
             unsafe {
                 FRAG = Some(FragState {
                     id: *id,
@@ -225,20 +245,45 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
             Response::Ok
         }
 
-        Frame::FragPart { id, offset, chunk, last } => {
+        Frame::FragPart {
+            id,
+            offset,
+            chunk,
+            last,
+        } => {
             unsafe {
-                let Some(st) = FRAG.as_mut() else { return Response::Err { code: ERR_BAD_COBS_OR_POSTCARD }; };
-                if st.id != *id || st.next_off != *offset { return Response::Err { code: ERR_BAD_COBS_OR_POSTCARD }; }
-                if st.buf.extend_from_slice(&chunk).is_err() { return Response::Err { code: ERR_OVERFLOW }; }
+                let Some(st) = FRAG.as_mut() else {
+                    return Response::Err {
+                        code: ERR_BAD_COBS_OR_POSTCARD,
+                    };
+                };
+                if st.id != *id || st.next_off != *offset {
+                    return Response::Err {
+                        code: ERR_BAD_COBS_OR_POSTCARD,
+                    };
+                }
+                if st.buf.extend_from_slice(&chunk).is_err() {
+                    return Response::Err { code: ERR_OVERFLOW };
+                }
                 st.next_off += chunk.len() as u32;
 
                 if *last {
-                    if st.next_off != st.total_len { FRAG = None; return Response::Err { code: ERR_BAD_COBS_OR_POSTCARD }; }
+                    if st.next_off != st.total_len {
+                        FRAG = None;
+                        return Response::Err {
+                            code: ERR_BAD_COBS_OR_POSTCARD,
+                        };
+                    }
 
                     // Decide by kind
                     match st.kind {
                         FragKind::SetSeed => {
-                            if st.buf.len() != 64 { FRAG = None; return Response::Err { code: ERR_BAD_COBS_OR_POSTCARD }; }
+                            if st.buf.len() != 64 {
+                                FRAG = None;
+                                return Response::Err {
+                                    code: ERR_BAD_COBS_OR_POSTCARD,
+                                };
+                            }
                             let mut arr = [0u8; 64];
                             arr.copy_from_slice(st.buf.as_slice());
                             set_seed(&arr);
@@ -261,7 +306,11 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                             FRAG = None;
 
                             // Kick off outbound stream with FragBegin
-                            Response::FragBegin { id: *id, total_len: total, kind: FragKind::SignDraft }
+                            Response::FragBegin {
+                                id: *id,
+                                total_len: total,
+                                kind: FragKind::SignDraft,
+                            }
                         }
                     }
                 } else {
@@ -274,110 +323,119 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
 
 fn handle_request_v1(req: &Request) -> Response {
     match req {
-        Request::Hello =>
-            Response::Hello(Caps { proto_v: PROTO_V1, compressed_pk: true }),
+        Request::Hello => Response::Hello(Caps {
+            proto_v: PROTO_V1,
+            compressed_pk: true,
+        }),
 
-            Request::GetInfo => {
-              let (has_seed, cheetah_x, cheetah_y) = unsafe {
-                  if SEED_STORE.set {
-                      let (sk, _cc) = cheetah::master_from_seed(&SEED_STORE.seed);
-                      let pk = cheetah::cheetah_pub_from_sk(sk);
-                      (true, pk.0, pk.1)
-                  } else {
-                      (false, [0u64; 6], [0u64; 6])
-                  }
-              };
-  
-              Response::Info {
-                  proto_v: PROTO_V1,
-                  fw_major: FW_MAJOR,
-                  fw_minor: FW_MINOR,
-                  features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
-                  has_seed,
-                  cheetah_x,
-                  cheetah_y,
-              }
-          }
-  
+        Request::GetInfo => {
+            let (has_seed, cheetah_x, cheetah_y) = unsafe {
+                if SEED_STORE.set {
+                    let (sk, _cc) = cheetah::master_from_seed(&SEED_STORE.seed);
+                    let pk = cheetah::cheetah_pub_from_sk(sk);
+                    (true, pk.0, pk.1)
+                } else {
+                    (false, [0u64; 6], [0u64; 6])
+                }
+            };
+
+            Response::Info {
+                proto_v: PROTO_V1,
+                fw_major: FW_MAJOR,
+                fw_minor: FW_MINOR,
+                features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
+                has_seed,
+                cheetah_x,
+                cheetah_y,
+            }
+        }
 
         Request::Ping => Response::Pong,
 
-        Request::SetSeed { seed64 } => { set_seed(seed64); Response::Ok }
-        Request::Wipe              => { wipe_seed();      Response::Ok }
+        Request::SetSeed { seed64 } => {
+            set_seed(seed64);
+            Response::Ok
+        }
+        Request::Wipe => {
+            wipe_seed();
+            Response::Ok
+        }
 
         Request::GetFingerprint => match master_fingerprint() {
             Ok(fp4) => Response::OkFingerprint { fp4 },
-            Err(_)  => Response::Err { code: ERR_NO_SEED },
-        },
-
-        Request::GetPubkey { path, compressed } => {
-            match derive_signing_key(path) {
-                Ok(sk) => {
-                    let vk = sk.verifying_key();
-                    if *compressed {
-                        let mut out = [0u8; 33];
-                        out.copy_from_slice(vk.to_encoded_point(true).as_bytes());
-                        Response::OkPubkeyCompressed { compressed: out }
-                    } else {
-                        let mut out = [0u8; 65];
-                        out.copy_from_slice(vk.to_encoded_point(false).as_bytes());
-                        Response::OkPubkey { uncompressed: out }
-                    }
-                }
-                Err(_) => Response::Err { code: ERR_NO_SEED },
-            }
-        }
-
-        Request::SignDigest { path, digest32 } => {
-            match derive_signing_key(path) {
-                Ok(sk) => {
-                    let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
-                    if let Some(norm) = sig.normalize_s() { sig = norm; }
-                    let mut out = [0u8; 64];
-                    out.copy_from_slice(&sig.to_bytes());
-                    Response::OkSig { sig64: out }
-                }
-                Err(_) => Response::Err { code: ERR_NO_SEED },
-            }
-        }
-
-        Request::GetXpub { path } => match get_xpub(path) {
-            Ok(x)  => Response::OkXpub(x),
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
 
-        Request::GetCheetahPub { path } => {
-            match derive_child_sk_from_seed_store(path) {
-                Ok(sk) => {
-                    let pk = cheetah::cheetah_pub_from_sk(sk);
-                    Response::OkCheetahPub { x: pk.0, y: pk.1 }
+        Request::GetPubkey { path, compressed } => match derive_signing_key(path) {
+            Ok(sk) => {
+                let vk = sk.verifying_key();
+                if *compressed {
+                    let mut out = [0u8; 33];
+                    out.copy_from_slice(vk.to_encoded_point(true).as_bytes());
+                    Response::OkPubkeyCompressed { compressed: out }
+                } else {
+                    let mut out = [0u8; 65];
+                    out.copy_from_slice(vk.to_encoded_point(false).as_bytes());
+                    Response::OkPubkey { uncompressed: out }
                 }
-                Err(_) => Response::Err { code: ERR_NO_SEED },
             }
-        }
+            Err(_) => Response::Err { code: ERR_NO_SEED },
+        },
 
-        Request::SignSpendHash { path, msg5 } => {
-            match derive_child_sk_from_seed_store(path) {
-                Ok(sk) => {
-                    let pk = cheetah::cheetah_pub_from_sk(sk);
-                    let hash = cheetah::Hash { values: *msg5 };
-                    let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
-                    Response::OkCheetahSig { chal: e.values, sig: s.values }
+        Request::SignDigest { path, digest32 } => match derive_signing_key(path) {
+            Ok(sk) => {
+                let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
+                if let Some(norm) = sig.normalize_s() {
+                    sig = norm;
                 }
-                Err(_) => Response::Err { code: ERR_NO_SEED },
+                let mut out = [0u8; 64];
+                out.copy_from_slice(&sig.to_bytes());
+                Response::OkSig { sig64: out }
             }
-        }
+            Err(_) => Response::Err { code: ERR_NO_SEED },
+        },
+
+        Request::GetXpub { path } => match get_xpub(path) {
+            Ok(x) => Response::OkXpub(x),
+            Err(_) => Response::Err { code: ERR_NO_SEED },
+        },
+
+        Request::GetCheetahPub { path } => match derive_child_sk_from_seed_store(path) {
+            Ok(sk) => {
+                let pk = cheetah::cheetah_pub_from_sk(sk);
+                Response::OkCheetahPub { x: pk.0, y: pk.1 }
+            }
+            Err(_) => Response::Err { code: ERR_NO_SEED },
+        },
+
+        Request::SignSpendHash { path, msg5 } => match derive_child_sk_from_seed_store(path) {
+            Ok(sk) => {
+                let pk = cheetah::cheetah_pub_from_sk(sk);
+                let hash = cheetah::Hash { values: *msg5 };
+                let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
+                Response::OkCheetahSig {
+                    chal: e.values,
+                    sig: s.values,
+                }
+            }
+            Err(_) => Response::Err { code: ERR_NO_SEED },
+        },
 
         Request::SignSpendHashFor { path, msg5, pubkey } => {
             match derive_child_sk_from_seed_store(path) {
                 Ok(sk) => {
                     let pk_dev = cheetah::cheetah_pub_from_sk(sk);
                     if &pk_dev != pubkey {
-                        Response::Err { code: ERR_WRONG_PUBKEY }
+                        Response::Err {
+                            code: ERR_WRONG_PUBKEY,
+                        }
                     } else {
                         let hash = cheetah::Hash { values: *msg5 };
                         let (e, s) = cheetah::schnorr_sign_tx(sk, *pubkey, hash.values);
-                        Response::OkCheetahSig { chal: e.values, sig: s.values }
+                        Response::OkCheetahSig {
+                            chal: e.values,
+                            sig: s.values,
+                        }
                     }
                 }
                 Err(_) => Response::Err { code: ERR_NO_SEED },
@@ -385,13 +443,19 @@ fn handle_request_v1(req: &Request) -> Response {
         }
 
         Request::Health => {
-            let path = pathmod::Path::from_iter([0x8000_002c, 0x8000_0000, 0x8000_0000, 0, 0].into_iter());
+            let path =
+                pathmod::Path::from_iter([0x8000_002c, 0x8000_0000, 0x8000_0000, 0, 0].into_iter());
             match derive_child_sk_from_seed_store(&path) {
                 Ok(sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
-                    let hash = cheetah::Hash { values: [0,0,0,0,0] };
+                    let hash = cheetah::Hash {
+                        values: [0, 0, 0, 0, 0],
+                    };
                     let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
-                    Response::OkCheetahSig { chal: e.values, sig: s.values }
+                    Response::OkCheetahSig {
+                        chal: e.values,
+                        sig: s.values,
+                    }
                 }
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }

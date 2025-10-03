@@ -5,7 +5,7 @@ use crate::commands;
 
 /// Unified top-level CLI with flat subcommands
 #[derive(Parser)]
-#[command(name="siger-cli")]
+#[command(name = "siger-cli")]
 #[command(author, version, about)]
 pub struct Cli {
     #[command(subcommand)]
@@ -38,54 +38,73 @@ pub enum Cmd {
 
 #[derive(Args, Clone)]
 pub struct PortArgs {
-    #[arg(long, required = true)] pub port: String,
-    #[arg(long, default_value_t = 115200)] pub baud: u32,
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
 }
 
 #[derive(Args, Clone)]
 pub struct TestArgs {
-    #[arg(long, required = true)] pub port: String,
-    #[arg(long, default_value_t = 115200)] pub baud: u32,
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
     /// Optional: 64-byte seed in hex (overrides default)
-    #[arg(long)] pub seed_hex: Option<String>,
+    #[arg(long)]
+    pub seed_hex: Option<String>,
     /// Derivation path: human ("m/44'/0'/0'/0/0") or comma u32s (MSB=hard)
-    #[arg(long, default_value = "m")] pub path: String,
+    #[arg(long, default_value = "m")]
+    pub path: String,
 }
 
 #[derive(Args, Clone)]
 pub struct PlanArgs {
-    #[arg(long, required = true)] pub port: String,
-    #[arg(long, default_value_t = 115200)] pub baud: u32,
-    #[arg(long, required = true)] pub draft: String,
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    #[arg(long, required = true)]
+    pub draft: String,
 }
 
 #[derive(Args, Clone)]
 pub struct SignDraftArgs {
-    #[arg(long, required = true)] pub port: String,
-    #[arg(long, default_value_t = 115200)] pub baud: u32,
-    #[arg(long, required = true)] pub draft: String,
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    #[arg(long, required = true)]
+    pub draft: String,
     /// Where to write returned blob (stdout hex if omitted)
-    #[arg(long)] pub out: Option<String>,
+    #[arg(long)]
+    pub out: Option<String>,
 }
 
 #[derive(Args, Clone)]
 pub struct InspectArgs {
     /// Path to jammed noun (wallet tx, raw-tx, tx, or [name inputs])
-    #[arg(long, required = true)] pub draft: String,
+    #[arg(long, required = true)]
+    pub draft: String,
     /// Also dump the raw noun tree
-    #[arg(long, default_value_t = false)] pub dump_noun: bool,
+    #[arg(long, default_value_t = false)]
+    pub dump_noun: bool,
     /// Max recursive depth for noun dump
-    #[arg(long, default_value_t = 6)] pub max_depth: usize,
+    #[arg(long, default_value_t = 6)]
+    pub max_depth: usize,
     /// Max children shown per cell/list at each level
-    #[arg(long, default_value_t = 16)] pub max_items: usize,
+    #[arg(long, default_value_t = 16)]
+    pub max_items: usize,
 }
 
 /// Unified seed/keys args (mutually exclusive inputs)
 #[derive(Args, Clone)]
 pub struct SeedArgs {
     /// Required for seeding the device (ignored for pure file export from sk)
-    #[arg(long, required = true)] pub port: String,
-    #[arg(long, default_value_t = 115200)] pub baud: u32,
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
 
     // One of these input sources:
     /// 64-byte seed in hex (seeds device; can also write files if --out is set)
@@ -97,12 +116,12 @@ pub struct SeedArgs {
     pub mnemonic: Option<String>,
 
     /// Optional BIP-39 passphrase (with --mnemonic)
-    #[arg(long, default_value="")]
+    #[arg(long, default_value = "")]
     pub passphrase: String,
 
     /// Derivation path to export key files for (with --seed-hex or --mnemonic)
     /// Also used with --sk-b58/--sk-hex to compute pubkey and blob
-    #[arg(long, default_value="m")]
+    #[arg(long, default_value = "m")]
     pub path: String,
 
     /// Base58-encoded 32-byte private key (file export only; does NOT seed device)
@@ -121,12 +140,18 @@ pub struct SeedArgs {
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Test(args) => commands::test::run(&args.port, args.baud, args.seed_hex.as_deref(), &args.path),
+        Cmd::Test(args) => {
+            commands::test::run(&args.port, args.baud, args.seed_hex.as_deref(), &args.path)
+        }
         Cmd::GetInfo(args) => commands::info::run(&args.port, args.baud),
         Cmd::Health(args) => commands::health::run(&args.port, args.baud),
         Cmd::Seed(args) => commands::seed::run(args),
         Cmd::Plan(args) => commands::plan::run(&args.port, args.baud, &args.draft),
-        Cmd::SignDraft(args) => commands::sign_draft::run(&args.port, args.baud, &args.draft, args.out.as_deref()),
-        Cmd::Inspect(args) => commands::inspect::run(&args.draft, args.dump_noun, args.max_depth, args.max_items),
+        Cmd::SignDraft(args) => {
+            commands::sign_draft::run(&args.port, args.baud, &args.draft, args.out.as_deref())
+        }
+        Cmd::Inspect(args) => {
+            commands::inspect::run(&args.draft, args.dump_noun, args.max_depth, args.max_items)
+        }
     }
 }

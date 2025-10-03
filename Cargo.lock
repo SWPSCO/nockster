@@ -1244,7 +1244,6 @@ name = "ibig"
 version = "0.3.6"
 dependencies = [
  "cfg-if",
- "num-traits",
  "static_assertions",
 ]
 

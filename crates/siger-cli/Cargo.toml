@@ -35,5 +35,5 @@ nockvm = { workspace = true }
 nockvm_macros = { workspace = true }
 
 
-siger-core = { path = "../siger-core", features = ["alloc-path"] }
-tx-types = { workspace = true, features = ["std"] }
+siger-core = { path = "../siger-core", features = ["std", "alloc-path"] }
+tx-types = { workspace = true }

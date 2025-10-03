@@ -64,15 +64,15 @@ either = "1.13"
 
 # nockchain
 nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
-nockvm = { path = "../tx-types/nockchain-core/crates/nockvm/rust/nockvm" }
-nockapp = { path = "../tx-types/nockchain-core/crates/nockapp", default-features = false }
-zkvm-jetpack = { path = "../tx-types/nockchain-core/crates/zkvm-jetpack" }
-nockvm_macros = { path = "../tx-types/nockchain-core/crates/nockvm/rust/nockvm_macros" }
-nockchain-libp2p-io = { path = "../tx-types/nockchain-core/crates/nockchain-libp2p-io", default-features = false }
+nockvm = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockvm" }
+nockapp = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockapp", default-features = false }
+zkvm-jetpack = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "zkvm-jetpack" }
+nockvm_macros = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockvm_macros" }
+nockchain-libp2p-io = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockchain-libp2p-io", default-features = false }
 kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
-noun-serde-derive = { path = "../tx-types/nockchain-core/crates/noun-serde-derive" }
-noun-serde = { path = "../tx-types/nockchain-core/crates/noun-serde" }
-tx-types = { path = "../tx-types/tx-types", default-features = false }
-ibig = { path = "../tx-types/nockchain-core/crates/nockvm/rust/ibig", default-features = false }
+noun-serde-derive = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "noun-serde-derive" }
+noun-serde = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "noun-serde" }
+tx-types = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "tx-types", default-features = false }
+ibig = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "ibig", default-features = false }
 
 [workspace.lints.rust]

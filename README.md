@@ -34,7 +34,7 @@ Hardware wallet firmware, host tooling, and web front-end for signing Nockchain 
 
 ## Notes
 - NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash without the PIN is useless.
-- The wasm build no longer shells out signatures — the browser now recomputes `tx_id`, jams the signed noun, and hands back a consumable `.tx`.
+- The wasm app deserializes the draft jam, sends the values over the wire for signature, recomputes `tx_id`, jams the signed noun, and hands back a consumable `.tx`.
 
 #### Partitions
 

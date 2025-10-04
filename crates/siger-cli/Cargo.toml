@@ -37,3 +37,6 @@ nockvm_macros = { workspace = true }
 
 siger-core = { path = "../siger-core", features = ["std", "alloc-path"] }
 tx-types = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

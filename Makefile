@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
 
-.PHONY: all build flash test clean fw cli core nicker
+.PHONY: all build flash test clean fw cli core
 
 all: build
 
@@ -25,7 +25,20 @@ flash: fw
 		DEV="ttyACM0"; \
 		fuser -k /dev/ttyACM0 2>/dev/null || true; \
 	fi; \
-	espflash flash --port /dev/$$DEV $(FW_BINARY)
+	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY)
+
+flash-wipe: fw
+	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
+		DEV=$$(ls /dev/cu.usbmodem* | head -1 | xargs basename); \
+		if [[ -z "$$DEV" ]]; then \
+			echo "No USB serial device found"; \
+			exit 1; \
+		fi; \
+	else \
+		DEV="ttyACM0"; \
+		fuser -k /dev/ttyACM0 2>/dev/null || true; \
+	fi; \
+	espflash flash --port /dev/$$DEV --partition-table partitions.csv --erase-parts nvs $(FW_BINARY)
 
 test:
 	@fuser -k /dev/ttyACM0 2>/dev/null || true; \
@@ -54,9 +67,6 @@ cli:
 
 core:
 	@cargo build -p siger-core --release
-
-nicker:
-	@cargo build -p nicker --release
 
 clean:
 	@cargo clean
@@ -100,15 +110,15 @@ disconnect:
 
 help:
 	@echo "Available targets:"
-	@echo "  make fw      - Build ESP32-S3 firmware"
-	@echo "  make flash   - Build and flash firmware to device"
-	@echo "  make test    - Run CLI tests against device"
-	@echo "  make cli     - Build CLI tool"
-	@echo "  make core    - Build core library"
-	@echo "  make nicker  - Build nicker crate"
-	@echo "  make clean   - Clean all build artifacts"
-	@echo "  make monitor - Open serial monitor"
-	@echo "  make check   - Check all crates"
-	@echo "  make clippy  - Run clippy lints"
-	@echo "  disconnect   - Disconnect USB device"
-	@echo "  make fmt     - Format code"
+	@echo "  make fw         - Build ESP32-S3 firmware"
+	@echo "  make flash      - Build and flash firmware (preserves NVS/keys)"
+	@echo "  make flash-wipe - Build and flash firmware (erases NVS/keys)"
+	@echo "  make test       - Run CLI tests against device"
+	@echo "  make cli        - Build CLI tool"
+	@echo "  make core       - Build core library"
+	@echo "  make clean      - Clean all build artifacts"
+	@echo "  make monitor    - Open serial monitor"
+	@echo "  make check      - Check all crates"
+	@echo "  make clippy     - Run clippy lints"
+	@echo "  disconnect      - Disconnect USB device"
+	@echo "  make fmt        - Format code"

@@ -38,6 +38,10 @@ pub const ERR_ENCODE_TOO_BIG: u16 = 103;
 pub const ERR_UNSUPPORTED_VERSION: u16 = 110;
 pub const ERR_NO_SEED: u16 = 120;
 pub const ERR_WRONG_PUBKEY: u16 = 0x0103;
+pub const ERR_DEVICE_LOCKED: u16 = 130;
+pub const ERR_WRONG_PIN: u16 = 131;
+pub const ERR_PIN_LOCKED_OUT: u16 = 132;
+pub const ERR_ALREADY_INITIALIZED: u16 = 133;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Msg<T> {
@@ -127,6 +131,22 @@ pub enum Request {
 
     // self-test
     Health,
+
+    // PIN and persistence
+    InitializePIN {
+        pin: alloc::string::String,
+        #[serde(with = "BigArray")]
+        seed64: [u8; 64],
+    },
+    Unlock {
+        pin: alloc::string::String,
+    },
+    Lock,
+    ChangePIN {
+        old_pin: alloc::string::String,
+        new_pin: alloc::string::String,
+    },
+    GetLockStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -178,6 +198,10 @@ pub enum Response {
     OkCheetahSig {
         chal: [u64; 8],
         sig: [u64; 8],
+    },
+    OkLockStatus {
+        locked: bool,
+        attempts_remaining: u8,
     },
     Err {
         code: u16,

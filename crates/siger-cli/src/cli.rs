@@ -17,10 +17,10 @@ pub enum Cmd {
     /// End-to-end self test (seed -> child key -> self-check signatures)
     Test(TestArgs),
 
-    /// Get basic device info / capabilities
-    GetInfo(PortArgs),
+    /// Get device info, capabilities, and lock status
+    Info(PortArgs),
 
-    /// Device health (firmware’s well-known test)
+    /// Device health (firmware's well-known test)
     Health(PortArgs),
 
     /// Seed management and optional key file export (replaces old Seed + Keys::Import)
@@ -29,11 +29,17 @@ pub enum Cmd {
     /// Parse a .draft (jam) and print inputs + signing plans
     Plan(PlanArgs),
 
-    /// Send a .draft (jam) as FragKind::SignDraft and receive a blob back
-    SignDraft(SignDraftArgs),
+    /// Send a .draft (jam) as FragKind::SignTx and receive a blob back
+    SignTx(SignTxArgs),
 
     /// Inspect a .draft/.tx file: typed summary + optional raw noun dump
     Inspect(InspectArgs),
+
+    /// Unlock the device with PIN
+    Unlock(UnlockArgs),
+
+    /// Lock the device (clear RAM seed)
+    Lock(PortArgs),
 }
 
 #[derive(Args, Clone)]
@@ -69,7 +75,7 @@ pub struct PlanArgs {
 }
 
 #[derive(Args, Clone)]
-pub struct SignDraftArgs {
+pub struct SignTxArgs {
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -135,6 +141,21 @@ pub struct SeedArgs {
     /// If provided, write <out>.json and <out>.bin (device blob + metadata)
     #[arg(long)]
     pub out: Option<PathBuf>,
+
+    /// PIN for hardware wallet (if provided, initializes device with encrypted storage)
+    #[arg(long)]
+    pub pin: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct UnlockArgs {
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    /// PIN to unlock the device
+    #[arg(long, required = true)]
+    pub pin: String,
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -143,15 +164,17 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Test(args) => {
             commands::test::run(&args.port, args.baud, args.seed_hex.as_deref(), &args.path)
         }
-        Cmd::GetInfo(args) => commands::info::run(&args.port, args.baud),
+        Cmd::Info(args) => commands::info::run(&args.port, args.baud),
         Cmd::Health(args) => commands::health::run(&args.port, args.baud),
         Cmd::Seed(args) => commands::seed::run(args),
         Cmd::Plan(args) => commands::plan::run(&args.port, args.baud, &args.draft),
-        Cmd::SignDraft(args) => {
-            commands::sign_draft::run(&args.port, args.baud, &args.draft, args.out.as_deref())
+        Cmd::SignTx(args) => {
+            commands::sign_tx::run(&args.port, args.baud, &args.draft, args.out.as_deref())
         }
         Cmd::Inspect(args) => {
             commands::inspect::run(&args.draft, args.dump_noun, args.max_depth, args.max_items)
         }
+        Cmd::Unlock(args) => commands::unlock::unlock(&args.port, args.baud, &args.pin),
+        Cmd::Lock(args) => commands::unlock::lock(&args.port, args.baud),
     }
 }

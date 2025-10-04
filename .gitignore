@@ -22,3 +22,6 @@ target
 *.tx
 ./*.bin
 ./*.json
+dist
+node_modules
+pkg

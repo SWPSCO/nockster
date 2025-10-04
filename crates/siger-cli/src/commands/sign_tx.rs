@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use serialport::SerialPort;
 
 use nockapp::noun::slab::NounSlab;
@@ -18,7 +19,7 @@ use tx_types::RawTransaction;
 use crate::keys;
 use crate::serial::{open, round_trip_frame};
 use crate::util::{
-    debug_shape, fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
+    fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
     transaction_name_from_noun, transaction_to_raw,
 };
 
@@ -123,7 +124,6 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
         transaction_name_from_noun(&noun_before).unwrap_or_else(|_| raw.id.to_b58());
 
     println!("file:  {draft_path}");
-    println!("shape: {}", debug_shape(&noun_before));
     println!("txid:  {tx_name_before}");
 
     // collect desired signer derivation paths
@@ -166,11 +166,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
                 // ask device to sign the tx sig hash for this path
                 let msg_hash = sig_hash_for_input(&raw, &name);
                 let msg5: [u64; 5] = msg_hash.values;
-                println!(
-                    "    signing hash for {:?}: {}",
-                    name,
-                    fmt_u64x5(&msg5)
-                );
+                println!("    signing hash for {:?}: {}", name, fmt_u64x5(&msg5));
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,
@@ -217,7 +213,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     updated.id = tx_types::hashing::tx_id::compute_tx_id(
         &updated.inputs,
         &updated.timelock_range,
-        updated.total_fees
+        updated.total_fees,
     );
 
     let out_bytes = match outer {
@@ -272,8 +268,191 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     Ok(())
 }
 
-pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) -> Result<()> {
-    run_device(port, baud, draft_path, out_opt)
+// Signature data structures for JSON deserialization
+#[derive(Deserialize, Serialize)]
+struct SignatureDataJson {
+    input_name: String,
+    pubkey_x: Vec<String>,
+    pubkey_y: Vec<String>,
+    chal: Vec<String>,
+    sig: Vec<String>,
+}
+
+impl SignatureDataJson {
+    fn parse(&self) -> Result<SignatureData> {
+        let parse_array = |v: &[String], expected: usize, name: &str| -> Result<Vec<u64>> {
+            if v.len() != expected {
+                return Err(anyhow!(
+                    "{} has {} elements, expected {}",
+                    name,
+                    v.len(),
+                    expected
+                ));
+            }
+            v.iter()
+                .map(|s| {
+                    s.parse::<u64>()
+                        .context(format!("Failed to parse {}", name))
+                })
+                .collect()
+        };
+
+        let pubkey_x = parse_array(&self.pubkey_x, 6, "pubkey_x")?;
+        let pubkey_y = parse_array(&self.pubkey_y, 6, "pubkey_y")?;
+        let chal = parse_array(&self.chal, 8, "chal")?;
+        let sig = parse_array(&self.sig, 8, "sig")?;
+
+        Ok(SignatureData {
+            input_name: self.input_name.clone(),
+            pubkey_x: pubkey_x
+                .try_into()
+                .map_err(|_| anyhow!("pubkey_x wrong length"))?,
+            pubkey_y: pubkey_y
+                .try_into()
+                .map_err(|_| anyhow!("pubkey_y wrong length"))?,
+            chal: chal.try_into().map_err(|_| anyhow!("chal wrong length"))?,
+            sig: sig.try_into().map_err(|_| anyhow!("sig wrong length"))?,
+        })
+    }
+}
+
+struct SignatureData {
+    input_name: String,
+    pubkey_x: [u64; 6],
+    pubkey_y: [u64; 6],
+    chal: [u64; 8],
+    sig: [u64; 8],
+}
+
+fn nname_b58(name: &NName) -> String {
+    let first = name.p.get(0).map(|h| h.to_b58()).unwrap_or_default();
+    let last = name.p.get(1).map(|h| h.to_b58()).unwrap_or_default();
+    let no_q = |s: String| s.trim_matches('\"').to_string();
+    let (first, last) = (no_q(first), no_q(last));
+    if last.is_empty() {
+        first
+    } else {
+        format!("{first} {last}")
+    }
+}
+
+fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str) -> Result<()> {
+    println!("Loading draft: {}", draft_path);
+    let draft_bytes = fs::read(draft_path).context("Failed to read draft file")?;
+
+    println!("Loading signatures: {}", sig_path);
+    let sig_json = fs::read_to_string(sig_path).context("Failed to read signatures file")?;
+    let sigs_json: Vec<SignatureDataJson> =
+        serde_json::from_str(&sig_json).context("Failed to parse signatures JSON")?;
+
+    let sigs: Vec<SignatureData> = sigs_json
+        .iter()
+        .map(|s| s.parse())
+        .collect::<Result<Vec<_>>>()?;
+
+    println!("Loaded {} signature(s)", sigs.len());
+
+    // Parse the transaction
+    let (outer, mut raw, _noun) = detect_outer(&draft_bytes)?;
+
+    // Apply signatures to inputs
+    let mut new_inputs: ZMap<NName, Input> = ZMap::new();
+
+    for (name, mut input) in raw.inputs.p.tap() {
+        let mut sig_map: ZMap<SchnorrPubkey, SchnorrSignature> = input
+            .spend
+            .signature
+            .as_ref()
+            .map(|s| s.map.clone())
+            .unwrap_or_else(ZMap::new);
+
+        let this_name = nname_b58(&name);
+
+        for sig_data in &sigs {
+            if sig_data.input_name == this_name {
+                println!("Applying signature to input: {}", this_name);
+
+                let pk = SchnorrPubkey {
+                    x: F6LT {
+                        values: sig_data.pubkey_x,
+                    },
+                    y: F6LT {
+                        values: sig_data.pubkey_y,
+                    },
+                    inf: false,
+                };
+
+                let schnorr_sig = SchnorrSignature {
+                    chal: Chal {
+                        values: t8_from_device(sig_data.chal),
+                    },
+                    sig: Sig {
+                        values: t8_from_device(sig_data.sig),
+                    },
+                };
+
+                sig_map.put(pk, schnorr_sig);
+            }
+        }
+
+        if sig_map.wyt() > 0 {
+            input.spend.signature = Some(Signature { map: sig_map });
+        }
+
+        new_inputs.put(name, input);
+    }
+
+    raw.inputs = Inputs { p: new_inputs };
+
+    // Jam the result
+    println!("Jamming signed transaction...");
+    let out_bytes = match outer {
+        Outer::RawTx => {
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = raw.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+        Outer::TxTransact { tail_jam } => {
+            let mut out_slab: NounSlab = NounSlab::new();
+            let raw_n = raw.to_noun(&mut out_slab);
+            let tail_n: Noun = out_slab
+                .cue_into(Bytes::from(tail_jam))
+                .context("Failed to cue tail")?;
+            let cell_n = T(&mut out_slab, &[raw_n, tail_n]);
+            out_slab.copy_into(cell_n);
+            out_slab.jam()
+        }
+        Outer::WalletTx(mut wallet_tx) => {
+            wallet_tx.p = raw.inputs;
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = wallet_tx.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+    };
+
+    // Write output
+    let out_path = default_out_path_for(draft_path, out_opt);
+    fs::write(&out_path, &out_bytes).context("Failed to write output file")?;
+
+    println!("✓ Signed transaction written to: {}", out_path.display());
+
+    Ok(())
+}
+
+pub fn run(
+    port: &str,
+    baud: u32,
+    draft_path: &str,
+    out_opt: Option<&str>,
+    signatures: Option<&str>,
+) -> Result<()> {
+    if let Some(sig_path) = signatures {
+        run_apply_signatures(draft_path, out_opt, sig_path)
+    } else {
+        run_device(port, baud, draft_path, out_opt)
+    }
 }
 
 #[allow(dead_code)]

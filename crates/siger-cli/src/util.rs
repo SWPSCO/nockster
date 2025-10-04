@@ -33,19 +33,6 @@ fn is_printable_ascii(bytes: &[u8]) -> bool {
         .all(|&b| (b == 0x09) || (b == 0x0A) || (b == 0x0D) || (0x20..=0x7E).contains(&b))
 }
 
-pub fn debug_shape(n: &Noun) -> String {
-    if let Ok(cell) = n.as_cell() {
-        format!("[{:?} ..]", cell.head())
-    } else if let Ok(atom) = n.as_atom() {
-        match atom.to_bytes_until_nul() {
-            Ok(b) => format!("atom(cord:{:?})", String::from_utf8_lossy(&b)),
-            _ => format!("atom({} bits)", nockvm::serialization::met0_usize(atom)),
-        }
-    } else {
-        "direct".into()
-    }
-}
-
 pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
     if let Ok(tx) = Transaction::from_noun(noun) {
         return Ok(tx.name);
@@ -224,8 +211,8 @@ pub fn t8_from_device(words: [u64; 8]) -> T8 {
         // words[3] is least-significant 64 bits if device sent MSW..LSW
         for i in 0..4 {
             let w = words[i];
-            v[i*2 + 0] = (w & 0xffff_ffff) as u64;        // low 32 bits
-            v[i*2 + 1] = (w >> 32) as u64;                // high 32 bits
+            v[i * 2 + 0] = (w & 0xffff_ffff) as u64; // low 32 bits
+            v[i * 2 + 1] = (w >> 32) as u64; // high 32 bits
         }
         T8 { values: v }
     } else {
@@ -358,9 +345,8 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
     }
 
     Err(anyhow!(
-      "decode failed (shape {}): not RawTransaction / tx:transact / transaction:wt / [name inputs]",
-      debug_shape(&noun)
-  ))
+        "decode failed: not RawTransaction / tx:transact / transaction:wt / [name inputs]"
+    ))
 }
 
 pub fn raw_from_inputs(inputs: Inputs) -> RawTransaction {
@@ -698,7 +684,9 @@ mod tests {
         // Create a test spend with some seeds
         let seed = Seed {
             output_source: Some(Source {
-                p: Hash { values: [1, 2, 3, 4, 5] },
+                p: Hash {
+                    values: [1, 2, 3, 4, 5],
+                },
                 is_coinbase: false,
             }),
             recipient: Lock {
@@ -707,7 +695,9 @@ mod tests {
             },
             timelock_intent: None,
             gift: Coins { value: 100 },
-            parent_hash: Hash { values: [10, 11, 12, 13, 14] },
+            parent_hash: Hash {
+                values: [10, 11, 12, 13, 14],
+            },
         };
 
         let mut seeds_set = ZSet::new();
@@ -728,7 +718,9 @@ mod tests {
                     timelock: Timelock { intent: None },
                 },
                 name: NName {
-                    p: vec![Hash { values: [1, 0, 0, 0, 0] }],
+                    p: vec![Hash {
+                        values: [1, 0, 0, 0, 0],
+                    }],
                 },
                 lock: Lock {
                     m: 1,
@@ -744,7 +736,9 @@ mod tests {
         };
 
         let name = NName {
-            p: vec![Hash { values: [1, 0, 0, 0, 0] }],
+            p: vec![Hash {
+                values: [1, 0, 0, 0, 0],
+            }],
         };
 
         let mut inputs_map = ZMap::new();

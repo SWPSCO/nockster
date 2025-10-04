@@ -21,7 +21,21 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     // Case 1: seed via mnemonic
     if let Some(m) = args.mnemonic.as_deref() {
         let seed64 = keys::bip39_seed_from_mnemonic(m, &args.passphrase);
-        send_blob(&mut *sp, 0x42, FragKind::SetSeed, &seed64)?;
+
+        // Use InitializePIN if PIN is provided, otherwise use SetSeed
+        if let Some(pin) = &args.pin {
+            send_call(
+                &mut *sp,
+                0x42,
+                Request::InitializePIN {
+                    pin: pin.clone(),
+                    seed64,
+                },
+            )?;
+            println!("✔ initialized device with PIN (encrypted NVS storage)");
+        } else {
+            send_blob(&mut *sp, 0x42, FragKind::SetSeed, &seed64)?;
+        }
         did_seed_device = true;
         seeded_len = seed64.len();
 
@@ -42,7 +56,21 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     // Case 2: seed via seed_hex
     } else if let Some(hx) = args.seed_hex.as_deref() {
         let seed64 = parse_64(hx)?;
-        send_blob(&mut *sp, 0x42, FragKind::SetSeed, &seed64)?;
+
+        // Use InitializePIN if PIN is provided, otherwise use SetSeed
+        if let Some(pin) = &args.pin {
+            send_call(
+                &mut *sp,
+                0x42,
+                Request::InitializePIN {
+                    pin: pin.clone(),
+                    seed64,
+                },
+            )?;
+            println!("✔ initialized device with PIN (encrypted NVS storage)");
+        } else {
+            send_blob(&mut *sp, 0x42, FragKind::SetSeed, &seed64)?;
+        }
         did_seed_device = true;
         seeded_len = seed64.len();
 

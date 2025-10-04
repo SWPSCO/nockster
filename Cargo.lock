@@ -3,6 +3,41 @@
 version = 4
 
 [[package]]
+name = "aead"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
+dependencies = [
+ "crypto-common",
+ "generic-array",
+]
+
+[[package]]
+name = "aes"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b169f7a6d4742236a0a00c541b845991d0ac43e546831af1249753ab4c3aa3a0"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
+name = "aes-gcm"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "831010a0f742e1209b3bcea8fab6a8e149051ba6099432c8cb2cc117dec3ead1"
+dependencies = [
+ "aead",
+ "aes",
+ "cipher",
+ "ctr",
+ "ghash",
+ "subtle",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -312,6 +347,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipher"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
+dependencies = [
+ "crypto-common",
+ "inout",
+]
+
+[[package]]
 name = "clap"
 version = "4.5.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -376,6 +421,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b05b61dc5112cbb17e4b6cd61790d9845d13888356391624cbe7e41efeac1e75"
 
 [[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -432,6 +487,15 @@ checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
 dependencies = [
  "generic-array",
  "typenum",
+]
+
+[[package]]
+name = "ctr"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0369ee1ad671834580515889b80f2ea915f23b8be8d0daa4bbaf2ac5c7590835"
+dependencies = [
+ "cipher",
 ]
 
 [[package]]
@@ -834,6 +898,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "esp-build"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b94a4b8d74e7cc7baabcca5b2277b41877e039ad9cd49959d48ef94dac7eab4b"
+dependencies = [
+ "quote",
+ "syn",
+ "termcolor",
+]
+
+[[package]]
 name = "esp-config"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -959,6 +1034,16 @@ dependencies = [
  "cfg-if",
  "document-features",
  "esp-metadata-generated",
+]
+
+[[package]]
+name = "esp-storage"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b475dc7bd3b5c33718a5e65c9f192ba4493f1244bf696e8b3a8743dff795bc3f"
+dependencies = [
+ "embedded-storage",
+ "esp-build",
 ]
 
 [[package]]
@@ -1135,8 +1220,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "335ff9f135e4384c8150d6f27c6daed433577f86b4750418338c01a1a2528592"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "ghash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0d8a4362ccb29cb0b265253fb0a2728f592895ee6854fd9bc13f2ffda266ff1"
+dependencies = [
+ "opaque-debug",
+ "polyval",
 ]
 
 [[package]]
@@ -1254,7 +1351,7 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "cfg-if",
  "num-traits",
@@ -1283,6 +1380,15 @@ name = "indoc"
 version = "2.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4c7245a08504955605670dbf141fceab975f15ca21570696aebe9d2e71576bd"
+
+[[package]]
+name = "inout"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
+dependencies = [
+ "generic-array",
+]
 
 [[package]]
 name = "instability"
@@ -1459,7 +1565,7 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.5.2"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 
 [[package]]
 name = "nb"
@@ -1490,7 +1596,7 @@ dependencies = [
 [[package]]
 name = "nockapp"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "bincode",
  "bitvec",
@@ -1506,10 +1612,10 @@ dependencies = [
 [[package]]
 name = "nockchain-libp2p-io"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "bs58",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
  "nockapp",
  "nockvm",
  "noun-serde",
@@ -1518,13 +1624,13 @@ dependencies = [
 [[package]]
 name = "nockvm"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "autotools",
  "bitvec",
  "cc",
  "either",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
  "intmap",
  "json",
  "lazy_static",
@@ -1544,7 +1650,7 @@ dependencies = [
 [[package]]
 name = "nockvm_macros"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "quote",
  "syn",
@@ -1553,7 +1659,7 @@ dependencies = [
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "nockapp",
  "nockvm",
@@ -1565,7 +1671,7 @@ dependencies = [
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "nockvm",
  "proc-macro2",
@@ -1634,6 +1740,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
+name = "opaque-debug"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
+
+[[package]]
 name = "panic-halt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1682,6 +1794,18 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+
+[[package]]
+name = "polyval"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d1fe60d06143b2430aa532c94cfe9e29783047f06c0d7fd359a9a51b729fa25"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "opaque-debug",
+ "universal-hash",
+]
 
 [[package]]
 name = "portable-atomic"
@@ -1908,6 +2032,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "serde_bytes"
 version = "0.11.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1999,6 +2134,7 @@ dependencies = [
  "bytes",
  "clap",
  "cobs 0.4.0",
+ "getrandom",
  "hex",
  "hmac",
  "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2047,16 +2183,20 @@ dependencies = [
 name = "siger-fw"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "bip32",
  "cobs 0.4.0",
+ "embedded-storage",
  "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
+ "esp-storage",
  "getrandom",
  "heapless",
  "hmac",
  "k256",
  "panic-halt",
+ "pbkdf2",
  "postcard",
  "ripemd",
  "serde",
@@ -2065,6 +2205,24 @@ dependencies = [
  "siger-core",
  "signature",
  "zeroize",
+]
+
+[[package]]
+name = "siger-wasm"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "console_error_panic_hook",
+ "js-sys",
+ "nockapp",
+ "nockvm",
+ "noun-serde",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "tx-types",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -2260,7 +2418,7 @@ dependencies = [
 [[package]]
 name = "tx-types"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "anyhow",
  "bip39",
@@ -2268,7 +2426,7 @@ dependencies = [
  "chrono",
  "either",
  "hmac",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
  "nockapp",
  "nockchain-libp2p-io",
  "nockvm",
@@ -2316,6 +2474,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5033c97c4262335cded6d6fc3e5c18ab755e1a3dc96376350f3d8e9f009ad956"
 dependencies = [
  "tinyvec",
+]
+
+[[package]]
+name = "universal-hash"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
+dependencies = [
+ "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -2438,6 +2606,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a05d73b933a847d6cccdda8f838a22ff101ad9bf93e33684f39c1f5f0eece3d"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.77"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33b6dd2ef9186f1f2072e409e99cd22a975331a6b3591b12c764e0e55c60d5d2"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2663,7 +2841,7 @@ checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
+source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "arrayref",
  "bitvec",
@@ -2671,7 +2849,7 @@ dependencies = [
  "bytes",
  "either",
  "hex-literal 1.0.0",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
  "nockapp",
  "nockvm",
  "nockvm_macros",

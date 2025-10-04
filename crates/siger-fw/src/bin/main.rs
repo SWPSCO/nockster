@@ -4,6 +4,7 @@
 
 mod random;
 use panic_halt as _;
+use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
 use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
@@ -44,6 +45,9 @@ static mut SEED_STORE: SeedStore = SeedStore {
     set: false,
     seed: [0u8; 64],
 };
+
+// Lock state (device is locked by default)
+static mut DEVICE_LOCKED: bool = true;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -382,18 +386,25 @@ fn handle_request_v1(req: &Request) -> Response {
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
 
-        Request::SignDigest { path, digest32 } => match derive_signing_key(path) {
-            Ok(sk) => {
-                let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
-                if let Some(norm) = sig.normalize_s() {
-                    sig = norm;
-                }
-                let mut out = [0u8; 64];
-                out.copy_from_slice(&sig.to_bytes());
-                Response::OkSig { sig64: out }
+        Request::SignDigest { path, digest32 } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
             }
-            Err(_) => Response::Err { code: ERR_NO_SEED },
-        },
+            match derive_signing_key(path) {
+                Ok(sk) => {
+                    let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
+                    if let Some(norm) = sig.normalize_s() {
+                        sig = norm;
+                    }
+                    let mut out = [0u8; 64];
+                    out.copy_from_slice(&sig.to_bytes());
+                    Response::OkSig { sig64: out }
+                }
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
 
         Request::GetXpub { path } => match get_xpub(path) {
             Ok(x) => Response::OkXpub(x),
@@ -408,20 +419,32 @@ fn handle_request_v1(req: &Request) -> Response {
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
 
-        Request::SignSpendHash { path, msg5 } => match derive_child_sk_from_seed_store(path) {
-            Ok(sk) => {
-                let pk = cheetah::cheetah_pub_from_sk(sk);
-                let hash = cheetah::Hash { values: *msg5 };
-                let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
-                Response::OkCheetahSig {
-                    chal: e.values,
-                    sig: s.values,
-                }
+        Request::SignSpendHash { path, msg5 } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
             }
-            Err(_) => Response::Err { code: ERR_NO_SEED },
-        },
+            match derive_child_sk_from_seed_store(path) {
+                Ok(sk) => {
+                    let pk = cheetah::cheetah_pub_from_sk(sk);
+                    let hash = cheetah::Hash { values: *msg5 };
+                    let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
+                    Response::OkCheetahSig {
+                        chal: e.values,
+                        sig: s.values,
+                    }
+                }
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
 
         Request::SignSpendHashFor { path, msg5, pubkey } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
+            }
             match derive_child_sk_from_seed_store(path) {
                 Ok(sk) => {
                     let pk_dev = cheetah::cheetah_pub_from_sk(sk);
@@ -460,7 +483,97 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
+
+        Request::InitializePIN { pin, seed64 } => {
+            let mut nvs = NvsStore::new();
+            match nvs.initialize_pin(pin, seed64) {
+                Ok(_) => {
+                    // Also set in RAM for immediate use
+                    set_seed(seed64);
+                    unsafe {
+                        DEVICE_LOCKED = false;
+                    }
+                    Response::Ok
+                }
+                Err(NvsError::AlreadyInitialized) => Response::Err {
+                    code: ERR_ALREADY_INITIALIZED,
+                },
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
+        Request::Unlock { pin } => {
+            unsafe {
+                if !DEVICE_LOCKED {
+                    return Response::Ok; // Already unlocked
+                }
+            }
+
+            let mut nvs = NvsStore::new();
+            match nvs.unlock(pin) {
+                Ok(seed) => {
+                    set_seed(&seed);
+                    unsafe {
+                        DEVICE_LOCKED = false;
+                    }
+                    Response::Ok
+                }
+                Err(NvsError::WrongPin) => {
+                    let remaining = nvs.get_attempts_remaining();
+                    if remaining == 0 {
+                        Response::Err {
+                            code: ERR_PIN_LOCKED_OUT,
+                        }
+                    } else {
+                        Response::Err {
+                            code: ERR_WRONG_PIN,
+                        }
+                    }
+                }
+                Err(NvsError::LockedOut) => Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                },
+                Err(NvsError::NotInitialized) => Response::Err { code: ERR_NO_SEED },
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
+        Request::Lock => {
+            wipe_seed();
+            unsafe {
+                DEVICE_LOCKED = true;
+            }
+            Response::Ok
+        }
+
+        Request::ChangePIN { old_pin, new_pin } => {
+            let mut nvs = NvsStore::new();
+            match nvs.change_pin(old_pin, new_pin) {
+                Ok(_) => Response::Ok,
+                Err(NvsError::WrongPin) => Response::Err {
+                    code: ERR_WRONG_PIN,
+                },
+                Err(NvsError::LockedOut) => Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                },
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
+        Request::GetLockStatus => {
+            let mut nvs = NvsStore::new();
+            let locked = unsafe { DEVICE_LOCKED };
+            let attempts_remaining = nvs.get_attempts_remaining();
+            Response::OkLockStatus {
+                locked,
+                attempts_remaining,
+            }
+        }
     }
+}
+
+fn is_device_locked() -> bool {
+    unsafe { DEVICE_LOCKED }
 }
 
 fn pk_uncompressed_65(sk: &SigningKey) -> [u8; 65] {
@@ -539,7 +652,7 @@ fn wipe_seed() {
     }
 }
 
-/// Convert our u32s with MSB=hard flag into a bip32 DerivationPath
+/// convert MSB=hard u32s into a bip32 DerivationPath
 fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     let mut dp = DerivationPath::default();
     for &p in path.iter() {
@@ -550,7 +663,7 @@ fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     dp
 }
 
-/// Create a k256 SigningKey from master seed + path
+/// create k256 SigningKey from master seed + path
 fn derive_signing_key(path: &pathmod::Path) -> Result<SigningKey, ()> {
     unsafe {
         if !SEED_STORE.set {
@@ -558,7 +671,7 @@ fn derive_signing_key(path: &pathmod::Path) -> Result<SigningKey, ()> {
         }
         let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
 
-        // Derive child by child
+        // derive child by child
         let mut key = xprv;
         for index in path.iter() {
             let child_num = ChildNumber::from(*index);
@@ -571,7 +684,7 @@ fn derive_signing_key(path: &pathmod::Path) -> Result<SigningKey, ()> {
     }
 }
 
-/// BIP32 parent fingerprint (master): first 4 bytes of RIPEMD160(SHA256(compressed pubkey))
+/// bip32 parent fingerprint (master): first 4 bytes of RIPEMD160(SHA256(compressed pubkey))
 fn master_fingerprint() -> Result<[u8; 4], ()> {
     unsafe {
         if !SEED_STORE.set {

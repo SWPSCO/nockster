@@ -1,0 +1,4 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# Note: Bootloader is at 0x0 (32K), partition table at 0x8000
+nvs,      data, nvs,     0x9000,  28K,
+factory,  app,  factory, 0x10000, 3M,

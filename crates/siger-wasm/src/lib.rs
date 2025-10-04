@@ -295,7 +295,7 @@ impl ParsedTransaction {
             let lock_display = format!("{}-of-{} signers", m, pks_b58.len());
 
             // Format seeds
-            let seeds_json: Vec<_> = input.spend.seeds.set.iter().enumerate().map(|(k, seed)| {
+            let seeds_json: Vec<_> = input.spend.seeds.set.iter().enumerate().map(|(_k, seed)| {
                 let (m, pks_b58) = seed.recipient.to_b58();
                 let lock = format!("{}-of-{}", m, pks_b58.len());
 
@@ -364,6 +364,8 @@ impl ParsedTransaction {
         for (name, input) in raw.inputs.p.tap() {
             let lock = &input.note.lock;
 
+            web_sys::console::log_1(&format!("WASM: Checking input with {} lock pubkeys", lock.pubkeys.wyt()).into());
+
             let mut matching_keys = Vec::new();
             for dev_pk in &dev_keys {
                 let pk_dev = SchnorrPubkey {
@@ -371,31 +373,59 @@ impl ParsedTransaction {
                     y: F6LT { values: dev_pk.y },
                     inf: false,
                 };
-                let dev_hash = pk_dev.to_hash();
 
-                if lock.pubkeys.iter().any(|pk| pk.to_hash() == dev_hash) {
-                    matching_keys.push(dev_hash.to_b58());
+                web_sys::console::log_1(&format!("WASM: Checking device pubkey x[0]={}, y[0]={}",
+                    pk_dev.x.values[0], pk_dev.y.values[0]).into());
+
+                // Check if this device pubkey matches any lock pubkey
+                // Compare directly without calling to_hash() to avoid NockStack allocation
+                let mut found_match = false;
+                for (idx, pk) in lock.pubkeys.iter().enumerate() {
+                    let matches = pk.x.values == pk_dev.x.values &&
+                                 pk.y.values == pk_dev.y.values &&
+                                 pk.inf == pk_dev.inf;
+
+                    if matches {
+                        web_sys::console::log_1(&format!("WASM: MATCH FOUND at lock pubkey index {}", idx).into());
+                        found_match = true;
+                        // Format the pubkey for display
+                        matching_keys.push(format!("pk({},{})",
+                            pk_dev.x.values[0], pk_dev.y.values[0]));
+                        break;
+                    }
+                }
+
+                if !found_match {
+                    web_sys::console::log_1(&"WASM: No match for this device key".into());
                 }
             }
 
             if !matching_keys.is_empty() {
-                web_sys::console::log_1(&format!("WASM: Found matching input").into());
+                web_sys::console::log_1(&format!("WASM: Found matching input with {} matching keys", matching_keys.len()).into());
 
                 let (first, last) = nname_b58_pair(&name);
                 let combined = if last.is_empty() { first.clone() } else { format!("{first} {last}") };
 
-                // Return input info without computing sig hash
-                // The hash will be computed on-device during signing
+                // We need to compute msg5 for signing, but we can't compute sig_hash without NockStack
+                // For now, use a placeholder - the actual signing will need to compute it
+                // TODO: Either compute this on device, or implement no-std TIP5
+                let placeholder_hash = Hash { values: [0, 0, 0, 0, 0] };
+                let msg5 = placeholder_hash.values.to_vec();
+
                 use serde_json::json;
                 let input_info = json!({
                     "name_first": first,
                     "name_last": last,
                     "input_name": combined,
                     "pubkey_hashes": matching_keys,
-                    "has_spend": true,
+                    "sig_hash": format_hash(&placeholder_hash),
+                    "msg5": msg5,
                 });
 
+                web_sys::console::log_1(&format!("WASM: Created input_info: {:?}", serde_json::to_string(&input_info).unwrap_or_default()).into());
                 signing_inputs.push(serde_wasm_bindgen::to_value(&input_info)?);
+            } else {
+                web_sys::console::log_1(&"WASM: No matching keys for this input".into());
             }
         }
 

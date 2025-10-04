@@ -188,7 +188,32 @@ function App() {
       const devicePubkeys = [{ x: response.x, y: response.y }];
       const inputs = tx.get_signing_inputs(devicePubkeys);
 
-      setSigningInputs(inputs);
+      console.log('Raw inputs from WASM:', inputs);
+
+      // Convert Map objects to plain objects
+      const convertMapToObject = (obj: any): any => {
+        if (obj instanceof Map) {
+          const result: any = {};
+          obj.forEach((value, key) => {
+            result[key] = convertMapToObject(value);
+          });
+          return result;
+        } else if (Array.isArray(obj)) {
+          return obj.map(convertMapToObject);
+        } else if (obj && typeof obj === 'object') {
+          const result: any = {};
+          for (const key in obj) {
+            result[key] = convertMapToObject(obj[key]);
+          }
+          return result;
+        }
+        return obj;
+      };
+
+      const convertedInputs = inputs.map(convertMapToObject);
+      console.log('Converted inputs:', convertedInputs);
+
+      setSigningInputs(convertedInputs);
       setStatus(`Found ${inputs.length} input(s) to sign`);
     } catch (error: any) {
       setStatus(`Failed to prepare signing: ${error.message}`);
@@ -418,7 +443,7 @@ function App() {
                       <div className="input-list">
                         {signingInputs.map((input, i) => (
                           <div key={i} className="input-item">
-                            <span className="mono-small">{input.input_name}</span>
+                            <span className="mono-small">[{input.input_name}]</span>
                             <span className="hash-small">{input.sig_hash}</span>
                           </div>
                         ))}

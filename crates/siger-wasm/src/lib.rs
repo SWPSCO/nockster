@@ -25,6 +25,10 @@ fn fmt_u64x5(arr: &[u64; 5]) -> String {
     )
 }
 
+fn format_hash(hash: &Hash) -> String {
+    fmt_u64x5(&hash.values)
+}
+
 #[inline]
 fn t8(v: [u64; 8]) -> tx_types::T8 {
     tx_types::T8 { values: v }
@@ -278,14 +282,46 @@ impl ParsedTransaction {
         let raw = &self.inner.raw;
         web_sys::console::log_1(&format!("WASM: raw has {} inputs", raw.inputs.p.wyt()).into());
 
-        let inputs_json: Vec<_> = raw.inputs.p.tap().into_iter().map(|(name, input)| {
+        let inputs_json: Vec<_> = raw.inputs.p.tap().into_iter().enumerate().map(|(idx, (name, input))| {
             let (first, last) = nname_b58_pair(&name);
+            let name_display = if last.is_empty() {
+                format!("[{}]", first)
+            } else {
+                format!("[{} {}]", first, last)
+            };
+
+            // Format lock
+            let (m, pks_b58) = input.note.lock.to_b58();
+            let lock_display = format!("{}-of-{} signers", m, pks_b58.len());
+
+            // Format seeds
+            let seeds_json: Vec<_> = input.spend.seeds.set.iter().enumerate().map(|(k, seed)| {
+                let (m, pks_b58) = seed.recipient.to_b58();
+                let lock = format!("{}-of-{}", m, pks_b58.len());
+
+                json!({
+                    "gift": seed.gift.value,
+                    "lock": lock,
+                    "recipient": pks_b58,
+                    "parent_hash": seed.parent_hash.to_b58(),
+                })
+            }).collect();
+
+            // Count signatures
+            let sig_count = input.spend.signature.as_ref().map(|m| m.map.wyt()).unwrap_or(0);
+
             json!({
-                "name": if last.is_empty() { first } else { format!("[{} {}]", first, last) },
+                "index": idx,
+                "name": name_display,
+                "origin_page": input.note.meta.origin_page.value,
                 "assets": input.note.assets.value,
-                "lock_threshold": input.note.lock.m,
-                "lock_pubkey_count": input.note.lock.pubkeys.wyt(),
+                "source": format_hash(&input.note.source.p),
+                "coinbase": input.note.source.is_coinbase,
+                "lock": lock_display,
+                "lock_pubkeys": pks_b58,
                 "fee": input.spend.fee.value,
+                "signatures": sig_count,
+                "seeds": seeds_json,
             })
         }).collect();
 

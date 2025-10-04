@@ -23,6 +23,15 @@ Hardware wallet firmware, host tooling, and web front-end for signing Nockchain 
 - Firmware image is placed at `0x10000` with a 3 MB ceiling.
 - `make flash` updates firmware without touching NVS; use `make flash-wipe` when you really need a factory reset.
 
+#### Partitions
+
+| Address | Size  | Type       | Purpose                        |
+|---------|-------|------------|--------------------------------|
+| 0x0     | 32KB  | Bootloader | First-stage bootloader         |
+| 0x8000  | —     | Partition  | Partition table                |
+| 0x9000  | 28KB  | NVS        | Encrypted seed storage (PIN)   |
+| 0x10000 | 3MB   | APP        | Firmware binary                |
+
 ## Commands
 - Provision from scratch: `make flash-wipe`, then `siger-cli seed --port /dev/ttyACM0 --mnemonic "..." --pin 1234`.
 - Firmware update: `make flash` (seed stays put).
@@ -35,12 +44,3 @@ Hardware wallet firmware, host tooling, and web front-end for signing Nockchain 
 ## Notes
 - NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash without the PIN is useless.
 - The wasm app deserializes the draft jam, sends the values over the wire for signature, recomputes `tx_id`, jams the signed noun, and hands back a consumable `.tx`.
-
-#### Partitions
-
-| Address | Size  | Type       | Purpose                        |
-|---------|-------|------------|--------------------------------|
-| 0x0     | 32KB  | Bootloader | First-stage bootloader         |
-| 0x8000  | —     | Partition  | Partition table                |
-| 0x9000  | 28KB  | NVS        | Encrypted seed storage (PIN)   |
-| 0x10000 | 3MB   | APP        | Firmware binary                |

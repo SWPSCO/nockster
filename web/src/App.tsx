@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { SigerDevice, formatCheetahPubkey } from 'siger-js';
-import { init, ParsedTransaction } from 'siger-wasm';
+import init, { ParsedTransaction } from 'siger-wasm';
 import './App.css';
 
 function App() {
@@ -21,17 +21,15 @@ function App() {
   const [signing, setSigning] = useState(false);
   const [signedTxBytes, setSignedTxBytes] = useState<Uint8Array | null>(null);
 
-  // Initialize WASM
+  // Initialize WASM module (required for web target)
   useEffect(() => {
-    console.log('Initializing WASM...');
-    try {
-      init();
+    init().then(() => {
       console.log('WASM initialized successfully');
       setWasmReady(true);
-    } catch (err: any) {
-      console.error('WASM init failed:', err);
-      console.error('Error stack:', err.stack);
-    }
+    }).catch(err => {
+      console.error('Failed to initialize WASM:', err);
+      setStatus('WASM initialization failed');
+    });
   }, []);
 
   // Check Web Serial support
@@ -116,6 +114,11 @@ function App() {
 
   const loadTransaction = async (file: File) => {
     try {
+      if (!wasmReady) {
+        setStatus('WASM not ready yet, please wait...');
+        return;
+      }
+
       console.log('Loading transaction file:', file.name, file.size, 'bytes');
       setStatus('Loading transaction...');
 
@@ -171,24 +174,24 @@ function App() {
     }
   };
 
-  const prepareToSign = async () => {
+  const signTransaction = async () => {
     if (!tx || !connected || locked) {
       setStatus('Device must be connected and unlocked');
       return;
     }
 
     try {
+      setSigning(true);
       setStatus('Finding inputs to sign...');
 
-      const response = await device.call({ type: 'GetCheetahPub', path: [] });
-      if (response.type !== 'OkCheetahPub') {
+      // Get device public key
+      const pubkeyResp = await device.call({ type: 'GetCheetahPub', path: [] });
+      if (pubkeyResp.type !== 'OkCheetahPub') {
         throw new Error('Failed to get device public key');
       }
 
-      const devicePubkeys = [{ x: response.x, y: response.y }];
+      const devicePubkeys = [{ x: pubkeyResp.x, y: pubkeyResp.y }];
       const inputs = tx.get_signing_inputs(devicePubkeys);
-
-      console.log('Raw inputs from WASM:', inputs);
 
       // Convert Map objects to plain objects
       const convertMapToObject = (obj: any): any => {
@@ -211,68 +214,62 @@ function App() {
       };
 
       const convertedInputs = inputs.map(convertMapToObject);
-      console.log('Converted inputs:', convertedInputs);
 
-      setSigningInputs(convertedInputs);
-      setStatus(`Found ${inputs.length} input(s) to sign`);
-    } catch (error: any) {
-      setStatus(`Failed to prepare signing: ${error.message}`);
-    }
-  };
-
-  const signTransaction = async () => {
-    if (!tx || !connected || locked || signingInputs.length === 0) {
-      setStatus('Cannot sign: device must be connected, unlocked, and inputs prepared');
-      return;
-    }
-
-    try {
-      setSigning(true);
-      setStatus('Signing transaction...');
-
-      // Get device public key
-      const pubkeyResp = await device.call({ type: 'GetCheetahPub', path: [] });
-      if (pubkeyResp.type !== 'OkCheetahPub') {
-        throw new Error('Failed to get device public key');
+      if (convertedInputs.length === 0) {
+        throw new Error('No inputs found to sign with this device');
       }
 
+      // Sign each input
       const signatures = [];
-      for (const input of signingInputs) {
+      for (const input of convertedInputs) {
         setStatus(`Signing input: ${input.input_name}`);
+
+        // Convert msg5 strings to BigInt array
+        const msg5BigInts = input.msg5.map((v: string) => BigInt(v));
 
         const sigResp = await device.call({
           type: 'SignSpendHash',
           path: [],
-          msg5: input.msg5
+          msg5: msg5BigInts
         });
 
         if (sigResp.type === 'OkCheetahSig') {
           signatures.push({
             input_name: input.input_name,
-            pubkey_x: pubkeyResp.x,
-            pubkey_y: pubkeyResp.y,
-            chal: sigResp.chal,
-            sig: sigResp.sig
+            pubkey_x: Array.from(pubkeyResp.x).map(n => n.toString()),
+            pubkey_y: Array.from(pubkeyResp.y).map(n => n.toString()),
+            chal: Array.from(sigResp.chal).map(n => n.toString()),
+            sig: Array.from(sigResp.sig).map(n => n.toString())
           });
         } else {
           throw new Error(`Failed to sign input ${input.input_name}`);
         }
       }
 
-      // Apply signatures
-      tx.apply_signatures(signatures);
+      // Download signatures as JSON
+      // Note: We can't jam the transaction in WASM because it requires 64MB memory allocation
+      // which exceeds WASM's capabilities. Use siger-cli to finalize.
+      const signaturesJson = JSON.stringify(signatures, null, 2);
+      const blob = new Blob([signaturesJson], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'signatures.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
 
-      // Get signed bytes
-      const signedBytes = new Uint8Array(tx.to_bytes());
-      setSignedTxBytes(signedBytes);
-
-      // Get new tx info
-      const newInfo = tx.info();
-      setTxInfo(newInfo);
-
-      setStatus(`Successfully signed ${signatures.length} input(s)! New TX ID: ${newInfo.tx_id}`);
+      setStatus(
+        `✓ Successfully signed ${signatures.length} input(s)!\n\n` +
+        `Downloaded: signatures.json\n\n` +
+        `To create the signed transaction, run:\n` +
+        `siger-cli apply-signatures --draft <your-file>.draft --signatures signatures.json --out <your-file>.tx`
+      );
     } catch (error: any) {
-      setStatus(`Signing failed: ${error.message}`);
+      console.error('Signing error:', error);
+      const errorMsg = error.message || error.toString() || 'Unknown error';
+      setStatus(`Signing failed: ${errorMsg}`);
     } finally {
       setSigning(false);
     }
@@ -454,23 +451,13 @@ function App() {
                   <div className="button-group">
                     {!signedTxBytes ? (
                       <>
-                        {signingInputs.length === 0 ? (
-                          <button
-                            onClick={prepareToSign}
-                            disabled={!connected || locked === true}
-                            className="btn btn-primary"
-                          >
-                            sign
-                          </button>
-                        ) : (
-                          <button
-                            onClick={signTransaction}
-                            disabled={signing || locked === true}
-                            className="btn btn-success"
-                          >
-                            {signing ? 'signing...' : 'sign transaction'}
-                          </button>
-                        )}
+                        <button
+                          onClick={signTransaction}
+                          disabled={signing || locked === true}
+                          className="btn btn-success"
+                        >
+                          {signing ? 'signing...' : 'sign transaction'}
+                        </button>
                         <button onClick={clearTransaction} className="btn btn-secondary">
                           clear
                         </button>

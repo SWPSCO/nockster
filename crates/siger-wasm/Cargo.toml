@@ -6,6 +6,12 @@ version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[profile.release]
+opt-level = "z"  # Optimize for size
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [dependencies]
 wasm-bindgen = "0.2"
 serde = { version = "1.0", features = ["derive"] }
@@ -15,10 +21,11 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 # Transaction types and noun handling
-tx-types = { workspace = true, features = ["std"] }
-nockapp = {workspace = true }
-nockvm = { workspace = true, features = ["malloc"] }
-noun-serde = { workspace = true }
+# Use local tx-types with WASM patches instead of workspace version
+tx-types = { path = "../../../tx-types/tx-types", features = ["std"] }
+nockapp = { path = "../../../tx-types/nockchain-core/crates/nockapp" }
+nockvm = { path = "../../../tx-types/nockchain-core/crates/nockvm/rust/nockvm", features = ["malloc"] }
+noun-serde = { path = "../../../tx-types/nockchain-core/crates/noun-serde" }
 bytes = "1.5"
 
 [dependencies.web-sys]

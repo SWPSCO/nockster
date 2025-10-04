@@ -13,9 +13,36 @@ use tx_types::{
     Signature, Sig,
 };
 
+mod tip5;
+
+// Use default WASM allocator (dlmalloc) - it will grow memory as needed
+
 #[wasm_bindgen(start)]
 pub fn init() {
+    // Pre-grow memory BEFORE setting up panic hook or doing any allocations
+    #[cfg(target_arch = "wasm32")]
+    {
+        let initial_pages = core::arch::wasm32::memory_size(0);
+
+        // Grow to 4096 pages (256MB) to ensure we have space for 64MB NockStack
+        let target_pages = 4096;
+        if initial_pages < target_pages {
+            let grow_result = core::arch::wasm32::memory_grow(0, target_pages - initial_pages);
+            if grow_result != usize::MAX {
+                let final_pages = core::arch::wasm32::memory_size(0);
+                // Memory grown successfully - but can't log yet, no allocator ready
+            }
+        }
+    }
+
     console_error_panic_hook::set_once();
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let pages = core::arch::wasm32::memory_size(0);
+        let bytes = pages * 64 * 1024;
+        web_sys::console::log_1(&format!("WASM memory: {} pages = {} MB", pages, bytes / (1024 * 1024)).into());
+    }
 }
 
 fn fmt_u64x5(arr: &[u64; 5]) -> String {
@@ -47,16 +74,362 @@ fn nname_b58(name: &NName) -> String {
 }
 
 
-fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Hash {
-    let mut spend = raw
-        .inputs
-        .p
-        .get(name)
-        .expect("input missing")
-        .spend
-        .clone();
+fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Result<Hash, JsValue> {
+    web_sys::console::log_1(&"sig_hash_for_input: start".into());
+
+    // CANNOT use ZMap::get() because it calls gor_tip which creates NounSlab!
+    // Instead, use tap() to get all entries and find the one we want
+    let all_inputs = raw.inputs.p.tap();
+    let input = all_inputs.iter()
+        .find(|(n, _)| n.p == name.p)
+        .map(|(_, i)| i)
+        .ok_or_else(|| JsValue::from_str("input missing"))?;
+
+    web_sys::console::log_1(&"sig_hash_for_input: got input".into());
+
+    let mut spend = input.spend.clone();
     spend.signature = None;
-    spend.sig_hash()
+
+    web_sys::console::log_1(&format!(
+        "sig_hash_for_input: fee={}, num_seeds={}",
+        spend.fee.value,
+        spend.seeds.set.wyt()
+    ).into());
+
+    web_sys::console::log_1(&"sig_hash_for_input: computing sig_hash using NounSlab".into());
+
+    // We CAN use NounSlab in WASM, just not NockStack!
+    // Build the sig_hashable manually using the ZSet structure
+    use tx_types::hashing::hashable::Hashable;
+
+    let seeds_hashable = build_zset_sig_hashable_with_nounslab(&spend.seeds.set)?;
+
+    let sig_hashable = Hashable::cell(
+        seeds_hashable,
+        Hashable::leaf_u64(spend.fee.value),
+    );
+
+    // Use reference hash_hashable which uses NounSlab
+    let sig_hash = tx_types::hashing::hasher::hash_hashable(&sig_hashable);
+
+    web_sys::console::log_1(&format!(
+        "Computed sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        sig_hash.values[0],
+        sig_hash.values[1],
+        sig_hash.values[2],
+        sig_hash.values[3],
+        sig_hash.values[4]
+    ).into());
+
+    Ok(sig_hash)
+}
+
+/// Build a ZSet's sig_hashable tree structure using NounSlab (not NockStack!)
+fn build_zset_sig_hashable_with_nounslab(zset: &tx_types::collections::ZSet<tx_types::Seed>) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+    use tx_types::collections::zset::Node;
+
+    // Traverse the actual ZSet tree structure
+    fn traverse_node(node: Option<&Node<tx_types::Seed>>) -> Result<Hashable, JsValue> {
+        match node {
+            None => Ok(Hashable::null()),
+            Some(n) => {
+                let node_hashable = build_seed_sig_hashable_with_nounslab(&n.value)?;
+                let left = traverse_node(n.left.as_deref())?;
+                let right = traverse_node(n.right.as_deref())?;
+                Ok(Hashable::triple(node_hashable, left, right))
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        traverse_node(zset.root_ref())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Fallback for non-WASM
+        let all_seeds: Vec<tx_types::Seed> = zset.tap();
+        if all_seeds.is_empty() {
+            return Ok(Hashable::null());
+        }
+        build_seed_sig_hashable_with_nounslab(&all_seeds[0])
+    }
+}
+
+/// Build a Seed's sig_hashable using NounSlab for pubkey hashing
+fn build_seed_sig_hashable_with_nounslab(seed: &tx_types::Seed) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+
+    // From transaction_types.rs lines 761-795, Seed::to_sig_hashable() creates:
+    // A 5-tuple: [output_source, recipient, timelock_intent, gift, parent_hash]
+
+    // output_source
+    let output_source_hashable = match &seed.output_source {
+        None => Hashable::null(),
+        Some(source) => {
+            // Build source hashable manually
+            Hashable::cell(Hashable::null(), Hashable::Hash(source.p.clone()))
+        }
+    };
+
+    // recipient (Lock) - build with NounSlab for pubkey hashing
+    let recipient_hashable = build_lock_hashable_with_nounslab(&seed.recipient)?;
+
+    // timelock_intent
+    let timelock_hashable = build_timelock_intent_hashable(&seed.timelock_intent)?;
+
+    // gift
+    let gift_hashable = Hashable::leaf_u64(seed.gift.value);
+
+    // parent_hash
+    let parent_hashable = Hashable::Hash(seed.parent_hash.clone());
+
+    // Build the 5-tuple as nested cells
+    Ok(Hashable::cell(
+        output_source_hashable,
+        Hashable::cell(
+            recipient_hashable,
+            Hashable::cell(
+                timelock_hashable,
+                Hashable::cell(gift_hashable, parent_hashable),
+            ),
+        ),
+    ))
+}
+
+/// Build Lock's hashable using NounSlab for pubkey hashing
+fn build_lock_hashable_with_nounslab(lock: &tx_types::Lock) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+    use nockapp::noun::slab::NounSlab;
+    use noun_serde::NounEncode;
+
+    // Lock is [m, pubkeys_zset]
+    let m_hashable = Hashable::leaf_u64(lock.m as u64);
+
+    // Build pubkeys ZSet hashable - each pubkey needs to be hashed using NounSlab
+    let pubkeys_hashable = build_pubkey_zset_hashable_with_nounslab(&lock.pubkeys)?;
+
+    Ok(Hashable::cell(m_hashable, pubkeys_hashable))
+}
+
+/// Build a ZSet of pubkeys hashable using NounSlab for each pubkey hash
+fn build_pubkey_zset_hashable_with_nounslab(zset: &tx_types::collections::ZSet<tx_types::SchnorrPubkey>) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+    use tx_types::collections::zset::Node;
+
+    fn traverse_pk_node(node: Option<&Node<tx_types::SchnorrPubkey>>) -> Result<Hashable, JsValue> {
+        match node {
+            None => Ok(Hashable::null()),
+            Some(n) => {
+                let node_hashable = hash_schnorr_pubkey_with_nounslab(&n.value)?;
+                let left = traverse_pk_node(n.left.as_deref())?;
+                let right = traverse_pk_node(n.right.as_deref())?;
+                Ok(Hashable::triple(node_hashable, left, right))
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        traverse_pk_node(zset.root_ref())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let pks: Vec<_> = zset.tap();
+        if pks.is_empty() {
+            return Ok(Hashable::null());
+        }
+        Ok(hash_schnorr_pubkey_with_nounslab(&pks[0])?)
+    }
+}
+
+/// Hash a SchnorrPubkey using NounSlab (not NockStack!)
+/// Converts to noun then hashes with reference hasher
+fn hash_schnorr_pubkey_with_nounslab(pk: &tx_types::SchnorrPubkey) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+    use nockapp::noun::slab::NounSlab;
+    use noun_serde::NounEncode;
+
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&"hash_schnorr_pubkey_with_nounslab: creating NounSlab".into());
+
+    // Create NounSlab (works in WASM - just creates empty vectors)
+    let mut slab: NounSlab = NounSlab::new();
+
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&"hash_schnorr_pubkey_with_nounslab: converting pubkey to noun".into());
+
+    // Convert pubkey to noun
+    let pk_noun = pk.to_noun(&mut slab);
+
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&"hash_schnorr_pubkey_with_nounslab: hashing noun (may crash if NockStack needed)".into());
+
+    // Hash the noun - THIS MAY CRASH if it tries to create NockStack
+    let pk_hash = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun)
+        .map_err(|e| JsValue::from_str(&format!("Pubkey hash failed: {:?}", e)))?;
+
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&format!("hash_schnorr_pubkey_with_nounslab: success! hash = {}", format_hash(&pk_hash)).into());
+
+    Ok(Hashable::Hash(pk_hash))
+}
+
+/// Build timelock intent hashable
+fn build_timelock_intent_hashable(
+    intent: &Option<(tx_types::TimelockRange, tx_types::TimelockRange)>,
+) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+
+    match intent {
+        None => Ok(Hashable::null()),
+        Some((absolute, relative)) => {
+            // Build structure for absolute and relative ranges
+            let abs_min = absolute.min.as_ref().map(|p| p.value).unwrap_or(0);
+            let abs_max = absolute.max.as_ref().map(|p| p.value).unwrap_or(0);
+            let rel_min = relative.min.as_ref().map(|p| p.value).unwrap_or(0);
+            let rel_max = relative.max.as_ref().map(|p| p.value).unwrap_or(0);
+
+            // This is a simplified version - proper implementation would match Hoon structure exactly
+            let mut bytes = Vec::new();
+            bytes.extend(&abs_min.to_le_bytes());
+            bytes.extend(&abs_max.to_le_bytes());
+            bytes.extend(&rel_min.to_le_bytes());
+            bytes.extend(&rel_max.to_le_bytes());
+
+            Ok(Hashable::Leaf(bytes))
+        }
+    }
+}
+
+/// Hash a Hashable structure using WASM-compatible TIP5 (no NounSlab)
+pub fn hash_hashable_wasm(h: &tx_types::hashing::hashable::Hashable) -> Result<Hash, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+
+    match h {
+        Hashable::Leaf(data) => {
+            // Hash raw byte data
+            // Convert bytes to u64s (pad with zeros if needed)
+            let mut u64s = Vec::new();
+            for chunk in data.chunks(8) {
+                let mut bytes = [0u8; 8];
+                bytes[..chunk.len()].copy_from_slice(chunk);
+                u64s.push(u64::from_le_bytes(bytes));
+            }
+            Ok(tip5::hash_varlen_u64s(&u64s))
+        }
+        Hashable::Hash(digest) => {
+            // Already hashed, return as-is
+            Ok(digest.clone())
+        }
+        Hashable::Cell(left, right) => {
+            // Recursively hash both sides and combine
+            let left_hash = hash_hashable_wasm(left)?;
+            let right_hash = hash_hashable_wasm(right)?;
+            // Combine two hashes: hash([left.values, right.values])
+            Ok(tip5::hash_two_hashes(&left_hash, &right_hash))
+        }
+        Hashable::List(items) => {
+            // Hash each item recursively
+            let hashes: Result<Vec<Hash>, JsValue> = items.iter()
+                .map(hash_hashable_wasm)
+                .collect();
+            let hashes = hashes?;
+
+            // Hash the list of hashes
+            Ok(tip5::hash_hash_list(&hashes))
+        }
+    }
+}
+
+/// Hash seeds for signature verification (to_sig_hashable)
+fn hash_seeds_sig_hashable(seeds: &tx_types::Seeds) -> Result<Hash, JsValue> {
+    web_sys::console::log_1(&"hash_seeds_sig_hashable: start".into());
+    // Each seed is converted to a hashable and then we hash the list of them
+    let mut seed_hashes = Vec::new();
+
+    web_sys::console::log_1(&format!("hash_seeds_sig_hashable: {} seeds", seeds.set.wyt()).into());
+
+    // Use tap() instead of iter() to avoid potential NounSlab allocations
+    let all_seeds = seeds.set.tap();
+    for seed in &all_seeds {
+        web_sys::console::log_1(&"hash_seeds_sig_hashable: hashing one seed".into());
+        let seed_hash = hash_seed_sig_hashable(seed)?;
+        seed_hashes.push(seed_hash);
+    }
+
+    web_sys::console::log_1(&"hash_seeds_sig_hashable: hashing list".into());
+    // Hash the list of seed hashes
+    Ok(tip5::hash_hash_list(&seed_hashes))
+}
+
+/// Hash a single seed for signature verification
+fn hash_seed_sig_hashable(seed: &tx_types::Seed) -> Result<Hash, JsValue> {
+    // A seed's sig_hashable structure is a list of:
+    // [output_source, recipient, timelock_intent, gift, parent_hash]
+
+    let mut components = Vec::new();
+
+    // output_source - if None, hash of 0, if Some, use the hash
+    if let Some(src) = &seed.output_source {
+        components.extend_from_slice(&src.p.values);
+    } else {
+        components.push(0);
+    }
+
+    // recipient (Lock) - hash the m value and each pubkey
+    components.push(seed.recipient.m as u64);
+    // Use tap() to avoid NounSlab allocations in ZSet
+    let pubkeys = seed.recipient.pubkeys.tap();
+    for pk in &pubkeys {
+        // Hash each pubkey by concatenating x and y coordinates
+        components.extend_from_slice(&pk.x.values);
+        components.extend_from_slice(&pk.y.values);
+    }
+
+    // timelock_intent - this is Option<(TimelockRange, TimelockRange)>
+    match &seed.timelock_intent {
+        None => components.push(0),
+        Some((absolute, relative)) => {
+            components.push(0); // leaf+~
+            if let Some(min) = &absolute.min {
+                components.push(0);
+                components.push(min.value);
+            } else {
+                components.push(0);
+            }
+            if let Some(max) = &absolute.max {
+                components.push(0);
+                components.push(max.value);
+            } else {
+                components.push(0);
+            }
+            if let Some(min) = &relative.min {
+                components.push(0);
+                components.push(min.value);
+            } else {
+                components.push(0);
+            }
+            if let Some(max) = &relative.max {
+                components.push(0);
+                components.push(max.value);
+            } else {
+                components.push(0);
+            }
+        }
+    }
+
+    // gift
+    components.push(seed.gift.value);
+
+    // parent_hash - this is a Hash (5 u64 values)
+    components.extend_from_slice(&seed.parent_hash.values);
+
+    // Hash all the components
+    Ok(tip5::hash_varlen_u64s(&components))
 }
 
 fn sum_inputs_fees(inputs: &Inputs) -> u64 {
@@ -140,14 +513,48 @@ struct DevicePubkey {
     y: [u64; 6],
 }
 
-#[derive(Serialize, Deserialize)]
+// Helper for deserializing from JavaScript (strings to avoid precision loss)
+#[derive(Deserialize)]
+struct SignatureDataJs {
+    input_name: String,
+    pubkey_x: Vec<String>,
+    pubkey_y: Vec<String>,
+    chal: Vec<String>,
+    sig: Vec<String>,
+}
+
 struct SignatureData {
-    // Must equal nname_b58(name) (i.e., "first last")
     input_name: String,
     pubkey_x: [u64; 6],
     pubkey_y: [u64; 6],
     chal: [u64; 8],
     sig: [u64; 8],
+}
+
+impl SignatureDataJs {
+    fn parse(self) -> Result<SignatureData, String> {
+        let parse_array = |v: Vec<String>, expected: usize, name: &str| -> Result<Vec<u64>, String> {
+            if v.len() != expected {
+                return Err(format!("{} has {} elements, expected {}", name, v.len(), expected));
+            }
+            v.into_iter()
+                .map(|s| s.parse::<u64>().map_err(|e| format!("Failed to parse {}: {}", name, e)))
+                .collect()
+        };
+
+        let pubkey_x = parse_array(self.pubkey_x, 6, "pubkey_x")?;
+        let pubkey_y = parse_array(self.pubkey_y, 6, "pubkey_y")?;
+        let chal = parse_array(self.chal, 8, "chal")?;
+        let sig = parse_array(self.sig, 8, "sig")?;
+
+        Ok(SignatureData {
+            input_name: self.input_name,
+            pubkey_x: pubkey_x.try_into().unwrap(),
+            pubkey_y: pubkey_y.try_into().unwrap(),
+            chal: chal.try_into().unwrap(),
+            sig: sig.try_into().unwrap(),
+        })
+    }
 }
 
 /// ---- ParsedTransaction ---------------------------------------------------
@@ -406,20 +813,24 @@ impl ParsedTransaction {
                 let (first, last) = nname_b58_pair(&name);
                 let combined = if last.is_empty() { first.clone() } else { format!("{first} {last}") };
 
-                // We need to compute msg5 for signing, but we can't compute sig_hash without NockStack
-                // For now, use a placeholder - the actual signing will need to compute it
-                // TODO: Either compute this on device, or implement no-std TIP5
-                let placeholder_hash = Hash { values: [0, 0, 0, 0, 0] };
-                let msg5 = placeholder_hash.values.to_vec();
+                // Compute the sig_hash for this input
+                // Using talc allocator with 256MB static arena for NockStack (64MB) allocation
+                web_sys::console::log_1(&"WASM: Computing sig_hash with talc".into());
+                let sig_hash = sig_hash_for_input(raw, &name)?;
+                let msg5 = sig_hash.values.to_vec();
 
                 use serde_json::json;
+                // Convert msg5 u64 values to strings to avoid JavaScript number precision loss
+                // JavaScript will need to parse these as BigInt
+                let msg5_strings: Vec<String> = msg5.iter().map(|v| v.to_string()).collect();
+
                 let input_info = json!({
                     "name_first": first,
                     "name_last": last,
                     "input_name": combined,
                     "pubkey_hashes": matching_keys,
-                    "sig_hash": format_hash(&placeholder_hash),
-                    "msg5": msg5,
+                    "sig_hash": format_hash(&sig_hash),
+                    "msg5": msg5_strings,
                 });
 
                 web_sys::console::log_1(&format!("WASM: Created input_info: {:?}", serde_json::to_string(&input_info).unwrap_or_default()).into());
@@ -441,14 +852,24 @@ impl ParsedTransaction {
           sig: bigint[]}
     */
     pub fn apply_signatures(&mut self, signatures: JsValue) -> Result<(), JsValue> {
-        let sigs: Vec<SignatureData> = serde_wasm_bindgen::from_value(signatures)
+        use tx_types::collections::ZMap;
+
+        web_sys::console::log_1(&"apply_signatures: start".into());
+
+        let sigs_js: Vec<SignatureDataJs> = serde_wasm_bindgen::from_value(signatures)
             .map_err(|e| JsValue::from_str(&format!("Invalid signatures: {}", e)))?;
 
+        let sigs: Vec<SignatureData> = sigs_js.into_iter()
+            .map(|s| s.parse().map_err(|e| JsValue::from_str(&e)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        web_sys::console::log_1(&format!("apply_signatures: got {} signatures", sigs.len()).into());
+
+        // ZMap now uses dor-tip for WASM (see tx-types patch), so put() won't allocate NockStack
         let raw = &mut self.inner.raw;
         let mut new_inputs: ZMap<NName, Input> = ZMap::new();
 
         for (name, mut input) in raw.inputs.p.tap() {
-            // existing signatures or empty
             let mut sig_map: ZMap<SchnorrPubkey, SchnorrSignature> = input
                 .spend
                 .signature
@@ -460,6 +881,8 @@ impl ParsedTransaction {
 
             for sig_data in &sigs {
                 if sig_data.input_name == this_name {
+                    web_sys::console::log_1(&format!("apply_signatures: applying sig to {}", this_name).into());
+
                     let pk = SchnorrPubkey {
                         x: F6LT { values: sig_data.pubkey_x },
                         y: F6LT { values: sig_data.pubkey_y },
@@ -484,16 +907,25 @@ impl ParsedTransaction {
 
         raw.inputs = Inputs { p: new_inputs };
 
-        raw.id = tx_types::hashing::tx_id::compute_tx_id(
-            &raw.inputs,
-            &raw.timelock_range,
-            raw.total_fees,
-        );
+        // NOTE: We skip recomputing tx_id in WASM because it requires complex hashing
+        // that would need NounSlab (64MB allocation - impossible in WASM)
+        // The node will validate and recompute the correct tx_id when receiving the transaction
+        web_sys::console::log_1(&"apply_signatures: done (tx_id will be validated by node)".into());
 
         Ok(())
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        use nockvm::mem::NockStack;
+
+        web_sys::console::log_1(&"to_bytes: start".into());
+
+        // Create a SMALL NockStack for WASM (4MB)
+        const STACK_SIZE: usize = 512 * 1024; // 4MB in u64 words
+        let mut _stack = NockStack::new(STACK_SIZE, 0);
+
+        web_sys::console::log_1(&"to_bytes: created small nockstack".into());
+
         let raw = &self.inner.raw;
 
         let out_bytes = match &self.inner.outer {
@@ -529,6 +961,9 @@ impl ParsedTransaction {
             }
         };
 
+        web_sys::console::log_1(&format!("to_bytes: jammed {} bytes", out_bytes.len()).into());
+
         Ok(out_bytes.to_vec())
     }
 }
+

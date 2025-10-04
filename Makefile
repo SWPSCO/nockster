@@ -69,10 +69,12 @@ core:
 	@cargo build -p siger-core --release
 
 wasm:
-	@cd crates/siger-wasm && wasm-pack build --target bundler
+	@wasm-pack build crates/siger-wasm --target web --out-dir pkg
 
 clean:
 	@cargo clean
+	@rm -rf crates/siger-wasm/pkg
+	@echo "Cleaned build artifacts and WASM pkg"
 
 monitor:
 	@if [[ "$$OSTYPE" == "darwin"* ]]; then \

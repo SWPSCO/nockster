@@ -25,12 +25,11 @@ npm link siger-js
 
 ## Usage
 
-### Basic Connection
+### Connection
 
 ```typescript
 import { SigerDevice } from 'siger-js';
 
-// Create device instance
 const device = new SigerDevice({ debug: false });
 
 // Check if Web Serial is supported
@@ -38,16 +37,14 @@ if (!SigerDevice.isSupported()) {
   console.error('Web Serial API not supported in this browser');
 }
 
-// Connect to device (prompts user to select serial port)
 await device.connect({ baudRate: 115200 });
 
-// Check connection
 if (device.isConnected()) {
   console.log('Connected to Siger device');
 }
 ```
 
-### Get Device Info
+### get device ino
 
 ```typescript
 const response = await device.call({ type: 'GetInfo' });
@@ -58,7 +55,6 @@ if (response.type === 'Info') {
   console.log('Has seed:', response.has_seed);
 
   if (response.has_seed) {
-    // Format public key as base58
     import { formatCheetahPubkey } from 'siger-js';
     const pubkey = formatCheetahPubkey(response.cheetah_x, response.cheetah_y);
     console.log('Public key:', pubkey);
@@ -92,7 +88,7 @@ if (unlockResp.type === 'Ok') {
 await device.call({ type: 'Lock' });
 ```
 
-### Initialize Device
+### initialize device
 
 ```typescript
 import { SigerDevice } from 'siger-js';
@@ -113,7 +109,7 @@ if (response.type === 'Ok') {
 }
 ```
 
-### Error Handling
+### error handling
 
 ```typescript
 import { getErrorMessage, ERR_DEVICE_LOCKED, ERR_WRONG_PIN } from 'siger-js';
@@ -130,7 +126,7 @@ if (response.type === 'Err') {
 }
 ```
 
-### Low-Level Serialization
+### Serialization
 
 If you need to work with the protocol directly:
 
@@ -170,9 +166,9 @@ console.log('Received:', decoded);
 
 The Siger protocol uses:
 
-- **Postcard** for message serialization (compatible with Rust `postcard` crate)
-- **COBS** for framing (Consistent Overhead Byte Stuffing)
-- **Varint encoding** for integers (u16, u32, u64 are all varints)
+- `Postcard` for message serialization
+- `COBS` for packet framing
+- Varint encoding for integers (u16, u32, u64 are all varints)
 
 ### Request Types
 

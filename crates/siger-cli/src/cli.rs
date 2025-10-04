@@ -85,6 +85,9 @@ pub struct SignTxArgs {
     /// Where to write returned blob (stdout hex if omitted)
     #[arg(long)]
     pub out: Option<String>,
+    /// Path to signatures.json file (if provided, apply these signatures instead of signing with device)
+    #[arg(long)]
+    pub signatures: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -169,7 +172,7 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Seed(args) => commands::seed::run(args),
         Cmd::Plan(args) => commands::plan::run(&args.port, args.baud, &args.draft),
         Cmd::SignTx(args) => {
-            commands::sign_tx::run(&args.port, args.baud, &args.draft, args.out.as_deref())
+            commands::sign_tx::run(&args.port, args.baud, &args.draft, args.out.as_deref(), args.signatures.as_deref())
         }
         Cmd::Inspect(args) => {
             commands::inspect::run(&args.draft, args.dump_noun, args.max_depth, args.max_items)

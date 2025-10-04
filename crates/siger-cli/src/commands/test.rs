@@ -159,7 +159,7 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
     // 13) End-to-end sign known-good draft and verify transaction ID matches reference.
     let draft_path = "known-good.draft";
     let signed_path = "kg.tx";
-    sign_tx::run(port, baud, draft_path, Some(signed_path))?;
+    sign_tx::run(port, baud, draft_path, Some(signed_path), None)?;
 
     let signed_bytes = fs::read(signed_path)?;
     let tx_name = transaction_name_from_bytes(&signed_bytes)?;

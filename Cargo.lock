@@ -1339,6 +1339,15 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
+dependencies = [
+ "cfg-if",
+ "num-traits",
+ "static_assertions",
+]
+
+[[package]]
+name = "ibig"
+version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d1fcc7f316b2c079dde77564a1360639c1a956a23fa96122732e416cb10717bb"
 dependencies = [
@@ -1565,6 +1574,10 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.5.2"
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
 source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
 
 [[package]]
@@ -1596,6 +1609,21 @@ dependencies = [
 [[package]]
 name = "nockapp"
 version = "0.1.0"
+dependencies = [
+ "bincode",
+ "bitvec",
+ "bytes",
+ "either",
+ "intmap",
+ "nockvm 0.1.0",
+ "nockvm_macros 0.1.0",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "nockapp"
+version = "0.1.0"
 source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
 dependencies = [
  "bincode",
@@ -1603,10 +1631,21 @@ dependencies = [
  "bytes",
  "either",
  "intmap",
- "nockvm",
- "nockvm_macros",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm_macros 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "thiserror",
  "tracing",
+]
+
+[[package]]
+name = "nockchain-libp2p-io"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "ibig 0.3.6",
+ "nockapp 0.1.0",
+ "nockvm 0.1.0",
+ "noun-serde 0.1.0",
 ]
 
 [[package]]
@@ -1616,9 +1655,34 @@ source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f
 dependencies = [
  "bs58",
  "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
- "nockapp",
- "nockvm",
- "noun-serde",
+ "nockapp 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "noun-serde 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+]
+
+[[package]]
+name = "nockvm"
+version = "0.1.0"
+dependencies = [
+ "autotools",
+ "bitvec",
+ "cc",
+ "either",
+ "ibig 0.3.6",
+ "intmap",
+ "json",
+ "lazy_static",
+ "libc",
+ "memmap2",
+ "murmur3 0.5.2",
+ "nockvm_macros 0.1.0",
+ "num-derive",
+ "num-traits",
+ "slotmap",
+ "static_assertions",
+ "thiserror",
+ "tracing",
+ "tracing-core",
 ]
 
 [[package]]
@@ -1636,8 +1700,8 @@ dependencies = [
  "lazy_static",
  "libc",
  "memmap2",
- "murmur3",
- "nockvm_macros",
+ "murmur3 0.5.2 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm_macros 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "num-derive",
  "num-traits",
  "slotmap",
@@ -1645,6 +1709,14 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-core",
+]
+
+[[package]]
+name = "nockvm_macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1659,11 +1731,22 @@ dependencies = [
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
+dependencies = [
+ "nockapp 0.1.0",
+ "nockvm 0.1.0",
+ "noun-serde-derive 0.1.0",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "noun-serde"
+version = "0.1.0"
 source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
 dependencies = [
- "nockapp",
- "nockvm",
- "noun-serde-derive",
+ "nockapp 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "noun-serde-derive 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "thiserror",
  "tracing",
 ]
@@ -1671,9 +1754,19 @@ dependencies = [
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
+dependencies = [
+ "nockvm 0.1.0",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "noun-serde-derive"
+version = "0.1.0"
 source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
 dependencies = [
- "nockvm",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "proc-macro2",
  "quote",
  "syn",
@@ -2139,10 +2232,10 @@ dependencies = [
  "hmac",
  "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "k256",
- "nockapp",
- "nockvm",
- "nockvm_macros",
- "noun-serde",
+ "nockapp 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm_macros 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "noun-serde 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -2155,7 +2248,7 @@ dependencies = [
  "serialport",
  "sha2",
  "siger-core",
- "tx-types",
+ "tx-types 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "unicode-normalization",
 ]
 
@@ -2175,7 +2268,7 @@ dependencies = [
  "serde-big-array",
  "serde_bytes",
  "sha2",
- "tx-types",
+ "tx-types 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "zeroize",
 ]
 
@@ -2214,13 +2307,13 @@ dependencies = [
  "bytes",
  "console_error_panic_hook",
  "js-sys",
- "nockapp",
- "nockvm",
- "noun-serde",
+ "nockapp 0.1.0",
+ "nockvm 0.1.0",
+ "noun-serde 0.1.0",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
- "tx-types",
+ "tx-types 0.1.0",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -2418,6 +2511,30 @@ dependencies = [
 [[package]]
 name = "tx-types"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bip39",
+ "bs58",
+ "chrono",
+ "either",
+ "hmac",
+ "ibig 0.3.6",
+ "nockapp 0.1.0",
+ "nockchain-libp2p-io 0.1.0",
+ "nockvm 0.1.0",
+ "noun-serde 0.1.0",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "sha2",
+ "zeroize",
+ "zkvm-jetpack 0.1.0",
+]
+
+[[package]]
+name = "tx-types"
+version = "0.1.0"
 source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
 dependencies = [
  "anyhow",
@@ -2427,17 +2544,17 @@ dependencies = [
  "either",
  "hmac",
  "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
- "nockapp",
- "nockchain-libp2p-io",
- "nockvm",
- "noun-serde",
+ "nockapp 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockchain-libp2p-io 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "noun-serde 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "num-bigint",
  "num-traits",
  "serde",
  "serde_json",
  "sha2",
  "zeroize",
- "zkvm-jetpack",
+ "zkvm-jetpack 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
 ]
 
 [[package]]
@@ -2841,6 +2958,28 @@ checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
+dependencies = [
+ "arrayref",
+ "bitvec",
+ "bs58",
+ "bytes",
+ "either",
+ "hex-literal 1.0.0",
+ "ibig 0.3.6",
+ "nockapp 0.1.0",
+ "nockvm 0.1.0",
+ "nockvm_macros 0.1.0",
+ "noun-serde 0.1.0",
+ "num-traits",
+ "once_cell",
+ "smallvec",
+ "strum",
+ "tracing",
+]
+
+[[package]]
+name = "zkvm-jetpack"
+version = "0.1.0"
 source = "git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986#efb4918a53398daa18d2f3f12665bd1f8e2af986"
 dependencies = [
  "arrayref",
@@ -2850,10 +2989,10 @@ dependencies = [
  "either",
  "hex-literal 1.0.0",
  "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
- "nockapp",
- "nockvm",
- "nockvm_macros",
- "noun-serde",
+ "nockapp 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "nockvm_macros 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
+ "noun-serde 0.1.0 (git+https://github.com/swpsco/tx-types.git?rev=efb4918a53398daa18d2f3f12665bd1f8e2af986)",
  "num-traits",
  "once_cell",
  "smallvec",

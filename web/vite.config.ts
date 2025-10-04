@@ -12,5 +12,8 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
+    fs: {
+      allow: ['..']  // Allow serving files from parent directory (for WASM pkg)
+    }
   },
 })

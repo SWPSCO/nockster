@@ -39,7 +39,9 @@ Hardware wallet firmware, host tooling, and web front-end for signing Nockchain 
 - Other shortcuts:
   - `make fw` builds the ESP32-S3 image, `make monitor` tails the serial console.
   - `make wasm` rebuilds the web bundle (`crates/siger-wasm/pkg`) for the browser client.
+    - `cd web && npm run dev` to use webapp wallet
   - `make cli` and `make core` keep the host tooling and shared library honest between firmware iterations.
+    - CLI app available at `target/x86_64-unknown-linux-gnu/release/siger-cli`
 
 ## Notes
 - NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash without the PIN is useless.

@@ -4,7 +4,13 @@ use siger_core::{Request, Response};
 pub fn unlock(port: &str, baud: u32, pin: &str) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
 
-    match send_call(&mut *sp, 0x43, Request::Unlock { pin: pin.to_string() })? {
+    match send_call(
+        &mut *sp,
+        0x43,
+        Request::Unlock {
+            pin: pin.to_string(),
+        },
+    )? {
         Response::Ok => {
             println!("✔ device unlocked");
             Ok(())
@@ -13,8 +19,10 @@ pub fn unlock(port: &str, baud: u32, pin: &str) -> anyhow::Result<()> {
             match code {
                 siger_core::ERR_WRONG_PIN => {
                     // Get remaining attempts
-                    if let Response::OkLockStatus { locked: _, attempts_remaining } =
-                        send_call(&mut *sp, 0x44, Request::GetLockStatus)?
+                    if let Response::OkLockStatus {
+                        locked: _,
+                        attempts_remaining,
+                    } = send_call(&mut *sp, 0x44, Request::GetLockStatus)?
                     {
                         anyhow::bail!("wrong PIN ({} attempts remaining)", attempts_remaining);
                     } else {
@@ -53,8 +61,18 @@ pub fn status(port: &str, baud: u32) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
 
     match send_call(&mut *sp, 0x46, Request::GetLockStatus)? {
-        Response::OkLockStatus { locked, attempts_remaining } => {
-            println!("device: {}", if locked { "🔒 locked" } else { "🔓 unlocked" });
+        Response::OkLockStatus {
+            locked,
+            attempts_remaining,
+        } => {
+            println!(
+                "device: {}",
+                if locked {
+                    "🔒 locked"
+                } else {
+                    "🔓 unlocked"
+                }
+            );
             println!("attempts remaining: {}", attempts_remaining);
             Ok(())
         }

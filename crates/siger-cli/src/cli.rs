@@ -171,9 +171,13 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Health(args) => commands::health::run(&args.port, args.baud),
         Cmd::Seed(args) => commands::seed::run(args),
         Cmd::Plan(args) => commands::plan::run(&args.port, args.baud, &args.draft),
-        Cmd::SignTx(args) => {
-            commands::sign_tx::run(&args.port, args.baud, &args.draft, args.out.as_deref(), args.signatures.as_deref())
-        }
+        Cmd::SignTx(args) => commands::sign_tx::run(
+            &args.port,
+            args.baud,
+            &args.draft,
+            args.out.as_deref(),
+            args.signatures.as_deref(),
+        ),
         Cmd::Inspect(args) => {
             commands::inspect::run(&args.draft, args.dump_noun, args.max_depth, args.max_items)
         }

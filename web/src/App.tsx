@@ -214,6 +214,7 @@ function App() {
       };
 
       const convertedInputs = inputs.map(convertMapToObject);
+      setSigningInputs(convertedInputs);
 
       if (convertedInputs.length === 0) {
         throw new Error('No inputs found to sign with this device');
@@ -246,26 +247,26 @@ function App() {
         }
       }
 
-      // Download signatures as JSON
-      // Note: We can't jam the transaction in WASM because it requires 64MB memory allocation
-      // which exceeds WASM's capabilities. Use siger-cli to finalize.
-      const signaturesJson = JSON.stringify(signatures, null, 2);
-      const blob = new Blob([signaturesJson], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
+      setStatus('Applying signatures in browser...');
+      tx.apply_signatures(signatures);
+
+      const signedBytes = tx.to_bytes();
+      const updatedInfo = tx.info();
+      setTxInfo(updatedInfo);
+      setSignedTxBytes(signedBytes);
+
+      const filename = `${updatedInfo.tx_id.slice(0, 16)}.tx`;
+      const txBlob = new Blob([signedBytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(txBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'signatures.json';
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      setStatus(
-        `✓ Successfully signed ${signatures.length} input(s)!\n\n` +
-        `Downloaded: signatures.json\n\n` +
-        `To create the signed transaction, run:\n` +
-        `siger-cli apply-signatures --draft <your-file>.draft --signatures signatures.json --out <your-file>.tx`
-      );
+      setStatus(`✓ Signed ${signatures.length} input(s) and downloaded ${filename}`);
     } catch (error: any) {
       console.error('Signing error:', error);
       const errorMsg = error.message || error.toString() || 'Unknown error';
@@ -278,7 +279,7 @@ function App() {
   const downloadSignedTx = () => {
     if (!signedTxBytes || !txInfo) return;
 
-    const blob = new Blob([signedTxBytes as any], { type: 'application/octet-stream' });
+    const blob = new Blob([signedTxBytes], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

@@ -2,7 +2,7 @@
 
 pub use tx_types::crypto::cheetah::{
     cheetah_pub_from_sk, hmac_split_512, master_from_seed, schnorr_sign_tx, ser_a_pt,
-    ser_a_pt_rep104, xprv_derive_child, xpub_derive_child, Hash, T8, XKey,
+    ser_a_pt_rep104, xprv_derive_child, xpub_derive_child, Hash, XKey, T8,
 };
 
 #[cfg(feature = "std")]

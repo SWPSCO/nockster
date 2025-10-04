@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use serialport::SerialPort;
 use serde::{Deserialize, Serialize};
+use serialport::SerialPort;
 
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
@@ -166,11 +166,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
                 // ask device to sign the tx sig hash for this path
                 let msg_hash = sig_hash_for_input(&raw, &name);
                 let msg5: [u64; 5] = msg_hash.values;
-                println!(
-                    "    signing hash for {:?}: {}",
-                    name,
-                    fmt_u64x5(&msg5)
-                );
+                println!("    signing hash for {:?}: {}", name, fmt_u64x5(&msg5));
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,
@@ -217,7 +213,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     updated.id = tx_types::hashing::tx_id::compute_tx_id(
         &updated.inputs,
         &updated.timelock_range,
-        updated.total_fees
+        updated.total_fees,
     );
 
     let out_bytes = match outer {
@@ -286,10 +282,18 @@ impl SignatureDataJson {
     fn parse(&self) -> Result<SignatureData> {
         let parse_array = |v: &[String], expected: usize, name: &str| -> Result<Vec<u64>> {
             if v.len() != expected {
-                return Err(anyhow!("{} has {} elements, expected {}", name, v.len(), expected));
+                return Err(anyhow!(
+                    "{} has {} elements, expected {}",
+                    name,
+                    v.len(),
+                    expected
+                ));
             }
             v.iter()
-                .map(|s| s.parse::<u64>().context(format!("Failed to parse {}", name)))
+                .map(|s| {
+                    s.parse::<u64>()
+                        .context(format!("Failed to parse {}", name))
+                })
                 .collect()
         };
 
@@ -300,8 +304,12 @@ impl SignatureDataJson {
 
         Ok(SignatureData {
             input_name: self.input_name.clone(),
-            pubkey_x: pubkey_x.try_into().map_err(|_| anyhow!("pubkey_x wrong length"))?,
-            pubkey_y: pubkey_y.try_into().map_err(|_| anyhow!("pubkey_y wrong length"))?,
+            pubkey_x: pubkey_x
+                .try_into()
+                .map_err(|_| anyhow!("pubkey_x wrong length"))?,
+            pubkey_y: pubkey_y
+                .try_into()
+                .map_err(|_| anyhow!("pubkey_y wrong length"))?,
             chal: chal.try_into().map_err(|_| anyhow!("chal wrong length"))?,
             sig: sig.try_into().map_err(|_| anyhow!("sig wrong length"))?,
         })
@@ -321,7 +329,11 @@ fn nname_b58(name: &NName) -> String {
     let last = name.p.get(1).map(|h| h.to_b58()).unwrap_or_default();
     let no_q = |s: String| s.trim_matches('\"').to_string();
     let (first, last) = (no_q(first), no_q(last));
-    if last.is_empty() { first } else { format!("{first} {last}") }
+    if last.is_empty() {
+        first
+    } else {
+        format!("{first} {last}")
+    }
 }
 
 fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str) -> Result<()> {
@@ -330,10 +342,11 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
 
     println!("Loading signatures: {}", sig_path);
     let sig_json = fs::read_to_string(sig_path).context("Failed to read signatures file")?;
-    let sigs_json: Vec<SignatureDataJson> = serde_json::from_str(&sig_json)
-        .context("Failed to parse signatures JSON")?;
+    let sigs_json: Vec<SignatureDataJson> =
+        serde_json::from_str(&sig_json).context("Failed to parse signatures JSON")?;
 
-    let sigs: Vec<SignatureData> = sigs_json.iter()
+    let sigs: Vec<SignatureData> = sigs_json
+        .iter()
         .map(|s| s.parse())
         .collect::<Result<Vec<_>>>()?;
 
@@ -360,14 +373,22 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
                 println!("Applying signature to input: {}", this_name);
 
                 let pk = SchnorrPubkey {
-                    x: F6LT { values: sig_data.pubkey_x },
-                    y: F6LT { values: sig_data.pubkey_y },
+                    x: F6LT {
+                        values: sig_data.pubkey_x,
+                    },
+                    y: F6LT {
+                        values: sig_data.pubkey_y,
+                    },
                     inf: false,
                 };
 
                 let schnorr_sig = SchnorrSignature {
-                    chal: Chal { values: t8_from_device(sig_data.chal) },
-                    sig:  Sig  { values: t8_from_device(sig_data.sig)  },
+                    chal: Chal {
+                        values: t8_from_device(sig_data.chal),
+                    },
+                    sig: Sig {
+                        values: t8_from_device(sig_data.sig),
+                    },
                 };
 
                 sig_map.put(pk, schnorr_sig);
@@ -413,15 +434,20 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
 
     // Write output
     let out_path = default_out_path_for(draft_path, out_opt);
-    fs::write(&out_path, &out_bytes)
-        .context("Failed to write output file")?;
+    fs::write(&out_path, &out_bytes).context("Failed to write output file")?;
 
     println!("✓ Signed transaction written to: {}", out_path.display());
 
     Ok(())
 }
 
-pub fn run(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>, signatures: Option<&str>) -> Result<()> {
+pub fn run(
+    port: &str,
+    baud: u32,
+    draft_path: &str,
+    out_opt: Option<&str>,
+    signatures: Option<&str>,
+) -> Result<()> {
     if let Some(sig_path) = signatures {
         run_apply_signatures(draft_path, out_opt, sig_path)
     } else {

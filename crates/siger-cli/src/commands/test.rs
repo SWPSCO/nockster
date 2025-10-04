@@ -4,19 +4,18 @@ use crate::serial::{open, send_blob, send_call};
 use crate::util::{
     fmt_u64x5, fmt_u64x6, fmt_u64x8, load_draft_as_raw, transaction_name_from_bytes,
 };
-use std::fs;
-use std::path::Path;
 use siger_core::alloc_path as pathmod;
 use siger_core::FragKind;
 use siger_core::{Request, Response};
+use std::fs;
+use std::path::Path;
 
 const TEST_MNEMONIC: &str =
     "around squeeze nerve chronic trophy kiwi enroll identify depth bicycle radio \
     gate critic child claim outer detect plug market visual stuff finish crime abuse";
 const TEST_EXPECT_B58: &str =
     "32bePYRuJ3heGVEbznc6xSCaTymgz9bGFREaZ2dtJdnepjc6RX7cMSP8ATeT8bHTfxFmS7StDTmFHfvt9GP1PUq99pN7DcEFat9SDBpQwJbnwmhn5JHcGpLsRKp4fxfHSRy5";
-const EXPECTED_TX_ID: &str =
-    "8VKtRMuQRJNjCLgyGi2c6XtjDfinFKChfVENEZQiRPRfp5cVHPhVSSg";
+const EXPECTED_TX_ID: &str = "8VKtRMuQRJNjCLgyGi2c6XtjDfinFKChfVENEZQiRPRfp5cVHPhVSSg";
 
 pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> anyhow::Result<()> {
     use siger_core::cheetah;

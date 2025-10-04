@@ -211,8 +211,8 @@ pub fn t8_from_device(words: [u64; 8]) -> T8 {
         // words[3] is least-significant 64 bits if device sent MSW..LSW
         for i in 0..4 {
             let w = words[i];
-            v[i*2 + 0] = (w & 0xffff_ffff) as u64;        // low 32 bits
-            v[i*2 + 1] = (w >> 32) as u64;                // high 32 bits
+            v[i * 2 + 0] = (w & 0xffff_ffff) as u64; // low 32 bits
+            v[i * 2 + 1] = (w >> 32) as u64; // high 32 bits
         }
         T8 { values: v }
     } else {
@@ -345,8 +345,8 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
     }
 
     Err(anyhow!(
-      "decode failed: not RawTransaction / tx:transact / transaction:wt / [name inputs]"
-  ))
+        "decode failed: not RawTransaction / tx:transact / transaction:wt / [name inputs]"
+    ))
 }
 
 pub fn raw_from_inputs(inputs: Inputs) -> RawTransaction {
@@ -684,7 +684,9 @@ mod tests {
         // Create a test spend with some seeds
         let seed = Seed {
             output_source: Some(Source {
-                p: Hash { values: [1, 2, 3, 4, 5] },
+                p: Hash {
+                    values: [1, 2, 3, 4, 5],
+                },
                 is_coinbase: false,
             }),
             recipient: Lock {
@@ -693,7 +695,9 @@ mod tests {
             },
             timelock_intent: None,
             gift: Coins { value: 100 },
-            parent_hash: Hash { values: [10, 11, 12, 13, 14] },
+            parent_hash: Hash {
+                values: [10, 11, 12, 13, 14],
+            },
         };
 
         let mut seeds_set = ZSet::new();
@@ -714,7 +718,9 @@ mod tests {
                     timelock: Timelock { intent: None },
                 },
                 name: NName {
-                    p: vec![Hash { values: [1, 0, 0, 0, 0] }],
+                    p: vec![Hash {
+                        values: [1, 0, 0, 0, 0],
+                    }],
                 },
                 lock: Lock {
                     m: 1,
@@ -730,7 +736,9 @@ mod tests {
         };
 
         let name = NName {
-            p: vec![Hash { values: [1, 0, 0, 0, 0] }],
+            p: vec![Hash {
+                values: [1, 0, 0, 0, 0],
+            }],
         };
 
         let mut inputs_map = ZMap::new();

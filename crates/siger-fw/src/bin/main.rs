@@ -3,8 +3,8 @@
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 
 mod random;
-use siger_fw::nvs_store::{NvsError, NvsStore};
 use panic_halt as _;
+use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
 use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
@@ -525,7 +525,9 @@ fn handle_request_v1(req: &Request) -> Response {
                             code: ERR_PIN_LOCKED_OUT,
                         }
                     } else {
-                        Response::Err { code: ERR_WRONG_PIN }
+                        Response::Err {
+                            code: ERR_WRONG_PIN,
+                        }
                     }
                 }
                 Err(NvsError::LockedOut) => Response::Err {
@@ -548,7 +550,9 @@ fn handle_request_v1(req: &Request) -> Response {
             let mut nvs = NvsStore::new();
             match nvs.change_pin(old_pin, new_pin) {
                 Ok(_) => Response::Ok,
-                Err(NvsError::WrongPin) => Response::Err { code: ERR_WRONG_PIN },
+                Err(NvsError::WrongPin) => Response::Err {
+                    code: ERR_WRONG_PIN,
+                },
                 Err(NvsError::LockedOut) => Response::Err {
                     code: ERR_PIN_LOCKED_OUT,
                 },

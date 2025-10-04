@@ -35,8 +35,18 @@ pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
     // Get lock status
     let resp: Response = send_call(&mut *sp, 0x02, Request::GetLockStatus)?;
     match resp {
-        Response::OkLockStatus { locked, attempts_remaining } => {
-            println!("status: {}", if locked { "🔒 locked" } else { "🔓 unlocked" });
+        Response::OkLockStatus {
+            locked,
+            attempts_remaining,
+        } => {
+            println!(
+                "status: {}",
+                if locked {
+                    "🔒 locked"
+                } else {
+                    "🔓 unlocked"
+                }
+            );
             println!("attempts remaining: {}", attempts_remaining);
         }
         other => anyhow::bail!("unexpected status response: {other:?}"),

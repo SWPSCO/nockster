@@ -1,6 +1,4 @@
-use crate::util::{
-    pretty_noun, raw_from_inputs, transaction_name_from_noun, transaction_to_raw,
-};
+use crate::util::{pretty_noun, raw_from_inputs, transaction_name_from_noun, transaction_to_raw};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;

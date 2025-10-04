@@ -4,7 +4,7 @@ SHELL := /bin/zsh
 TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
 
-.PHONY: all build flash test clean fw cli core
+.PHONY: all build flash test clean fw cli core wasm
 
 all: build
 
@@ -68,6 +68,9 @@ cli:
 core:
 	@cargo build -p siger-core --release
 
+wasm:
+	@cd crates/siger-wasm && wasm-pack build --target bundler
+
 clean:
 	@cargo clean
 
@@ -116,6 +119,7 @@ help:
 	@echo "  make test       - Run CLI tests against device"
 	@echo "  make cli        - Build CLI tool"
 	@echo "  make core       - Build core library"
+	@echo "  make wasm       - Build WASM package for web"
 	@echo "  make clean      - Clean all build artifacts"
 	@echo "  make monitor    - Open serial monitor"
 	@echo "  make check      - Check all crates"

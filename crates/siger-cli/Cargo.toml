@@ -31,7 +31,7 @@ hmac = "0.12"
 
 noun-serde = { workspace = true }
 nockapp = { workspace = true, default-features = false }
-nockvm = { workspace = true }
+nockvm = { workspace = true, features = ["mmap"] }
 nockvm_macros = { workspace = true }
 
 

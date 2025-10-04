@@ -2219,6 +2219,7 @@ dependencies = [
  "noun-serde",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "tx-types",
  "wasm-bindgen",
  "web-sys",

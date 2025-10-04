@@ -18,7 +18,7 @@ use tx_types::RawTransaction;
 use crate::keys;
 use crate::serial::{open, round_trip_frame};
 use crate::util::{
-    debug_shape, fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
+    fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
     transaction_name_from_noun, transaction_to_raw,
 };
 
@@ -123,7 +123,6 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
         transaction_name_from_noun(&noun_before).unwrap_or_else(|_| raw.id.to_b58());
 
     println!("file:  {draft_path}");
-    println!("shape: {}", debug_shape(&noun_before));
     println!("txid:  {tx_name_before}");
 
     // collect desired signer derivation paths

@@ -64,7 +64,7 @@ either = "1.13"
 
 # nockchain
 nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
-nockvm = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockvm" }
+nockvm = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockvm", default-features = false }
 nockapp = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockapp", default-features = false }
 zkvm-jetpack = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "zkvm-jetpack" }
 nockvm_macros = { git = "https://github.com/swpsco/tx-types.git", rev = "efb4918a53398daa18d2f3f12665bd1f8e2af986", package = "nockvm_macros" }

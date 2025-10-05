@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SigerDevice, formatCheetahPubkey } from 'siger-js';
+import { mnemonicToSeed, validateMnemonicWords } from './bip39';
 import init, { ParsedTransaction } from 'siger-wasm';
 import './App.css';
 
@@ -11,6 +12,10 @@ function App() {
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
   const [pin, setPin] = useState('');
   const [info, setInfo] = useState<any>(null);
+  const [mnemonic, setMnemonic] = useState('');
+  const [seedPassphrase, setSeedPassphrase] = useState('');
+  const [seedPin, setSeedPin] = useState('');
+  const [seeding, setSeeding] = useState(false);
 
   // Transaction signing state
   const [wasmReady, setWasmReady] = useState(false);
@@ -34,6 +39,10 @@ function App() {
 
   // Check Web Serial support
   const isSupported = SigerDevice.isSupported();
+  const readyToSeed = connected && locked === false && info?.has_seed === false;
+  const hasSeedPin = seedPin.trim().length > 0;
+
+  const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
   const connect = async () => {
     try {
@@ -41,6 +50,7 @@ function App() {
       await device.connect();
       setConnected(true);
       setStatus('Connected!');
+      await sleep(1000);
       await refreshStatus();
     } catch (error: any) {
       setStatus(`Connection failed: ${error.message}`);
@@ -73,6 +83,48 @@ function App() {
     }
   };
 
+  const [pollMs] = useState(2000);
+  const refreshingRef = useRef(false);
+
+  useEffect(() => {
+    if (!connected) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (!refreshingRef.current) {
+        try {
+          refreshingRef.current = true;
+          await refreshStatus();
+        } finally {
+          refreshingRef.current = false;
+        }
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(tick, pollMs);
+      }
+    };
+
+    timer = window.setTimeout(tick, pollMs);
+    const onVis = () => {
+      if (document.hidden) {
+        if (timer) window.clearTimeout(timer);
+      } else {
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(tick, pollMs);
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [connected, pollMs, refreshStatus]);
+
   const unlock = async () => {
     if (!pin) {
       setStatus('Please enter PIN');
@@ -99,6 +151,34 @@ function App() {
       await refreshStatus();
     } catch (error: any) {
       setStatus(`Lock failed: ${error.message}`);
+    }
+  };
+
+  const seedDevice = async () => {
+    const trimmedMnemonic = mnemonic.trim();
+    const trimmedPin = seedPin.trim();
+    try {
+      if (!readyToSeed) {
+        throw new Error('Connect and unlock a blank device first');
+      }
+      validateMnemonicWords(trimmedMnemonic);
+      if (!trimmedPin) {
+        throw new Error('Enter a device PIN before seeding');
+      }
+      setSeeding(true);
+      setStatus('Seeding device...');
+      const seed = await mnemonicToSeed(trimmedMnemonic, seedPassphrase);
+      await device.initializePIN(trimmedPin, seed);
+      await refreshStatus();
+      setMnemonic('');
+      setSeedPassphrase('');
+      setSeedPin('');
+      setStatus('Seed loaded successfully');
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`Seeding failed: ${message}`);
+    } finally {
+      setSeeding(false);
     }
   };
 
@@ -321,6 +401,64 @@ function App() {
 
       {connected && (
         <>
+          {readyToSeed && (
+            <div className="section">
+              <h2>Load a seed</h2>
+              <p className="seed-subtitle">
+                Device ready to seed. Make sure your keys are <b>written down</b>, on something that isn't a computer.
+              </p>
+              <div className="seed-form">
+                <textarea
+                  className="input mnemonic-input"
+                  value={mnemonic}
+                  onChange={(e) => setMnemonic(e.target.value)}
+                  placeholder="twelve or twenty-four words, separated by spaces"
+                  spellCheck={false}
+                  disabled={seeding}
+                />
+                <input
+                  type="password"
+                  className="input pin-input"
+                  value={seedPin}
+                  onChange={(e) => setSeedPin(e.target.value)}
+                  placeholder="set a device PIN"
+                  disabled={seeding}
+                  autoComplete="off"
+                />
+                <input
+                  type="text"
+                  className="input passphrase-input"
+                  value={seedPassphrase}
+                  onChange={(e) => setSeedPassphrase(e.target.value)}
+                  placeholder="optional bip39 passphrase"
+                  disabled={seeding}
+                />
+                <div className="seed-actions">
+                  <button
+                    type="button"
+                    onClick={seedDevice}
+                    disabled={seeding || !mnemonic.trim() || !hasSeedPin}
+                    className="btn btn-success"
+                  >
+                    {seeding ? 'seeding...' : 'load seed'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMnemonic('');
+                      setSeedPassphrase('');
+                      setSeedPin('');
+                    }}
+                    disabled={seeding}
+                    className="btn btn-secondary"
+                  >
+                    clear
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="section">
             <h2>Control</h2>
             <div className="pin-controls">

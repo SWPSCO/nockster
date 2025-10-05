@@ -184,6 +184,20 @@ export class SigerDevice {
     return resp;
   }
 
+  async setSeed(seed64: Uint8Array) {
+    if (seed64.length !== 64) {
+      throw new Error('seed must be 64 bytes');
+    }
+    const resp = await this.call({ type: 'SetSeed', seed64 });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
   /**
    * Start reading from serial port
    */

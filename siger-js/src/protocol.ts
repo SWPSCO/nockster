@@ -11,6 +11,7 @@ export type Request =
   | { type: 'Hello' }
   | { type: 'GetInfo' }
   | { type: 'Ping' }
+  | { type: 'SetSeed'; seed64: Uint8Array }
   | { type: 'Unlock'; pin: string }
   | { type: 'Lock' }
   | { type: 'GetLockStatus' }
@@ -64,8 +65,12 @@ export function serializeRequest(req: Request): Uint8Array {
     case 'Ping':
       w.writeVarint(2);
       break;
+    case 'SetSeed':
+      w.writeVarint(4);
+      w.writeFixedBytes(req.seed64);
+      break;
     case 'GetLockStatus':
-      w.writeVarint(14); // Enum index after all other commands
+      w.writeVarint(17);
       break;
     case 'Unlock':
       w.writeVarint(11); // InitializePIN=10, Unlock=11
@@ -157,6 +162,10 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
       break;
     case 'Ping':
       w.writeVarint(2);
+      break;
+    case 'SetSeed':
+      w.writeVarint(4);
+      w.writeFixedBytes(req.seed64);
       break;
     case 'GetCheetahPub':
       w.writeVarint(9);

@@ -562,7 +562,13 @@ fn handle_request_v1(req: &Request) -> Response {
 
         Request::GetLockStatus => {
             let mut nvs = NvsStore::new();
-            let locked = unsafe { DEVICE_LOCKED };
+            let has_seed_in_ram = unsafe { SEED_STORE.set };
+            let persisted_seed = nvs.is_initialized();
+            let locked = if has_seed_in_ram || persisted_seed {
+                unsafe { DEVICE_LOCKED }
+            } else {
+                false
+            };
             let attempts_remaining = nvs.get_attempts_remaining();
             Response::OkLockStatus {
                 locked,
@@ -642,6 +648,7 @@ fn set_seed(seed64: &[u8; 64]) {
     unsafe {
         SEED_STORE.seed.copy_from_slice(seed64);
         SEED_STORE.set = true;
+        DEVICE_LOCKED = false;
     }
 }
 

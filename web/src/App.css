@@ -252,6 +252,44 @@ h2 {
   color: var(--color-text);
 }
 
+.seed-subtitle {
+  margin-bottom: 1rem;
+  color: var(--color-gray);
+  font-size: 0.95rem;
+}
+
+.seed-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+textarea.input.mnemonic-input {
+  min-height: 6.5rem;
+  line-height: 1.4;
+  letter-spacing: normal;
+  font-family: var(--font-base);
+  font-size: 0.95rem;
+}
+
+input.input.passphrase-input {
+  letter-spacing: normal;
+  font-family: var(--font-base);
+}
+
+.pin-input {
+  letter-spacing: normal;
+}
+
+.seed-actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.seed-actions .btn {
+  flex: 1;
+}
+
 /* Transaction signing */
 .tx-info {
   display: flex;

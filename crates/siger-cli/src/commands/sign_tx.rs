@@ -1,4 +1,4 @@
-// src/cmd/sign_tx.rs
+// here's where the magic happens!!
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -209,7 +209,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     let mut updated = raw.clone();
     updated.inputs = Inputs { p: new_inputs };
 
-    // Recalculate the transaction ID with the signed inputs (like reference implementation does)
+    // recalculate the transaction ID with the signed inputs
     updated.id = tx_types::hashing::tx_id::compute_tx_id(
         &updated.inputs,
         &updated.timelock_range,
@@ -268,7 +268,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     Ok(())
 }
 
-// Signature data structures for JSON deserialization
+// signature data structures for json deserialization
 #[derive(Deserialize, Serialize)]
 struct SignatureDataJson {
     input_name: String,
@@ -343,7 +343,7 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
     println!("Loading signatures: {}", sig_path);
     let sig_json = fs::read_to_string(sig_path).context("Failed to read signatures file")?;
     let sigs_json: Vec<SignatureDataJson> =
-        serde_json::from_str(&sig_json).context("Failed to parse signatures JSON")?;
+        serde_json::from_str(&sig_json).context("Failed to parse signatures json")?;
 
     let sigs: Vec<SignatureData> = sigs_json
         .iter()
@@ -351,11 +351,8 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
         .collect::<Result<Vec<_>>>()?;
 
     println!("Loaded {} signature(s)", sigs.len());
-
-    // Parse the transaction
     let (outer, mut raw, _noun) = detect_outer(&draft_bytes)?;
-
-    // Apply signatures to inputs
+    // apply signatures to inputs
     let mut new_inputs: ZMap<NName, Input> = ZMap::new();
 
     for (name, mut input) in raw.inputs.p.tap() {
@@ -370,7 +367,7 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
 
         for sig_data in &sigs {
             if sig_data.input_name == this_name {
-                println!("Applying signature to input: {}", this_name);
+                println!("Applying signature to input {}", this_name);
 
                 let pk = SchnorrPubkey {
                     x: F6LT {
@@ -404,8 +401,6 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
 
     raw.inputs = Inputs { p: new_inputs };
 
-    // Jam the result
-    println!("Jamming signed transaction...");
     let out_bytes = match outer {
         Outer::RawTx => {
             let mut out_slab: NounSlab = NounSlab::new();
@@ -432,11 +427,10 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
         }
     };
 
-    // Write output
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes).context("Failed to write output file")?;
 
-    println!("✓ Signed transaction written to: {}", out_path.display());
+    println!("Signed transaction written to {}", out_path.display());
 
     Ok(())
 }

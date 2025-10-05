@@ -1,14 +1,15 @@
 SHELL := /bin/zsh
 .SHELLFLAGS := -c
-
 TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
+WASM_TOOLCHAIN := nightly
+WASM_TARGET := wasm32-unknown-unknown
 
-.PHONY: all build flash test clean fw cli core wasm
+.PHONY: all build flash test clean fw cli core wasm js web
 
 all: build
 
-build: fw cli
+build: fw cli web
 
 fw:
 	@. $(HOME)/export-esp.sh && \
@@ -27,7 +28,7 @@ flash: fw
 	fi; \
 	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY)
 
-flash-wipe: fw
+wipe: fw
 	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
 		DEV=$$(ls /dev/cu.usbmodem* | head -1 | xargs basename); \
 		if [[ -z "$$DEV" ]]; then \
@@ -68,8 +69,28 @@ cli:
 core:
 	@cargo build -p siger-core --release
 
-wasm:
-	@wasm-pack build crates/siger-wasm --target web --out-dir pkg
+wasm-setup:
+	@rustup toolchain install $(WASM_TOOLCHAIN)
+	@rustup +$(WASM_TOOLCHAIN) target add $(WASM_TARGET)
+	@cargo +$(WASM_TOOLCHAIN) install wasm-pack --locked >/dev/null 2>&1 || true
+
+wasm: wasm-setup
+	@RUSTUP_TOOLCHAIN=$(WASM_TOOLCHAIN) \
+	wasm-pack build crates/siger-wasm --target web --out-dir pkg
+
+js:
+	@cd siger-js; \
+	npm install; \
+	npm run build
+
+web: wasm js
+	@cd web; \
+	npm install; \
+	npm run build
+
+serve: web
+	@cd web; \
+	npm run dev
 
 clean:
 	@cargo clean
@@ -115,16 +136,17 @@ disconnect:
 
 help:
 	@echo "Available targets:"
-	@echo "  make fw         - Build ESP32-S3 firmware"
-	@echo "  make flash      - Build and flash firmware (preserves NVS/keys)"
-	@echo "  make flash-wipe - Build and flash firmware (erases NVS/keys)"
+	@echo "  make flash      - Build and flash firmware (preserves keys)"
+	@echo "    make fw         - Build firmware"
+	@echo "    make wipe       - Build and flash firmware (erases keys)"
 	@echo "  make test       - Run CLI tests against device"
-	@echo "  make cli        - Build CLI tool"
-	@echo "  make core       - Build core library"
-	@echo "  make wasm       - Build WASM package for web"
-	@echo "  make clean      - Clean all build artifacts"
+	@echo "  make cli        - Build siger-cli tool"
+	@echo "  make serve      - Build and serve web UI and dependencies"
+	@echo "    make wasm       - Build WASM package for web"
+	@echo "    make js         - Build siger-js lib for web"
+	@echo "    make web        - Build demo UI for web"
+	@echo "  make core       - Build siger-core library"
 	@echo "  make monitor    - Open serial monitor"
-	@echo "  make check      - Check all crates"
-	@echo "  make clippy     - Run clippy lints"
-	@echo "  disconnect      - Disconnect USB device"
+	@echo "  make disconnect - Disconnect USB device"
 	@echo "  make fmt        - Format code"
+	@echo "  make clean      - Clean all build artifacts"

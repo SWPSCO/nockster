@@ -1,5 +1,6 @@
 [package]
 name = "siger-cli"
+authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
 version = "0.1.0"
 edition = "2021"
 

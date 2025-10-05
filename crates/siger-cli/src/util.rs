@@ -763,7 +763,7 @@ mod tests {
             "sig_hash_for_input should return the same hash as spend.sig_hash()"
         );
 
-        println!("✓ sig_hash_for_input correctly matches spend.sig_hash()");
+        println!("sig_hash_for_input correctly matches spend.sig_hash()");
         println!("  Hash: {:016x?}", hash_from_util.values);
     }
 }

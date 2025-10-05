@@ -267,7 +267,7 @@ fn hash_schnorr_pubkey(
 
     #[cfg(target_arch = "wasm32")]
     web_sys::console::log_1(&"hash_schnorr_pubkey: converting pubkey to noun".into());
-    
+
     let pk_noun = pk.to_noun(&mut slab);
 
     #[cfg(target_arch = "wasm32")]
@@ -673,9 +673,7 @@ impl ParsedTransaction {
             });
         }
 
-        Err(JsValue::from_str(
-            "Unrecognized transaction format",
-        ))
+        Err(JsValue::from_str("Unrecognized transaction format"))
     }
 
     /// get transaction info
@@ -756,7 +754,6 @@ impl ParsedTransaction {
             })
             .collect();
 
-
         let details = json!({
             "transaction_id": raw.id.to_b58(),
             "input_count": raw.inputs.p.wyt(),
@@ -769,9 +766,7 @@ impl ParsedTransaction {
         web_sys::console::log_1(&format!("WASM: transaction details: {}", details).into());
 
         match serde_wasm_bindgen::to_value(&details) {
-            Ok(result) => {
-                result
-            }
+            Ok(result) => result,
             Err(e) => {
                 web_sys::console::error_1(&format!("WASM: serialization failed: {}", e).into());
                 JsValue::from_str("{\"error\": \"serialization failed\"}")
@@ -780,7 +775,6 @@ impl ParsedTransaction {
     }
 
     pub fn get_signing_inputs(&self, device_pubkeys: JsValue) -> Result<Vec<JsValue>, JsValue> {
-
         let dev_keys: Vec<DevicePubkey> = serde_wasm_bindgen::from_value(device_pubkeys)
             .map_err(|e| JsValue::from_str(&format!("Invalid device_pubkeys: {}", e)))?;
 
@@ -818,7 +812,6 @@ impl ParsedTransaction {
             }
 
             if !matching_keys.is_empty() {
-
                 let (first, last) = nname_b58_pair(&name);
                 let combined = if last.is_empty() {
                     first.clone()
@@ -895,7 +888,6 @@ impl ParsedTransaction {
 
             for sig_data in &sigs {
                 if sig_data.input_name == this_name {
-
                     let pk = SchnorrPubkey {
                         x: F6LT {
                             values: sig_data.pubkey_x,

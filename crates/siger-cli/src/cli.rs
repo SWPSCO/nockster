@@ -3,7 +3,6 @@ use std::path::PathBuf;
 
 use crate::commands;
 
-/// Unified top-level CLI with flat subcommands
 #[derive(Parser)]
 #[command(name = "siger-cli")]
 #[command(author, version, about)]
@@ -14,10 +13,10 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
-    /// End-to-end self test (seed -> child key -> self-check signatures)
+    /// self test (seed -> child key -> self-check signatures)
     Test(TestArgs),
 
-    /// Get device info, capabilities, and lock status
+    /// get device info, capabilities, and lock status
     Info(PortArgs),
 
     /// Device health (firmware's well-known test)
@@ -26,19 +25,19 @@ pub enum Cmd {
     /// Seed management and optional key file export (replaces old Seed + Keys::Import)
     Seed(SeedArgs),
 
-    /// Parse a .draft (jam) and print inputs + signing plans
+    /// parse a .draft jam and print inputs + signing plans
     Plan(PlanArgs),
 
-    /// Send a .draft (jam) as FragKind::SignTx and receive a blob back
+    /// send a .draft jam as FragKind::SignTx and receive a blob back
     SignTx(SignTxArgs),
 
-    /// Inspect a .draft/.tx file: typed summary + optional raw noun dump
+    /// inspect a .draft/.tx file
     Inspect(InspectArgs),
 
-    /// Unlock the device with PIN
+    /// unlock the device with pin
     Unlock(UnlockArgs),
 
-    /// Lock the device (clear RAM seed)
+    /// lock the device (clear ram)
     Lock(PortArgs),
 }
 
@@ -85,68 +84,58 @@ pub struct SignTxArgs {
     /// Where to write returned blob (stdout hex if omitted)
     #[arg(long)]
     pub out: Option<String>,
-    /// Path to signatures.json file (if provided, apply these signatures instead of signing with device)
+    /// path to signatures json file (apply these signatures instead of signing with device)
     #[arg(long)]
     pub signatures: Option<String>,
 }
 
 #[derive(Args, Clone)]
 pub struct InspectArgs {
-    /// Path to jammed noun (wallet tx, raw-tx, tx, or [name inputs])
+    /// Path to jammed transaction noun
     #[arg(long, required = true)]
-    pub draft: String,
-    /// Also dump the raw noun tree
+    pub file: String,
+    /// also dump the raw noun tree
     #[arg(long, default_value_t = false)]
     pub dump_noun: bool,
-    /// Max recursive depth for noun dump
+    /// max recursive depth for noun dump
     #[arg(long, default_value_t = 6)]
     pub max_depth: usize,
-    /// Max children shown per cell/list at each level
+    /// max children shown per cell/list at each level
     #[arg(long, default_value_t = 16)]
     pub max_items: usize,
 }
 
-/// Unified seed/keys args (mutually exclusive inputs)
 #[derive(Args, Clone)]
 pub struct SeedArgs {
-    /// Required for seeding the device (ignored for pure file export from sk)
+    /// required for seeding the device (ignored for pure file export from sk)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
 
-    // One of these input sources:
-    /// 64-byte seed in hex (seeds device; can also write files if --out is set)
+    // one of these input sources:
+    /// 64-byte seed in hex
     #[arg(long, conflicts_with_all=&["mnemonic","sk_b58","sk_hex"])]
     pub seed_hex: Option<String>,
 
-    /// BIP-39 mnemonic (seeds device)
+    /// bip39 mnemonic
     #[arg(long, conflicts_with_all=&["seed_hex","sk_b58","sk_hex"])]
-    pub mnemonic: Option<String>,
+    pub seedphrase: Option<String>,
 
-    /// Optional BIP-39 passphrase (with --mnemonic)
+    /// optional passphrase (with --mnemonic)
     #[arg(long, default_value = "")]
     pub passphrase: String,
 
-    /// Derivation path to export key files for (with --seed-hex or --mnemonic)
-    /// Also used with --sk-b58/--sk-hex to compute pubkey and blob
+    /// derivation path to export key files for
     #[arg(long, default_value = "m")]
     pub path: String,
 
-    /// Base58-encoded 32-byte private key (file export only; does NOT seed device)
-    #[arg(long, conflicts_with_all=&["seed_hex","mnemonic","sk_hex"])]
-    pub sk_b58: Option<String>,
-
-    /// Hex-encoded 32-byte private key (file export only; does NOT seed device)
-    #[arg(long, conflicts_with_all=&["seed_hex","mnemonic","sk_b58"])]
-    pub sk_hex: Option<String>,
-
-    /// If provided, write <out>.json and <out>.bin (device blob + metadata)
+    /// if provided, write <out>.json and <out>.bin (device blob + metadata)
     #[arg(long)]
     pub out: Option<PathBuf>,
 
-    /// PIN for hardware wallet (if provided, initializes device with encrypted storage)
-    #[arg(long)]
+    /// pin for hardware wallet
+    #[arg(long, required = true)]
     pub pin: Option<String>,
 }
 
@@ -156,7 +145,7 @@ pub struct UnlockArgs {
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
-    /// PIN to unlock the device
+    /// pin to unlock the device
     #[arg(long, required = true)]
     pub pin: String,
 }
@@ -179,7 +168,7 @@ pub fn run() -> anyhow::Result<()> {
             args.signatures.as_deref(),
         ),
         Cmd::Inspect(args) => {
-            commands::inspect::run(&args.draft, args.dump_noun, args.max_depth, args.max_items)
+            commands::inspect::run(&args.file, args.dump_noun, args.max_depth, args.max_items)
         }
         Cmd::Unlock(args) => commands::unlock::unlock(&args.port, args.baud, &args.pin),
         Cmd::Lock(args) => commands::unlock::lock(&args.port, args.baud),

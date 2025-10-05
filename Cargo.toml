@@ -7,6 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
+authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
 edition = "2021"
 version = "0.1.0"
 

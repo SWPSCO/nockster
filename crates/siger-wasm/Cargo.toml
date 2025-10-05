@@ -1,5 +1,6 @@
 [package]
 name = "siger-wasm"
+authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
 edition.workspace = true
 version.workspace = true
 

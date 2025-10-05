@@ -19,14 +19,11 @@ pub fn run(
     max_items: usize,
 ) -> anyhow::Result<()> {
     let data = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
-
-    // Keep allocator alive while noun is in scope
     let mut slab: NounSlab = NounSlab::new();
     let noun: Noun = slab
         .cue_into(Bytes::from(data.clone()))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
-    // Basic shape
     println!("file: {draft_path}");
 
     if let Ok(name) = transaction_name_from_noun(&noun) {
@@ -43,7 +40,6 @@ pub fn run(
             // tx:transact — head is raw
             if let Ok(cell) = noun.as_cell() {
                 if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
-                    println!("detected: tx:transact (head is raw-tx)");
                     r
                 } else {
                     // wallet transaction:wt
@@ -79,13 +75,6 @@ pub fn run(
 
     // Typed summary
     print_raw_details(&raw);
-
-    // Optional raw noun dump
-    if dump_noun {
-        println!("\n-- raw noun dump --");
-        let s = pretty_noun(&noun, max_depth, max_items);
-        println!("{s}");
-    }
 
     Ok(())
 }

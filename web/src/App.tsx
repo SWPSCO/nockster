@@ -256,7 +256,9 @@ function App() {
       setSignedTxBytes(signedBytes);
 
       const filename = `${updatedInfo.tx_id.slice(0, 16)}.tx`;
-      const txBlob = new Blob([signedBytes], { type: 'application/octet-stream' });
+      const ab = new ArrayBuffer(signedBytes.byteLength);
+      new Uint8Array(ab).set(signedBytes);
+      const txBlob = new Blob([ab], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(txBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -279,7 +281,9 @@ function App() {
   const downloadSignedTx = () => {
     if (!signedTxBytes || !txInfo) return;
 
-    const blob = new Blob([signedTxBytes], { type: 'application/octet-stream' });
+    const ab = new ArrayBuffer(signedTxBytes.byteLength);
+    new Uint8Array(ab).set(signedTxBytes);
+    const blob = new Blob([ab], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

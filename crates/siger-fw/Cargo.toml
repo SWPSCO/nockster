@@ -1,6 +1,7 @@
 [package]
-edition      = "2021"
 name         = "siger-fw"
+authors      = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
+edition      = "2021"
 rust-version = "1.86"
 version      = "0.1.0"
 

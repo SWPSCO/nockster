@@ -1,8 +1,3 @@
-//! Key import/derivation for CLI
-//! - BIP39 mnemonic (+ passphrase) → 64B seed → SLIP-10 master → path derivation
-//! - Base58 or hex raw private key (32B big-endian scalar)
-//! - Exports a compact device blob for the ESP32 key-store.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,18 +23,18 @@ pub enum KeyOrigin {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LockKey(pub tx_types::transaction_types::Lock);
 
-/// Persisted data structure
+/// persisted data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportedKey {
     /// 32-byte BE secret scalar
     pub sk_be32_hex: String,
     /// 32-byte chain code (zeros if unknown)
     pub cc_hex: String,
-    /// Public key in base58 (cheetah a-pt encoding parity)
+    /// public key in base58
     pub pk_b58: String,
-    /// Derivation path if applicable (e.g., m/44'/1337'/0'/0/0)
+    /// derivation path if applicable (e.g., m/44'/1337'/0'/0/0)
     pub path: Option<String>,
-    /// Origin info (mnemonic path, base58 raw, etc.)
+    /// origin info (mnemonic path, base58 raw, etc.)
     pub origin: KeyOrigin,
 }
 
@@ -64,7 +59,7 @@ pub fn device_blob_v1(
     out
 }
 
-/// BIP-39 mnemonic + passphrase → 64B seed
+/// mnemonic & optional passphrase to 64B seed
 pub fn bip39_seed_from_mnemonic(mnemonic: &str, passphrase: &str) -> [u8; 64] {
     let pw = mnemonic.nfkd().collect::<String>();
     let salt = format!("mnemonic{}", passphrase.nfkd().collect::<String>());
@@ -73,7 +68,7 @@ pub fn bip39_seed_from_mnemonic(mnemonic: &str, passphrase: &str) -> [u8; 64] {
     out
 }
 
-/// Create a master XKey (xprv) from a 64-byte seed.
+/// create a master XKey (xprv) from a 64-byte seed
 pub fn xkey_from_seed(seed64: &[u8; 64]) -> XKey {
     let (sk, cc) = master_from_seed(seed64);
     let pk_xy = cheetah_pub_from_sk(sk);
@@ -87,7 +82,7 @@ pub fn xkey_from_seed(seed64: &[u8; 64]) -> XKey {
     }
 }
 
-/// Parse derivation path like "m/44'/1337'/0'/0/0".
+/// parse derivation path like "m/44'/1337'/0'/0/0"
 pub fn parse_path(path: &str) -> Result<Vec<u32>, String> {
     let p = path.trim();
     if p.is_empty() {
@@ -121,7 +116,7 @@ fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
     Ok(xk)
 }
 
-/// Import from base58 32-byte scalar (raw), no chain-code/path.
+/// import from base58 32-byte scalar (raw), no chain-code/path.
 pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
     let sk = sk_from_b58(b58)?;
     let cc = [0u8; 32];
@@ -139,7 +134,7 @@ pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_
     Ok((key, blob))
 }
 
-/// Import from raw hex private key (32B).
+/// import from raw hex private key (32B)
 pub fn import_from_hex_priv(
     hex_sk: &str,
 ) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
@@ -164,7 +159,7 @@ pub fn import_from_hex_priv(
     Ok((key, blob))
 }
 
-/// Import from 64-byte seed (already PBKDF’d) and path (full private derivation).
+/// import from 64-byte seed (PBKDF’d) and path (full private derivation)
 pub fn import_from_seed(
     seed64: &[u8; 64],
     path: &str,
@@ -191,7 +186,7 @@ pub fn import_from_seed(
     Ok((key, blob))
 }
 
-/// Persist json + bin to disk.
+/// persist json + bin to nvs
 pub fn write_key_files(
     out_base: &Path,
     key: &ImportedKey,
@@ -205,7 +200,7 @@ pub fn write_key_files(
     Ok((json_path, bin_path))
 }
 
-/// base58 private key → 32-byte big-endian scalar
+/// base58 private key to 32-byte big-endian scalar
 fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
     let v = bs58::decode(s)
         .into_vec()
@@ -217,12 +212,11 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
         ));
     }
     let mut sk = [0u8; 32];
-    // take last 32 as big-endian scalar
     sk.copy_from_slice(&v[v.len() - 32..]);
     Ok(sk)
 }
 
-/// Serialize pubkey (a-pt) to base58 (97-byte form).
+/// pubkey (affine point) to base58
 pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
     let ser = ser_a_pt(pk); // 0x01 || Y || X
     bs58::encode(ser).into_string()

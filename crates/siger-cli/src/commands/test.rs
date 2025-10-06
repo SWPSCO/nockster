@@ -7,6 +7,7 @@ use crate::util::{
 use siger_core::alloc_path as pathmod;
 use siger_core::FragKind;
 use siger_core::{Request, Response};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -21,6 +22,7 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
     use siger_core::cheetah;
 
     let mut sp = open(port, baud)?;
+    let _ = send_call(&mut *sp, 0x4001, Request::SelectSeed { slot: 0 })?;
 
     // 0) wipe first
     let _ = send_call(&mut *sp, 0x0001, Request::Wipe)?;
@@ -36,10 +38,13 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
         fw_minor,
         features,
         has_seed,
-        ..
+        cheetah_pubs,
     } = send_call(&mut *sp, 2, Request::GetInfo)?
     {
-        println!("info(before): proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}");
+        println!(
+            "info(before): proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}, keys={}",
+            cheetah_pubs.len()
+        );
     }
 
     // 3) derive 64B seed from the hardcoded mnemonic (empty passphrase)
@@ -57,10 +62,21 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
         fw_minor,
         features,
         has_seed,
-        ..
+        cheetah_pubs,
     } = send_call(&mut *sp, 3, Request::GetInfo)?
     {
-        println!("info(after):  proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}");
+        println!(
+            "info(after):  proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}, keys={}",
+            cheetah_pubs.len()
+        );
+        if let Some(first) = cheetah_pubs.get(0) {
+            println!(
+                "info(after):  key[00] path={} X={} Y={}",
+                format_path(first.path.as_slice()),
+                fmt_u64x6(&first.x),
+                fmt_u64x6(&first.y)
+            );
+        }
     }
 
     // 6) fingerprint (for visibility)
@@ -73,15 +89,21 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
     let path = pathmod::Path::from_iter(core::iter::empty());
 
     // 8) device cheetah pub
-    let (dev_x, dev_y) =
-        match send_call(&mut *sp, 5, Request::GetCheetahPub { path: path.clone() })? {
-            Response::OkCheetahPub { x, y } => {
-                println!("cheetah pub.X = {}", fmt_u64x6(&x));
-                println!("cheetah pub.Y = {}", fmt_u64x6(&y));
-                (x, y)
-            }
-            other => anyhow::bail!("unexpected: {other:?}"),
-        };
+    let (dev_x, dev_y) = match send_call(
+        &mut *sp,
+        5,
+        Request::GetCheetahPub {
+            slot: 0,
+            path: path.clone(),
+        },
+    )? {
+        Response::OkCheetahPub { x, y } => {
+            println!("cheetah pub.X = {}", fmt_u64x6(&x));
+            println!("cheetah pub.Y = {}", fmt_u64x6(&y));
+            (x, y)
+        }
+        other => anyhow::bail!("unexpected: {other:?}"),
+    };
 
     // 8b) encode to base58 (0x01||Y||X a-pt -> base58) and compare to hardcoded expected
     let dev_pk_b58 = pubkey_to_b58(&(dev_x, dev_y));
@@ -113,6 +135,7 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
         &mut *sp,
         6,
         Request::SignSpendHash {
+            slot: 0,
             path: path.clone(),
             msg5: dummy.values,
         },
@@ -131,6 +154,7 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
         &mut *sp,
         7,
         Request::SignSpendHash {
+            slot: 0,
             path: path.clone(),
             msg5: dummy.values,
         },
@@ -181,4 +205,18 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
     println!("sign-draft: signatures attached = {signed_inputs}");
 
     Ok(())
+}
+
+fn format_path(path: &[u32]) -> String {
+    let mut out = String::from("m");
+    for &component in path {
+        let hardened = (component & 0x8000_0000) != 0;
+        let index = component & 0x7FFF_FFFF;
+        out.push('/');
+        let _ = write!(out, "{}", index);
+        if hardened {
+            out.push('\'');
+        }
+    }
+    out
 }

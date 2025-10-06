@@ -27,6 +27,20 @@ use tx_types::Hash;
 use tx_types::Hashable;
 use tx_types::RawTransaction;
 
+fn signer_slot() -> u8 {
+    std::env::var("SIGER_SLOT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .and_then(|v| {
+            if v <= u8::MAX as u16 {
+                Some(v as u8)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
 fn is_printable_ascii(bytes: &[u8]) -> bool {
     bytes
         .iter()
@@ -486,19 +500,29 @@ pub fn sign_draft_with_paths(
     let mut raw: RawTransaction = RawTransaction::from_noun(&noun)
         .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
 
+    let slot = signer_slot();
+    let select_msg = Msg {
+        v: PROTO_V1,
+        id: 0x4001,
+        msg: Frame::One(Request::SelectSeed { slot }),
+    };
+    match round_trip_frame(sp, &select_msg)?.msg {
+        Response::Ok => {}
+        Response::Err { code } => return Err(anyhow!("SelectSeed failed: code {}", code)),
+        other => return Err(anyhow!("unexpected response to SelectSeed: {other:?}")),
+    }
+
     // cache pk per path
     let mut path_pks: Vec<(Vec<u32>, SchnorrPubkey)> = Vec::new();
     for path in signer_paths.iter() {
-        let _req = Msg {
-            v: PROTO_V1,
-            id: 0x4100,
-            msg: Frame::One(Request::GetCheetahPub { path: path.clone() }),
-        };
         let resp: Msg<Response> = {
             let m = Msg {
                 v: PROTO_V1,
                 id: 0x4100,
-                msg: Frame::One(Request::GetCheetahPub { path: path.clone() }),
+                msg: Frame::One(Request::GetCheetahPub {
+                    slot,
+                    path: path.clone(),
+                }),
             };
             round_trip_frame(sp, &m)?
         };
@@ -537,6 +561,7 @@ pub fn sign_draft_with_paths(
                 v: PROTO_V1,
                 id: 0x4200,
                 msg: Frame::One(Request::SignSpendHash {
+                    slot,
                     path: path.clone(),
                     msg5,
                 }),

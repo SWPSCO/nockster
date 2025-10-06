@@ -10,12 +10,9 @@ use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, main};
 use heapless::Vec as HVec;
-use heapless::Vec;
-use serde::{Deserialize, Serialize};
-use serde_big_array::BigArray;
 
 use siger_core::alloc_path as pathmod;
-use siger_core::*;
+use siger_core::{CheetahPub, *};
 
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use k256::{
@@ -36,18 +33,22 @@ const FEAT_XPUB: u32 = 1 << 2;
 
 const MAX_FRAG: usize = 4096; // arbitrary
 const TX_CHUNK: usize = 200;
+const PLAIN_BUF_LEN: usize = 4096;
+const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
 
 struct SeedStore {
-    set: bool,
-    seed: [u8; 64],
+    slots: HVec<[u8; 64], MAX_SEED_SLOTS>,
+    active: usize,
 }
 static mut SEED_STORE: SeedStore = SeedStore {
-    set: false,
-    seed: [0u8; 64],
+    slots: HVec::new(),
+    active: 0,
 };
 
 // Lock state (device is locked by default)
 static mut DEVICE_LOCKED: bool = true;
+static mut MASTER_KEY: [u8; 32] = [0; 32];
+static mut MASTER_KEY_SET: bool = false;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -141,8 +142,8 @@ fn main() -> ! {
 
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
-    let mut plain = [0u8; 512];
-    let mut enc = [0u8; 640];
+    let mut plain = [0u8; PLAIN_BUF_LEN];
+    let mut enc = [0u8; ENC_BUF_LEN];
 
     'run: loop {
         // 1) Proactive outbound frag, if any
@@ -333,14 +334,14 @@ fn handle_request_v1(req: &Request) -> Response {
         }),
 
         Request::GetInfo => {
-            let (has_seed, cheetah_x, cheetah_y) = unsafe {
-                if SEED_STORE.set {
-                    let (sk, _cc) = cheetah::master_from_seed(&SEED_STORE.seed);
-                    let pk = cheetah::cheetah_pub_from_sk(sk);
-                    (true, pk.0, pk.1)
-                } else {
-                    (false, [0u64; 6], [0u64; 6])
-                }
+            let mut nvs = NvsStore::new();
+            let stored_pubs = nvs.list_seed_pubs().unwrap_or_default();
+            let has_seed_persisted = !stored_pubs.is_empty() || nvs.is_initialized();
+            let has_seed_ram = unsafe { !SEED_STORE.slots.is_empty() };
+            let cheetah_pubs = if stored_pubs.is_empty() && has_seed_ram {
+                collect_info_pubs_from_ram()
+            } else {
+                stored_pubs
             };
 
             Response::Info {
@@ -348,9 +349,8 @@ fn handle_request_v1(req: &Request) -> Response {
                 fw_major: FW_MAJOR,
                 fw_minor: FW_MINOR,
                 features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
-                has_seed,
-                cheetah_x,
-                cheetah_y,
+                has_seed: has_seed_persisted || has_seed_ram,
+                cheetah_pubs,
             }
         }
 
@@ -365,12 +365,12 @@ fn handle_request_v1(req: &Request) -> Response {
             Response::Ok
         }
 
-        Request::GetFingerprint => match master_fingerprint() {
+        Request::GetFingerprint => match master_fingerprint_for_active() {
             Ok(fp4) => Response::OkFingerprint { fp4 },
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
 
-        Request::GetPubkey { path, compressed } => match derive_signing_key(path) {
+        Request::GetPubkey { path, compressed } => match derive_signing_key_active(path) {
             Ok(sk) => {
                 let vk = sk.verifying_key();
                 if *compressed {
@@ -392,7 +392,7 @@ fn handle_request_v1(req: &Request) -> Response {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-            match derive_signing_key(path) {
+            match derive_signing_key_active(path) {
                 Ok(sk) => {
                     let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
                     if let Some(norm) = sig.normalize_s() {
@@ -411,21 +411,23 @@ fn handle_request_v1(req: &Request) -> Response {
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
 
-        Request::GetCheetahPub { path } => match derive_child_sk_from_seed_store(path) {
-            Ok(sk) => {
-                let pk = cheetah::cheetah_pub_from_sk(sk);
-                Response::OkCheetahPub { x: pk.0, y: pk.1 }
+        Request::GetCheetahPub { slot, path } => {
+            match derive_child_sk_for_slot(path, *slot as usize) {
+                Ok(sk) => {
+                    let pk = cheetah::cheetah_pub_from_sk(sk);
+                    Response::OkCheetahPub { x: pk.0, y: pk.1 }
+                }
+                Err(_) => Response::Err { code: ERR_NO_SEED },
             }
-            Err(_) => Response::Err { code: ERR_NO_SEED },
-        },
+        }
 
-        Request::SignSpendHash { path, msg5 } => {
+        Request::SignSpendHash { slot, path, msg5 } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-            match derive_child_sk_from_seed_store(path) {
+            match derive_child_sk_for_slot(path, *slot as usize) {
                 Ok(sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
                     let hash = cheetah::Hash { values: *msg5 };
@@ -439,13 +441,18 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
 
-        Request::SignSpendHashFor { path, msg5, pubkey } => {
+        Request::SignSpendHashFor {
+            slot,
+            path,
+            msg5,
+            pubkey,
+        } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-            match derive_child_sk_from_seed_store(path) {
+            match derive_child_sk_for_slot(path, *slot as usize) {
                 Ok(sk) => {
                     let pk_dev = cheetah::cheetah_pub_from_sk(sk);
                     if &pk_dev != pubkey {
@@ -466,9 +473,13 @@ fn handle_request_v1(req: &Request) -> Response {
         }
 
         Request::Health => {
+            let slot = match active_slot_index() {
+                Ok(idx) => idx,
+                Err(_) => return Response::Err { code: ERR_NO_SEED },
+            };
             let path =
                 pathmod::Path::from_iter([0x8000_002c, 0x8000_0000, 0x8000_0000, 0, 0].into_iter());
-            match derive_child_sk_from_seed_store(&path) {
+            match derive_child_sk_for_slot(&path, slot) {
                 Ok(sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
                     let hash = cheetah::Hash {
@@ -486,8 +497,13 @@ fn handle_request_v1(req: &Request) -> Response {
 
         Request::InitializePIN { pin, seed64 } => {
             let mut nvs = NvsStore::new();
-            match nvs.initialize_pin(pin, seed64) {
+            let pub_xy = root_pub_from_seed(seed64);
+            match nvs.initialize_pin(pin.as_str(), seed64, pub_xy) {
                 Ok(_) => {
+                    match nvs.derive_master_key_for_pin(pin.as_str()) {
+                        Ok(master_key) => store_master_key(&master_key),
+                        Err(_) => return Response::Err { code: ERR_NO_SEED },
+                    }
                     // Also set in RAM for immediate use
                     set_seed(seed64);
                     unsafe {
@@ -502,6 +518,74 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
 
+        Request::AddSeed { seed64 } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
+            }
+
+            let master_key = match master_key_copy() {
+                Some(key) => key,
+                None => {
+                    return Response::Err {
+                        code: ERR_DEVICE_LOCKED,
+                    }
+                }
+            };
+
+            let mut nvs = NvsStore::new();
+            let pub_xy = root_pub_from_seed(seed64);
+            match nvs.add_seed_with_key(&master_key, seed64, pub_xy) {
+                Ok(_) => {
+                    append_seed_slot(seed64);
+                    Response::Ok
+                }
+                Err(NvsError::WrongPin) => Response::Err {
+                    code: ERR_WRONG_PIN,
+                },
+                Err(NvsError::LockedOut) => Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                },
+                Err(NvsError::Full) => Response::Err { code: ERR_OVERFLOW },
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
+        Request::DeleteSeed { slot } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
+            }
+
+            let master_key = match master_key_copy() {
+                Some(key) => key,
+                None => {
+                    return Response::Err {
+                        code: ERR_DEVICE_LOCKED,
+                    }
+                }
+            };
+
+            let mut nvs = NvsStore::new();
+            match nvs.delete_seed_with_key(&master_key, *slot as usize) {
+                Ok(_) => {
+                    remove_seed_slot(*slot as usize);
+                    Response::Ok
+                }
+                Err(NvsError::InvalidSlot) => Response::Err { code: ERR_NO_SEED },
+                Err(NvsError::WrongPin) => Response::Err {
+                    code: ERR_WRONG_PIN,
+                },
+                Err(NvsError::LockedOut) => Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                },
+                Err(NvsError::NotInitialized) => Response::Err { code: ERR_NO_SEED },
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
         Request::Unlock { pin } => {
             unsafe {
                 if !DEVICE_LOCKED {
@@ -510,9 +594,10 @@ fn handle_request_v1(req: &Request) -> Response {
             }
 
             let mut nvs = NvsStore::new();
-            match nvs.unlock(pin) {
-                Ok(seed) => {
-                    set_seed(&seed);
+            match nvs.unlock(pin.as_str()) {
+                Ok((seeds, master_key)) => {
+                    update_seed_store_from_slice(seeds.as_slice());
+                    store_master_key(&master_key);
                     unsafe {
                         DEVICE_LOCKED = false;
                     }
@@ -540,16 +625,32 @@ fn handle_request_v1(req: &Request) -> Response {
 
         Request::Lock => {
             wipe_seed();
+            clear_master_key();
             unsafe {
                 DEVICE_LOCKED = true;
             }
             Response::Ok
         }
 
-        Request::ChangePIN { old_pin, new_pin } => {
+        Request::ResetPIN {
+            current_pin,
+            new_pin,
+        } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
+            }
+
             let mut nvs = NvsStore::new();
-            match nvs.change_pin(old_pin, new_pin) {
-                Ok(_) => Response::Ok,
+            match nvs.change_pin(current_pin.as_str(), new_pin.as_str()) {
+                Ok(_) => match nvs.derive_master_key_for_pin(new_pin.as_str()) {
+                    Ok(master_key) => {
+                        store_master_key(&master_key);
+                        Response::Ok
+                    }
+                    Err(_) => Response::Err { code: ERR_NO_SEED },
+                },
                 Err(NvsError::WrongPin) => Response::Err {
                     code: ERR_WRONG_PIN,
                 },
@@ -560,9 +661,30 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
 
+        Request::SelectSeed { slot } => match set_active_slot(*slot as usize) {
+            Ok(()) => Response::Ok,
+            Err(_) => Response::Err { code: ERR_NO_SEED },
+        },
+
+        Request::Reset => {
+            wipe_seed();
+            clear_master_key();
+            let mut nvs = NvsStore::new();
+            match nvs.factory_reset() {
+                Ok(()) => Response::Ok,
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
         Request::GetLockStatus => {
             let mut nvs = NvsStore::new();
-            let locked = unsafe { DEVICE_LOCKED };
+            let has_seed_in_ram = unsafe { !SEED_STORE.slots.is_empty() };
+            let persisted_seed = nvs.is_initialized();
+            let locked = if has_seed_in_ram || persisted_seed {
+                unsafe { DEVICE_LOCKED }
+            } else {
+                false
+            };
             let attempts_remaining = nvs.get_attempts_remaining();
             Response::OkLockStatus {
                 locked,
@@ -594,7 +716,7 @@ fn signing_key_demo() -> k256::ecdsa::SigningKey {
     k256::ecdsa::SigningKey::from_bytes((&DEMO_SK).into()).unwrap()
 }
 
-fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut [u8; 640]) {
+fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut [u8]) {
     let msg = Msg {
         v: PROTO_V1,
         id: 0,
@@ -609,50 +731,128 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
 }
 
 fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
+    let seed = get_active_seed_copy()?;
+    let dp = path_to_derivation(path);
+    let child = XPrv::derive_from_path(&seed, &dp).map_err(|_| ())?;
+    let xpub = child.public_key();
+
+    let attrs = child.attrs();
+    let depth = attrs.depth;
+    let child_u32 = u32::from(attrs.child_number);
+    let fp4 = attrs.parent_fingerprint;
+    let chain_code = attrs.chain_code;
+
+    let mut pubkey33 = [0u8; 33];
+    pubkey33.copy_from_slice(&xpub.public_key().to_bytes());
+
+    Ok(Xpub {
+        depth,
+        fp4,
+        child: child_u32,
+        chain_code,
+        pubkey33,
+    })
+}
+
+fn master_key_copy() -> Option<[u8; 32]> {
     unsafe {
-        if !SEED_STORE.set {
-            return Err(());
+        if MASTER_KEY_SET {
+            Some(MASTER_KEY)
+        } else {
+            None
         }
-        let dp = path_to_derivation(path);
-        let child = XPrv::derive_from_path(&SEED_STORE.seed, &dp).map_err(|_| ())?;
-        let xpub = child.public_key();
+    }
+}
 
-        // Get attributes
-        let attrs = child.attrs();
-        let depth = attrs.depth;
-        let child_u32 = u32::from(attrs.child_number);
-        let fp4 = attrs.parent_fingerprint;
-        let chain_code = attrs.chain_code;
+fn store_master_key(key: &[u8; 32]) {
+    unsafe {
+        MASTER_KEY.copy_from_slice(key);
+        MASTER_KEY_SET = true;
+    }
+}
 
-        // Get compressed pubkey
-        let mut pubkey33 = [0u8; 33];
-        pubkey33.copy_from_slice(&xpub.public_key().to_bytes());
-
-        Ok(Xpub {
-            depth,
-            fp4,
-            child: child_u32,
-            chain_code,
-            pubkey33,
-        })
+fn clear_master_key() {
+    unsafe {
+        MASTER_KEY.zeroize();
+        MASTER_KEY_SET = false;
     }
 }
 
 fn set_seed(seed64: &[u8; 64]) {
+    update_seed_store_from_slice(core::slice::from_ref(seed64));
+}
+
+fn update_seed_store_from_slice(seeds: &[[u8; 64]]) {
     unsafe {
-        SEED_STORE.seed.copy_from_slice(seed64);
-        SEED_STORE.set = true;
+        SEED_STORE.slots.clear();
+        for seed in seeds {
+            let _ = SEED_STORE.slots.push(*seed);
+        }
+        SEED_STORE.active = 0;
+        DEVICE_LOCKED = SEED_STORE.slots.is_empty();
+    }
+}
+
+fn append_seed_slot(seed64: &[u8; 64]) {
+    unsafe {
+        if SEED_STORE.slots.len() < MAX_SEED_SLOTS {
+            let _ = SEED_STORE.slots.push(*seed64);
+        }
+    }
+}
+
+fn remove_seed_slot(index: usize) {
+    unsafe {
+        if index < SEED_STORE.slots.len() {
+            let len = SEED_STORE.slots.len();
+            let mut i = index;
+            while i + 1 < len {
+                SEED_STORE.slots[i] = SEED_STORE.slots[i + 1];
+                i += 1;
+            }
+            let _ = SEED_STORE.slots.pop();
+            if SEED_STORE.active >= SEED_STORE.slots.len() {
+                SEED_STORE.active = SEED_STORE.slots.len().saturating_sub(1);
+            }
+            DEVICE_LOCKED = SEED_STORE.slots.is_empty();
+        }
     }
 }
 
 fn wipe_seed() {
     unsafe {
-        SEED_STORE.seed.zeroize();
-        SEED_STORE.set = false;
+        SEED_STORE.slots.clear();
+        SEED_STORE.active = 0;
+        DEVICE_LOCKED = true;
+    }
+    clear_master_key();
+}
+
+fn collect_info_pubs() -> alloc::vec::Vec<CheetahPub> {
+    let mut nvs = NvsStore::new();
+    match nvs.list_seed_pubs() {
+        Ok(pubs) if !pubs.is_empty() => pubs,
+        _ => collect_info_pubs_from_ram(),
     }
 }
 
-/// convert MSB=hard u32s into a bip32 DerivationPath
+fn collect_info_pubs_from_ram() -> alloc::vec::Vec<CheetahPub> {
+    let mut out = alloc::vec::Vec::new();
+    unsafe {
+        for (idx, seed) in SEED_STORE.slots.iter().enumerate() {
+            let pub_xy = root_pub_from_seed(seed);
+            let path = pathmod::Path::new();
+            out.push(CheetahPub {
+                slot: idx as u8,
+                path,
+                x: pub_xy.0,
+                y: pub_xy.1,
+            });
+        }
+    }
+    out
+}
+
 fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     let mut dp = DerivationPath::default();
     for &p in path.iter() {
@@ -663,55 +863,83 @@ fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     dp
 }
 
-/// create k256 SigningKey from master seed + path
-fn derive_signing_key(path: &pathmod::Path) -> Result<SigningKey, ()> {
+fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<SigningKey, ()> {
+    let seed = get_seed_for_slot(slot)?;
+    let mut key = XPrv::new(&seed).map_err(|_| ())?;
+    for index in path.iter() {
+        let child_num = ChildNumber::from(*index);
+        key = key.derive_child(child_num).map_err(|_| ())?;
+    }
+    let sk_bytes = key.private_key().to_bytes();
+    SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())
+}
+
+fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
+    let seed = get_active_seed_copy()?;
+    let xprv = XPrv::new(&seed).map_err(|_| ())?;
+    let xpub = xprv.public_key();
+    let comp = xpub.public_key().to_bytes();
+    let sha = Sha256::digest(&comp);
+    let ripe = Ripemd160::digest(&sha);
+    let mut fp4 = [0u8; 4];
+    fp4.copy_from_slice(&ripe[..4]);
+    Ok(fp4)
+}
+
+fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32], ()> {
+    let seed = get_seed_for_slot(slot)?;
+    let (sk, cc) = cheetah::master_from_seed(&seed);
+    let mut xk = cheetah::XKey::from_master(sk, cc);
+    for &i in path.iter() {
+        xk = cheetah::xprv_derive_child(&xk, i);
+    }
+    xk.sk.ok_or(())
+}
+
+fn root_pub_from_seed(seed: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
+    let (sk, _cc) = cheetah::master_from_seed(seed);
+    cheetah::cheetah_pub_from_sk(sk)
+}
+
+fn get_seed_for_slot(slot: usize) -> Result<[u8; 64], ()> {
     unsafe {
-        if !SEED_STORE.set {
+        if slot >= SEED_STORE.slots.len() {
             return Err(());
         }
-        let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
-
-        // derive child by child
-        let mut key = xprv;
-        for index in path.iter() {
-            let child_num = ChildNumber::from(*index);
-            key = key.derive_child(child_num).map_err(|_| ())?;
-        }
-
-        let sk_bytes = key.private_key().to_bytes();
-        let sk = SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())?;
-        Ok(sk)
+        Ok(SEED_STORE.slots[slot])
     }
 }
 
-/// bip32 parent fingerprint (master): first 4 bytes of RIPEMD160(SHA256(compressed pubkey))
-fn master_fingerprint() -> Result<[u8; 4], ()> {
+fn get_active_seed_copy() -> Result<[u8; 64], ()> {
     unsafe {
-        if !SEED_STORE.set {
+        if SEED_STORE.slots.is_empty() {
             return Err(());
         }
-        let xprv = XPrv::new(&SEED_STORE.seed).map_err(|_| ())?;
-        let xpub = xprv.public_key();
-        let comp = xpub.public_key().to_bytes(); // compressed 33 bytes
-        let sha = Sha256::digest(&comp);
-        let ripe = Ripemd160::digest(&sha);
-        let mut fp4 = [0u8; 4];
-        fp4.copy_from_slice(&ripe[..4]);
-        Ok(fp4)
+        let idx = SEED_STORE.active.min(SEED_STORE.slots.len() - 1);
+        Ok(SEED_STORE.slots[idx])
     }
 }
 
-fn derive_child_sk_from_seed_store(path: &pathmod::Path) -> Result<[u8; 32], ()> {
+fn set_active_slot(slot: usize) -> Result<(), ()> {
     unsafe {
-        if !SEED_STORE.set {
+        if slot >= SEED_STORE.slots.len() {
             return Err(());
         }
-        // SLIP-10 master for Cheetah:
-        let (sk, cc) = cheetah::master_from_seed(&SEED_STORE.seed);
-        let mut xk = cheetah::XKey::from_master(sk, cc);
-        for &i in path.iter() {
-            xk = cheetah::xprv_derive_child(&xk, i);
-        }
-        xk.sk.ok_or(())
+        SEED_STORE.active = slot;
     }
+    Ok(())
+}
+
+fn active_slot_index() -> Result<usize, ()> {
+    unsafe {
+        if SEED_STORE.slots.is_empty() {
+            return Err(());
+        }
+        Ok(SEED_STORE.active.min(SEED_STORE.slots.len() - 1))
+    }
+}
+
+fn derive_signing_key_active(path: &pathmod::Path) -> Result<SigningKey, ()> {
+    let slot = active_slot_index()?;
+    derive_signing_key_for_slot(path, slot)
 }

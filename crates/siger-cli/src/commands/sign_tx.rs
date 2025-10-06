@@ -11,13 +11,13 @@ use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
 
-use siger_core::{Frame, Msg, Request, Response, PROTO_V1};
+use siger_core::{Frame, Msg, Request, Response, MAX_INFO_CHEETAH_PUBS, PROTO_V1};
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::*;
 use tx_types::RawTransaction;
 
 use crate::keys;
-use crate::serial::{open, round_trip_frame};
+use crate::serial::{open, round_trip_frame, send_call};
 use crate::util::{
     fmt_u64x5, sig_hash_for_input, t8_from_device, transaction_name_from_bytes,
     transaction_name_from_noun, transaction_to_raw,
@@ -48,8 +48,23 @@ fn parse_signer_paths(path_args: &[String]) -> Result<Vec<Vec<u32>>> {
     Ok(out)
 }
 
+fn signer_slot() -> u8 {
+    std::env::var("SIGER_SLOT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .and_then(|v| {
+            if v <= u8::MAX as u16 {
+                Some(v as u8)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
+}
+
 fn fetch_device_pks(
     sp: &mut dyn SerialPort,
+    slot: u8,
     paths: &[Vec<u32>],
 ) -> Result<Vec<(Vec<u32>, SchnorrPubkey)>> {
     let mut out = Vec::new();
@@ -57,7 +72,10 @@ fn fetch_device_pks(
         let req = Msg {
             v: PROTO_V1,
             id: 0x4100,
-            msg: Frame::One(Request::GetCheetahPub { path: path.clone() }),
+            msg: Frame::One(Request::GetCheetahPub {
+                slot,
+                path: path.clone(),
+            }),
         };
         let resp: Msg<Response> = round_trip_frame(sp, &req)?;
         match resp.msg {
@@ -126,22 +144,74 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     println!("file:  {draft_path}");
     println!("txid:  {tx_name_before}");
 
-    // collect desired signer derivation paths
-    let path_list: Vec<String> = std::env::var("SIGER_PATHS")
+    // collect desired signer derivation paths (optional override via env)
+    let env_paths: Option<Vec<String>> = std::env::var("SIGER_PATHS")
         .or_else(|_| std::env::var("SIGER_PATH"))
         .ok()
         .map(|s| {
             s.split(|c| c == ';' || c == ',')
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty())
-                .collect()
-        })
-        .unwrap_or_else(|| vec!["m".to_string()]);
-    let signer_paths = parse_signer_paths(&path_list)?;
+                .collect::<Vec<_>>()
+        });
 
-    // fetch device pubkeys for the requested paths
     let mut sp = open(port, baud)?;
-    let dev_keys = fetch_device_pks(&mut *sp, &signer_paths)?;
+
+    let slot = signer_slot();
+    match send_call(&mut *sp, 0x4001, Request::SelectSeed { slot })? {
+        Response::Ok => {}
+        Response::Err { code } => anyhow::bail!("SelectSeed failed with code {code}"),
+        other => anyhow::bail!("unexpected SelectSeed response: {other:?}"),
+    }
+
+    let info_resp: Response = send_call(&mut *sp, 0x4000, Request::GetInfo)?;
+    let available_keys = match info_resp {
+        Response::Info { cheetah_pubs, .. } => cheetah_pubs,
+        other => anyhow::bail!("unexpected GetInfo response: {other:?}"),
+    };
+
+    let mut preloaded_keys: Vec<(u8, Vec<u32>, SchnorrPubkey)> = available_keys
+        .into_iter()
+        .map(|pubinfo| {
+            let pk = SchnorrPubkey {
+                x: F6LT { values: pubinfo.x },
+                y: F6LT { values: pubinfo.y },
+                inf: false,
+            };
+            (pubinfo.slot, pubinfo.path, pk)
+        })
+        .collect();
+
+    if preloaded_keys.len() > MAX_INFO_CHEETAH_PUBS {
+        preloaded_keys.truncate(MAX_INFO_CHEETAH_PUBS);
+    }
+
+    let signer_paths = if let Some(path_strings) = env_paths {
+        parse_signer_paths(&path_strings)?
+    } else if !preloaded_keys.is_empty() {
+        preloaded_keys
+            .iter()
+            .filter(|(s, _, _)| *s == slot)
+            .map(|(_, path, _)| path.clone())
+            .collect()
+    } else {
+        vec![Vec::<u32>::new()]
+    };
+
+    // Ensure we have device pubkeys for each requested path
+    let mut dev_keys: Vec<(Vec<u32>, SchnorrPubkey)> = Vec::new();
+    for path in signer_paths {
+        if let Some((_, pref_path, pk)) = preloaded_keys
+            .iter()
+            .find(|(s, p, _)| *s == slot && p.as_slice() == path.as_slice())
+        {
+            dev_keys.push((pref_path.clone(), pk.clone()));
+        } else {
+            let fetched = fetch_device_pks(&mut *sp, slot, &[path.clone()])?;
+            dev_keys.extend(fetched);
+        }
+    }
+
     println!("device keys: {}", dev_keys.len());
 
     // sign each input whose lock contains a device key
@@ -171,6 +241,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
                     v: PROTO_V1,
                     id: 0x4200,
                     msg: Frame::One(Request::SignSpendHash {
+                        slot,
                         path: path.clone(),
                         msg5,
                     }),

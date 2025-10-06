@@ -39,6 +39,9 @@ pub enum Cmd {
 
     /// lock the device (clear ram)
     Lock(PortArgs),
+
+    /// factory reset (clears seed + persistent PIN state)
+    Reset(PortArgs),
 }
 
 #[derive(Args, Clone)]
@@ -172,5 +175,6 @@ pub fn run() -> anyhow::Result<()> {
         }
         Cmd::Unlock(args) => commands::unlock::unlock(&args.port, args.baud, &args.pin),
         Cmd::Lock(args) => commands::unlock::lock(&args.port, args.baud),
+        Cmd::Reset(args) => commands::reset::run(&args),
     }
 }

@@ -11,16 +11,42 @@ export type Request =
   | { type: 'Hello' }
   | { type: 'GetInfo' }
   | { type: 'Ping' }
+  | { type: 'Wipe' }
+  | { type: 'SetSeed'; seed64: Uint8Array }
+  | { type: 'GetFingerprint' }
+  | { type: 'GetPubkey'; path: number[]; compressed?: boolean }
+  | { type: 'GetXpub'; path: number[] }
+  | { type: 'SignDigest'; path: number[]; digest32: Uint8Array }
+  | { type: 'GetCheetahPub'; slot: number; path: number[] }
+  | { type: 'SignSpendHash'; slot: number; path: number[]; msg5: bigint[] }
+  | {
+      type: 'SignSpendHashFor';
+      slot: number;
+      path: number[];
+      msg5: bigint[];
+      pubkey: { x: bigint[]; y: bigint[] };
+    }
+  | { type: 'Health' }
+  | { type: 'InitializePIN'; pin: string; seed64: Uint8Array }
+  | { type: 'AddSeed'; seed64: Uint8Array }
+  | { type: 'DeleteSeed'; slot: number }
   | { type: 'Unlock'; pin: string }
   | { type: 'Lock' }
+  | { type: 'ResetPIN'; current_pin: string; new_pin: string }
   | { type: 'GetLockStatus' }
-  | { type: 'InitializePIN'; pin: string; seed64: Uint8Array }
-  | { type: 'GetCheetahPub'; path: number[] }
-  | { type: 'SignSpendHash'; path: number[]; msg5: bigint[] };
+  | { type: 'SelectSeed'; slot: number }
+  | { type: 'Reset' };
+
+export interface CheetahPubInfo {
+  slot: number;
+  path: number[];
+  x: bigint[];
+  y: bigint[];
+}
 
 export type Response =
   | { type: 'Hello'; proto_v: number; compressed_pk: boolean }
-  | { type: 'Info'; proto_v: number; fw_major: number; fw_minor: number; features: number; has_seed: boolean; cheetah_x: bigint[]; cheetah_y: bigint[] }
+  | { type: 'Info'; proto_v: number; fw_major: number; fw_minor: number; features: number; has_seed: boolean; cheetah_pubs: CheetahPubInfo[] }
   | { type: 'Pong' }
   | { type: 'Ok' }
   | { type: 'OkLockStatus'; locked: boolean; attempts_remaining: number }
@@ -56,7 +82,7 @@ export function serializeRequest(req: Request): Uint8Array {
 
   switch (req.type) {
     case 'Hello':
-      w.writeVarint(0); // Variant index
+      w.writeVarint(0);
       break;
     case 'GetInfo':
       w.writeVarint(1);
@@ -64,25 +90,119 @@ export function serializeRequest(req: Request): Uint8Array {
     case 'Ping':
       w.writeVarint(2);
       break;
-    case 'GetLockStatus':
-      w.writeVarint(14); // Enum index after all other commands
+    case 'Wipe':
+      w.writeVarint(3);
       break;
-    case 'Unlock':
-      w.writeVarint(11); // InitializePIN=10, Unlock=11
-      w.writeString(req.pin);
+    case 'SetSeed':
+      w.writeVarint(4);
+      w.writeFixedBytes(req.seed64);
       break;
-    case 'Lock':
+    case 'GetFingerprint':
+      w.writeVarint(5);
+      break;
+    case 'GetPubkey':
+      w.writeVarint(6);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      w.writeBool(req.compressed ?? false);
+      break;
+    case 'GetXpub':
+      w.writeVarint(7);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      break;
+    case 'SignDigest':
+      w.writeVarint(8);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      w.writeFixedBytes(req.digest32);
+      break;
+    case 'GetCheetahPub':
+      w.writeVarint(9);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      break;
+    case 'SignSpendHash':
+      w.writeVarint(10);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      for (const val of req.msg5) {
+        w.writeU64Varint(val);
+      }
+      break;
+    case 'SignSpendHashFor':
+      w.writeVarint(11);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      for (const val of req.msg5) {
+        w.writeU64Varint(val);
+      }
+      for (const limb of req.pubkey.x) {
+        w.writeU64Varint(limb);
+      }
+      for (const limb of req.pubkey.y) {
+        w.writeU64Varint(limb);
+      }
+      break;
+    case 'Health':
       w.writeVarint(12);
       break;
     case 'InitializePIN':
-      w.writeVarint(10);
+      w.writeVarint(13);
       w.writeString(req.pin);
       w.writeFixedBytes(req.seed64);
+      break;
+    case 'AddSeed':
+      w.writeVarint(14);
+      w.writeFixedBytes(req.seed64);
+      break;
+    case 'DeleteSeed':
+      w.writeVarint(15);
+      w.writeU8(req.slot);
+      break;
+    case 'Unlock':
+      w.writeVarint(16);
+      w.writeString(req.pin);
+      break;
+    case 'Lock':
+      w.writeVarint(17);
+      break;
+    case 'ResetPIN':
+      w.writeVarint(18);
+      w.writeString(req.current_pin);
+      w.writeString(req.new_pin);
+      break;
+    case 'GetLockStatus':
+      w.writeVarint(19);
+      break;
+    case 'SelectSeed':
+      w.writeVarint(20);
+      w.writeU8(req.slot);
+      break;
+    case 'Reset':
+      w.writeVarint(21);
       break;
   }
 
   return w.toBytes();
 }
+
+
 
 /**
  * Deserialize a Response from bytes using Postcard format
@@ -103,9 +223,20 @@ export function deserializeResponse(data: Uint8Array): Response {
       const fw_minor = r.readVarint(); // postcard encodes u16 as varint
       const features = r.readVarint(); // postcard encodes u32 as varint
       const has_seed = r.readBool();
-      const cheetah_x = r.readU64Array(6);
-      const cheetah_y = r.readU64Array(6);
-      return { type: 'Info', proto_v, fw_major, fw_minor, features, has_seed, cheetah_x, cheetah_y };
+      const keyCount = r.readVarint();
+      const cheetah_pubs: CheetahPubInfo[] = [];
+      for (let i = 0; i < keyCount; i++) {
+        const slot = r.readU8();
+        const pathLen = r.readVarint();
+        const path: number[] = [];
+        for (let j = 0; j < pathLen; j++) {
+          path.push(r.readU32());
+        }
+        const x = r.readU64Array(6);
+        const y = r.readU64Array(6);
+        cheetah_pubs.push({ slot, path, x, y });
+      }
+      return { type: 'Info', proto_v, fw_major, fw_minor, features, has_seed, cheetah_pubs };
     }
     case 4: // Pong
       return { type: 'Pong' };
@@ -146,7 +277,6 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
   // Frame enum: 0 = One, 1 = FragBegin, 2 = FragPart
   w.writeVarint(0); // Frame::One
 
-  // Now serialize the Request inside Frame::One
   const req = msg.msg;
   switch (req.type) {
     case 'Hello':
@@ -158,9 +288,42 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
     case 'Ping':
       w.writeVarint(2);
       break;
+    case 'Wipe':
+      w.writeVarint(3);
+      break;
+    case 'SetSeed':
+      w.writeVarint(4);
+      w.writeFixedBytes(req.seed64);
+      break;
+    case 'GetFingerprint':
+      w.writeVarint(5);
+      break;
+    case 'GetPubkey':
+      w.writeVarint(6);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      w.writeBool(req.compressed ?? false);
+      break;
+    case 'GetXpub':
+      w.writeVarint(7);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      break;
+    case 'SignDigest':
+      w.writeVarint(8);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      w.writeFixedBytes(req.digest32);
+      break;
     case 'GetCheetahPub':
       w.writeVarint(9);
-      // Path is a Vec<u32>
+      w.writeU8(req.slot);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
         w.writeU32(p);
@@ -168,35 +331,76 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
       break;
     case 'SignSpendHash':
       w.writeVarint(10);
-      // Path
+      w.writeU8(req.slot);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
         w.writeU32(p);
       }
-      // msg5 is [u64; 5], but postcard encodes u64 as varint
       for (const val of req.msg5) {
         w.writeU64Varint(val);
       }
       break;
+    case 'SignSpendHashFor':
+      w.writeVarint(11);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeU32(p);
+      }
+      for (const val of req.msg5) {
+        w.writeU64Varint(val);
+      }
+      for (const limb of req.pubkey.x) {
+        w.writeU64Varint(limb);
+      }
+      for (const limb of req.pubkey.y) {
+        w.writeU64Varint(limb);
+      }
+      break;
+    case 'Health':
+      w.writeVarint(12);
+      break;
     case 'InitializePIN':
-      w.writeVarint(13); // After Health
+      w.writeVarint(13);
       w.writeString(req.pin);
       w.writeFixedBytes(req.seed64);
       break;
-    case 'Unlock':
+    case 'AddSeed':
       w.writeVarint(14);
+      w.writeFixedBytes(req.seed64);
+      break;
+    case 'DeleteSeed':
+      w.writeVarint(15);
+      w.writeU8(req.slot);
+      break;
+    case 'Unlock':
+      w.writeVarint(16);
       w.writeString(req.pin);
       break;
     case 'Lock':
-      w.writeVarint(15);
+      w.writeVarint(17);
+      break;
+    case 'ResetPIN':
+      w.writeVarint(18);
+      w.writeString(req.current_pin);
+      w.writeString(req.new_pin);
       break;
     case 'GetLockStatus':
-      w.writeVarint(17); // After ChangePIN
+      w.writeVarint(19);
+      break;
+    case 'SelectSeed':
+      w.writeVarint(20);
+      w.writeU8(req.slot);
+      break;
+    case 'Reset':
+      w.writeVarint(21);
       break;
   }
 
   return w.toBytes();
 }
+
+
 
 /**
  * Deserialize a Msg<Response>
@@ -221,7 +425,7 @@ export function getErrorMessage(code: number): string {
     case ERR_BAD_COBS_OR_POSTCARD:
       return 'Invalid message format';
     case ERR_OVERFLOW:
-      return 'Buffer overflow';
+      return 'Seed storage full';
     case ERR_ENCODE_TOO_BIG:
       return 'Message too large';
     case ERR_UNSUPPORTED_VERSION:

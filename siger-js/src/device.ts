@@ -152,6 +152,17 @@ export class SigerDevice {
     return await this.call({ type: 'Ping' });
   }
 
+  async reset() {
+    const resp = await this.call({ type: 'Reset' });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
   async getLockStatus() {
     const resp = await this.call({ type: 'GetLockStatus' });
     if (resp.type !== 'OkLockStatus') {
@@ -180,6 +191,67 @@ export class SigerDevice {
     const resp = await this.call({ type: 'InitializePIN', pin, seed64 });
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
+    }
+    return resp;
+  }
+
+  async addSeed(seed64: Uint8Array) {
+    if (seed64.length !== 64) {
+      throw new Error('seed must be 64 bytes');
+    }
+    const resp = await this.call({ type: 'AddSeed', seed64 });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
+  async deleteSeed(slot: number) {
+    const resp = await this.call({ type: 'DeleteSeed', slot });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
+  async resetPIN(currentPin: string, newPin: string) {
+    const resp = await this.call({ type: 'ResetPIN', current_pin: currentPin, new_pin: newPin });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
+  async selectSeed(slot: number) {
+    const resp = await this.call({ type: 'SelectSeed', slot });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
+  async setSeed(seed64: Uint8Array) {
+    if (seed64.length !== 64) {
+      throw new Error('seed must be 64 bytes');
+    }
+    const resp = await this.call({ type: 'SetSeed', seed64 });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
     }
     return resp;
   }

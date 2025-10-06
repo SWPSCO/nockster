@@ -1,7 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { SigerDevice, formatCheetahPubkey } from 'siger-js';
+import type { Response } from 'siger-js';
+import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import init, { ParsedTransaction } from 'siger-wasm';
 import './App.css';
+
+type DeviceKey = { slot: number; path: number[]; x: bigint[]; y: bigint[] };
+type InputDeviceKey = { slot: number; path: number[] };
+type InfoResponse = Extract<Response, { type: 'Info' }>;
 
 function App() {
   const [device] = useState(() => new SigerDevice());
@@ -10,7 +16,25 @@ function App() {
   const [locked, setLocked] = useState<boolean | null>(null);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
   const [pin, setPin] = useState('');
-  const [info, setInfo] = useState<any>(null);
+  const [info, setInfo] = useState<InfoResponse | null>(null);
+  const [deviceKeys, setDeviceKeys] = useState<DeviceKey[]>([]);
+  const [selectedSlotState, setSelectedSlotState] = useState<number>(0);
+  const selectedSlotRef = useRef(0);
+  const setSelectedSlot = (slot: number) => {
+    selectedSlotRef.current = slot;
+    setSelectedSlotState(slot);
+  };
+  const selectedSlot = selectedSlotState;
+  const [mnemonic, setMnemonic] = useState('');
+  const [seedPassphrase, setSeedPassphrase] = useState('');
+  const [seedPin, setSeedPin] = useState('');
+  const [seeding, setSeeding] = useState(false);
+  const [addSeedExpanded, setAddSeedExpanded] = useState(false);
+  const [pinResetCurrent, setPinResetCurrent] = useState('');
+  const [pinResetNew, setPinResetNew] = useState('');
+  const [pinResetConfirm, setPinResetConfirm] = useState('');
+  const [resettingPin, setResettingPin] = useState(false);
+  const [deletingSlot, setDeletingSlot] = useState<number | null>(null);
 
   // Transaction signing state
   const [wasmReady, setWasmReady] = useState(false);
@@ -34,6 +58,43 @@ function App() {
 
   // Check Web Serial support
   const isSupported = SigerDevice.isSupported();
+  const showSeedForm = connected && locked === false;
+  const hasSeeds = !!info?.has_seed || deviceKeys.length > 0;
+  const isInitialSeed = !hasSeeds;
+  const trimmedSeedPin = seedPin.trim();
+  const seedPinRequired = isInitialSeed;
+  const seedPinReady = !seedPinRequired || trimmedSeedPin.length > 0;
+  const trimmedMnemonicValue = mnemonic.trim();
+  const wordCount = trimmedMnemonicValue ? trimmedMnemonicValue.split(/\s+/).filter(Boolean).length : 0;
+  const wordCountValid = wordCount === 0 || isValidMnemonicWordCount(wordCount);
+  const canSubmitSeed = trimmedMnemonicValue.length > 0 && seedPinReady && wordCountValid;
+  const slotSummary = Array.from(new Map(deviceKeys.map((pub) => [pub.slot, pub])).values()).sort(
+    (a, b) => a.slot - b.slot
+  );
+
+  useEffect(() => {
+    if (isInitialSeed) {
+      setAddSeedExpanded(true);
+    } else {
+      setAddSeedExpanded(false);
+      setSeedPin('');
+    }
+  }, [isInitialSeed]);
+
+  const formatDerivationPath = (path: number[]) => {
+    if (!path || path.length === 0) {
+      return 'm';
+    }
+    const parts = path.map((component) => {
+      const hardened = (component & 0x80000000) !== 0;
+      const index = component & 0x7fffffff;
+      return `${index}${hardened ? "'" : ''}`;
+    });
+    return `m/${parts.join('/')}`;
+  };
+
+
+  const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
   const connect = async () => {
     try {
@@ -41,6 +102,7 @@ function App() {
       await device.connect();
       setConnected(true);
       setStatus('Connected!');
+      await sleep(1000);
       await refreshStatus();
     } catch (error: any) {
       setStatus(`Connection failed: ${error.message}`);
@@ -54,24 +116,112 @@ function App() {
       setLocked(null);
       setAttemptsRemaining(null);
       setInfo(null);
+      setDeviceKeys([]);
+      setSelectedSlot(0);
       setStatus('Disconnected');
     } catch (error: any) {
       setStatus(`Disconnect failed: ${error.message}`);
     }
   };
 
-  const refreshStatus = async () => {
+  const refreshStatus = async (preferSlot?: number, infoOverride?: InfoResponse) => {
     try {
       const lockStatus = await device.getLockStatus();
       setLocked(lockStatus.locked);
       setAttemptsRemaining(lockStatus.attempts_remaining);
 
-      const deviceInfo = await device.getInfo();
-      setInfo(deviceInfo);
+      const deviceInfo = infoOverride ?? (await device.getInfo());
+      if (deviceInfo.type === 'Info') {
+        setInfo(deviceInfo);
+
+        const pubsRaw = Array.isArray(deviceInfo.cheetah_pubs)
+          ? deviceInfo.cheetah_pubs
+          : [];
+        const normalizedKeys = pubsRaw.map((pub) => ({
+          slot: Number(pub.slot),
+          path: Array.isArray(pub.path) ? pub.path.map((value) => Number(value)) : [],
+          x: pub.x,
+          y: pub.y,
+        }));
+        setDeviceKeys(normalizedKeys);
+
+        const slotNumbers = normalizedKeys.map((pub) => pub.slot);
+        if (slotNumbers.length === 0) {
+          if (selectedSlotRef.current !== 0) {
+            setSelectedSlot(0);
+          }
+          return;
+        }
+
+        const currentSlot = selectedSlotRef.current;
+        let desiredSlot = preferSlot ?? currentSlot;
+        if (!slotNumbers.includes(desiredSlot)) {
+          desiredSlot = slotNumbers[0];
+        }
+
+        const shouldSelect =
+          !lockStatus.locked &&
+          slotNumbers.includes(desiredSlot) &&
+          (preferSlot !== undefined || desiredSlot !== currentSlot);
+
+        if (shouldSelect) {
+          try {
+            await device.selectSeed(desiredSlot);
+          } catch (err: any) {
+            console.warn('selectSeed failed', err);
+          }
+        }
+
+        if (desiredSlot !== currentSlot) {
+          setSelectedSlot(desiredSlot);
+        }
+      }
     } catch (error: any) {
       setStatus(`Status check failed: ${error.message}`);
     }
   };
+
+  const [pollMs] = useState(2000);
+  const refreshingRef = useRef(false);
+
+  useEffect(() => {
+    if (!connected) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (!refreshingRef.current) {
+        try {
+          refreshingRef.current = true;
+          await refreshStatus();
+        } finally {
+          refreshingRef.current = false;
+        }
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(tick, pollMs);
+      }
+    };
+
+    timer = window.setTimeout(tick, pollMs);
+    const onVis = () => {
+      if (document.hidden) {
+        if (timer) window.clearTimeout(timer);
+      } else {
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(tick, pollMs);
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [connected, pollMs, refreshStatus]);
 
   const unlock = async () => {
     if (!pin) {
@@ -99,6 +249,156 @@ function App() {
       await refreshStatus();
     } catch (error: any) {
       setStatus(`Lock failed: ${error.message}`);
+    }
+  };
+
+  const resetDevice = async () => {
+    if (!connected) {
+      return;
+    }
+    const confirmed = window.confirm(
+      'This will erase the seed and PIN from the device. Continue?'
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setStatus('Resetting device...');
+      await device.reset();
+      setMnemonic('');
+      setSeedPassphrase('');
+      setSeedPin('');
+      setDeviceKeys([]);
+      setSelectedSlot(0);
+      await refreshStatus();
+      setStatus('Device reset to factory state');
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`Reset failed: ${message}`);
+    }
+  };
+
+  const seedDevice = async () => {
+    const trimmedMnemonic = mnemonic.trim();
+    const trimmedPin = seedPin.trim();
+    try {
+      if (!showSeedForm) {
+        throw new Error('Connect and unlock the device first');
+      }
+      validateMnemonicWords(trimmedMnemonic);
+      if (seedPinRequired && !trimmedPin) {
+        throw new Error('Enter a device PIN before seeding');
+      }
+      setSeeding(true);
+      setStatus('Seeding device...');
+      const seed = await mnemonicToSeed(trimmedMnemonic, seedPassphrase);
+      const prevSlots = deviceKeys.map((key) => key.slot);
+
+      if (isInitialSeed) {
+        await device.initializePIN(trimmedPin, seed);
+        await refreshStatus(0);
+        setStatus('Seed loaded successfully');
+      } else {
+        await device.addSeed(seed);
+        const infoAfter = await device.getInfo();
+        if (infoAfter.type !== 'Info') {
+          throw new Error('Unexpected response from device after adding seed');
+        }
+        const pubsAfter = Array.isArray(infoAfter.cheetah_pubs)
+          ? infoAfter.cheetah_pubs
+          : [];
+        const newSlots = pubsAfter.map((pub) => Number(pub.slot));
+        const addedSlot = newSlots.find((slot) => !prevSlots.includes(slot));
+        await refreshStatus(addedSlot, infoAfter);
+        setStatus('Seed slot added successfully');
+        setAddSeedExpanded(false);
+      }
+      setMnemonic('');
+      setSeedPassphrase('');
+      setSeedPin('');
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`Seeding failed: ${message}`);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const resetPin = async () => {
+    const current = pinResetCurrent.trim();
+    const next = pinResetNew.trim();
+    const confirm = pinResetConfirm.trim();
+
+    if (locked !== false) {
+      setStatus('Unlock the device before resetting the PIN');
+      return;
+    }
+    if (!current) {
+      setStatus('Enter the current PIN');
+      return;
+    }
+    if (!next) {
+      setStatus('Enter a new PIN');
+      return;
+    }
+    if (next !== confirm) {
+      setStatus('New PIN entries do not match');
+      return;
+    }
+
+    try {
+      setResettingPin(true);
+      setStatus('Updating device PIN...');
+      await device.resetPIN(current, next);
+      setStatus('Device PIN updated successfully');
+      setPinResetCurrent('');
+      setPinResetNew('');
+      setPinResetConfirm('');
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`PIN update failed: ${message}`);
+    } finally {
+      setResettingPin(false);
+    }
+  };
+
+  const deleteSeedSlot = async (slot: number) => {
+    if (locked !== false) {
+      setStatus('Unlock the device before deleting a seed');
+      return;
+    }
+    const confirmed = window.confirm(
+      `Remove seed slot ${slot}? This cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingSlot(slot);
+      setStatus(`Deleting seed slot ${slot}...`);
+      await device.deleteSeed(slot);
+      await refreshStatus();
+      setStatus(`Seed slot ${slot} removed`);
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`Delete failed: ${message}`);
+    } finally {
+      setDeletingSlot(null);
+    }
+  };
+
+  const handleSlotChange = async (slotValue: number) => {
+    if (slotValue === selectedSlotRef.current) {
+      return;
+    }
+    try {
+      setStatus(`Switching to slot ${slotValue}...`);
+      setSelectedSlot(slotValue);
+      await refreshStatus(slotValue);
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`Slot switch failed: ${message}`);
     }
   };
 
@@ -184,14 +484,23 @@ function App() {
       setSigning(true);
       setStatus('Finding inputs to sign...');
 
-      // Get device public key
-      const pubkeyResp = await device.call({ type: 'GetCheetahPub', path: [] });
-      if (pubkeyResp.type !== 'OkCheetahPub') {
-        throw new Error('Failed to get device public key');
+      if (deviceKeys.length === 0) {
+        throw new Error('No seed slots available on this device');
       }
 
-      const devicePubkeys = [{ x: pubkeyResp.x, y: pubkeyResp.y }];
-      const inputs = tx.get_signing_inputs(devicePubkeys);
+      const activeDevicePubkeys = deviceKeys.filter((pub) => pub.slot === selectedSlot);
+      if (activeDevicePubkeys.length === 0) {
+        throw new Error('Select a seeded slot before signing');
+      }
+
+      const inputs = tx.get_signing_inputs(
+        activeDevicePubkeys.map((pub) => ({
+          slot: pub.slot,
+          path: [...pub.path],
+          x: [...pub.x],
+          y: [...pub.y],
+        }))
+      );
 
       // Convert Map objects to plain objects
       const convertMapToObject = (obj: any): any => {
@@ -220,31 +529,59 @@ function App() {
         throw new Error('No inputs found to sign with this device');
       }
 
-      // Sign each input
-      const signatures = [];
-      for (const input of convertedInputs) {
-        setStatus(`Signing input: ${input.input_name}`);
+      const keyId = (slot: number, path: number[]) => `${slot}:${path.join(',')}`;
+      const keyMap = new Map<string, DeviceKey>();
+      activeDevicePubkeys.forEach((pub) => {
+        keyMap.set(keyId(pub.slot, pub.path), pub);
+      });
 
-        // Convert msg5 strings to BigInt array
+      const signatures: any[] = [];
+      for (const input of convertedInputs) {
+        const deviceEntries: InputDeviceKey[] = input.device_keys || [];
+        if (!deviceEntries.length) {
+          continue;
+        }
+
         const msg5BigInts = input.msg5.map((v: string) => BigInt(v));
 
-        const sigResp = await device.call({
-          type: 'SignSpendHash',
-          path: [],
-          msg5: msg5BigInts
-        });
+        for (const entry of deviceEntries) {
+          const path = (entry.path ?? []) as number[];
+          const slot = Number(entry.slot ?? 0);
+          if (slot !== selectedSlot) {
+            continue;
+          }
 
-        if (sigResp.type === 'OkCheetahSig') {
+          const key = keyMap.get(keyId(slot, path));
+          if (!key) {
+            throw new Error(`Missing device key for slot ${slot} ${formatDerivationPath(path)}`);
+          }
+
+          setStatus(`Signing ${input.input_name} @ slot ${slot} · ${formatDerivationPath(path)}`);
+
+          const sigResp = await device.call({
+            type: 'SignSpendHash',
+            slot,
+            path,
+            msg5: msg5BigInts
+          });
+
+          if (sigResp.type !== 'OkCheetahSig') {
+            throw new Error(`Failed to sign input ${input.input_name}`);
+          }
+
           signatures.push({
             input_name: input.input_name,
-            pubkey_x: Array.from(pubkeyResp.x).map(n => n.toString()),
-            pubkey_y: Array.from(pubkeyResp.y).map(n => n.toString()),
-            chal: Array.from(sigResp.chal).map(n => n.toString()),
-            sig: Array.from(sigResp.sig).map(n => n.toString())
+            pubkey_x: key.x.map((n: bigint) => n.toString()),
+            pubkey_y: key.y.map((n: bigint) => n.toString()),
+            chal: Array.from(sigResp.chal).map((n: bigint) => n.toString()),
+            sig: Array.from(sigResp.sig).map((n: bigint) => n.toString()),
+            slot
           });
-        } else {
-          throw new Error(`Failed to sign input ${input.input_name}`);
         }
+      }
+
+      if (signatures.length === 0) {
+        throw new Error('No inputs found to sign with available device keys');
       }
 
       setStatus('Applying signatures in browser...');
@@ -268,7 +605,7 @@ function App() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      setStatus(`✓ Signed ${signatures.length} input(s) and downloaded ${filename}`);
+      setStatus(`Signed ${signatures.length} signature(s) and downloaded ${filename}`);
     } catch (error: any) {
       console.error('Signing error:', error);
       const errorMsg = error.message || error.toString() || 'Unknown error';
@@ -306,7 +643,7 @@ function App() {
   if (!isSupported) {
     return (
       <div className="container">
-        <h1>Siger hardware wallet</h1>
+        <img src="assets/nockster.png" width="400px"/>
         <div className="error">
           <p>Web Serial API not supported in this browser.</p>
           <p>Please use Chrome, Edge, or Opera.</p>
@@ -317,54 +654,108 @@ function App() {
 
   return (
     <div className="container">
-      <h1>Siger hardware wallet</h1>
+      <div className="header-img">
+        <img src="assets/nockster.png" width="400px"/>
+      </div>
 
       {connected && (
         <>
-          <div className="section">
-            <h2>Control</h2>
-            <div className="pin-controls">
-              {locked && (
-                <input
-                  type="password"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="enter PIN"
-                  className="input"
-                  onKeyPress={(e) => {
-                    if (e.key === 'Enter' && locked) {
-                      unlock();
-                    }
-                  }}
-                />
-              )}
-              <div className="button-group" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
-                <button
-                  onClick={unlock}
-                  disabled={!locked || !pin}
-                  className="btn btn-success"
-                >
-                  unlock
-                </button>
-                <button
-                  onClick={lock}
-                  disabled={locked || locked === null}
-                  className="btn btn-warning"
-                >
-                  lock
-                </button>
-                <button onClick={ping} className="btn btn-small">
-                  test
-                </button>
-                <button onClick={disconnect} className="btn btn-secondary">
-                  disconnect
-                </button>
+          {showSeedForm && (
+            <div className="section">
+              <div className="seed-header">
+                <h2>{isInitialSeed ? 'Load a seed' : 'Add a seed slot'}</h2>
+                {!isInitialSeed && (
+                  <button
+                    type="button"
+                    onClick={() => setAddSeedExpanded((prev) => !prev)}
+                    className="btn btn-small btn-secondary seed-toggle"
+                  >
+                    {addSeedExpanded ? 'hide form' : 'add seed'}
+                  </button>
+                )}
               </div>
+
+              {(isInitialSeed || addSeedExpanded) && (
+                <>
+                  <p className="seed-subtitle">
+                    {isInitialSeed
+                      ? 'Device ready to seed. Make sure your keys are written on something that isn\'t a computer!'
+                      : 'Add another BIP39 seedphrase to this device. Keep it unlocked; no new PIN required.'}
+                  </p>
+                  <div className="seed-form">
+                    <textarea
+                      className="input mnemonic-input"
+                      value={mnemonic}
+                      onChange={(e) => setMnemonic(e.target.value)}
+                      placeholder="twelve or twenty-four words, separated by spaces"
+                      spellCheck={false}
+                      disabled={seeding}
+                    />
+                    {isInitialSeed && (
+                      <input
+                        type="password"
+                        className="input pin-input"
+                        value={seedPin}
+                        onChange={(e) => setSeedPin(e.target.value)}
+                        placeholder="set a device PIN"
+                        disabled={seeding}
+                        autoComplete="off"
+                      />
+                    )}
+                    <input
+                      type="text"
+                      className="input passphrase-input"
+                      value={seedPassphrase}
+                      onChange={(e) => setSeedPassphrase(e.target.value)}
+                      placeholder="optional bip39 passphrase"
+                      disabled={seeding}
+                    />
+                    <div className="seed-actions">
+                      <button
+                        type="button"
+                        onClick={seedDevice}
+                        disabled={seeding || !canSubmitSeed}
+                        className="btn btn-success"
+                      >
+                        {seeding ? 'seeding...' : isInitialSeed ? 'load seed' : 'add seed'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMnemonic('');
+                          setSeedPassphrase('');
+                          setSeedPin('');
+                        }}
+                        disabled={seeding}
+                        className="btn btn-secondary"
+                      >
+                        clear
+                      </button>
+                    </div>
+                    {mnemonic.trim() && !wordCountValid && (
+                      <div className="validation-text">
+                        Seed words should contain 12, 15, 18, 21, or 24 words (currently {wordCount}).
+                      </div>
+                    )}
+                    {!isInitialSeed && (
+                      <div className="seed-hint">
+                        Device uses your existing PIN. Unlock it in the control section before adding a seed.
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
-          </div>
+          )}
+
+          {status && (
+            <div className="status-message">
+              {status}
+            </div>
+          )}
 
           <div className="section">
-            <h2>Device status</h2>
+            <h2>Device</h2>
             <div className="status-grid">
               <div className="status-item">
                 <span className="label">lock status:</span>
@@ -390,29 +781,185 @@ function App() {
                     <span className="label">has seed:</span>
                     <span className="value">{info.has_seed ? 'yes' : 'no'}</span>
                   </div>
-                  {info.has_seed && info.cheetah_x && info.cheetah_y && (
+                  {info.has_seed && deviceKeys.length === 0 && (
                     <div className="status-item full-width">
-                      <span className="label">public key:</span>
-                      <div className="pubkey-display">
-                        <span className="pubkey-text">{formatCheetahPubkey(info.cheetah_x, info.cheetah_y)}</span>
-                        <button
-                          onClick={() => {
-                            navigator.clipboard.writeText(formatCheetahPubkey(info.cheetah_x, info.cheetah_y));
-                            setStatus('Public key copied to clipboard');
-                          }}
-                          className="btn btn-small copy-btn"
-                        >
-                          copy
-                        </button>
-                      </div>
+                      <span className="label">public keys:</span>
+                      <span className="value">unlock to view</span>
                     </div>
+                  )}
+                  {deviceKeys.length > 0 && (
+                    <>
+                      <div className="status-item full-width">
+                        <span className="label">active slot:</span>
+                        <select
+                          value={selectedSlot}
+                          onChange={(e) => handleSlotChange(Number(e.target.value))}
+                          className="slot-select"
+                        >
+                          {slotSummary.map((pub) => (
+                            <option key={pub.slot} value={pub.slot}>
+                              {`slot ${pub.slot} · ${formatDerivationPath(pub.path)}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="status-item full-width multi-keys">
+                        <span className="label">public keys:</span>
+                        <div className="pubkey-list">
+                          {slotSummary.map((pub, idx) => (
+                            <div key={idx} className="pubkey-list-item">
+                              <div className="pubkey-meta">
+                                <span className="path-tag">slot {pub.slot} · {formatDerivationPath(pub.path)}</span>
+                              </div>
+                              <div className="pubkey-display">
+                                <span className="pubkey-text">{formatCheetahPubkey(pub.x, pub.y)}</span>
+                                <div className="pubkey-actions">
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(formatCheetahPubkey(pub.x, pub.y));
+                                      setStatus(
+                                        `Copied slot ${pub.slot} ${formatDerivationPath(pub.path)} to clipboard`
+                                      );
+                                    }}
+                                    className="btn btn-small copy-btn"
+                                  >
+                                    copy
+                                  </button>
+                                  <button
+                                    onClick={() => deleteSeedSlot(pub.slot)}
+                                    className="btn btn-small btn-danger"
+                                    disabled={deletingSlot === pub.slot || seeding || signing}
+                                  >
+                                    {deletingSlot === pub.slot ? 'removing...' : 'remove'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
                   )}
                 </>
               )}
             </div>
-            <button onClick={refreshStatus} className="btn btn-small">
+            <button onClick={() => refreshStatus()} className="btn btn-small">
               refresh status
             </button>
+          </div>
+
+
+
+          <div className="section">
+            <h2>Control</h2>
+            <div className="pin-controls">
+              {locked && (
+                <input
+                  type="password"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  placeholder="enter PIN"
+                  className="input"
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && locked) {
+                      unlock();
+                    }
+                  }}
+                />
+              )}
+              <div className="button-group" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+                <button
+                  onClick={unlock}
+                  disabled={!locked || !pin}
+                  className="btn btn-success"
+                >
+                  unlock
+                </button>
+                <button
+                  onClick={lock}
+                  disabled={locked || locked === null}
+                  className="btn btn-warning"
+                >
+                  lock
+                </button>
+                <button onClick={ping} className="btn btn-small">
+                  test
+                </button>
+                <button
+                  onClick={resetDevice}
+                  disabled={seeding || signing}
+                  className="btn btn-danger"
+                >
+                  reset
+                </button>
+                <button onClick={disconnect} className="btn btn-secondary">
+                  disconnect
+                </button>
+              </div>
+            </div>
+            {info?.has_seed && (
+              <div className="reset-pin">
+                <h3>Reset PIN</h3>
+                <p className="reset-pin-note">Requires the device to be unlocked.</p>
+                <div className="reset-pin-grid">
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinResetCurrent}
+                    onChange={(e) => setPinResetCurrent(e.target.value)}
+                    placeholder="current PIN"
+                    disabled={resettingPin}
+                    autoComplete="off"
+                  />
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinResetNew}
+                    onChange={(e) => setPinResetNew(e.target.value)}
+                    placeholder="new PIN"
+                    disabled={resettingPin}
+                    autoComplete="off"
+                  />
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinResetConfirm}
+                    onChange={(e) => setPinResetConfirm(e.target.value)}
+                    placeholder="confirm new PIN"
+                    disabled={resettingPin}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="reset-pin-actions">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPinResetCurrent('');
+                      setPinResetNew('');
+                      setPinResetConfirm('');
+                    }}
+                    disabled={resettingPin}
+                    className="btn btn-secondary btn-small"
+                  >
+                    clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetPin}
+                    disabled={
+                      resettingPin ||
+                      locked !== false ||
+                      !pinResetCurrent.trim() ||
+                      !pinResetNew.trim() ||
+                      pinResetNew !== pinResetConfirm
+                    }
+                    className="btn btn-success btn-small"
+                  >
+                    {resettingPin ? 'updating...' : 'update PIN'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {wasmReady && (
@@ -446,6 +993,15 @@ function App() {
                         {signingInputs.map((input, i) => (
                           <div key={i} className="input-item">
                             <span className="mono-small">[{input.input_name}]</span>
+                            {input.device_keys && input.device_keys.length > 0 && (
+                              <span className="path-small">
+                                {input.device_keys
+                                  .map((entry: InputDeviceKey) =>
+                                    `slot ${entry.slot} · ${formatDerivationPath(entry.path ?? [])}`
+                                  )
+                                  .join(', ')}
+                              </span>
+                            )}
                             <span className="hash-small">{input.sig_hash}</span>
                           </div>
                         ))}
@@ -482,12 +1038,6 @@ function App() {
               )}
             </div>
           )}
-
-          {status && (
-            <div className="status-message">
-              {status}
-            </div>
-          )}
         </>
       )}
 
@@ -495,7 +1045,7 @@ function App() {
         <div className="section">
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <button onClick={connect} className="btn btn-primary">
-              connect device
+              connect
             </button>
           </div>
         </div>

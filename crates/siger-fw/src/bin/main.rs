@@ -11,7 +11,7 @@ use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
-use heapless::Vec as HVec;
+use heapless::{String as HString, Vec as HVec};
 
 use siger_core::alloc_path as pathmod;
 use siger_core::{CheetahPub, *};
@@ -74,6 +74,14 @@ struct OutFrag {
 }
 
 static mut OUT_FRAG: Option<OutFrag> = None;
+
+enum UnlockAttempt {
+    Success,
+    WrongPin { attempts_remaining: u8 },
+    LockedOut,
+    NotInitialized,
+    Failed,
+}
 
 /// cobs test
 #[cfg(test)]
@@ -171,16 +179,49 @@ fn main() -> ! {
 
     'run: loop {
         if let Some(ui) = ui.as_mut() {
-            if let Some(event) = ui.tick() {
+            let event = ui.tick();
+
+            if let Some(result) = ui.poll_confirmation_result() {
+                if result {
+                    let _ = usb.write(b"confirm accepted\r\n");
+                } else {
+                    let _ = usb.write(b"confirm rejected\r\n");
+                }
+            }
+
+            if let Some(event) = event {
                 match event {
                     GuiInteraction::PinComplete(digits) => {
-                        let mut msg = heapless::String::<32>::new();
+                        let mut pin = HString::<16>::new();
                         for digit in digits.iter() {
-                            let _ = msg.push(char::from(b'0' + *digit));
+                            let ch = char::from(b'0' + *digit);
+                            let _ = pin.push(ch);
                         }
-                        let _ = usb.write(b"PIN entry: ");
-                        let _ = usb.write(msg.as_bytes());
-                        let _ = usb.write(b"\r\n");
+
+                        ui.show_unlocking();
+
+                        match unlock_device_with_pin(pin.as_str()) {
+                            UnlockAttempt::Success => {
+                                ui.show_unlock_success();
+                                let _ = usb.write(b"unlock success\r\n");
+                            }
+                            UnlockAttempt::WrongPin { attempts_remaining } => {
+                                ui.show_pin_failure(Some(attempts_remaining));
+                                let _ = usb.write(b"wrong pin\r\n");
+                            }
+                            UnlockAttempt::LockedOut => {
+                                ui.show_pin_locked_out();
+                                let _ = usb.write(b"pin locked out\r\n");
+                            }
+                            UnlockAttempt::NotInitialized => {
+                                ui.show_pin_not_initialized();
+                                let _ = usb.write(b"pin not set\r\n");
+                            }
+                            UnlockAttempt::Failed => {
+                                ui.show_pin_failure(None);
+                                let _ = usb.write(b"unlock failed\r\n");
+                            }
+                        }
                     }
                     GuiInteraction::ConfirmAccepted => {
                         let _ = usb.write(b"confirm accepted\r\n");
@@ -633,42 +674,17 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
 
-        Request::Unlock { pin } => {
-            unsafe {
-                if !DEVICE_LOCKED {
-                    return Response::Ok; // Already unlocked
-                }
-            }
-
-            let mut nvs = NvsStore::new();
-            match nvs.unlock(pin.as_str()) {
-                Ok((seeds, master_key)) => {
-                    update_seed_store_from_slice(seeds.as_slice());
-                    store_master_key(&master_key);
-                    unsafe {
-                        DEVICE_LOCKED = false;
-                    }
-                    Response::Ok
-                }
-                Err(NvsError::WrongPin) => {
-                    let remaining = nvs.get_attempts_remaining();
-                    if remaining == 0 {
-                        Response::Err {
-                            code: ERR_PIN_LOCKED_OUT,
-                        }
-                    } else {
-                        Response::Err {
-                            code: ERR_WRONG_PIN,
-                        }
-                    }
-                }
-                Err(NvsError::LockedOut) => Response::Err {
-                    code: ERR_PIN_LOCKED_OUT,
-                },
-                Err(NvsError::NotInitialized) => Response::Err { code: ERR_NO_SEED },
-                Err(_) => Response::Err { code: ERR_NO_SEED },
-            }
-        }
+        Request::Unlock { pin } => match unlock_device_with_pin(pin.as_str()) {
+            UnlockAttempt::Success => Response::Ok,
+            UnlockAttempt::WrongPin { .. } => Response::Err {
+                code: ERR_WRONG_PIN,
+            },
+            UnlockAttempt::LockedOut => Response::Err {
+                code: ERR_PIN_LOCKED_OUT,
+            },
+            UnlockAttempt::NotInitialized => Response::Err { code: ERR_NO_SEED },
+            UnlockAttempt::Failed => Response::Err { code: ERR_NO_SEED },
+        },
 
         Request::Lock => {
             wipe_seed();
@@ -743,6 +759,39 @@ fn handle_request_v1(req: &Request) -> Response {
 
 fn is_device_locked() -> bool {
     unsafe { DEVICE_LOCKED }
+}
+
+fn unlock_device_with_pin(pin: &str) -> UnlockAttempt {
+    unsafe {
+        if !DEVICE_LOCKED {
+            return UnlockAttempt::Success;
+        }
+    }
+
+    let mut nvs = NvsStore::new();
+    match nvs.unlock(pin) {
+        Ok((seeds, master_key)) => {
+            update_seed_store_from_slice(seeds.as_slice());
+            store_master_key(&master_key);
+            unsafe {
+                DEVICE_LOCKED = false;
+            }
+            UnlockAttempt::Success
+        }
+        Err(NvsError::WrongPin) => {
+            let remaining = nvs.get_attempts_remaining();
+            if remaining == 0 {
+                UnlockAttempt::LockedOut
+            } else {
+                UnlockAttempt::WrongPin {
+                    attempts_remaining: remaining,
+                }
+            }
+        }
+        Err(NvsError::LockedOut) => UnlockAttempt::LockedOut,
+        Err(NvsError::NotInitialized) => UnlockAttempt::NotInitialized,
+        Err(_) => UnlockAttempt::Failed,
+    }
 }
 
 fn pk_uncompressed_65(sk: &SigningKey) -> [u8; 65] {

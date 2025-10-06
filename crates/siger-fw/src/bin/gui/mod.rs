@@ -1,4 +1,4 @@
-use core::convert::Infallible;
+use core::{convert::Infallible, fmt::Write};
 
 use axs5106l::{Axs5106l, Coordinates, Rotation as TouchRotation};
 use display_interface_spi::SPIInterface;
@@ -53,18 +53,23 @@ const COLOR_BUTTON: Rgb565 = Rgb565::new(6, 12, 6);
 const COLOR_BUTTON_BORDER: Rgb565 = Rgb565::new(2, 4, 2);
 const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
+const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
 /// Top-level GUI manager for the hardware wallet.
 pub struct Gui {
     display: LcdDisplay,
     backlight: Output<'static>,
     touch: Option<TouchController>,
+    touch_irq: Option<Input<'static>>,
     mode: GuiMode,
     pin_expected: Option<u8>,
     pin_entered: Vec<u8, MAX_PIN_DIGITS>,
     confirm_prompt: String<64>,
     touch_active: bool,
     active_button: Option<(usize, usize)>,
+    unlock_anim: u16,
+    current_spinner_frame: u8,
+    confirm_result: Option<bool>,
 }
 
 /// UI mode.
@@ -73,6 +78,9 @@ pub enum GuiMode {
     Splash,
     Locked,
     Confirm,
+    Unlocking,
+    Unlocked,
+    Error,
 }
 
 /// User interactions surfaced by the GUI layer.
@@ -148,7 +156,6 @@ impl Gui {
 
         let _ = backlight.set_high();
 
-        // Prepare I2C + touch controller (best-effort: ignore failures)
         let i2c = I2c::new(i2c0, I2cConfig::default())
             .map_err(GuiError::I2cConfig)?
             .with_scl(touch_scl)
@@ -165,20 +172,25 @@ impl Gui {
             Ok(()) => Some(touch_driver),
             Err(_err) => None,
         };
-
-        // Configure interrupt pin (even if we don't actively sample it) so ownership is consumed.
-        let _touch_irq = Input::new(touch_int, InputConfig::default().with_pull(Pull::Up));
+        let touch_irq = Some(Input::new(
+            touch_int,
+            InputConfig::default().with_pull(Pull::Up),
+        ));
 
         let mut gui = Gui {
             display,
             backlight,
             touch,
+            touch_irq,
             mode: GuiMode::Splash,
             pin_expected: None,
             pin_entered: Vec::new(),
             confirm_prompt: String::new(),
             touch_active: false,
             active_button: None,
+            unlock_anim: 0,
+            current_spinner_frame: 0,
+            confirm_result: None,
         };
 
         gui.show_boot_logo();
@@ -188,8 +200,8 @@ impl Gui {
     pub fn show_boot_logo(&mut self) {
         self.active_button = None;
         self.touch_active = false;
-        self.blit_boot_logo();
         self.mode = GuiMode::Splash;
+        self.blit_boot_logo();
     }
 
     pub fn begin_unlock(&mut self, expected_digits: Option<u8>) {
@@ -202,6 +214,61 @@ impl Gui {
         self.render_pin_header();
     }
 
+    pub fn show_unlocking(&mut self) {
+        self.touch_active = false;
+        self.active_button = None;
+        self.mode = GuiMode::Unlocking;
+        self.unlock_anim = 0;
+        self.current_spinner_frame = 0;
+        let _ = self.display.clear(COLOR_BACKGROUND);
+        self.render_header("Unlocking...", COLOR_BACKGROUND);
+        self.draw_unlock_spinner_frame(0);
+    }
+
+    pub fn show_unlock_success(&mut self) {
+        self.touch_active = false;
+        self.active_button = None;
+        self.mode = GuiMode::Unlocked;
+        let _ = self.display.clear(COLOR_BACKGROUND);
+        self.draw_centered_message("Unlocked");
+    }
+
+    pub fn show_pin_failure(&mut self, attempts_remaining: Option<u8>) {
+        self.touch_active = false;
+        self.active_button = None;
+        self.pin_entered.clear();
+        self.mode = GuiMode::Locked;
+        self.draw_pin_pad();
+        let mut msg = String::<32>::new();
+        let _ = msg.push_str("Wrong PIN");
+        if let Some(rem) = attempts_remaining {
+            let _ = write!(msg, " ({} left)", rem);
+        }
+        self.render_header(msg.as_str(), COLOR_BUTTON_ACTIVE);
+    }
+
+    pub fn show_pin_locked_out(&mut self) {
+        self.touch_active = false;
+        self.active_button = None;
+        self.pin_entered.clear();
+        self.mode = GuiMode::Error;
+        let _ = self.display.clear(COLOR_BACKGROUND);
+        self.draw_centered_message("PIN Locked Out");
+    }
+
+    pub fn show_pin_not_initialized(&mut self) {
+        self.touch_active = false;
+        self.active_button = None;
+        self.pin_entered.clear();
+        self.mode = GuiMode::Error;
+        let _ = self.display.clear(COLOR_BACKGROUND);
+        self.draw_centered_message("PIN Not Set");
+    }
+
+    pub fn poll_confirmation_result(&mut self) -> Option<bool> {
+        self.confirm_result.take()
+    }
+
     pub fn request_confirmation(&mut self, prompt: &str) {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
@@ -212,14 +279,23 @@ impl Gui {
     }
 
     pub fn tick(&mut self) -> Option<GuiInteraction> {
-        let Some(coord) = self.poll_touch_state() else {
+        self.advance_unlocking();
+
+        match self.mode {
+            GuiMode::Unlocking | GuiMode::Unlocked | GuiMode::Error | GuiMode::Splash => {
+                return None
+            }
+            _ => {}
+        }
+
+        let Some(touch) = self.poll_touch_state() else {
             return None;
         };
 
         match self.mode {
-            GuiMode::Locked => self.handle_pin_touch(coord),
-            GuiMode::Confirm => self.handle_confirm_touch(coord),
-            GuiMode::Splash => Some(GuiInteraction::RawTouch(coord)),
+            GuiMode::Locked => self.handle_pin_touch(touch),
+            GuiMode::Confirm => self.handle_confirm_touch(touch),
+            GuiMode::Unlocking | GuiMode::Unlocked | GuiMode::Error | GuiMode::Splash => None,
         }
     }
 
@@ -241,10 +317,7 @@ impl Gui {
                     None
                 } else {
                     self.touch_active = true;
-                    Some(Coordinates {
-                        x: mirror_x(coord.x),
-                        y: coord.y,
-                    })
+                    Some(coord)
                 }
             }
             None => {
@@ -286,11 +359,11 @@ impl Gui {
             Button::Ok => {
                 if let Some(expected) = self.pin_expected {
                     if self.pin_entered.len() as u8 != expected {
-                        self.flash_pin_error();
+                        self.show_pin_failure(None);
                         return None;
                     }
                 } else if self.pin_entered.len() < 4 {
-                    self.flash_pin_error();
+                    self.show_pin_failure(None);
                     return None;
                 }
                 Some(GuiInteraction::PinComplete(self.pin_entered.clone()))
@@ -307,11 +380,23 @@ impl Gui {
         self.draw_button(hit.row, hit.col, true);
         self.active_button = Some((hit.row, hit.col));
 
-        match hit.button {
+        let result = match hit.button {
             Button::Ok => Some(GuiInteraction::ConfirmAccepted),
             Button::Clear => Some(GuiInteraction::ConfirmRejected),
             Button::Digit(_) => Some(GuiInteraction::RawTouch(coord)),
+        };
+
+        match result {
+            Some(GuiInteraction::ConfirmAccepted) => {
+                self.confirm_result = Some(true);
+            }
+            Some(GuiInteraction::ConfirmRejected) => {
+                self.confirm_result = Some(false);
+            }
+            _ => {}
         }
+
+        result
     }
 
     fn draw_pin_pad(&mut self) {
@@ -330,30 +415,7 @@ impl Gui {
         for _ in 0..self.pin_entered.len() {
             let _ = status.push('*');
         }
-
-        let header_rect = Rectangle::new(
-            Point::new(0, 0),
-            Size::new(BOOT_LOGO_WIDTH.into(), HEADER_HEIGHT as u32),
-        );
-        let _ = header_rect
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_BACKGROUND)
-                    .build(),
-            )
-            .draw(&mut self.display);
-
-        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-        let _ = Text::with_alignment(
-            &status,
-            Point::new(
-                (BOOT_LOGO_WIDTH / 2) as i32,
-                HEADER_HEIGHT / 2 + FONT_10X20.baseline as i32 / 2,
-            ),
-            style,
-            Alignment::Center,
-        )
-        .draw(&mut self.display);
+        self.render_header(status.as_str(), COLOR_BACKGROUND);
     }
 
     fn render_confirm_prompt(&mut self) {
@@ -374,21 +436,6 @@ impl Gui {
             }
             self.draw_button_with_label(3, col_idx, label, false);
         }
-    }
-
-    fn flash_pin_error(&mut self) {
-        let highlight = Rectangle::new(
-            Point::new(0, 0),
-            Size::new(BOOT_LOGO_WIDTH.into(), HEADER_HEIGHT as u32),
-        );
-        let _ = highlight
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_BUTTON_ACTIVE)
-                    .build(),
-            )
-            .draw(&mut self.display);
-        self.render_pin_header();
     }
 
     fn blit_boot_logo(&mut self) {
@@ -513,6 +560,76 @@ impl Gui {
         )
         .draw(&mut self.display);
     }
+
+    fn render_header(&mut self, text: &str, bg: Rgb565) {
+        let header_rect = Rectangle::new(
+            Point::new(0, 0),
+            Size::new(BOOT_LOGO_WIDTH.into(), HEADER_HEIGHT as u32),
+        );
+        let _ = header_rect
+            .into_styled(PrimitiveStyleBuilder::new().fill_color(bg).build())
+            .draw(&mut self.display);
+
+        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let baseline = HEADER_HEIGHT / 2 + FONT_10X20.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            text,
+            Point::new((BOOT_LOGO_WIDTH / 2) as i32, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut self.display);
+    }
+
+    fn draw_centered_message(&mut self, text: &str) {
+        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let baseline = (BOOT_LOGO_HEIGHT / 2) as i32;
+        let _ = Text::with_alignment(
+            text,
+            Point::new((BOOT_LOGO_WIDTH / 2) as i32, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut self.display);
+    }
+
+    fn draw_unlock_spinner_frame(&mut self, frame: u8) {
+        let center = Point::new((BOOT_LOGO_WIDTH / 2) as i32, HEADER_HEIGHT + 80);
+        let erase = Rectangle::new(Point::new(center.x - 10, center.y - 12), Size::new(20, 24));
+        let _ = erase
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_BACKGROUND)
+                    .build(),
+            )
+            .draw(&mut self.display);
+
+        let mut buf = [0u8; 4];
+        let spinner_str = SPINNER_FRAMES[frame as usize].encode_utf8(&mut buf);
+        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            spinner_str,
+            Point::new(center.x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut self.display);
+    }
+
+    fn advance_unlocking(&mut self) {
+        if self.mode != GuiMode::Unlocking {
+            return;
+        }
+        self.unlock_anim = self.unlock_anim.wrapping_add(1);
+        if self.unlock_anim % 8 == 0 {
+            let frame = ((self.unlock_anim / 8) % SPINNER_FRAMES.len() as u16) as u8;
+            if frame != self.current_spinner_frame {
+                self.current_spinner_frame = frame;
+                self.draw_unlock_spinner_frame(frame);
+            }
+        }
+    }
 }
 
 fn button_label(button: Button) -> &'static str {
@@ -531,8 +648,4 @@ fn button_label(button: Button) -> &'static str {
         Button::Clear => "CLR",
         Button::Ok => "OK",
     }
-}
-
-fn mirror_x(x: u16) -> u16 {
-    BOOT_LOGO_WIDTH.saturating_sub(1).saturating_sub(x)
 }

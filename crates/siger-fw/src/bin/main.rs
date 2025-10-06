@@ -2,13 +2,15 @@
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 
+mod gui;
 mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
 use cobs::encode;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
-use esp_hal::{clock::CpuClock, main};
+use esp_hal::{clock::CpuClock, delay::Delay, main};
+use gui::{Gui, GuiInteraction};
 use heapless::Vec as HVec;
 
 use siger_core::alloc_path as pathmod;
@@ -137,8 +139,30 @@ fn main() -> ! {
     let p = esp_hal::init(cfg);
     esp_alloc::heap_allocator!(size: 64 * 1024);
 
+    let mut delay = Delay::new();
+    let mut ui = Gui::new(
+        p.SPI2, p.GPIO38, p.GPIO39, p.GPIO45, p.GPIO21, p.GPIO40, p.GPIO46, p.I2C0, p.GPIO41,
+        p.GPIO42, p.GPIO47, p.GPIO48, &mut delay,
+    )
+    .ok();
+
+    let pin_required = {
+        let mut nvs = NvsStore::new();
+        nvs.is_initialized()
+    };
+
+    delay.delay_millis(2_000);
+    if pin_required {
+        if let Some(ui) = ui.as_mut() {
+            ui.begin_unlock(None);
+        }
+    }
+
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
     let _ = usb.write(b"siger-fw ready\r\n");
+    if ui.is_none() {
+        let _ = usb.write(b"gui init failed\r\n");
+    }
 
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
@@ -146,6 +170,29 @@ fn main() -> ! {
     let mut enc = [0u8; ENC_BUF_LEN];
 
     'run: loop {
+        if let Some(ui) = ui.as_mut() {
+            if let Some(event) = ui.tick() {
+                match event {
+                    GuiInteraction::PinComplete(digits) => {
+                        let mut msg = heapless::String::<32>::new();
+                        for digit in digits.iter() {
+                            let _ = msg.push(char::from(b'0' + *digit));
+                        }
+                        let _ = usb.write(b"PIN entry: ");
+                        let _ = usb.write(msg.as_bytes());
+                        let _ = usb.write(b"\r\n");
+                    }
+                    GuiInteraction::ConfirmAccepted => {
+                        let _ = usb.write(b"confirm accepted\r\n");
+                    }
+                    GuiInteraction::ConfirmRejected => {
+                        let _ = usb.write(b"confirm rejected\r\n");
+                    }
+                    GuiInteraction::RawTouch(_) => {}
+                }
+            }
+        }
+
         // 1) Proactive outbound frag, if any
         unsafe {
             if let Some(of) = OUT_FRAG.as_mut() {

@@ -117,6 +117,45 @@ h2 {
   max-width: 100%;
 }
 
+.pubkey-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.pubkey-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 2px;
+  padding: 0.75rem;
+}
+
+.pubkey-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.path-tag {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.75rem;
+  color: var(--color-gray);
+}
+
+.slot-select {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  font-family: var(--font-base);
+  font-size: 0.9rem;
+}
+
 .copy-btn {
   padding: 0.25rem 0.5rem;
   font-size: 0.75rem;
@@ -228,6 +267,16 @@ h2 {
   color: var(--color-bg);
 }
 
+.btn-danger {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #c92a2a;
+  color: var(--color-bg);
+}
+
 .btn-warning {
   background: var(--color-bg);
   color: var(--color-text);
@@ -264,6 +313,18 @@ h2 {
   gap: 1rem;
 }
 
+.seed-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.seed-toggle {
+  white-space: nowrap;
+}
+
 textarea.input.mnemonic-input {
   min-height: 6.5rem;
   line-height: 1.4;
@@ -288,6 +349,42 @@ input.input.passphrase-input {
 
 .seed-actions .btn {
   flex: 1;
+}
+
+.validation-text {
+  margin-top: 0.5rem;
+  color: #b00020;
+  font-size: 0.9rem;
+}
+
+.seed-hint {
+  margin-top: 0.5rem;
+  color: var(--color-gray);
+  font-size: 0.9rem;
+}
+
+.reset-pin {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.reset-pin-note {
+  color: var(--color-gray);
+  font-size: 0.9rem;
+}
+
+.reset-pin-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.reset-pin-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
 }
 
 /* Transaction signing */
@@ -320,6 +417,12 @@ input.input.passphrase-input {
   font-size: 0.75rem;
   color: var(--color-gray);
   word-break: break-all;
+}
+
+.path-small {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.7rem;
+  color: var(--color-gray);
 }
 
 .tx-details {

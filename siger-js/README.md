@@ -40,7 +40,6 @@ siger-js/
 ### 4. **Cheetah Crypto** (`cheetah.ts`)
 - `formatCheetahPubkey()` - Convert (x, y) coordinates to base58 string
 - `serializeCheetahPublicKey()` - 97-byte serialization format
-- Compatible with nockchain's pubkey format
 
 ### 5. **Device Connection** (`device.ts`)
 - `SigerDevice` class - High-level Web Serial API wrapper
@@ -113,8 +112,12 @@ if (response.type === 'Info') {
 
   if (response.has_seed) {
     import { formatCheetahPubkey } from 'siger-js';
-    const pubkey = formatCheetahPubkey(response.cheetah_x, response.cheetah_y);
-    console.log('Public key:', pubkey);
+    const first = response.cheetah_pubs[0];
+    if (first) {
+      const pubkey = formatCheetahPubkey(first.x, first.y);
+      console.log('First public key:', pubkey);
+      console.log('Derivation path:', ['m', ...first.path].join('/'));
+    }
   }
 }
 ```
@@ -229,10 +232,14 @@ type Request =
   | { type: 'Hello' }
   | { type: 'GetInfo' }
   | { type: 'Ping' }
+  | { type: 'SetSeed'; seed64: Uint8Array }
   | { type: 'Unlock'; pin: string }
   | { type: 'Lock' }
   | { type: 'GetLockStatus' }
-  | { type: 'InitializePIN'; pin: string; seed64: Uint8Array };
+  | { type: 'Reset' }
+  | { type: 'InitializePIN'; pin: string; seed64: Uint8Array }
+  | { type: 'GetCheetahPub'; path: number[] }
+  | { type: 'SignSpendHash'; path: number[]; msg5: bigint[] };
 ```
 
 ### Responses
@@ -241,10 +248,13 @@ type Request =
 type Response =
   | { type: 'Hello'; proto_v: number; compressed_pk: boolean }
   | { type: 'Info'; proto_v: number; fw_major: number; fw_minor: number;
-      features: number; has_seed: boolean; cheetah_x: bigint[]; cheetah_y: bigint[] }
+      features: number; has_seed: boolean;
+      cheetah_pubs: Array<{ path: number[]; x: bigint[]; y: bigint[] }> }
   | { type: 'Pong' }
   | { type: 'Ok' }
   | { type: 'OkLockStatus'; locked: boolean; attempts_remaining: number }
+  | { type: 'OkCheetahPub'; x: bigint[]; y: bigint[] }
+  | { type: 'OkCheetahSig'; chal: bigint[]; sig: bigint[] }
   | { type: 'Err'; code: number };
 ```
 
@@ -255,9 +265,8 @@ Cheetah public keys are elliptic curve points represented as (x, y) coordinates,
 ```typescript
 import { serializeCheetahPublicKey, base58Encode, formatCheetahPubkey } from 'siger-js';
 
-// from device info response
-const x = response.cheetah_x; // bigint[6]
-const y = response.cheetah_y; // bigint[6]
+// from device info response (first pubkey)
+const [{ x, y }] = response.cheetah_pubs;
 
 // get base58 public key
 const pubkey = formatCheetahPubkey(x, y);

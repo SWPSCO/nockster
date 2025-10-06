@@ -117,13 +117,16 @@ pub enum Request {
 
     // Cheetah
     GetCheetahPub {
+        slot: u8,
         path: alloc_path::Path,
     },
     SignSpendHash {
+        slot: u8,
         path: alloc_path::Path,
         msg5: [u64; 5],
     },
     SignSpendHashFor {
+        slot: u8,
         path: alloc_path::Path,
         msg5: [u64; 5],
         pubkey: ([u64; 6], [u64; 6]),
@@ -138,15 +141,23 @@ pub enum Request {
         #[serde(with = "BigArray")]
         seed64: [u8; 64],
     },
+    AddSeed {
+        #[serde(with = "BigArray")]
+        seed64: [u8; 64],
+    },
     Unlock {
         pin: alloc::string::String,
     },
     Lock,
-    ChangePIN {
-        old_pin: alloc::string::String,
+    ResetPIN {
+        current_pin: alloc::string::String,
         new_pin: alloc::string::String,
     },
     GetLockStatus,
+    SelectSeed {
+        slot: u8,
+    },
+    Reset,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -169,8 +180,7 @@ pub enum Response {
         fw_minor: u16,
         features: u32,
         has_seed: bool,
-        cheetah_x: [u64; 6],
-        cheetah_y: [u64; 6],
+        cheetah_pubs: alloc::vec::Vec<CheetahPub>,
     },
     Pong,
     Ok,
@@ -207,6 +217,19 @@ pub enum Response {
         code: u16,
     },
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CheetahPub {
+    pub slot: u8,
+    pub path: alloc_path::Path,
+    #[serde(with = "BigArray")]
+    pub x: [u64; 6],
+    #[serde(with = "BigArray")]
+    pub y: [u64; 6],
+}
+
+pub const MAX_SEED_SLOTS: usize = 16;
+pub const MAX_INFO_CHEETAH_PUBS: usize = MAX_SEED_SLOTS;
 
 // Host uses Vec<u32>, firmware uses HVec<u32,16>
 pub mod alloc_path {

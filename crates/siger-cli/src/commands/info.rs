@@ -1,7 +1,7 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_call};
-use crate::util::fmt_u64x6;
 use siger_core::{Request, Response};
+use std::fmt::Write as _;
 
 pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
@@ -15,18 +15,27 @@ pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
             fw_minor,
             features,
             has_seed,
-            cheetah_x,
-            cheetah_y,
+            cheetah_pubs,
         } => {
             println!(
-              "info: proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}"
-          );
+                "info: proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}"
+            );
             if has_seed {
-                eprintln!("DEBUG X: {:?}", cheetah_x);
-                eprintln!("DEBUG Y: {:?}", cheetah_y);
-                let pk_xy = (cheetah_x, cheetah_y);
-                let b58 = pubkey_to_b58(&pk_xy);
-                println!("public key: {b58}");
+                if cheetah_pubs.is_empty() {
+                    println!("  (device locked; pubkeys withheld)");
+                } else {
+                    for (idx, pubinfo) in cheetah_pubs.iter().enumerate() {
+                        let pk_xy = (pubinfo.x, pubinfo.y);
+                        let b58 = pubkey_to_b58(&pk_xy);
+                        let path_display = format_path(pubinfo.path.as_slice());
+                        println!(
+                            "  slot[{slot}] key[{idx:02}]: path={} pubkey={}",
+                            path_display,
+                            b58,
+                            slot = pubinfo.slot
+                        );
+                    }
+                }
             }
         }
         other => anyhow::bail!("unexpected info response: {other:?}"),
@@ -53,4 +62,18 @@ pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn format_path(path: &[u32]) -> String {
+    let mut out = String::from("m");
+    for &component in path {
+        let hardened = (component & 0x8000_0000) != 0;
+        let index = component & 0x7FFF_FFFF;
+        out.push('/');
+        let _ = write!(out, "{}", index);
+        if hardened {
+            out.push('\'');
+        }
+    }
+    out
 }

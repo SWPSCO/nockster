@@ -526,8 +526,10 @@ impl SigningInput {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct DevicePubkey {
+    slot: u8,
+    path: Vec<u32>,
     x: [u64; 6],
     y: [u64; 6],
 }
@@ -784,7 +786,7 @@ impl ParsedTransaction {
         for (name, input) in raw.inputs.p.tap() {
             let lock = &input.note.lock;
 
-            let mut matching_keys = Vec::new();
+            let mut matching_keys: Vec<(u8, Vec<u32>)> = Vec::new();
             for dev_pk in &dev_keys {
                 let pk_dev = SchnorrPubkey {
                     x: F6LT { values: dev_pk.x },
@@ -800,8 +802,7 @@ impl ParsedTransaction {
 
                     if matches {
                         found_match = true;
-                        matching_keys
-                            .push(format!("pk({},{})", pk_dev.x.values[0], pk_dev.y.values[0]));
+                        matching_keys.push((dev_pk.slot, dev_pk.path.clone()));
                         break;
                     }
                 }
@@ -828,11 +829,21 @@ impl ParsedTransaction {
                 // JavaScript will need to parse these as BigInt
                 let msg5_strings: Vec<String> = msg5.iter().map(|v| v.to_string()).collect();
 
+                let device_keys_json: Vec<_> = matching_keys
+                    .iter()
+                    .map(|(slot, path)| {
+                        json!({
+                            "slot": slot,
+                            "path": path,
+                        })
+                    })
+                    .collect();
+
                 let input_info = json!({
                     "name_first": first,
                     "name_last": last,
                     "input_name": combined,
-                    "pubkey_hashes": matching_keys,
+                    "device_keys": device_keys_json,
                     "sig_hash": format_hash(&sig_hash),
                     "msg5": msg5_strings,
                 });

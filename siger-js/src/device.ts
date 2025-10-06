@@ -209,6 +209,17 @@ export class SigerDevice {
     return resp;
   }
 
+  async deleteSeed(slot: number) {
+    const resp = await this.call({ type: 'DeleteSeed', slot });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
   async resetPIN(currentPin: string, newPin: string) {
     const resp = await this.call({ type: 'ResetPIN', current_pin: currentPin, new_pin: newPin });
     if (resp.type === 'Err') {

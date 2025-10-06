@@ -145,6 +145,9 @@ pub enum Request {
         #[serde(with = "BigArray")]
         seed64: [u8; 64],
     },
+    DeleteSeed {
+        slot: u8,
+    },
     Unlock {
         pin: alloc::string::String,
     },

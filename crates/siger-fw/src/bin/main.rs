@@ -552,6 +552,40 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
 
+        Request::DeleteSeed { slot } => {
+            if is_device_locked() {
+                return Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                };
+            }
+
+            let master_key = match master_key_copy() {
+                Some(key) => key,
+                None => {
+                    return Response::Err {
+                        code: ERR_DEVICE_LOCKED,
+                    }
+                }
+            };
+
+            let mut nvs = NvsStore::new();
+            match nvs.delete_seed_with_key(&master_key, *slot as usize) {
+                Ok(_) => {
+                    remove_seed_slot(*slot as usize);
+                    Response::Ok
+                }
+                Err(NvsError::InvalidSlot) => Response::Err { code: ERR_NO_SEED },
+                Err(NvsError::WrongPin) => Response::Err {
+                    code: ERR_WRONG_PIN,
+                },
+                Err(NvsError::LockedOut) => Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                },
+                Err(NvsError::NotInitialized) => Response::Err { code: ERR_NO_SEED },
+                Err(_) => Response::Err { code: ERR_NO_SEED },
+            }
+        }
+
         Request::Unlock { pin } => {
             unsafe {
                 if !DEVICE_LOCKED {
@@ -763,6 +797,24 @@ fn append_seed_slot(seed64: &[u8; 64]) {
     unsafe {
         if SEED_STORE.slots.len() < MAX_SEED_SLOTS {
             let _ = SEED_STORE.slots.push(*seed64);
+        }
+    }
+}
+
+fn remove_seed_slot(index: usize) {
+    unsafe {
+        if index < SEED_STORE.slots.len() {
+            let len = SEED_STORE.slots.len();
+            let mut i = index;
+            while i + 1 < len {
+                SEED_STORE.slots[i] = SEED_STORE.slots[i + 1];
+                i += 1;
+            }
+            let _ = SEED_STORE.slots.pop();
+            if SEED_STORE.active >= SEED_STORE.slots.len() {
+                SEED_STORE.active = SEED_STORE.slots.len().saturating_sub(1);
+            }
+            DEVICE_LOCKED = SEED_STORE.slots.is_empty();
         }
     }
 }

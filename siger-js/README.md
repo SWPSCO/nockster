@@ -18,7 +18,7 @@ siger-js/
 │   ├── protocol.ts   # Protocol types and message handlers
 │   ├── cheetah.ts    # Cheetah public key encoding
 │   ├── cobs.ts       # COBS framing
-│   ├── device.t      # SigerDevice class (Web Serial)
+│   ├── device.ts     # SigerDevice class (Web Serial)
 │   └── types.d.ts    # Web Serial API type definitions
 ```
 
@@ -47,6 +47,10 @@ siger-js/
 - `call()` - Send request and wait for response
 - Optional debug logging
 - Automatic message ID tracking and response matching
+- `initializePIN(pin, seed)` - Persist first seed and PIN
+- `addSeed(seed)` - Append additional seed slots while unlocked
+- `deleteSeed(slot)` - Remove a specific seed slot without wiping others
+- `resetPIN(currentPin, newPin)` - Rotate the device PIN while unlocked
 
 
 ## Exports
@@ -144,6 +148,9 @@ if (unlockResp.type === 'Ok') {
 
 // lock device
 await device.call({ type: 'Lock' });
+
+// delete a seed slot (device must be unlocked)
+await device.deleteSeed(1);
 ```
 
 ```typescript

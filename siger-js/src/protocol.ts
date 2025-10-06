@@ -29,6 +29,7 @@ export type Request =
   | { type: 'Health' }
   | { type: 'InitializePIN'; pin: string; seed64: Uint8Array }
   | { type: 'AddSeed'; seed64: Uint8Array }
+  | { type: 'DeleteSeed'; slot: number }
   | { type: 'Unlock'; pin: string }
   | { type: 'Lock' }
   | { type: 'ResetPIN'; current_pin: string; new_pin: string }
@@ -170,27 +171,31 @@ export function serializeRequest(req: Request): Uint8Array {
       w.writeVarint(14);
       w.writeFixedBytes(req.seed64);
       break;
-    case 'Unlock':
+    case 'DeleteSeed':
       w.writeVarint(15);
+      w.writeU8(req.slot);
+      break;
+    case 'Unlock':
+      w.writeVarint(16);
       w.writeString(req.pin);
       break;
     case 'Lock':
-      w.writeVarint(16);
+      w.writeVarint(17);
       break;
     case 'ResetPIN':
-      w.writeVarint(17);
+      w.writeVarint(18);
       w.writeString(req.current_pin);
       w.writeString(req.new_pin);
       break;
     case 'GetLockStatus':
-      w.writeVarint(18);
+      w.writeVarint(19);
       break;
     case 'SelectSeed':
-      w.writeVarint(19);
+      w.writeVarint(20);
       w.writeU8(req.slot);
       break;
     case 'Reset':
-      w.writeVarint(20);
+      w.writeVarint(21);
       break;
   }
 
@@ -364,27 +369,31 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
       w.writeVarint(14);
       w.writeFixedBytes(req.seed64);
       break;
-    case 'Unlock':
+    case 'DeleteSeed':
       w.writeVarint(15);
+      w.writeU8(req.slot);
+      break;
+    case 'Unlock':
+      w.writeVarint(16);
       w.writeString(req.pin);
       break;
     case 'Lock':
-      w.writeVarint(16);
+      w.writeVarint(17);
       break;
     case 'ResetPIN':
-      w.writeVarint(17);
+      w.writeVarint(18);
       w.writeString(req.current_pin);
       w.writeString(req.new_pin);
       break;
     case 'GetLockStatus':
-      w.writeVarint(18);
+      w.writeVarint(19);
       break;
     case 'SelectSeed':
-      w.writeVarint(19);
+      w.writeVarint(20);
       w.writeU8(req.slot);
       break;
     case 'Reset':
-      w.writeVarint(20);
+      w.writeVarint(21);
       break;
   }
 

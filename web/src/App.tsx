@@ -34,6 +34,7 @@ function App() {
   const [pinResetNew, setPinResetNew] = useState('');
   const [pinResetConfirm, setPinResetConfirm] = useState('');
   const [resettingPin, setResettingPin] = useState(false);
+  const [deletingSlot, setDeletingSlot] = useState<number | null>(null);
 
   // Transaction signing state
   const [wasmReady, setWasmReady] = useState(false);
@@ -361,6 +362,32 @@ function App() {
     }
   };
 
+  const deleteSeedSlot = async (slot: number) => {
+    if (locked !== false) {
+      setStatus('Unlock the device before deleting a seed');
+      return;
+    }
+    const confirmed = window.confirm(
+      `Remove seed slot ${slot}? This cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setDeletingSlot(slot);
+      setStatus(`Deleting seed slot ${slot}...`);
+      await device.deleteSeed(slot);
+      await refreshStatus();
+      setStatus(`Seed slot ${slot} removed`);
+    } catch (error: any) {
+      const message = error?.message ?? error?.toString() ?? 'unknown error';
+      setStatus(`Delete failed: ${message}`);
+    } finally {
+      setDeletingSlot(null);
+    }
+  };
+
   const handleSlotChange = async (slotValue: number) => {
     if (slotValue === selectedSlotRef.current) {
       return;
@@ -578,7 +605,7 @@ function App() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      setStatus(`✓ Signed ${signatures.length} signature(s) and downloaded ${filename}`);
+      setStatus(`Signed ${signatures.length} signature(s) and downloaded ${filename}`);
     } catch (error: any) {
       console.error('Signing error:', error);
       const errorMsg = error.message || error.toString() || 'Unknown error';
@@ -616,7 +643,7 @@ function App() {
   if (!isSupported) {
     return (
       <div className="container">
-        <h1>Siger hardware wallet</h1>
+        <img src="assets/nockster.png" width="400px"/>
         <div className="error">
           <p>Web Serial API not supported in this browser.</p>
           <p>Please use Chrome, Edge, or Opera.</p>
@@ -627,7 +654,9 @@ function App() {
 
   return (
     <div className="container">
-      <h1>Siger hardware wallet</h1>
+      <div className="header-img">
+        <img src="assets/nockster.png" width="400px"/>
+      </div>
 
       {connected && (
         <>
@@ -650,8 +679,8 @@ function App() {
                 <>
                   <p className="seed-subtitle">
                     {isInitialSeed
-                      ? 'Device ready to seed. Make sure your keys are written down somewhere safe.'
-                      : 'Add another BIP39 seed to this device. Keep it unlocked; no new PIN required.'}
+                      ? 'Device ready to seed. Make sure your keys are written on something that isn\'t a computer!'
+                      : 'Add another BIP39 seedphrase to this device. Keep it unlocked; no new PIN required.'}
                   </p>
                   <div className="seed-form">
                     <textarea
@@ -718,6 +747,108 @@ function App() {
               )}
             </div>
           )}
+
+          {status && (
+            <div className="status-message">
+              {status}
+            </div>
+          )}
+
+          <div className="section">
+            <h2>Device</h2>
+            <div className="status-grid">
+              <div className="status-item">
+                <span className="label">lock status:</span>
+                <span className={`value ${locked ? 'locked' : 'unlocked'}`}>
+                  {locked === null ? '...' : locked ? 'locked' : 'unlocked'}
+                </span>
+              </div>
+              <div className="status-item">
+                <span className="label">PIN attempts:</span>
+                <span className="value">
+                  {attemptsRemaining === null ? '...' : attemptsRemaining}
+                </span>
+              </div>
+              {info && (
+                <>
+                  <div className="status-item">
+                    <span className="label">firmware:</span>
+                    <span className="value">
+                      v{info.fw_major}.{info.fw_minor}
+                    </span>
+                  </div>
+                  <div className="status-item">
+                    <span className="label">has seed:</span>
+                    <span className="value">{info.has_seed ? 'yes' : 'no'}</span>
+                  </div>
+                  {info.has_seed && deviceKeys.length === 0 && (
+                    <div className="status-item full-width">
+                      <span className="label">public keys:</span>
+                      <span className="value">unlock to view</span>
+                    </div>
+                  )}
+                  {deviceKeys.length > 0 && (
+                    <>
+                      <div className="status-item full-width">
+                        <span className="label">active slot:</span>
+                        <select
+                          value={selectedSlot}
+                          onChange={(e) => handleSlotChange(Number(e.target.value))}
+                          className="slot-select"
+                        >
+                          {slotSummary.map((pub) => (
+                            <option key={pub.slot} value={pub.slot}>
+                              {`slot ${pub.slot} · ${formatDerivationPath(pub.path)}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="status-item full-width multi-keys">
+                        <span className="label">public keys:</span>
+                        <div className="pubkey-list">
+                          {slotSummary.map((pub, idx) => (
+                            <div key={idx} className="pubkey-list-item">
+                              <div className="pubkey-meta">
+                                <span className="path-tag">slot {pub.slot} · {formatDerivationPath(pub.path)}</span>
+                              </div>
+                              <div className="pubkey-display">
+                                <span className="pubkey-text">{formatCheetahPubkey(pub.x, pub.y)}</span>
+                                <div className="pubkey-actions">
+                                  <button
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(formatCheetahPubkey(pub.x, pub.y));
+                                      setStatus(
+                                        `Copied slot ${pub.slot} ${formatDerivationPath(pub.path)} to clipboard`
+                                      );
+                                    }}
+                                    className="btn btn-small copy-btn"
+                                  >
+                                    copy
+                                  </button>
+                                  <button
+                                    onClick={() => deleteSeedSlot(pub.slot)}
+                                    className="btn btn-small btn-danger"
+                                    disabled={deletingSlot === pub.slot || seeding || signing}
+                                  >
+                                    {deletingSlot === pub.slot ? 'removing...' : 'remove'}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+            <button onClick={() => refreshStatus()} className="btn btn-small">
+              refresh status
+            </button>
+          </div>
+
+
 
           <div className="section">
             <h2>Control</h2>
@@ -831,91 +962,6 @@ function App() {
             )}
           </div>
 
-          <div className="section">
-            <h2>Device status</h2>
-            <div className="status-grid">
-              <div className="status-item">
-                <span className="label">lock status:</span>
-                <span className={`value ${locked ? 'locked' : 'unlocked'}`}>
-                  {locked === null ? '...' : locked ? 'locked' : 'unlocked'}
-                </span>
-              </div>
-              <div className="status-item">
-                <span className="label">PIN attempts:</span>
-                <span className="value">
-                  {attemptsRemaining === null ? '...' : attemptsRemaining}
-                </span>
-              </div>
-              {info && (
-                <>
-                  <div className="status-item">
-                    <span className="label">firmware:</span>
-                    <span className="value">
-                      v{info.fw_major}.{info.fw_minor}
-                    </span>
-                  </div>
-                  <div className="status-item">
-                    <span className="label">has seed:</span>
-                    <span className="value">{info.has_seed ? 'yes' : 'no'}</span>
-                  </div>
-                  {info.has_seed && deviceKeys.length === 0 && (
-                    <div className="status-item full-width">
-                      <span className="label">public keys:</span>
-                      <span className="value">unlock to view</span>
-                    </div>
-                  )}
-                  {deviceKeys.length > 0 && (
-                    <>
-                      <div className="status-item full-width">
-                        <span className="label">active slot:</span>
-                        <select
-                          value={selectedSlot}
-                          onChange={(e) => handleSlotChange(Number(e.target.value))}
-                          className="slot-select"
-                        >
-                          {slotSummary.map((pub) => (
-                            <option key={pub.slot} value={pub.slot}>
-                              {`slot ${pub.slot} · ${formatDerivationPath(pub.path)}`}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="status-item full-width multi-keys">
-                        <span className="label">public keys:</span>
-                        <div className="pubkey-list">
-                          {slotSummary.map((pub, idx) => (
-                            <div key={idx} className="pubkey-list-item">
-                              <div className="pubkey-meta">
-                                <span className="path-tag">slot {pub.slot} · {formatDerivationPath(pub.path)}</span>
-                              </div>
-                              <div className="pubkey-display">
-                                <span className="pubkey-text">{formatCheetahPubkey(pub.x, pub.y)}</span>
-                                <button
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(formatCheetahPubkey(pub.x, pub.y));
-                                    setStatus(
-                                      `Copied slot ${pub.slot} ${formatDerivationPath(pub.path)} to clipboard`
-                                    );
-                                  }}
-                                  className="btn btn-small copy-btn"
-                                >
-                                  copy
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
-            <button onClick={() => refreshStatus()} className="btn btn-small">
-              refresh status
-            </button>
-          </div>
-
           {wasmReady && (
             <div className="section">
               <h2>Transaction signing</h2>
@@ -992,12 +1038,6 @@ function App() {
               )}
             </div>
           )}
-
-          {status && (
-            <div className="status-message">
-              {status}
-            </div>
-          )}
         </>
       )}
 
@@ -1005,7 +1045,7 @@ function App() {
         <div className="section">
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <button onClick={connect} className="btn btn-primary">
-              connect device
+              connect
             </button>
           </div>
         </div>

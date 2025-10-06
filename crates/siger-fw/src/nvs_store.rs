@@ -34,6 +34,7 @@ pub enum NvsError {
     LockedOut,
     AlreadyInitialized,
     Full,
+    InvalidSlot,
 }
 
 pub struct NvsStore {
@@ -279,6 +280,47 @@ impl NvsStore {
         Ok(key)
     }
 
+    pub fn delete_seed_with_key(
+        &mut self,
+        master_key: &[u8; 32],
+        slot_index: usize,
+    ) -> Result<(), NvsError> {
+        let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
+        if !header.initialized() {
+            return Err(NvsError::NotInitialized);
+        }
+        if header.attempts >= MAX_PIN_ATTEMPTS {
+            return Err(NvsError::LockedOut);
+        }
+        if slot_index >= header.slot_count as usize {
+            return Err(NvsError::InvalidSlot);
+        }
+
+        if self.verify_master_key(master_key, &header).is_err() {
+            self.increment_attempts(&mut header)?;
+            return Err(NvsError::WrongPin);
+        }
+
+        let last_index = header.slot_count.saturating_sub(1) as usize;
+        if slot_index < last_index {
+            for idx in slot_index..last_index {
+                match self.read_slot(idx + 1)? {
+                    Some(record) => self.write_slot(idx, &record)?,
+                    None => self.erase_slot(idx)?,
+                }
+            }
+        }
+
+        self.erase_slot(last_index)?;
+        header.slot_count = header.slot_count.saturating_sub(1);
+        if header.slot_count == 0 {
+            header.flags &= !FLAG_INITIALIZED;
+        }
+        header.attempts = 0;
+        self.write_header(&header)?;
+        Ok(())
+    }
+
     pub fn change_pin(&mut self, old_pin: &str, new_pin: &str) -> Result<(), NvsError> {
         let (seeds, _) = self.unlock(old_pin)?;
         let pubs = self.list_seed_pubs()?;
@@ -450,6 +492,15 @@ impl NvsStore {
             return Err(NvsError::Full);
         }
         let buf = record.to_bytes();
+        let offset = NVS_BASE_ADDR + HEADER_SIZE as u32 + (index * SLOT_SIZE) as u32;
+        self.flash.write(offset, &buf).map_err(|_| NvsError::Flash)
+    }
+
+    fn erase_slot(&mut self, index: usize) -> Result<(), NvsError> {
+        if index >= MAX_SEED_SLOTS {
+            return Err(NvsError::InvalidSlot);
+        }
+        let buf = [0xFFu8; SLOT_SIZE];
         let offset = NVS_BASE_ADDR + HEADER_SIZE as u32 + (index * SLOT_SIZE) as u32;
         self.flash.write(offset, &buf).map_err(|_| NvsError::Flash)
     }

@@ -49,6 +49,8 @@ NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash
   - `make cli` and `make core` keep the host tooling and shared library honest between firmware iterations.
     - CLI app available at `target/x86_64-unknown-linux-gnu/release/siger-cli`
 
+## Notes
+
 ---
 
 ## Development

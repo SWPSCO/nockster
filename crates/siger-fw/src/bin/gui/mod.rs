@@ -3,13 +3,12 @@ use core::convert::Infallible;
 use axs5106l::{Axs5106l, Coordinates, Rotation as TouchRotation};
 use display_interface_spi::SPIInterface;
 use embedded_graphics::{
-    mono_font::{ascii::FONT_10X20, iso_8859_1, MonoTextStyle},
+    mono_font::{ascii::FONT_10X20, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyleBuilder, Rectangle},
     text::{Alignment, Baseline, Text},
 };
-use embedded_graphics_core::pixelcolor::raw::RawU16;
-use embedded_graphics_core::pixelcolor::Rgb565;
+use embedded_graphics_core::pixelcolor::{raw::RawU16, Rgb565};
 use embedded_hal::delay::DelayNs;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
@@ -52,7 +51,7 @@ const MAX_PIN_DIGITS: usize = 12;
 const COLOR_BACKGROUND: Rgb565 = Rgb565::BLACK;
 const COLOR_BUTTON: Rgb565 = Rgb565::new(6, 12, 6);
 const COLOR_BUTTON_BORDER: Rgb565 = Rgb565::new(2, 4, 2);
-const COLOR_HIGHLIGHT: Rgb565 = Rgb565::new(0, 32, 0);
+const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 
 /// Top-level GUI manager for the hardware wallet.
@@ -60,12 +59,12 @@ pub struct Gui {
     display: LcdDisplay,
     backlight: Output<'static>,
     touch: Option<TouchController>,
-    touch_irq: Input<'static>,
     mode: GuiMode,
     pin_expected: Option<u8>,
     pin_entered: Vec<u8, MAX_PIN_DIGITS>,
     confirm_prompt: String<64>,
     touch_active: bool,
+    active_button: Option<(usize, usize)>,
 }
 
 /// UI mode.
@@ -100,6 +99,12 @@ enum Button {
     Ok,
 }
 
+struct ButtonHit {
+    button: Button,
+    row: usize,
+    col: usize,
+}
+
 impl Gui {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -117,7 +122,6 @@ impl Gui {
         touch_int: GPIO48<'static>,
         delay: &mut Delay,
     ) -> Result<Self, GuiError> {
-        // SPI setup for the ST7789 panel
         let spi_cfg = SpiConfig::default()
             .with_frequency(Rate::from_mhz(60))
             .with_mode(Mode::_0);
@@ -162,18 +166,19 @@ impl Gui {
             Err(_err) => None,
         };
 
-        let touch_irq = Input::new(touch_int, InputConfig::default().with_pull(Pull::Up));
+        // Configure interrupt pin (even if we don't actively sample it) so ownership is consumed.
+        let _touch_irq = Input::new(touch_int, InputConfig::default().with_pull(Pull::Up));
 
         let mut gui = Gui {
             display,
             backlight,
             touch,
-            touch_irq,
             mode: GuiMode::Splash,
             pin_expected: None,
             pin_entered: Vec::new(),
             confirm_prompt: String::new(),
             touch_active: false,
+            active_button: None,
         };
 
         gui.show_boot_logo();
@@ -181,6 +186,8 @@ impl Gui {
     }
 
     pub fn show_boot_logo(&mut self) {
+        self.active_button = None;
+        self.touch_active = false;
         self.blit_boot_logo();
         self.mode = GuiMode::Splash;
     }
@@ -188,6 +195,8 @@ impl Gui {
     pub fn begin_unlock(&mut self, expected_digits: Option<u8>) {
         self.pin_expected = expected_digits;
         self.pin_entered.clear();
+        self.touch_active = false;
+        self.active_button = None;
         self.mode = GuiMode::Locked;
         self.draw_pin_pad();
         self.render_pin_header();
@@ -196,19 +205,21 @@ impl Gui {
     pub fn request_confirmation(&mut self, prompt: &str) {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
+        self.touch_active = false;
+        self.active_button = None;
         self.mode = GuiMode::Confirm;
         self.render_confirm_prompt();
     }
 
     pub fn tick(&mut self) -> Option<GuiInteraction> {
-        let Some(touch) = self.poll_touch_state() else {
+        let Some(coord) = self.poll_touch_state() else {
             return None;
         };
 
         match self.mode {
-            GuiMode::Locked => self.handle_pin_touch(touch),
-            GuiMode::Confirm => self.handle_confirm_touch(touch),
-            GuiMode::Splash => Some(GuiInteraction::RawTouch(touch)),
+            GuiMode::Locked => self.handle_pin_touch(coord),
+            GuiMode::Confirm => self.handle_confirm_touch(coord),
+            GuiMode::Splash => Some(GuiInteraction::RawTouch(coord)),
         }
     }
 
@@ -218,11 +229,6 @@ impl Gui {
 
     fn poll_touch_state(&mut self) -> Option<Coordinates> {
         let touch = self.touch.as_mut()?;
-
-        if self.touch_irq.is_high() {
-            self.touch_active = false;
-            return None;
-        }
 
         let touch_present = match touch.get_touch_data() {
             Ok(Some(data)) => data.first_touch(),
@@ -242,16 +248,23 @@ impl Gui {
                 }
             }
             None => {
-                self.touch_active = false;
+                if self.touch_active {
+                    self.touch_active = false;
+                    if let Some((row, col)) = self.active_button.take() {
+                        self.draw_button(row, col, false);
+                    }
+                }
                 None
             }
         }
     }
 
     fn handle_pin_touch(&mut self, coord: Coordinates) -> Option<GuiInteraction> {
-        let button = self.button_from_point(coord)?;
+        let hit = self.button_from_point(coord)?;
+        self.draw_button(hit.row, hit.col, true);
+        self.active_button = Some((hit.row, hit.col));
 
-        match button {
+        match hit.button {
             Button::Digit(digit) => {
                 if self.pin_entered.len() < MAX_PIN_DIGITS {
                     let _ = self.pin_entered.push(digit);
@@ -286,43 +299,27 @@ impl Gui {
     }
 
     fn handle_confirm_touch(&mut self, coord: Coordinates) -> Option<GuiInteraction> {
-        match self.button_from_point(coord) {
-            Some(Button::Ok) => Some(GuiInteraction::ConfirmAccepted),
-            Some(Button::Clear) => Some(GuiInteraction::ConfirmRejected),
-            Some(Button::Digit(_)) | None => Some(GuiInteraction::RawTouch(coord)),
+        let hit = match self.button_from_point(coord) {
+            Some(hit) => hit,
+            None => return Some(GuiInteraction::RawTouch(coord)),
+        };
+
+        self.draw_button(hit.row, hit.col, true);
+        self.active_button = Some((hit.row, hit.col));
+
+        match hit.button {
+            Button::Ok => Some(GuiInteraction::ConfirmAccepted),
+            Button::Clear => Some(GuiInteraction::ConfirmRejected),
+            Button::Digit(_) => Some(GuiInteraction::RawTouch(coord)),
         }
     }
 
     fn draw_pin_pad(&mut self) {
         let _ = self.display.clear(COLOR_BACKGROUND);
 
-        let button_grid = self.button_grid();
-        let button_style = PrimitiveStyleBuilder::new()
-            .fill_color(COLOR_BUTTON)
-            .stroke_color(COLOR_BUTTON_BORDER)
-            .stroke_width(2)
-            .build();
-
-        for (row_idx, row) in button_grid.iter().enumerate() {
-            for (col_idx, button) in row.iter().enumerate() {
-                let (top_left, size) = self.button_rect(row_idx as i32, col_idx as i32);
-                let rect = Rectangle::new(top_left, size);
-                let _ = rect.into_styled(button_style).draw(&mut self.display);
-
-                let label = button_label(*button);
-                let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-                let center = Point::new(
-                    top_left.x + size.width as i32 / 2,
-                    top_left.y + size.height as i32 / 2,
-                );
-                let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
-                let _ = Text::with_alignment(
-                    label,
-                    Point::new(center.x, baseline),
-                    style,
-                    Alignment::Center,
-                )
-                .draw(&mut self.display);
+        for (row_idx, row) in self.button_grid().iter().enumerate() {
+            for col_idx in 0..row.len() {
+                self.draw_button(row_idx, col_idx, false);
             }
         }
     }
@@ -371,34 +368,11 @@ impl Gui {
         )
         .draw(&mut self.display);
 
-        // Reuse button grid bottom row for clear/ok actions.
-        let button_style = PrimitiveStyleBuilder::new()
-            .fill_color(COLOR_BUTTON)
-            .stroke_color(COLOR_BUTTON_BORDER)
-            .stroke_width(2)
-            .build();
-
         for (label, col_idx) in [("NO", 0), ("", 1), ("YES", 2)] {
             if label.is_empty() {
                 continue;
             }
-            let (top_left, size) = self.button_rect(3, col_idx);
-            let rect = Rectangle::new(top_left, size);
-            let _ = rect.into_styled(button_style).draw(&mut self.display);
-
-            let text_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-            let center = Point::new(
-                top_left.x + size.width as i32 / 2,
-                top_left.y + size.height as i32 / 2,
-            );
-            let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
-            let _ = Text::with_alignment(
-                label,
-                Point::new(center.x, baseline),
-                text_style,
-                Alignment::Center,
-            )
-            .draw(&mut self.display);
+            self.draw_button_with_label(3, col_idx, label, false);
         }
     }
 
@@ -410,7 +384,7 @@ impl Gui {
         let _ = highlight
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_HIGHLIGHT)
+                    .fill_color(COLOR_BUTTON_ACTIVE)
                     .build(),
             )
             .draw(&mut self.display);
@@ -456,7 +430,7 @@ impl Gui {
         ]
     }
 
-    fn button_from_point(&self, coord: Coordinates) -> Option<Button> {
+    fn button_from_point(&self, coord: Coordinates) -> Option<ButtonHit> {
         let x = coord.x as i32;
         let y = coord.y as i32;
 
@@ -495,7 +469,49 @@ impl Gui {
             return None;
         }
 
-        Some(self.button_grid()[row as usize][col as usize])
+        let row_idx = row as usize;
+        let col_idx = col as usize;
+        Some(ButtonHit {
+            button: self.button_grid()[row_idx][col_idx],
+            row: row_idx,
+            col: col_idx,
+        })
+    }
+
+    fn draw_button(&mut self, row: usize, col: usize, active: bool) {
+        let label = button_label(self.button_grid()[row][col]);
+        self.draw_button_with_label(row as i32, col as i32, label, active);
+    }
+
+    fn draw_button_with_label(&mut self, row: i32, col: i32, label: &str, active: bool) {
+        let (top_left, size) = self.button_rect(row, col);
+        let fill_color = if active {
+            COLOR_BUTTON_ACTIVE
+        } else {
+            COLOR_BUTTON
+        };
+        let button_style = PrimitiveStyleBuilder::new()
+            .fill_color(fill_color)
+            .stroke_color(COLOR_BUTTON_BORDER)
+            .stroke_width(2)
+            .build();
+
+        let rect = Rectangle::new(top_left, size);
+        let _ = rect.into_styled(button_style).draw(&mut self.display);
+
+        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let center = Point::new(
+            top_left.x + size.width as i32 / 2,
+            top_left.y + size.height as i32 / 2,
+        );
+        let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            label,
+            Point::new(center.x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut self.display);
     }
 }
 

@@ -11,7 +11,7 @@ fn main() {
 fn generate_boot_logo() -> Result<(), Box<dyn std::error::Error>> {
     use std::{env, fs, io::Write, path::PathBuf, string::String};
 
-    const SOURCE: &str = "../../nockster-flip.png";
+    const SOURCE: &str = "nockster-flip.png";
 
     println!("cargo:rerun-if-changed={SOURCE}");
 

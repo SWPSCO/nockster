@@ -9,7 +9,6 @@ use embedded_graphics::{
     text::{Alignment, Baseline, Text},
 };
 use embedded_graphics_core::pixelcolor::{raw::RawU16, Rgb565};
-use embedded_hal::delay::DelayNs;
 use embedded_hal_bus::spi::ExclusiveDevice;
 use esp_hal::{
     delay::Delay,
@@ -26,11 +25,7 @@ use esp_hal::{
     Blocking,
 };
 use heapless::{String, Vec};
-use mipidsi::{
-    models::ST7789,
-    options::{Orientation, Rotation},
-    Builder, Display,
-};
+use mipidsi::{models::ST7789, options::Orientation, Builder, Display};
 
 include!(concat!(env!("OUT_DIR"), "/boot_logo.rs"));
 
@@ -44,9 +39,9 @@ type LcdDisplay = Display<DisplayInterface, ST7789, Output<'static>>;
 /// Convenience alias for the touch controller type.
 type TouchController = Axs5106l<I2c<'static, Blocking>, Output<'static>>;
 
-const HEADER_HEIGHT: i32 = 60;
 const PADDING: i32 = 6;
 const MAX_PIN_DIGITS: usize = 12;
+const DEBUG_BAR_HEIGHT: i32 = 6;
 
 const COLOR_BACKGROUND: Rgb565 = Rgb565::BLACK;
 const COLOR_BUTTON: Rgb565 = Rgb565::new(6, 12, 6);
@@ -55,12 +50,22 @@ const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
+/// Physical sensor dimensions reported by the AXS5106L controller.
+const TOUCH_SENSOR_WIDTH: u16 = 240;
+const TOUCH_SENSOR_HEIGHT: u16 = 320;
+/// Visible touchable window after accounting for the ST7789 column offset.
+const TOUCH_VISIBLE_X_MIN: u16 = 34;
+const TOUCH_VISIBLE_X_MAX: u16 = TOUCH_VISIBLE_X_MIN + BOOT_LOGO_WIDTH - 1;
+const TOUCH_VISIBLE_Y_MIN: u16 = 0;
+const TOUCH_VISIBLE_Y_MAX: u16 = TOUCH_VISIBLE_Y_MIN + BOOT_LOGO_HEIGHT - 1;
+
 /// Top-level GUI manager for the hardware wallet.
 pub struct Gui {
     display: LcdDisplay,
     backlight: Output<'static>,
     touch: Option<TouchController>,
     touch_irq: Option<Input<'static>>,
+    touch_ready: bool,
     mode: GuiMode,
     pin_expected: Option<u8>,
     pin_entered: Vec<u8, MAX_PIN_DIGITS>,
@@ -70,6 +75,8 @@ pub struct Gui {
     unlock_anim: u16,
     current_spinner_frame: u8,
     confirm_result: Option<bool>,
+    debug_flash: bool,
+    debug_touch_raw: Option<(u16, u16)>,
 }
 
 /// UI mode.
@@ -164,14 +171,19 @@ impl Gui {
         let mut touch_driver = Axs5106l::new(
             i2c,
             touch_reset,
-            BOOT_LOGO_WIDTH,
-            BOOT_LOGO_HEIGHT,
+            TOUCH_SENSOR_WIDTH,
+            TOUCH_SENSOR_HEIGHT,
             TouchRotation::Rotate0,
         );
-        let touch = match touch_driver.init(delay) {
-            Ok(()) => Some(touch_driver),
-            Err(_err) => None,
-        };
+        let mut touch_ready = false;
+        for _ in 0..5 {
+            if touch_driver.init(delay).is_ok() {
+                touch_ready = true;
+                break;
+            }
+            delay.delay_millis(100);
+        }
+        let touch = Some(touch_driver);
         let touch_irq = Some(Input::new(
             touch_int,
             InputConfig::default().with_pull(Pull::Up),
@@ -182,6 +194,7 @@ impl Gui {
             backlight,
             touch,
             touch_irq,
+            touch_ready,
             mode: GuiMode::Splash,
             pin_expected: None,
             pin_entered: Vec::new(),
@@ -191,6 +204,8 @@ impl Gui {
             unlock_anim: 0,
             current_spinner_frame: 0,
             confirm_result: None,
+            debug_flash: false,
+            debug_touch_raw: None,
         };
 
         gui.show_boot_logo();
@@ -274,6 +289,7 @@ impl Gui {
         let _ = self.confirm_prompt.push_str(prompt);
         self.touch_active = false;
         self.active_button = None;
+        self.confirm_result = None;
         self.mode = GuiMode::Confirm;
         self.render_confirm_prompt();
     }
@@ -292,6 +308,8 @@ impl Gui {
             return None;
         };
 
+        self.flash_touch_debug();
+
         match self.mode {
             GuiMode::Locked => self.handle_pin_touch(touch),
             GuiMode::Confirm => self.handle_confirm_touch(touch),
@@ -304,36 +322,80 @@ impl Gui {
     }
 
     fn poll_touch_state(&mut self) -> Option<Coordinates> {
+        self.ensure_touch_ready();
         let touch = self.touch.as_mut()?;
+
+        // fall back to polling even if INT stays high
+
+        let irq_asserted = match &self.touch_irq {
+            Some(irq) => {
+                if irq.is_high() {
+                    self.clear_touch_latch();
+                    return None;
+                }
+                true
+            }
+            None => false,
+        };
+
+        if irq_asserted && self.touch_active {
+            return None;
+        }
 
         let touch_present = match touch.get_touch_data() {
             Ok(Some(data)) => data.first_touch(),
-            _ => None,
+            Ok(None) => {
+                self.clear_touch_latch();
+                return None;
+            }
+            Err(_) => {
+                self.touch_ready = false;
+                self.clear_touch_latch();
+                return None;
+            }
         };
 
-        match touch_present {
-            Some(coord) => {
-                if self.touch_active {
-                    None
-                } else {
-                    self.touch_active = true;
-                    Some(coord)
-                }
-            }
+        let point = match touch_present {
+            Some(point) => point,
             None => {
-                if self.touch_active {
-                    self.touch_active = false;
-                    if let Some((row, col)) = self.active_button.take() {
-                        self.draw_button(row, col, false);
-                    }
-                }
-                None
+                self.clear_touch_latch();
+                return None;
+            }
+        };
+
+        self.debug_touch_raw = Some((point.x, point.y));
+        let mapped = map_touch_point(point);
+
+        if self.touch_active {
+            None
+        } else {
+            self.touch_active = true;
+            self.draw_touch_debug(&mapped);
+            Some(mapped)
+        }
+    }
+
+    fn ensure_touch_ready(&mut self) {
+        if self.touch_ready {
+            return;
+        }
+        if let Some(touch) = self.touch.as_mut() {
+            let mut delay = Delay::new();
+            if touch.init(&mut delay).is_ok() {
+                self.touch_ready = true;
             }
         }
     }
 
+    pub fn take_debug_touch_raw(&mut self) -> Option<(u16, u16)> {
+        self.debug_touch_raw.take()
+    }
+
     fn handle_pin_touch(&mut self, coord: Coordinates) -> Option<GuiInteraction> {
-        let hit = self.button_from_point(coord)?;
+        let hit = match self.button_from_point(coord) {
+            Some(hit) => hit,
+            None => return Some(GuiInteraction::RawTouch(coord)),
+        };
         self.draw_button(hit.row, hit.col, true);
         self.active_button = Some((hit.row, hit.col));
 
@@ -422,9 +484,10 @@ impl Gui {
         let _ = self.display.clear(COLOR_BACKGROUND);
 
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let header_h = header_height();
         let _ = Text::with_baseline(
             &self.confirm_prompt,
-            Point::new(PADDING, HEADER_HEIGHT / 2),
+            Point::new(PADDING, header_h / 2),
             style,
             Baseline::Top,
         )
@@ -454,13 +517,14 @@ impl Gui {
 
     fn button_rect(&self, row: i32, col: i32) -> (Point, Size) {
         let width = BOOT_LOGO_WIDTH as i32;
-        let height = BOOT_LOGO_HEIGHT as i32;
+        let row_height = row_height();
+        let header_h = header_height();
 
         let button_width = (width - PADDING * 4) / 3;
-        let button_height = (height - HEADER_HEIGHT - PADDING * 5) / 4;
+        let button_height = (row_height - PADDING * 2).max(4);
 
         let x = PADDING + col * (button_width + PADDING);
-        let y = HEADER_HEIGHT + PADDING + row * (button_height + PADDING);
+        let y = header_h + row * row_height + PADDING;
 
         (
             Point::new(x, y),
@@ -481,14 +545,14 @@ impl Gui {
         let x = coord.x as i32;
         let y = coord.y as i32;
 
-        if y < HEADER_HEIGHT + PADDING {
+        let header_h = header_height();
+        if y < header_h {
             return None;
         }
 
         let width = BOOT_LOGO_WIDTH as i32;
-        let height = BOOT_LOGO_HEIGHT as i32;
         let button_width = (width - PADDING * 4) / 3;
-        let button_height = (height - HEADER_HEIGHT - PADDING * 5) / 4;
+        let row_height = row_height();
 
         let rel_x = x - PADDING;
         if rel_x < 0 {
@@ -503,16 +567,16 @@ impl Gui {
             return None;
         }
 
-        let rel_y = y - (HEADER_HEIGHT + PADDING);
+        let rel_y = y - header_h;
         if rel_y < 0 {
             return None;
         }
-        let row = rel_y / (button_height + PADDING);
+        let row = rel_y / row_height;
         if row < 0 || row > 3 {
             return None;
         }
-        let row_start = HEADER_HEIGHT + PADDING + row * (button_height + PADDING);
-        if y > row_start + button_height {
+        let row_start = header_h + row * row_height;
+        if y >= row_start + row_height {
             return None;
         }
 
@@ -562,16 +626,17 @@ impl Gui {
     }
 
     fn render_header(&mut self, text: &str, bg: Rgb565) {
+        let header_h = header_height();
         let header_rect = Rectangle::new(
             Point::new(0, 0),
-            Size::new(BOOT_LOGO_WIDTH.into(), HEADER_HEIGHT as u32),
+            Size::new(BOOT_LOGO_WIDTH.into(), header_h as u32),
         );
         let _ = header_rect
             .into_styled(PrimitiveStyleBuilder::new().fill_color(bg).build())
             .draw(&mut self.display);
 
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-        let baseline = HEADER_HEIGHT / 2 + FONT_10X20.character_size.height as i32 / 3;
+        let baseline = header_h / 2 + FONT_10X20.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
             text,
             Point::new((BOOT_LOGO_WIDTH / 2) as i32, baseline),
@@ -594,7 +659,10 @@ impl Gui {
     }
 
     fn draw_unlock_spinner_frame(&mut self, frame: u8) {
-        let center = Point::new((BOOT_LOGO_WIDTH / 2) as i32, HEADER_HEIGHT + 80);
+        let center = Point::new(
+            (BOOT_LOGO_WIDTH / 2) as i32,
+            header_height() + row_height() * 2,
+        );
         let erase = Rectangle::new(Point::new(center.x - 10, center.y - 12), Size::new(20, 24));
         let _ = erase
             .into_styled(
@@ -630,6 +698,54 @@ impl Gui {
             }
         }
     }
+
+    fn flash_touch_debug(&mut self) {
+        self.debug_flash = !self.debug_flash;
+        let color = if self.debug_flash {
+            COLOR_BUTTON_ACTIVE
+        } else {
+            COLOR_BACKGROUND
+        };
+        let rect = Rectangle::new(
+            Point::new(0, BOOT_LOGO_HEIGHT as i32 - DEBUG_BAR_HEIGHT),
+            Size::new(BOOT_LOGO_WIDTH.into(), DEBUG_BAR_HEIGHT as u32),
+        );
+        let _ = rect
+            .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
+            .draw(&mut self.display);
+    }
+
+    fn draw_touch_debug(&mut self, coord: &Coordinates) {
+        let size = 8i32;
+        let half = size / 2;
+        let x = coord.x as i32 - half;
+        let y = coord.y as i32 - half;
+        self.debug_flash = !self.debug_flash;
+        let rect = Rectangle::new(
+            Point::new(
+                x.clamp(0, BOOT_LOGO_WIDTH as i32 - size),
+                y.clamp(0, BOOT_LOGO_HEIGHT as i32 - size),
+            ),
+            Size::new(size as u32, size as u32),
+        );
+        let color = if self.debug_flash {
+            COLOR_BUTTON_ACTIVE
+        } else {
+            COLOR_BACKGROUND
+        };
+        let _ = rect
+            .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
+            .draw(&mut self.display);
+    }
+
+    fn clear_touch_latch(&mut self) {
+        if self.touch_active {
+            self.touch_active = false;
+            if let Some((row, col)) = self.active_button.take() {
+                self.draw_button(row, col, false);
+            }
+        }
+    }
 }
 
 fn button_label(button: Button) -> &'static str {
@@ -648,4 +764,46 @@ fn button_label(button: Button) -> &'static str {
         Button::Clear => "CLR",
         Button::Ok => "OK",
     }
+}
+
+fn header_height() -> i32 {
+    row_height()
+}
+
+fn row_height() -> i32 {
+    (BOOT_LOGO_HEIGHT as i32) / 5
+}
+
+fn map_touch_point(raw: Coordinates) -> Coordinates {
+    Coordinates {
+        x: map_touch_axis(
+            raw.x,
+            TOUCH_VISIBLE_X_MIN,
+            TOUCH_VISIBLE_X_MAX,
+            BOOT_LOGO_WIDTH,
+        ),
+        y: map_touch_axis(
+            raw.y,
+            TOUCH_VISIBLE_Y_MIN,
+            TOUCH_VISIBLE_Y_MAX,
+            BOOT_LOGO_HEIGHT,
+        ),
+    }
+}
+
+fn map_touch_axis(value: u16, min: u16, max: u16, output: u16) -> u16 {
+    if output <= 1 || max <= min {
+        return 0;
+    }
+
+    let clamped = value.clamp(min, max);
+    let span = u32::from(max - min);
+    let relative = u32::from(clamped - min);
+    let target = u32::from(output - 1);
+
+    if span == 0 {
+        return 0;
+    }
+
+    ((relative * target + span / 2) / span) as u16
 }

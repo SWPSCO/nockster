@@ -8,6 +8,7 @@ use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
 use cobs::encode;
+use core::fmt::Write as _;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
@@ -17,10 +18,7 @@ use siger_core::alloc_path as pathmod;
 use siger_core::{CheetahPub, *};
 
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
-use k256::{
-    ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey},
-    EncodedPoint,
-};
+use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
@@ -177,8 +175,14 @@ fn main() -> ! {
     let mut plain = [0u8; PLAIN_BUF_LEN];
     let mut enc = [0u8; ENC_BUF_LEN];
 
-    'run: loop {
+    loop {
         if let Some(ui) = ui.as_mut() {
+            if let Some((raw_x, raw_y)) = ui.take_debug_touch_raw() {
+                let mut msg = HString::<40>::new();
+                let _ = write!(msg, "raw {},{}\r\n", raw_x, raw_y);
+                let _ = usb.write(msg.as_bytes());
+            }
+
             let event = ui.tick();
 
             if let Some(result) = ui.poll_confirmation_result() {
@@ -229,7 +233,11 @@ fn main() -> ! {
                     GuiInteraction::ConfirmRejected => {
                         let _ = usb.write(b"confirm rejected\r\n");
                     }
-                    GuiInteraction::RawTouch(_) => {}
+                    GuiInteraction::RawTouch(coord) => {
+                        let mut msg = HString::<32>::new();
+                        let _ = write!(msg, "touch {},{}\r\n", coord.x, coord.y);
+                        let _ = usb.write(msg.as_bytes());
+                    }
                 }
             }
         }

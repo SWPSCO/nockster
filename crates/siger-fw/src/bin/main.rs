@@ -47,6 +47,7 @@ fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
     }
     let _ = usb.flush_tx_nb();
 }
+
 struct SeedStore {
     slots: HVec<[u8; 64], MAX_SEED_SLOTS>,
     active: usize,
@@ -247,8 +248,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb_write(&mut usb, &enc[..n]);
-                    let _ = usb_write(&mut usb, &[0]);
+                    let _ = usb.write(&enc[..n]);
+                    let _ = usb.write(&[0]);
                 }
                 of.off = end as u32;
                 if last {
@@ -299,8 +300,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb_write(&mut usb, &enc[..n]);
-                    let _ = usb_write(&mut usb, &[0]);
+                    let _ = usb.write(&enc[..n]);
+                    let _ = usb.write(&[0]);
                 } else {
                     send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                 }
@@ -773,8 +774,8 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
     let mut tmp = [0u8; 64];
     if let Ok(used) = postcard::to_slice(&msg, &mut tmp) {
         let n = cobs::encode(used, enc);
-        let _ = usb_write(usb, &enc[..n]);
-        let _ = usb_write(usb, &[0]);
+        let _ = usb.write(&enc[..n]);
+        let _ = usb.write(&[0]);
     }
 }
 fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {

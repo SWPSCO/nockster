@@ -22,7 +22,7 @@ pub fn init() {
     {
         let initial_pages = core::arch::wasm32::memory_size(0);
 
-        // 4096 pages/256MB to ensure we have space for 64MB NockStack
+        // 256MB to ensure we have space for 64MB nockstack
         let target_pages = 4096;
         if initial_pages < target_pages {
             let grow_result = core::arch::wasm32::memory_grow(0, target_pages - initial_pages);
@@ -128,7 +128,7 @@ fn build_zset_sig_hashable(
     use tx_types::collections::zset::Node;
     use tx_types::hashing::hashable::Hashable;
 
-    // Traverse the actual ZSet tree structure
+    // traverse zset
     fn traverse_node(node: Option<&Node<tx_types::Seed>>) -> Result<Hashable, JsValue> {
         match node {
             None => Ok(Hashable::null()),

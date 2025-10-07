@@ -3,6 +3,7 @@
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 
 mod gui;
+mod touch;
 mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
@@ -12,6 +13,7 @@ use core::fmt::Write as _;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
+use touch::{TapFilter, Rotation, TouchCal};
 use heapless::{String as HString, Vec as HVec};
 
 use siger_core::alloc_path as pathmod;
@@ -36,6 +38,25 @@ const TX_CHUNK: usize = 200;
 const PLAIN_BUF_LEN: usize = 4096;
 const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
 
+// lock state (locked by default)
+static mut DEVICE_LOCKED: bool = true;
+
+static mut MASTER_KEY: [u8; 32] = [0; 32];
+static mut MASTER_KEY_SET: bool = false;
+
+esp_bootloader_esp_idf::esp_app_desc!();
+
+// this is necessary because if there's no serial console and you try writing
+// to the console, it will block and the device will appear to be frozen.
+// this shit was really annoying!
+#[inline]
+fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
+    for &byte in buf {
+        let _ = usb.write_byte_nb(byte);
+    }
+    let _ = usb.flush_tx_nb();
+}
+
 struct SeedStore {
     slots: HVec<[u8; 64], MAX_SEED_SLOTS>,
     active: usize,
@@ -44,13 +65,6 @@ static mut SEED_STORE: SeedStore = SeedStore {
     slots: HVec::new(),
     active: 0,
 };
-
-// Lock state (device is locked by default)
-static mut DEVICE_LOCKED: bool = true;
-static mut MASTER_KEY: [u8; 32] = [0; 32];
-static mut MASTER_KEY_SET: bool = false;
-
-esp_bootloader_esp_idf::esp_app_desc!();
 
 struct FragState {
     id: u16,
@@ -165,31 +179,32 @@ fn main() -> ! {
     }
 
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
-    let _ = usb.write(b"siger-fw ready\r\n");
+    if usb.read_byte().is_ok() {
+        let _ = usb_write(&mut usb, b"siger-fw ready\r\n");
+    }
     if ui.is_none() {
-        let _ = usb.write(b"gui init failed\r\n");
+        let _ = usb_write(&mut usb, b"gui init failed\r\n");
     }
 
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; PLAIN_BUF_LEN];
     let mut enc = [0u8; ENC_BUF_LEN];
-
     loop {
         if let Some(ui) = ui.as_mut() {
             if let Some((raw_x, raw_y)) = ui.take_debug_touch_raw() {
                 let mut msg = HString::<40>::new();
                 let _ = write!(msg, "raw {},{}\r\n", raw_x, raw_y);
-                let _ = usb.write(msg.as_bytes());
+                let _ =  usb_write(&mut usb, msg.as_bytes());
             }
 
             let event = ui.tick();
 
             if let Some(result) = ui.poll_confirmation_result() {
                 if result {
-                    let _ = usb.write(b"confirm accepted\r\n");
+                    let _ = usb_write(&mut usb, b"confirm accepted\r\n");
                 } else {
-                    let _ = usb.write(b"confirm rejected\r\n");
+                    let _ = usb_write(&mut usb, b"confirm rejected\r\n");
                 }
             }
 
@@ -207,36 +222,36 @@ fn main() -> ! {
                         match unlock_device_with_pin(pin.as_str()) {
                             UnlockAttempt::Success => {
                                 ui.show_unlock_success();
-                                let _ = usb.write(b"unlock success\r\n");
+                                let _ = usb_write(&mut usb, b"unlock success\r\n");
                             }
                             UnlockAttempt::WrongPin { attempts_remaining } => {
                                 ui.show_pin_failure(Some(attempts_remaining));
-                                let _ = usb.write(b"wrong pin\r\n");
+                                let _ = usb_write(&mut usb, b"wrong pin\r\n");
                             }
                             UnlockAttempt::LockedOut => {
                                 ui.show_pin_locked_out();
-                                let _ = usb.write(b"pin locked out\r\n");
+                                let _ = usb_write(&mut usb, b"pin locked out\r\n");
                             }
                             UnlockAttempt::NotInitialized => {
                                 ui.show_pin_not_initialized();
-                                let _ = usb.write(b"pin not set\r\n");
+                                let _ = usb_write(&mut usb, b"pin not set\r\n");
                             }
                             UnlockAttempt::Failed => {
                                 ui.show_pin_failure(None);
-                                let _ = usb.write(b"unlock failed\r\n");
+                                let _ = usb_write(&mut usb, b"unlock failed\r\n");
                             }
                         }
                     }
                     GuiInteraction::ConfirmAccepted => {
-                        let _ = usb.write(b"confirm accepted\r\n");
+                        let _ = usb_write(&mut usb, b"confirm accepted\r\n");
                     }
                     GuiInteraction::ConfirmRejected => {
-                        let _ = usb.write(b"confirm rejected\r\n");
+                        let _ = usb_write(&mut usb, b"confirm rejected\r\n");
                     }
                     GuiInteraction::RawTouch(coord) => {
                         let mut msg = HString::<32>::new();
                         let _ = write!(msg, "touch {},{}\r\n", coord.x, coord.y);
-                        let _ = usb.write(msg.as_bytes());
+                        let _ =  usb_write(&mut usb, msg.as_bytes());
                     }
                 }
             }
@@ -262,8 +277,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb.write(&enc[..n]);
-                    let _ = usb.write(&[0]);
+                    let _ = usb_write(&mut usb, &enc[..n]);
+                    let _ = usb_write(&mut usb, &[0]);
                 }
                 of.off = end as u32;
                 if last {
@@ -279,11 +294,14 @@ fn main() -> ! {
             if b == 0 && rx.is_empty() {
                 continue;
             }
-            if rx.push(b).is_err() {
-                rx.clear();
+        if rx.push(b).is_err() {
+            rx.clear();
+            // Only send error if connected - avoid blocking
+            if usb_connected(&mut usb) {
                 send_err(&mut usb, ERR_OVERFLOW, &mut enc);
-                continue;
             }
+            continue;
+        }
 
             if b == 0 {
                 // decode Msg<Frame>
@@ -314,8 +332,8 @@ fn main() -> ! {
 
                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb.write(&enc[..n]);
-                    let _ = usb.write(&[0]);
+                    let _ = usb_write(&mut usb, &enc[..n]);
+                    let _ = usb_write(&mut usb, &[0]);
                 } else {
                     send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                 }
@@ -829,8 +847,8 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
     let mut tmp = [0u8; 64];
     if let Ok(used) = postcard::to_slice(&msg, &mut tmp) {
         let n = cobs::encode(used, enc);
-        let _ = usb.write(&enc[..n]);
-        let _ = usb.write(&[0]);
+        let _ = usb_write(usb, &enc[..n]);
+        let _ = usb_write(usb, &[0]);
     }
 }
 
@@ -1046,4 +1064,8 @@ fn active_slot_index() -> Result<usize, ()> {
 fn derive_signing_key_active(path: &pathmod::Path) -> Result<SigningKey, ()> {
     let slot = active_slot_index()?;
     derive_signing_key_for_slot(path, slot)
+}
+
+fn usb_connected(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) -> bool {
+    usb.read_byte().is_ok()
 }

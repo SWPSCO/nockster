@@ -50,14 +50,26 @@ const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
-/// Physical sensor dimensions reported by the AXS5106L controller.
-const TOUCH_SENSOR_WIDTH: u16 = 240;
+// AXS5106L native grid
+const TOUCH_SENSOR_WIDTH:  u16 = 240;
 const TOUCH_SENSOR_HEIGHT: u16 = 320;
-/// Visible touchable window after accounting for the ST7789 column offset.
-const TOUCH_VISIBLE_X_MIN: u16 = 34;
-const TOUCH_VISIBLE_X_MAX: u16 = TOUCH_VISIBLE_X_MIN + BOOT_LOGO_WIDTH - 1;
-const TOUCH_VISIBLE_Y_MIN: u16 = 0;
-const TOUCH_VISIBLE_Y_MAX: u16 = TOUCH_VISIBLE_Y_MIN + BOOT_LOGO_HEIGHT - 1;
+
+// LCD is a 172×320 window starting at column 34 on the panel
+const VISIBLE_X_MIN: u16 = 34;
+const VISIBLE_X_MAX: u16 = VISIBLE_X_MIN + BOOT_LOGO_WIDTH - 1; // 34..205 (width 172)
+const VISIBLE_Y_MIN: u16 = 0;
+const VISIBLE_Y_MAX: u16 = TOUCH_SENSOR_HEIGHT - 1;             // 0..319
+
+// <<< ORIENTATION KNOBS >>>
+// Do NOT swap: raw.x already corresponds to LCD columns (short axis)
+const TOUCH_SWAP_AXES: bool = false;
+
+// If you keep ST7789 .orientation(... .flip_horizontal()), undo it here once:
+const LCD_FLIPPED_HORIZONTALLY: bool = true;
+
+// Your raw logs suggested rows are upside-down vs UI; flip Y once:
+const INVERT_GUI_Y: bool = true;
+
 
 /// Top-level GUI manager for the hardware wallet.
 pub struct Gui {
@@ -775,21 +787,32 @@ fn row_height() -> i32 {
 }
 
 fn map_touch_point(raw: Coordinates) -> Coordinates {
-    Coordinates {
-        x: map_touch_axis(
-            raw.x,
-            TOUCH_VISIBLE_X_MIN,
-            TOUCH_VISIBLE_X_MAX,
-            BOOT_LOGO_WIDTH,
-        ),
-        y: map_touch_axis(
-            raw.y,
-            TOUCH_VISIBLE_Y_MIN,
-            TOUCH_VISIBLE_Y_MAX,
-            BOOT_LOGO_HEIGHT,
-        ),
+    // 1) start with raw
+    let mut rx = raw.x;
+    let mut ry = raw.y;
+
+    // 2) axes: DO NOT SWAP for your panel
+    if TOUCH_SWAP_AXES {
+        core::mem::swap(&mut rx, &mut ry);
     }
+
+    // 3) scale ONLY the visible sensor band on X; full band on Y
+    let mut x = map_touch_axis(rx, VISIBLE_X_MIN, VISIBLE_X_MAX, BOOT_LOGO_WIDTH);
+    let mut y = map_touch_axis(ry, VISIBLE_Y_MIN, VISIBLE_Y_MAX, BOOT_LOGO_HEIGHT);
+
+    // 4) account for LCD flip (your ST7789 init uses .flip_horizontal())
+    if LCD_FLIPPED_HORIZONTALLY {
+        x = (BOOT_LOGO_WIDTH - 1) - x;
+    }
+
+    // 5) flip Y once if needed (your logs suggested it's inverted)
+    if INVERT_GUI_Y {
+        y = (BOOT_LOGO_HEIGHT - 1) - y;
+    }
+
+    Coordinates { x, y }
 }
+
 
 fn map_touch_axis(value: u16, min: u16, max: u16, output: u16) -> u16 {
     if output <= 1 || max <= min {

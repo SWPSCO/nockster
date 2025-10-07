@@ -22,6 +22,7 @@ use esp_hal::{
     },
     time::Rate,
     Blocking,
+    usb_serial_jtag::UsbSerialJtag,
 };
 use heapless::{String, Vec};
 use mipidsi::{models::ST7789, options::Orientation, Builder, Display};
@@ -44,18 +45,24 @@ const COLOR_BUTTON_BORDER: Rgb565 = Rgb565::new(2, 4, 2);
 const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
-// AXS5106L native grid
+const DRIVER_ROTATION: TouchRotation = TouchRotation::Rotate180; 
 const TOUCH_SENSOR_WIDTH:  u16 = 240;
 const TOUCH_SENSOR_HEIGHT: u16 = 320;
+const TOUCH_SWAP_AXES: bool = false;           // we just arranged the driver so X is true-X
+const LCD_FLIPPED_HORIZONTALLY: bool = false;   // you already flip the ST7789
+const INVERT_GUI_Y: bool = false;
 
-const VISIBLE_X_MIN: u16 = 34;   // Your LCD starts at column 34
-const VISIBLE_X_MAX: u16 = 205;  // 34 + 172 - 1
-const VISIBLE_Y_MIN: u16 = 0;
-const VISIBLE_Y_MAX: u16 = 319;
+const SENSOR_W: i32 = 240;
+const SENSOR_H: i32 = 320;
 
-const TOUCH_SWAP_AXES: bool = false;
-const LCD_FLIPPED_HORIZONTALLY: bool = false;
-const INVERT_GUI_Y: bool = true;  // Enable to flip Y back
+const SWAP_XY:  bool = false;
+const MIRROR_X: bool = true;   // counter .flip_horizontal()
+const MIRROR_Y: bool = false;
+
+// visible window on the glass
+const VX_MIN: i32 = 34;
+const VX_MAX: i32 = 205; // inclusive (205-34+1 = 172)
+
 
 pub struct Gui {
     display: LcdDisplay,
@@ -111,6 +118,36 @@ struct ButtonHit {
     row: usize,
     col: usize,
 }
+
+// running raw bounds learned at runtime
+static mut RAW_X_MIN: i32 =  i32::MAX;
+static mut RAW_X_MAX: i32 = -i32::MAX;
+static mut RAW_Y_MIN: i32 =  i32::MAX;
+static mut RAW_Y_MAX: i32 = -i32::MAX;
+
+// optional: nudge bounds so the very first sample doesn’t make a zero span
+const BOUNDS_PAD: i32 = 8;
+
+#[inline]
+fn learn_raw_bounds(rx: u16, ry: u16) {
+    let (x, y) = (rx as i32, ry as i32);
+    unsafe {
+        if x < RAW_X_MIN { RAW_X_MIN = x; }
+        if x > RAW_X_MAX { RAW_X_MAX = x; }
+        if y < RAW_Y_MIN { RAW_Y_MIN = y; }
+        if y > RAW_Y_MAX { RAW_Y_MAX = y; }
+    }
+}
+
+#[inline]
+fn scale_i32(v: i32, in_min: i32, in_max: i32, out_max: i32) -> i32 {
+    // clamp + safe linear map [in_min..in_max] -> [0..out_max]
+    if in_max <= in_min { return 0; }
+    let v = v.clamp(in_min, in_max) - in_min;
+    (v as i64 * out_max as i64 / (in_max - in_min) as i64) as i32
+}
+
+
 impl Gui {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -159,7 +196,7 @@ impl Gui {
             touch_reset,
             TOUCH_SENSOR_WIDTH,
             TOUCH_SENSOR_HEIGHT,
-            TouchRotation::Rotate180,
+            DRIVER_ROTATION,
         );
         let mut touch_ready = false;
         for _ in 0..5 {
@@ -292,10 +329,10 @@ impl Gui {
     fn poll_touch_state(&mut self) -> Option<Coordinates> {
         self.ensure_touch_ready();
         let touch = self.touch.as_mut()?;
-        // fall back to polling even if INT stays high
+
         let irq_asserted = match &self.touch_irq {
             Some(irq) => {
-                if irq.is_high() {
+                if irq.is_high() { // active-low: high => no touch
                     self.clear_touch_latch();
                     return None;
                 }
@@ -306,27 +343,31 @@ impl Gui {
         if irq_asserted && self.touch_active {
             return None;
         }
-        let touch_present = match touch.get_touch_data() {
-            Ok(Some(data)) => data.first_touch(),
-            Ok(None) => {
-                self.clear_touch_latch();
-                return None;
-            }
-            Err(_) => {
-                self.touch_ready = false;
+
+        // >>> CHANGED: read raw, not get_touch_data() <<<
+        let touch_present = match touch.read_raw_touch_data() {
+            Ok(data) if data.count > 0 => data.first_touch(),
+            _ => {
                 self.clear_touch_latch();
                 return None;
             }
         };
-        let point = match touch_present {
-            Some(point) => point,
+
+        let raw = match touch_present {
+            Some(p) => p,
             None => {
                 self.clear_touch_latch();
                 return None;
             }
         };
-        self.debug_touch_raw = Some((point.x, point.y));
-        let mapped = map_touch_point(point);
+
+        // store *true* raw
+        self.debug_touch_raw = Some((raw.x, raw.y));
+
+        // map full-range (no cropping)
+        let mapped = map_touch_point_raw(raw);
+        let mut msg = heapless::String::<48>::new();
+        let _ = core::fmt::Write::write_fmt(&mut msg, format_args!("map {},{}  raw {},{}\r\n", mapped.x, mapped.y, raw.x, raw.y));
         if self.touch_active {
             None
         } else {
@@ -335,6 +376,7 @@ impl Gui {
             Some(mapped)
         }
     }
+
     fn ensure_touch_ready(&mut self) {
         if self.touch_ready {
             return;
@@ -682,6 +724,7 @@ fn button_label(button: Button) -> &'static str {
         Button::Ok => "OK",
     }
 }
+
 fn header_height() -> i32 {
     row_height()
 }
@@ -689,27 +732,91 @@ fn row_height() -> i32 {
     (BOOT_LOGO_HEIGHT as i32) / 5
 }
 
-fn map_touch_point(raw: Coordinates) -> Coordinates {
-    let mut rx = raw.x;
-    let mut ry = raw.y;
-    
-    if TOUCH_SWAP_AXES {
-        core::mem::swap(&mut rx, &mut ry);
+fn map_touch_point_raw(raw: Coordinates) -> Coordinates {
+    // Sensor full ranges
+    const SW_MIN: i32 = 0;   const SW_MAX: i32 = 239; // touch X
+    const SH_MIN: i32 = 0;   const SH_MAX: i32 = 319; // touch Y
+
+    // Visible window on the LCD (columns) due to display_offset(34, 0), width=172
+    const VX_MIN: i32 = 34;
+    const VX_MAX: i32 = 205; // 34 + 172 - 1
+
+    // GUI target sizes
+    let gw_max = (BOOT_LOGO_WIDTH  as i32) - 1; // 171
+    let gh_max = (BOOT_LOGO_HEIGHT as i32) - 1; // 319
+
+    // 1) mirror X to match flip_horizontal()
+    let rx_mir = (SW_MAX - (raw.x as i32)).clamp(SW_MIN, SW_MAX);
+    let ry     = (raw.y as i32).clamp(SH_MIN, SH_MAX);
+
+    // 2) crop mirrored X to visible window 34..205
+    let rx_vis = rx_mir.clamp(VX_MIN, VX_MAX);
+
+    // 3) scale X: [34..205] -> [0..gw_max]
+    let x_span = (VX_MAX - VX_MIN).max(1);
+    let gx = ((rx_vis - VX_MIN) as i64 * gw_max as i64 / x_span as i64) as i32;
+
+    // 4) scale Y: [0..319] -> [0..gh_max]
+    let y_span = (SH_MAX - SH_MIN).max(1);
+    let gy = ((ry - SH_MIN) as i64 * gh_max as i64 / y_span as i64) as i32;
+
+    Coordinates {
+        x: gx as u16,
+        y: gy as u16,
     }
-    
-    // Map visible sensor region to display
-    let mut x = map_touch_axis(rx, VISIBLE_X_MIN, VISIBLE_X_MAX, BOOT_LOGO_WIDTH);
-    let mut y = map_touch_axis(ry, VISIBLE_Y_MIN, VISIBLE_Y_MAX, BOOT_LOGO_HEIGHT);
-    
-    if LCD_FLIPPED_HORIZONTALLY {
-        x = (BOOT_LOGO_WIDTH - 1) - x;
+}
+
+
+#[inline]
+fn scale_clamped(v: i32, in_min: i32, in_max: i32, out_max: i32) -> i32 {
+    if in_max <= in_min { return 0; }
+    let vv = v.clamp(in_min, in_max) - in_min;
+    (vv as i64 * out_max as i64 / (in_max - in_min) as i64) as i32
+  }
+
+// ---- helpers ----
+
+#[inline]
+fn normalize_12bit_to_range(v: u16, max_target: u16) -> u16 {
+    // If v looks like 12-bit (much larger than target), scale; else leave as-is.
+    let vt = v as u32;
+    let mt = max_target as u32;
+    if vt > mt + 8 { // tiny hysteresis to ignore jitter
+        // scale 0..4095 -> 0..max_target
+        const RAW_MAX: u32 = 4095;
+        ((vt * mt + RAW_MAX/2) / RAW_MAX) as u16
+    } else {
+        v
     }
-    
-    if INVERT_GUI_Y {
-        y = (BOOT_LOGO_HEIGHT - 1) - y;
+}
+
+#[inline]
+fn undo_driver_rotation(mut x: u16, mut y: u16, rot: TouchRotation, w: u16, h: u16) -> (u16, u16) {
+    // Invert the exact transforms in your lib’s apply_rotation():
+    match rot {
+        TouchRotation::Rotate0 => {
+            // lib did: x = (w-1) - x; y = y;
+            x = (w - 1) - x;
+            (x, y)
+        }
+        TouchRotation::Rotate90 => {
+            // lib did: x = y; y = x;  => inverse is the same swap
+            core::mem::swap(&mut x, &mut y);
+            (x, y)
+        }
+        TouchRotation::Rotate180 => {
+            // lib did: x = x; y = (h-1) - y;
+            y = (h - 1) - y;
+            (x, y)
+        }
+        TouchRotation::Rotate270 => {
+            // lib did: x = (w-1) - y; y = (h-1) - x;
+            // Inverse of that:
+            let orig_x = (w - 1) - y;
+            let orig_y = (h - 1) - x;
+            (orig_x, orig_y)
+        }
     }
-    
-    Coordinates { x, y }
 }
 
 fn map_touch_axis(value: u16, min: u16, max: u16, output: u16) -> u16 {
@@ -720,8 +827,14 @@ fn map_touch_axis(value: u16, min: u16, max: u16, output: u16) -> u16 {
     let span = u32::from(max - min);
     let relative = u32::from(clamped - min);
     let target = u32::from(output - 1);
-    if span == 0 {
-        return 0;
-    }
     ((relative * target + span / 2) / span) as u16
+}
+
+
+#[inline]
+fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
+    for &byte in buf {
+        let _ = usb.write_byte_nb(byte);
+    }
+    let _ = usb.flush_tx_nb();
 }

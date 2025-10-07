@@ -23,8 +23,8 @@ flash: fw
 			exit 1; \
 		fi; \
 	else \
-		DEV="ttyACM1"; \
-		fuser -k /dev/ttyACM1 2>/dev/null || true; \
+		DEV="ttyACM0"; \
+		fuser -k /dev/ttyACM0 2>/dev/null || true; \
 	fi; \
 	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY)
 
@@ -36,13 +36,13 @@ wipe: fw
 			exit 1; \
 		fi; \
 	else \
-		DEV="ttyACM1"; \
-		fuser -k /dev/ttyACM1 2>/dev/null || true; \
+		DEV="ttyACM0"; \
+		fuser -k /dev/ttyACM0 2>/dev/null || true; \
 	fi; \
 	espflash flash --port /dev/$$DEV --partition-table partitions.csv --erase-parts nvs $(FW_BINARY)
 
 test:
-	@fuser -k /dev/ttyACM1 2>/dev/null || true; \
+	@fuser -k /dev/ttyACM0 2>/dev/null || true; \
 	if [[ "$$OSTYPE" == "darwin"* ]]; then \
 		TARGET=aarch64-apple-darwin; \
 		DEVICE=$$(ls /dev/tty.usbmodem* 2>/dev/null | head -1); \
@@ -55,7 +55,7 @@ test:
 		fi; \
 	else \
 		TARGET=x86_64-unknown-linux-gnu; \
-		DEVICE=/dev/ttyACM1; \
+		DEVICE=/dev/ttyACM0; \
 	fi; \
 	cargo +nightly run -p siger-cli --bin siger-cli --target $$TARGET -- test --port $$DEVICE
 
@@ -105,7 +105,7 @@ monitor:
 			exit 1; \
 		fi; \
 	else \
-		DEV="ttyACM1"; \
+		DEV="ttyACM0"; \
 	fi; \
 	espflash monitor --port /dev/$$DEV
 

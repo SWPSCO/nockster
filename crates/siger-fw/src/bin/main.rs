@@ -80,6 +80,7 @@ enum UnlockAttempt {
     NotInitialized,
     Failed,
 }
+
 /// cobs test
 #[cfg(test)]
 pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {

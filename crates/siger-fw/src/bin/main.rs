@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
-
 mod gui;
 mod touch;
 mod random;
@@ -15,16 +14,13 @@ use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
 use touch::{TapFilter, Rotation, TouchCal};
 use heapless::{String as HString, Vec as HVec};
-
 use siger_core::alloc_path as pathmod;
 use siger_core::{CheetahPub, *};
-
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
-
 const DEMO_SK: [u8; 32] = [0x11; 32];
 const FW_MAJOR: u16 = 0;
 const FW_MINOR: u16 = 1;
@@ -32,20 +28,15 @@ const FW_MINOR: u16 = 1;
 const FEAT_CHEETAH: u32 = 1 << 0;
 const FEAT_FRAG: u32 = 1 << 1;
 const FEAT_XPUB: u32 = 1 << 2;
-
 const MAX_FRAG: usize = 4096; // arbitrary
 const TX_CHUNK: usize = 200;
 const PLAIN_BUF_LEN: usize = 4096;
 const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
-
 // lock state (locked by default)
 static mut DEVICE_LOCKED: bool = true;
-
 static mut MASTER_KEY: [u8; 32] = [0; 32];
 static mut MASTER_KEY_SET: bool = false;
-
 esp_bootloader_esp_idf::esp_app_desc!();
-
 // this is necessary because if there's no serial console and you try writing
 // to the console, it will block and the device will appear to be frozen.
 // this shit was really annoying!
@@ -56,7 +47,6 @@ fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
     }
     let _ = usb.flush_tx_nb();
 }
-
 struct SeedStore {
     slots: HVec<[u8; 64], MAX_SEED_SLOTS>,
     active: usize,
@@ -65,7 +55,6 @@ static mut SEED_STORE: SeedStore = SeedStore {
     slots: HVec::new(),
     active: 0,
 };
-
 struct FragState {
     id: u16,
     kind: FragKind,
@@ -73,9 +62,7 @@ struct FragState {
     next_off: u32,
     buf: HVec<u8, MAX_FRAG>,
 }
-
 static mut FRAG: Option<FragState> = None;
-
 // outbound fragment queue
 struct OutFrag {
     msg_id: u32,
@@ -84,9 +71,7 @@ struct OutFrag {
     off: u32,
     data: HVec<u8, MAX_FRAG>,
 }
-
 static mut OUT_FRAG: Option<OutFrag> = None;
-
 enum UnlockAttempt {
     Success,
     WrongPin { attempts_remaining: u8 },
@@ -94,7 +79,6 @@ enum UnlockAttempt {
     NotInitialized,
     Failed,
 }
-
 /// cobs test
 #[cfg(test)]
 pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
@@ -108,7 +92,6 @@ pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
                 msg: body,
             };
             let tmp = postcard::to_allocvec(&resp).unwrap();
-
             // COBS encode into a scratch slice, then append 0x00
             let mut enc = alloc::vec::Vec::with_capacity(cobs::max_encoding_length(tmp.len()));
             enc.resize(cobs::max_encoding_length(tmp.len()), 0);
@@ -152,32 +135,27 @@ pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
     }
     out
 }
-
 #[main]
 fn main() -> ! {
     let cfg = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(cfg);
     esp_alloc::heap_allocator!(size: 64 * 1024);
-
     let mut delay = Delay::new();
     let mut ui = Gui::new(
         p.SPI2, p.GPIO38, p.GPIO39, p.GPIO45, p.GPIO21, p.GPIO40, p.GPIO46, p.I2C0, p.GPIO41,
         p.GPIO42, p.GPIO47, p.GPIO48, &mut delay,
     )
     .ok();
-
     let pin_required = {
         let mut nvs = NvsStore::new();
         nvs.is_initialized()
     };
-
     delay.delay_millis(2_000);
     if pin_required {
         if let Some(ui) = ui.as_mut() {
             ui.begin_unlock(None);
         }
     }
-
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
     if usb.read_byte().is_ok() {
         let _ = usb_write(&mut usb, b"siger-fw ready\r\n");
@@ -185,7 +163,6 @@ fn main() -> ! {
     if ui.is_none() {
         let _ = usb_write(&mut usb, b"gui init failed\r\n");
     }
-
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; PLAIN_BUF_LEN];
@@ -195,11 +172,9 @@ fn main() -> ! {
             if let Some((raw_x, raw_y)) = ui.take_debug_touch_raw() {
                 let mut msg = HString::<40>::new();
                 let _ = write!(msg, "raw {},{}\r\n", raw_x, raw_y);
-                let _ =  usb_write(&mut usb, msg.as_bytes());
+                let _ = usb_write(&mut usb, msg.as_bytes());
             }
-
             let event = ui.tick();
-
             if let Some(result) = ui.poll_confirmation_result() {
                 if result {
                     let _ = usb_write(&mut usb, b"confirm accepted\r\n");
@@ -207,7 +182,6 @@ fn main() -> ! {
                     let _ = usb_write(&mut usb, b"confirm rejected\r\n");
                 }
             }
-
             if let Some(event) = event {
                 match event {
                     GuiInteraction::PinComplete(digits) => {
@@ -216,9 +190,7 @@ fn main() -> ! {
                             let ch = char::from(b'0' + *digit);
                             let _ = pin.push(ch);
                         }
-
                         ui.show_unlocking();
-
                         match unlock_device_with_pin(pin.as_str()) {
                             UnlockAttempt::Success => {
                                 ui.show_unlock_success();
@@ -256,14 +228,12 @@ fn main() -> ! {
                 }
             }
         }
-
         // 1) Proactive outbound frag, if any
         unsafe {
             if let Some(of) = OUT_FRAG.as_mut() {
                 let start = of.off as usize;
                 let end = core::cmp::min(start + TX_CHUNK, of.data.len());
                 let last = end == of.data.len();
-
                 let chunk: alloc::vec::Vec<u8> = of.data[start..end].to_vec();
                 let resp = Msg {
                     v: PROTO_V1,
@@ -288,7 +258,6 @@ fn main() -> ! {
                 continue;
             }
         }
-
         // 2) RX path
         if let Ok(b) = usb.read_byte() {
             if b == 0 && rx.is_empty() {
@@ -302,7 +271,6 @@ fn main() -> ! {
             }
             continue;
         }
-
             if b == 0 {
                 // decode Msg<Frame>
                 let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
@@ -329,7 +297,6 @@ fn main() -> ! {
                         },
                     },
                 };
-
                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                     let n = encode(used, &mut enc);
                     let _ = usb_write(&mut usb, &enc[..n]);
@@ -342,11 +309,9 @@ fn main() -> ! {
         }
     }
 }
-
 fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
     match frame {
         Frame::One(req) => handle_request_v1(req),
-
         Frame::FragBegin {
             id,
             total_len,
@@ -363,7 +328,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
             }
             Response::Ok
         }
-
         Frame::FragPart {
             id,
             offset,
@@ -385,7 +349,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                     return Response::Err { code: ERR_OVERFLOW };
                 }
                 st.next_off += chunk.len() as u32;
-
                 if *last {
                     if st.next_off != st.total_len {
                         FRAG = None;
@@ -393,7 +356,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                             code: ERR_BAD_COBS_OR_POSTCARD,
                         };
                     }
-
                     // Decide by kind
                     match st.kind {
                         FragKind::SetSeed => {
@@ -414,7 +376,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                             let mut out = HVec::<u8, MAX_FRAG>::new();
                             let _ = out.extend_from_slice(st.buf.as_slice());
                             let total = out.len() as u32;
-
                             OUT_FRAG = Some(OutFrag {
                                 msg_id: req_id,
                                 id: st.id,
@@ -423,7 +384,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                                 data: out,
                             });
                             FRAG = None;
-
                             // Kick off outbound stream with FragBegin
                             Response::FragBegin {
                                 id: *id,
@@ -439,14 +399,12 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
         }
     }
 }
-
 fn handle_request_v1(req: &Request) -> Response {
     match req {
         Request::Hello => Response::Hello(Caps {
             proto_v: PROTO_V1,
             compressed_pk: true,
         }),
-
         Request::GetInfo => {
             let mut nvs = NvsStore::new();
             let stored_pubs = nvs.list_seed_pubs().unwrap_or_default();
@@ -457,7 +415,6 @@ fn handle_request_v1(req: &Request) -> Response {
             } else {
                 stored_pubs
             };
-
             Response::Info {
                 proto_v: PROTO_V1,
                 fw_major: FW_MAJOR,
@@ -467,9 +424,7 @@ fn handle_request_v1(req: &Request) -> Response {
                 cheetah_pubs,
             }
         }
-
         Request::Ping => Response::Pong,
-
         Request::SetSeed { seed64 } => {
             set_seed(seed64);
             Response::Ok
@@ -478,12 +433,10 @@ fn handle_request_v1(req: &Request) -> Response {
             wipe_seed();
             Response::Ok
         }
-
         Request::GetFingerprint => match master_fingerprint_for_active() {
             Ok(fp4) => Response::OkFingerprint { fp4 },
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::GetPubkey { path, compressed } => match derive_signing_key_active(path) {
             Ok(sk) => {
                 let vk = sk.verifying_key();
@@ -499,7 +452,6 @@ fn handle_request_v1(req: &Request) -> Response {
             }
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::SignDigest { path, digest32 } => {
             if is_device_locked() {
                 return Response::Err {
@@ -519,12 +471,10 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::GetXpub { path } => match get_xpub(path) {
             Ok(x) => Response::OkXpub(x),
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::GetCheetahPub { slot, path } => {
             match derive_child_sk_for_slot(path, *slot as usize) {
                 Ok(sk) => {
@@ -534,7 +484,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::SignSpendHash { slot, path, msg5 } => {
             if is_device_locked() {
                 return Response::Err {
@@ -554,7 +503,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::SignSpendHashFor {
             slot,
             path,
@@ -585,7 +533,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::Health => {
             let slot = match active_slot_index() {
                 Ok(idx) => idx,
@@ -608,7 +555,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::InitializePIN { pin, seed64 } => {
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
@@ -631,14 +577,12 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::AddSeed { seed64 } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-
             let master_key = match master_key_copy() {
                 Some(key) => key,
                 None => {
@@ -647,7 +591,6 @@ fn handle_request_v1(req: &Request) -> Response {
                     }
                 }
             };
-
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
             match nvs.add_seed_with_key(&master_key, seed64, pub_xy) {
@@ -665,14 +608,12 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::DeleteSeed { slot } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-
             let master_key = match master_key_copy() {
                 Some(key) => key,
                 None => {
@@ -681,7 +622,6 @@ fn handle_request_v1(req: &Request) -> Response {
                     }
                 }
             };
-
             let mut nvs = NvsStore::new();
             match nvs.delete_seed_with_key(&master_key, *slot as usize) {
                 Ok(_) => {
@@ -699,7 +639,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::Unlock { pin } => match unlock_device_with_pin(pin.as_str()) {
             UnlockAttempt::Success => Response::Ok,
             UnlockAttempt::WrongPin { .. } => Response::Err {
@@ -711,7 +650,6 @@ fn handle_request_v1(req: &Request) -> Response {
             UnlockAttempt::NotInitialized => Response::Err { code: ERR_NO_SEED },
             UnlockAttempt::Failed => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::Lock => {
             wipe_seed();
             clear_master_key();
@@ -720,7 +658,6 @@ fn handle_request_v1(req: &Request) -> Response {
             }
             Response::Ok
         }
-
         Request::ResetPIN {
             current_pin,
             new_pin,
@@ -730,7 +667,6 @@ fn handle_request_v1(req: &Request) -> Response {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-
             let mut nvs = NvsStore::new();
             match nvs.change_pin(current_pin.as_str(), new_pin.as_str()) {
                 Ok(_) => match nvs.derive_master_key_for_pin(new_pin.as_str()) {
@@ -749,12 +685,10 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::SelectSeed { slot } => match set_active_slot(*slot as usize) {
             Ok(()) => Response::Ok,
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::Reset => {
             wipe_seed();
             clear_master_key();
@@ -764,7 +698,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::GetLockStatus => {
             let mut nvs = NvsStore::new();
             let has_seed_in_ram = unsafe { !SEED_STORE.slots.is_empty() };
@@ -782,18 +715,15 @@ fn handle_request_v1(req: &Request) -> Response {
         }
     }
 }
-
 fn is_device_locked() -> bool {
     unsafe { DEVICE_LOCKED }
 }
-
 fn unlock_device_with_pin(pin: &str) -> UnlockAttempt {
     unsafe {
         if !DEVICE_LOCKED {
             return UnlockAttempt::Success;
         }
     }
-
     let mut nvs = NvsStore::new();
     match nvs.unlock(pin) {
         Ok((seeds, master_key)) => {
@@ -819,25 +749,21 @@ fn unlock_device_with_pin(pin: &str) -> UnlockAttempt {
         Err(_) => UnlockAttempt::Failed,
     }
 }
-
 fn pk_uncompressed_65(sk: &SigningKey) -> [u8; 65] {
     let ep = sk.verifying_key().to_encoded_point(false);
     let mut out = [0u8; 65];
     out.copy_from_slice(ep.as_bytes());
     out
 }
-
 fn pk_compressed_33(sk: &SigningKey) -> [u8; 33] {
     let ep = sk.verifying_key().to_encoded_point(true);
     let mut out = [0u8; 33];
     out.copy_from_slice(ep.as_bytes());
     out
 }
-
 fn signing_key_demo() -> k256::ecdsa::SigningKey {
     k256::ecdsa::SigningKey::from_bytes((&DEMO_SK).into()).unwrap()
 }
-
 fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut [u8]) {
     let msg = Msg {
         v: PROTO_V1,
@@ -851,22 +777,18 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
         let _ = usb_write(usb, &[0]);
     }
 }
-
 fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
     let seed = get_active_seed_copy()?;
     let dp = path_to_derivation(path);
     let child = XPrv::derive_from_path(&seed, &dp).map_err(|_| ())?;
     let xpub = child.public_key();
-
     let attrs = child.attrs();
     let depth = attrs.depth;
     let child_u32 = u32::from(attrs.child_number);
     let fp4 = attrs.parent_fingerprint;
     let chain_code = attrs.chain_code;
-
     let mut pubkey33 = [0u8; 33];
     pubkey33.copy_from_slice(&xpub.public_key().to_bytes());
-
     Ok(Xpub {
         depth,
         fp4,
@@ -875,7 +797,6 @@ fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
         pubkey33,
     })
 }
-
 fn master_key_copy() -> Option<[u8; 32]> {
     unsafe {
         if MASTER_KEY_SET {
@@ -885,25 +806,21 @@ fn master_key_copy() -> Option<[u8; 32]> {
         }
     }
 }
-
 fn store_master_key(key: &[u8; 32]) {
     unsafe {
         MASTER_KEY.copy_from_slice(key);
         MASTER_KEY_SET = true;
     }
 }
-
 fn clear_master_key() {
     unsafe {
         MASTER_KEY.zeroize();
         MASTER_KEY_SET = false;
     }
 }
-
 fn set_seed(seed64: &[u8; 64]) {
     update_seed_store_from_slice(core::slice::from_ref(seed64));
 }
-
 fn update_seed_store_from_slice(seeds: &[[u8; 64]]) {
     unsafe {
         SEED_STORE.slots.clear();
@@ -914,7 +831,6 @@ fn update_seed_store_from_slice(seeds: &[[u8; 64]]) {
         DEVICE_LOCKED = SEED_STORE.slots.is_empty();
     }
 }
-
 fn append_seed_slot(seed64: &[u8; 64]) {
     unsafe {
         if SEED_STORE.slots.len() < MAX_SEED_SLOTS {
@@ -922,7 +838,6 @@ fn append_seed_slot(seed64: &[u8; 64]) {
         }
     }
 }
-
 fn remove_seed_slot(index: usize) {
     unsafe {
         if index < SEED_STORE.slots.len() {
@@ -940,7 +855,6 @@ fn remove_seed_slot(index: usize) {
         }
     }
 }
-
 fn wipe_seed() {
     unsafe {
         SEED_STORE.slots.clear();
@@ -949,7 +863,6 @@ fn wipe_seed() {
     }
     clear_master_key();
 }
-
 fn collect_info_pubs() -> alloc::vec::Vec<CheetahPub> {
     let mut nvs = NvsStore::new();
     match nvs.list_seed_pubs() {
@@ -957,7 +870,6 @@ fn collect_info_pubs() -> alloc::vec::Vec<CheetahPub> {
         _ => collect_info_pubs_from_ram(),
     }
 }
-
 fn collect_info_pubs_from_ram() -> alloc::vec::Vec<CheetahPub> {
     let mut out = alloc::vec::Vec::new();
     unsafe {
@@ -974,7 +886,6 @@ fn collect_info_pubs_from_ram() -> alloc::vec::Vec<CheetahPub> {
     }
     out
 }
-
 fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     let mut dp = DerivationPath::default();
     for &p in path.iter() {
@@ -984,7 +895,6 @@ fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     }
     dp
 }
-
 fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<SigningKey, ()> {
     let seed = get_seed_for_slot(slot)?;
     let mut key = XPrv::new(&seed).map_err(|_| ())?;
@@ -995,7 +905,6 @@ fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<Sign
     let sk_bytes = key.private_key().to_bytes();
     SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())
 }
-
 fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
     let seed = get_active_seed_copy()?;
     let xprv = XPrv::new(&seed).map_err(|_| ())?;
@@ -1007,7 +916,6 @@ fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
     fp4.copy_from_slice(&ripe[..4]);
     Ok(fp4)
 }
-
 fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32], ()> {
     let seed = get_seed_for_slot(slot)?;
     let (sk, cc) = cheetah::master_from_seed(&seed);
@@ -1017,12 +925,10 @@ fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32
     }
     xk.sk.ok_or(())
 }
-
 fn root_pub_from_seed(seed: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
     let (sk, _cc) = cheetah::master_from_seed(seed);
     cheetah::cheetah_pub_from_sk(sk)
 }
-
 fn get_seed_for_slot(slot: usize) -> Result<[u8; 64], ()> {
     unsafe {
         if slot >= SEED_STORE.slots.len() {
@@ -1031,7 +937,6 @@ fn get_seed_for_slot(slot: usize) -> Result<[u8; 64], ()> {
         Ok(SEED_STORE.slots[slot])
     }
 }
-
 fn get_active_seed_copy() -> Result<[u8; 64], ()> {
     unsafe {
         if SEED_STORE.slots.is_empty() {
@@ -1041,7 +946,6 @@ fn get_active_seed_copy() -> Result<[u8; 64], ()> {
         Ok(SEED_STORE.slots[idx])
     }
 }
-
 fn set_active_slot(slot: usize) -> Result<(), ()> {
     unsafe {
         if slot >= SEED_STORE.slots.len() {
@@ -1051,7 +955,6 @@ fn set_active_slot(slot: usize) -> Result<(), ()> {
     }
     Ok(())
 }
-
 fn active_slot_index() -> Result<usize, ()> {
     unsafe {
         if SEED_STORE.slots.is_empty() {
@@ -1060,12 +963,10 @@ fn active_slot_index() -> Result<usize, ()> {
         Ok(SEED_STORE.active.min(SEED_STORE.slots.len() - 1))
     }
 }
-
 fn derive_signing_key_active(path: &pathmod::Path) -> Result<SigningKey, ()> {
     let slot = active_slot_index()?;
     derive_signing_key_for_slot(path, slot)
 }
-
 fn usb_connected(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) -> bool {
     usb.read_byte().is_ok()
 }

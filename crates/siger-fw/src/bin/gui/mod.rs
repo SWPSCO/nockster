@@ -1,5 +1,4 @@
 use core::{convert::Infallible, fmt::Write};
-
 use axs5106l::{Axs5106l, Coordinates, Rotation as TouchRotation};
 use display_interface_spi::SPIInterface;
 use embedded_graphics::{
@@ -26,9 +25,7 @@ use esp_hal::{
 };
 use heapless::{String, Vec};
 use mipidsi::{models::ST7789, options::Orientation, Builder, Display};
-
 include!(concat!(env!("OUT_DIR"), "/boot_logo.rs"));
-
 /// Convenience alias for the SPI device wrapper we use for the LCD.
 type DisplaySpiDevice =
     ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, embedded_hal_bus::spi::NoDelay>;
@@ -38,40 +35,28 @@ type DisplayInterface = SPIInterface<DisplaySpiDevice, Output<'static>>;
 type LcdDisplay = Display<DisplayInterface, ST7789, Output<'static>>;
 /// Convenience alias for the touch controller type.
 type TouchController = Axs5106l<I2c<'static, Blocking>, Output<'static>>;
-
 const PADDING: i32 = 6;
 const MAX_PIN_DIGITS: usize = 12;
 const DEBUG_BAR_HEIGHT: i32 = 6;
-
 const COLOR_BACKGROUND: Rgb565 = Rgb565::BLACK;
 const COLOR_BUTTON: Rgb565 = Rgb565::new(6, 12, 6);
 const COLOR_BUTTON_BORDER: Rgb565 = Rgb565::new(2, 4, 2);
 const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
-
 // AXS5106L native grid
 const TOUCH_SENSOR_WIDTH:  u16 = 240;
 const TOUCH_SENSOR_HEIGHT: u16 = 320;
 
-// LCD is a 172×320 window starting at column 34 on the panel
-const VISIBLE_X_MIN: u16 = 34;
-const VISIBLE_X_MAX: u16 = VISIBLE_X_MIN + BOOT_LOGO_WIDTH - 1; // 34..205 (width 172)
+const VISIBLE_X_MIN: u16 = 34;   // Your LCD starts at column 34
+const VISIBLE_X_MAX: u16 = 205;  // 34 + 172 - 1
 const VISIBLE_Y_MIN: u16 = 0;
-const VISIBLE_Y_MAX: u16 = TOUCH_SENSOR_HEIGHT - 1;             // 0..319
+const VISIBLE_Y_MAX: u16 = 319;
 
-// <<< ORIENTATION KNOBS >>>
-// Do NOT swap: raw.x already corresponds to LCD columns (short axis)
 const TOUCH_SWAP_AXES: bool = false;
+const LCD_FLIPPED_HORIZONTALLY: bool = false;
+const INVERT_GUI_Y: bool = true;  // Enable to flip Y back
 
-// If you keep ST7789 .orientation(... .flip_horizontal()), undo it here once:
-const LCD_FLIPPED_HORIZONTALLY: bool = true;
-
-// Your raw logs suggested rows are upside-down vs UI; flip Y once:
-const INVERT_GUI_Y: bool = true;
-
-
-/// Top-level GUI manager for the hardware wallet.
 pub struct Gui {
     display: LcdDisplay,
     backlight: Output<'static>,
@@ -90,7 +75,6 @@ pub struct Gui {
     debug_flash: bool,
     debug_touch_raw: Option<(u16, u16)>,
 }
-
 /// UI mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuiMode {
@@ -101,7 +85,6 @@ pub enum GuiMode {
     Unlocked,
     Error,
 }
-
 /// User interactions surfaced by the GUI layer.
 #[derive(Debug, Clone)]
 pub enum GuiInteraction {
@@ -110,7 +93,6 @@ pub enum GuiInteraction {
     ConfirmRejected,
     RawTouch(Coordinates),
 }
-
 /// Setup errors emitted while building the GUI subsystem.
 #[derive(Debug)]
 pub enum GuiError {
@@ -118,20 +100,17 @@ pub enum GuiError {
     DisplayInit(mipidsi::error::InitError<Infallible>),
     I2cConfig(esp_hal::i2c::master::ConfigError),
 }
-
 #[derive(Clone, Copy, Debug)]
 enum Button {
     Digit(u8),
     Clear,
     Ok,
 }
-
 struct ButtonHit {
     button: Button,
     row: usize,
     col: usize,
 }
-
 impl Gui {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -156,15 +135,12 @@ impl Gui {
             .map_err(GuiError::SpiConfig)?
             .with_sck(sck)
             .with_mosi(mosi);
-
         let dc = Output::new(dc, Level::Low, OutputConfig::default());
         let cs = Output::new(cs, Level::High, OutputConfig::default());
         let rst = Output::new(rst, Level::High, OutputConfig::default());
         let mut backlight = Output::new(backlight_pin, Level::Low, OutputConfig::default());
-
         let device = ExclusiveDevice::new_no_delay(spi, cs);
         let interface = SPIInterface::new(device, dc);
-
         let mut display = Builder::new(ST7789, interface)
             .reset_pin(rst)
             .display_size(BOOT_LOGO_WIDTH, BOOT_LOGO_HEIGHT)
@@ -172,9 +148,7 @@ impl Gui {
             .orientation(Orientation::new().flip_horizontal())
             .init(delay)
             .map_err(GuiError::DisplayInit)?;
-
         let _ = backlight.set_high();
-
         let i2c = I2c::new(i2c0, I2cConfig::default())
             .map_err(GuiError::I2cConfig)?
             .with_scl(touch_scl)
@@ -185,7 +159,7 @@ impl Gui {
             touch_reset,
             TOUCH_SENSOR_WIDTH,
             TOUCH_SENSOR_HEIGHT,
-            TouchRotation::Rotate0,
+            TouchRotation::Rotate180,
         );
         let mut touch_ready = false;
         for _ in 0..5 {
@@ -200,7 +174,6 @@ impl Gui {
             touch_int,
             InputConfig::default().with_pull(Pull::Up),
         ));
-
         let mut gui = Gui {
             display,
             backlight,
@@ -219,18 +192,15 @@ impl Gui {
             debug_flash: false,
             debug_touch_raw: None,
         };
-
         gui.show_boot_logo();
         Ok(gui)
     }
-
     pub fn show_boot_logo(&mut self) {
         self.active_button = None;
         self.touch_active = false;
         self.mode = GuiMode::Splash;
         self.blit_boot_logo();
     }
-
     pub fn begin_unlock(&mut self, expected_digits: Option<u8>) {
         self.pin_expected = expected_digits;
         self.pin_entered.clear();
@@ -240,7 +210,6 @@ impl Gui {
         self.draw_pin_pad();
         self.render_pin_header();
     }
-
     pub fn show_unlocking(&mut self) {
         self.touch_active = false;
         self.active_button = None;
@@ -251,7 +220,6 @@ impl Gui {
         self.render_header("Unlocking...", COLOR_BACKGROUND);
         self.draw_unlock_spinner_frame(0);
     }
-
     pub fn show_unlock_success(&mut self) {
         self.touch_active = false;
         self.active_button = None;
@@ -259,7 +227,6 @@ impl Gui {
         let _ = self.display.clear(COLOR_BACKGROUND);
         self.draw_centered_message("Unlocked");
     }
-
     pub fn show_pin_failure(&mut self, attempts_remaining: Option<u8>) {
         self.touch_active = false;
         self.active_button = None;
@@ -273,7 +240,6 @@ impl Gui {
         }
         self.render_header(msg.as_str(), COLOR_BUTTON_ACTIVE);
     }
-
     pub fn show_pin_locked_out(&mut self) {
         self.touch_active = false;
         self.active_button = None;
@@ -282,7 +248,6 @@ impl Gui {
         let _ = self.display.clear(COLOR_BACKGROUND);
         self.draw_centered_message("PIN Locked Out");
     }
-
     pub fn show_pin_not_initialized(&mut self) {
         self.touch_active = false;
         self.active_button = None;
@@ -291,11 +256,9 @@ impl Gui {
         let _ = self.display.clear(COLOR_BACKGROUND);
         self.draw_centered_message("PIN Not Set");
     }
-
     pub fn poll_confirmation_result(&mut self) -> Option<bool> {
         self.confirm_result.take()
     }
-
     pub fn request_confirmation(&mut self, prompt: &str) {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
@@ -305,40 +268,31 @@ impl Gui {
         self.mode = GuiMode::Confirm;
         self.render_confirm_prompt();
     }
-
     pub fn tick(&mut self) -> Option<GuiInteraction> {
         self.advance_unlocking();
-
         match self.mode {
             GuiMode::Unlocking | GuiMode::Unlocked | GuiMode::Error | GuiMode::Splash => {
                 return None
             }
             _ => {}
         }
-
         let Some(touch) = self.poll_touch_state() else {
             return None;
         };
-
         self.flash_touch_debug();
-
         match self.mode {
             GuiMode::Locked => self.handle_pin_touch(touch),
             GuiMode::Confirm => self.handle_confirm_touch(touch),
             GuiMode::Unlocking | GuiMode::Unlocked | GuiMode::Error | GuiMode::Splash => None,
         }
     }
-
     pub fn mode(&self) -> GuiMode {
         self.mode
     }
-
     fn poll_touch_state(&mut self) -> Option<Coordinates> {
         self.ensure_touch_ready();
         let touch = self.touch.as_mut()?;
-
         // fall back to polling even if INT stays high
-
         let irq_asserted = match &self.touch_irq {
             Some(irq) => {
                 if irq.is_high() {
@@ -349,11 +303,9 @@ impl Gui {
             }
             None => false,
         };
-
         if irq_asserted && self.touch_active {
             return None;
         }
-
         let touch_present = match touch.get_touch_data() {
             Ok(Some(data)) => data.first_touch(),
             Ok(None) => {
@@ -366,7 +318,6 @@ impl Gui {
                 return None;
             }
         };
-
         let point = match touch_present {
             Some(point) => point,
             None => {
@@ -374,10 +325,8 @@ impl Gui {
                 return None;
             }
         };
-
         self.debug_touch_raw = Some((point.x, point.y));
         let mapped = map_touch_point(point);
-
         if self.touch_active {
             None
         } else {
@@ -386,7 +335,6 @@ impl Gui {
             Some(mapped)
         }
     }
-
     fn ensure_touch_ready(&mut self) {
         if self.touch_ready {
             return;
@@ -398,11 +346,9 @@ impl Gui {
             }
         }
     }
-
     pub fn take_debug_touch_raw(&mut self) -> Option<(u16, u16)> {
         self.debug_touch_raw.take()
     }
-
     fn handle_pin_touch(&mut self, coord: Coordinates) -> Option<GuiInteraction> {
         let hit = match self.button_from_point(coord) {
             Some(hit) => hit,
@@ -410,13 +356,11 @@ impl Gui {
         };
         self.draw_button(hit.row, hit.col, true);
         self.active_button = Some((hit.row, hit.col));
-
         match hit.button {
             Button::Digit(digit) => {
                 if self.pin_entered.len() < MAX_PIN_DIGITS {
                     let _ = self.pin_entered.push(digit);
                     self.render_pin_header();
-
                     if let Some(expected) = self.pin_expected {
                         if self.pin_entered.len() as u8 == expected {
                             return Some(GuiInteraction::PinComplete(self.pin_entered.clone()));
@@ -444,22 +388,18 @@ impl Gui {
             }
         }
     }
-
     fn handle_confirm_touch(&mut self, coord: Coordinates) -> Option<GuiInteraction> {
         let hit = match self.button_from_point(coord) {
             Some(hit) => hit,
             None => return Some(GuiInteraction::RawTouch(coord)),
         };
-
         self.draw_button(hit.row, hit.col, true);
         self.active_button = Some((hit.row, hit.col));
-
         let result = match hit.button {
             Button::Ok => Some(GuiInteraction::ConfirmAccepted),
             Button::Clear => Some(GuiInteraction::ConfirmRejected),
             Button::Digit(_) => Some(GuiInteraction::RawTouch(coord)),
         };
-
         match result {
             Some(GuiInteraction::ConfirmAccepted) => {
                 self.confirm_result = Some(true);
@@ -469,20 +409,16 @@ impl Gui {
             }
             _ => {}
         }
-
         result
     }
-
     fn draw_pin_pad(&mut self) {
         let _ = self.display.clear(COLOR_BACKGROUND);
-
         for (row_idx, row) in self.button_grid().iter().enumerate() {
             for col_idx in 0..row.len() {
                 self.draw_button(row_idx, col_idx, false);
             }
         }
     }
-
     fn render_pin_header(&mut self) {
         let mut status = String::<32>::new();
         let _ = status.push_str("PIN: ");
@@ -491,10 +427,8 @@ impl Gui {
         }
         self.render_header(status.as_str(), COLOR_BACKGROUND);
     }
-
     fn render_confirm_prompt(&mut self) {
         let _ = self.display.clear(COLOR_BACKGROUND);
-
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
         let header_h = header_height();
         let _ = Text::with_baseline(
@@ -504,7 +438,6 @@ impl Gui {
             Baseline::Top,
         )
         .draw(&mut self.display);
-
         for (label, col_idx) in [("NO", 0), ("", 1), ("YES", 2)] {
             if label.is_empty() {
                 continue;
@@ -512,38 +445,30 @@ impl Gui {
             self.draw_button_with_label(3, col_idx, label, false);
         }
     }
-
     fn blit_boot_logo(&mut self) {
         let expected_len = (BOOT_LOGO_WIDTH as usize) * (BOOT_LOGO_HEIGHT as usize) * 2;
         debug_assert_eq!(BOOT_LOGO.len(), expected_len);
-
         let logo_iter = BOOT_LOGO.chunks_exact(2).map(|chunk| {
             let raw = u16::from_be_bytes([chunk[0], chunk[1]]);
             Rgb565::from(RawU16::new(raw))
         });
-
         let _ = self
             .display
             .set_pixels(0, 0, BOOT_LOGO_WIDTH - 1, BOOT_LOGO_HEIGHT - 1, logo_iter);
     }
-
     fn button_rect(&self, row: i32, col: i32) -> (Point, Size) {
         let width = BOOT_LOGO_WIDTH as i32;
         let row_height = row_height();
         let header_h = header_height();
-
         let button_width = (width - PADDING * 4) / 3;
         let button_height = (row_height - PADDING * 2).max(4);
-
         let x = PADDING + col * (button_width + PADDING);
         let y = header_h + row * row_height + PADDING;
-
         (
             Point::new(x, y),
             Size::new(button_width as u32, button_height as u32),
         )
     }
-
     fn button_grid(&self) -> [[Button; 3]; 4] {
         [
             [Button::Digit(1), Button::Digit(2), Button::Digit(3)],
@@ -552,20 +477,16 @@ impl Gui {
             [Button::Clear, Button::Digit(0), Button::Ok],
         ]
     }
-
     fn button_from_point(&self, coord: Coordinates) -> Option<ButtonHit> {
         let x = coord.x as i32;
         let y = coord.y as i32;
-
         let header_h = header_height();
         if y < header_h {
             return None;
         }
-
         let width = BOOT_LOGO_WIDTH as i32;
         let button_width = (width - PADDING * 4) / 3;
         let row_height = row_height();
-
         let rel_x = x - PADDING;
         if rel_x < 0 {
             return None;
@@ -578,7 +499,6 @@ impl Gui {
         if x > col_start + button_width {
             return None;
         }
-
         let rel_y = y - header_h;
         if rel_y < 0 {
             return None;
@@ -591,7 +511,6 @@ impl Gui {
         if y >= row_start + row_height {
             return None;
         }
-
         let row_idx = row as usize;
         let col_idx = col as usize;
         Some(ButtonHit {
@@ -600,12 +519,10 @@ impl Gui {
             col: col_idx,
         })
     }
-
     fn draw_button(&mut self, row: usize, col: usize, active: bool) {
         let label = button_label(self.button_grid()[row][col]);
         self.draw_button_with_label(row as i32, col as i32, label, active);
     }
-
     fn draw_button_with_label(&mut self, row: i32, col: i32, label: &str, active: bool) {
         let (top_left, size) = self.button_rect(row, col);
         let fill_color = if active {
@@ -618,10 +535,8 @@ impl Gui {
             .stroke_color(COLOR_BUTTON_BORDER)
             .stroke_width(2)
             .build();
-
         let rect = Rectangle::new(top_left, size);
         let _ = rect.into_styled(button_style).draw(&mut self.display);
-
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
         let center = Point::new(
             top_left.x + size.width as i32 / 2,
@@ -636,7 +551,6 @@ impl Gui {
         )
         .draw(&mut self.display);
     }
-
     fn render_header(&mut self, text: &str, bg: Rgb565) {
         let header_h = header_height();
         let header_rect = Rectangle::new(
@@ -646,7 +560,6 @@ impl Gui {
         let _ = header_rect
             .into_styled(PrimitiveStyleBuilder::new().fill_color(bg).build())
             .draw(&mut self.display);
-
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
         let baseline = header_h / 2 + FONT_10X20.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
@@ -657,7 +570,6 @@ impl Gui {
         )
         .draw(&mut self.display);
     }
-
     fn draw_centered_message(&mut self, text: &str) {
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
         let baseline = (BOOT_LOGO_HEIGHT / 2) as i32;
@@ -669,7 +581,6 @@ impl Gui {
         )
         .draw(&mut self.display);
     }
-
     fn draw_unlock_spinner_frame(&mut self, frame: u8) {
         let center = Point::new(
             (BOOT_LOGO_WIDTH / 2) as i32,
@@ -683,7 +594,6 @@ impl Gui {
                     .build(),
             )
             .draw(&mut self.display);
-
         let mut buf = [0u8; 4];
         let spinner_str = SPINNER_FRAMES[frame as usize].encode_utf8(&mut buf);
         let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
@@ -696,7 +606,6 @@ impl Gui {
         )
         .draw(&mut self.display);
     }
-
     fn advance_unlocking(&mut self) {
         if self.mode != GuiMode::Unlocking {
             return;
@@ -710,7 +619,6 @@ impl Gui {
             }
         }
     }
-
     fn flash_touch_debug(&mut self) {
         self.debug_flash = !self.debug_flash;
         let color = if self.debug_flash {
@@ -726,7 +634,6 @@ impl Gui {
             .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
             .draw(&mut self.display);
     }
-
     fn draw_touch_debug(&mut self, coord: &Coordinates) {
         let size = 8i32;
         let half = size / 2;
@@ -749,7 +656,6 @@ impl Gui {
             .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
             .draw(&mut self.display);
     }
-
     fn clear_touch_latch(&mut self) {
         if self.touch_active {
             self.touch_active = false;
@@ -759,7 +665,6 @@ impl Gui {
         }
     }
 }
-
 fn button_label(button: Button) -> &'static str {
     match button {
         Button::Digit(0) => "0",
@@ -777,56 +682,46 @@ fn button_label(button: Button) -> &'static str {
         Button::Ok => "OK",
     }
 }
-
 fn header_height() -> i32 {
     row_height()
 }
-
 fn row_height() -> i32 {
     (BOOT_LOGO_HEIGHT as i32) / 5
 }
 
 fn map_touch_point(raw: Coordinates) -> Coordinates {
-    // 1) start with raw
     let mut rx = raw.x;
     let mut ry = raw.y;
-
-    // 2) axes: DO NOT SWAP for your panel
+    
     if TOUCH_SWAP_AXES {
         core::mem::swap(&mut rx, &mut ry);
     }
-
-    // 3) scale ONLY the visible sensor band on X; full band on Y
+    
+    // Map visible sensor region to display
     let mut x = map_touch_axis(rx, VISIBLE_X_MIN, VISIBLE_X_MAX, BOOT_LOGO_WIDTH);
     let mut y = map_touch_axis(ry, VISIBLE_Y_MIN, VISIBLE_Y_MAX, BOOT_LOGO_HEIGHT);
-
-    // 4) account for LCD flip (your ST7789 init uses .flip_horizontal())
+    
     if LCD_FLIPPED_HORIZONTALLY {
         x = (BOOT_LOGO_WIDTH - 1) - x;
     }
-
-    // 5) flip Y once if needed (your logs suggested it's inverted)
+    
     if INVERT_GUI_Y {
         y = (BOOT_LOGO_HEIGHT - 1) - y;
     }
-
+    
     Coordinates { x, y }
 }
-
 
 fn map_touch_axis(value: u16, min: u16, max: u16, output: u16) -> u16 {
     if output <= 1 || max <= min {
         return 0;
     }
-
     let clamped = value.clamp(min, max);
     let span = u32::from(max - min);
     let relative = u32::from(clamped - min);
     let target = u32::from(output - 1);
-
     if span == 0 {
         return 0;
     }
-
     ((relative * target + span / 2) / span) as u16
 }

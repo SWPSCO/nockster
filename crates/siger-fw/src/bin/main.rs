@@ -2,7 +2,6 @@
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 mod gui;
-mod touch;
 mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
@@ -12,7 +11,6 @@ use core::fmt::Write as _;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
-use touch::{TapFilter, Rotation, TouchCal};
 use heapless::{String as HString, Vec as HVec};
 use siger_core::alloc_path as pathmod;
 use siger_core::{CheetahPub, *};

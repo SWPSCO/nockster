@@ -40,7 +40,6 @@ display-interface-spi = { version = "0.5", default-features = false }
 embedded-hal-bus = { version = "0.1", default-features = false }
 embedded-graphics-core = { version = "0.4", default-features = false }
 embedded-graphics = { version = "0.8.1", default-features = false }
-axs5106l = { git = "https://github.com/toto04/axs5106l", rev = "abcefbbacbb1e2249c02278d2218fc9dbc5cb2d4", default-features = false }
 
 # Your shared core lib (keep as you have it; just ensure it's no_std for FW)
 siger-core = { path = "../siger-core", default-features = false }

@@ -1,5 +1,5 @@
 use core::{convert::Infallible, fmt::Write};
-use axs5106l::{Axs5106l, Coordinates, Rotation as TouchRotation};
+use siger_fw::axs5106l::{Axs5106l, Coordinates, Rotation as TouchRotation};
 use display_interface_spi::SPIInterface;
 use embedded_graphics::{
     mono_font::{ascii::FONT_10X20, MonoTextStyle},
@@ -45,11 +45,11 @@ const COLOR_BUTTON_BORDER: Rgb565 = Rgb565::new(2, 4, 2);
 const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
-const DRIVER_ROTATION: TouchRotation = TouchRotation::Rotate180; 
+const DRIVER_ROTATION: TouchRotation = TouchRotation::Rotate270; 
 const TOUCH_SENSOR_WIDTH:  u16 = 240;
 const TOUCH_SENSOR_HEIGHT: u16 = 320;
-const TOUCH_SWAP_AXES: bool = false;           // we just arranged the driver so X is true-X
-const LCD_FLIPPED_HORIZONTALLY: bool = false;   // you already flip the ST7789
+const TOUCH_SWAP_AXES: bool = false;
+const LCD_FLIPPED_HORIZONTALLY: bool = false; // you already flip the ST7789
 const INVERT_GUI_Y: bool = false;
 
 const SENSOR_W: i32 = 240;
@@ -271,7 +271,7 @@ impl Gui {
         self.mode = GuiMode::Locked;
         self.draw_pin_pad();
         let mut msg = String::<32>::new();
-        let _ = msg.push_str("Wrong PIN");
+        let _ = msg.push_str("Bad PIN");
         if let Some(rem) = attempts_remaining {
             let _ = write!(msg, " ({} left)", rem);
         }
@@ -283,7 +283,7 @@ impl Gui {
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
         let _ = self.display.clear(COLOR_BACKGROUND);
-        self.draw_centered_message("PIN Locked Out");
+        self.draw_centered_message("Lockout :(");
     }
     pub fn show_pin_not_initialized(&mut self) {
         self.touch_active = false;
@@ -720,7 +720,7 @@ fn button_label(button: Button) -> &'static str {
         Button::Digit(8) => "8",
         Button::Digit(9) => "9",
         Button::Digit(_) => "?",
-        Button::Clear => "CLR",
+        Button::Clear => "X",
         Button::Ok => "OK",
     }
 }
@@ -733,108 +733,19 @@ fn row_height() -> i32 {
 }
 
 fn map_touch_point_raw(raw: Coordinates) -> Coordinates {
-    // Sensor full ranges
-    const SW_MIN: i32 = 0;   const SW_MAX: i32 = 239; // touch X
-    const SH_MIN: i32 = 0;   const SH_MAX: i32 = 319; // touch Y
-
-    // Visible window on the LCD (columns) due to display_offset(34, 0), width=172
-    const VX_MIN: i32 = 34;
-    const VX_MAX: i32 = 205; // 34 + 172 - 1
-
-    // GUI target sizes
-    let gw_max = (BOOT_LOGO_WIDTH  as i32) - 1; // 171
-    let gh_max = (BOOT_LOGO_HEIGHT as i32) - 1; // 319
-
-    // 1) mirror X to match flip_horizontal()
-    let rx_mir = (SW_MAX - (raw.x as i32)).clamp(SW_MIN, SW_MAX);
-    let ry     = (raw.y as i32).clamp(SH_MIN, SH_MAX);
-
-    // 2) crop mirrored X to visible window 34..205
-    let rx_vis = rx_mir.clamp(VX_MIN, VX_MAX);
-
-    // 3) scale X: [34..205] -> [0..gw_max]
-    let x_span = (VX_MAX - VX_MIN).max(1);
-    let gx = ((rx_vis - VX_MIN) as i64 * gw_max as i64 / x_span as i64) as i32;
-
-    // 4) scale Y: [0..319] -> [0..gh_max]
-    let y_span = (SH_MAX - SH_MIN).max(1);
-    let gy = ((ry - SH_MIN) as i64 * gh_max as i64 / y_span as i64) as i32;
-
+    // Buttons start at X=6, so offset the mapping
+    // Raw 0-127 should map to screen 0-171, but shift right by ~20px
+    let x = ((raw.x as i32 * 171) / 127) + 20;
+    let y = (raw.y as i32 * 319) / 304;
+    
     Coordinates {
-        x: gx as u16,
-        y: gy as u16,
-    }
-}
-
-
-#[inline]
-fn scale_clamped(v: i32, in_min: i32, in_max: i32, out_max: i32) -> i32 {
-    if in_max <= in_min { return 0; }
-    let vv = v.clamp(in_min, in_max) - in_min;
-    (vv as i64 * out_max as i64 / (in_max - in_min) as i64) as i32
-  }
-
-// ---- helpers ----
-
-#[inline]
-fn normalize_12bit_to_range(v: u16, max_target: u16) -> u16 {
-    // If v looks like 12-bit (much larger than target), scale; else leave as-is.
-    let vt = v as u32;
-    let mt = max_target as u32;
-    if vt > mt + 8 { // tiny hysteresis to ignore jitter
-        // scale 0..4095 -> 0..max_target
-        const RAW_MAX: u32 = 4095;
-        ((vt * mt + RAW_MAX/2) / RAW_MAX) as u16
-    } else {
-        v
+        x: x.clamp(0, 171) as u16,
+        y: y as u16,
     }
 }
 
 #[inline]
-fn undo_driver_rotation(mut x: u16, mut y: u16, rot: TouchRotation, w: u16, h: u16) -> (u16, u16) {
-    // Invert the exact transforms in your lib’s apply_rotation():
-    match rot {
-        TouchRotation::Rotate0 => {
-            // lib did: x = (w-1) - x; y = y;
-            x = (w - 1) - x;
-            (x, y)
-        }
-        TouchRotation::Rotate90 => {
-            // lib did: x = y; y = x;  => inverse is the same swap
-            core::mem::swap(&mut x, &mut y);
-            (x, y)
-        }
-        TouchRotation::Rotate180 => {
-            // lib did: x = x; y = (h-1) - y;
-            y = (h - 1) - y;
-            (x, y)
-        }
-        TouchRotation::Rotate270 => {
-            // lib did: x = (w-1) - y; y = (h-1) - x;
-            // Inverse of that:
-            let orig_x = (w - 1) - y;
-            let orig_y = (h - 1) - x;
-            (orig_x, orig_y)
-        }
-    }
-}
-
-fn map_touch_axis(value: u16, min: u16, max: u16, output: u16) -> u16 {
-    if output <= 1 || max <= min {
-        return 0;
-    }
-    let clamped = value.clamp(min, max);
-    let span = u32::from(max - min);
-    let relative = u32::from(clamped - min);
-    let target = u32::from(output - 1);
-    ((relative * target + span / 2) / span) as u16
-}
-
-
-#[inline]
-fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
-    for &byte in buf {
-        let _ = usb.write_byte_nb(byte);
-    }
-    let _ = usb.flush_tx_nb();
+fn scale_12bit_to_range(v: i32, max_target: i32) -> i32 {
+    const RAW_MAX: i32 = 4095;
+    (v * max_target + RAW_MAX / 2) / RAW_MAX
 }

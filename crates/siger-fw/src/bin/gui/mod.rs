@@ -733,13 +733,12 @@ fn row_height() -> i32 {
 }
 
 fn map_touch_point_raw(raw: Coordinates) -> Coordinates {
-    // Buttons start at X=6, so offset the mapping
-    // Raw 0-127 should map to screen 0-171, but shift right by ~20px
-    let x = ((raw.x as i32 * 171) / 127) + 20;
+    // Adjust to spread raw 0-15 across screen 0-171
+    let x = ((raw.x as i32 * 16) - 5).clamp(0, 171);
     let y = (raw.y as i32 * 319) / 304;
     
     Coordinates {
-        x: x.clamp(0, 171) as u16,
+        x: x as u16,
         y: y as u16,
     }
 }

@@ -249,16 +249,28 @@ where
             for i in 0..max_points {
                 let base_idx = 2 + i * 6; // Start after the header bytes
 
-                // Extract X coordinate (12-bit value split across bytes)
-                // Byte pattern: [status & 0x0f][x_low] for X coordinate
-                let x = ((u16::from(data[base_idx]) & 0x0f) << 8) | u16::from(data[base_idx + 1]);
+                // Read bytes as the sensor sends them
+                let byte0 = data[base_idx];
+                let byte1 = data[base_idx + 1];
+                let byte2 = data[base_idx + 2];
+                let byte3 = data[base_idx + 3];
 
-                // Extract Y coordinate (12-bit value split across bytes)
-                // Byte pattern: [status & 0x0f][y_low] for Y coordinate
-                let y =
-                    ((u16::from(data[base_idx + 2]) & 0x0f) << 8) | u16::from(data[base_idx + 3]);
+                // Extract raw 12-bit values EXACTLY as C code does
+                let sensor_x = (u16::from(byte0 & 0x0f) << 8) | u16::from(byte1);
+                let sensor_y = (u16::from(byte2 & 0x0f) << 8) | u16::from(byte3);
 
-                let coords = Coordinates { x, y };
+                // The sensor reports X in 0-~130 range, Y in 0-~320 range
+                // We need to swap and scale to match display (172×320 portrait)
+                // Swap: sensor Y → display X, sensor X → display Y
+                // Scale X: sensor_y (0-320) → display X (0-171)
+                // Scale Y: sensor_x (0-130) → display Y (0-319)
+                let display_x = (sensor_y as u32 * 172 / 320).min(171) as u16;
+                let display_y = (sensor_x as u32 * 320 / 130).min(319) as u16;
+
+                // Apply flip for .flip_horizontal()
+                let x_flipped = 171u16.saturating_sub(display_x);
+
+                let coords = Coordinates { x: x_flipped, y: display_y };
 
                 // Add to our touch data (heapless::Vec will handle capacity limits)
                 let _ = touch_data.points.push(coords);
@@ -283,8 +295,7 @@ where
             return Ok(None);
         }
 
-        // Apply rotation transformation to each touch point
-        touch_data.apply_transform(|coords| self.apply_rotation(coords));
+        // Skip rotation transformation - return swapped coordinates directly
         Ok(Some(touch_data))
     }
 

@@ -26,15 +26,14 @@ use esp_hal::{
 };
 use heapless::{String, Vec};
 use mipidsi::{models::ST7789, options::Orientation, Builder, Display};
+
 include!(concat!(env!("OUT_DIR"), "/boot_logo.rs"));
-/// Convenience alias for the SPI device wrapper we use for the LCD.
+
 type DisplaySpiDevice =
     ExclusiveDevice<Spi<'static, Blocking>, Output<'static>, embedded_hal_bus::spi::NoDelay>;
 /// Convenience alias for the SPI interface exposed to the display driver.
 type DisplayInterface = SPIInterface<DisplaySpiDevice, Output<'static>>;
-/// Concrete display type for the ST7789 panel.
 type LcdDisplay = Display<DisplayInterface, ST7789, Output<'static>>;
-/// Convenience alias for the touch controller type.
 type TouchController = Axs5106l<I2c<'static, Blocking>, Output<'static>>;
 const PADDING: i32 = 6;
 const MAX_PIN_DIGITS: usize = 12;
@@ -45,24 +44,7 @@ const COLOR_BUTTON_BORDER: Rgb565 = Rgb565::new(2, 4, 2);
 const COLOR_BUTTON_ACTIVE: Rgb565 = Rgb565::new(16, 32, 16);
 const COLOR_TEXT: Rgb565 = Rgb565::WHITE;
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
-const DRIVER_ROTATION: TouchRotation = TouchRotation::Rotate270; 
-const TOUCH_SENSOR_WIDTH:  u16 = 240;
-const TOUCH_SENSOR_HEIGHT: u16 = 320;
-const TOUCH_SWAP_AXES: bool = false;
-const LCD_FLIPPED_HORIZONTALLY: bool = false; // you already flip the ST7789
-const INVERT_GUI_Y: bool = false;
-
-const SENSOR_W: i32 = 240;
-const SENSOR_H: i32 = 320;
-
-const SWAP_XY:  bool = false;
-const MIRROR_X: bool = true;   // counter .flip_horizontal()
-const MIRROR_Y: bool = false;
-
-// visible window on the glass
-const VX_MIN: i32 = 34;
-const VX_MAX: i32 = 205; // inclusive (205-34+1 = 172)
-
+const DRIVER_ROTATION: TouchRotation = TouchRotation::Rotate0;
 
 pub struct Gui {
     display: LcdDisplay,
@@ -119,35 +101,6 @@ struct ButtonHit {
     col: usize,
 }
 
-// running raw bounds learned at runtime
-static mut RAW_X_MIN: i32 =  i32::MAX;
-static mut RAW_X_MAX: i32 = -i32::MAX;
-static mut RAW_Y_MIN: i32 =  i32::MAX;
-static mut RAW_Y_MAX: i32 = -i32::MAX;
-
-// optional: nudge bounds so the very first sample doesn’t make a zero span
-const BOUNDS_PAD: i32 = 8;
-
-#[inline]
-fn learn_raw_bounds(rx: u16, ry: u16) {
-    let (x, y) = (rx as i32, ry as i32);
-    unsafe {
-        if x < RAW_X_MIN { RAW_X_MIN = x; }
-        if x > RAW_X_MAX { RAW_X_MAX = x; }
-        if y < RAW_Y_MIN { RAW_Y_MIN = y; }
-        if y > RAW_Y_MAX { RAW_Y_MAX = y; }
-    }
-}
-
-#[inline]
-fn scale_i32(v: i32, in_min: i32, in_max: i32, out_max: i32) -> i32 {
-    // clamp + safe linear map [in_min..in_max] -> [0..out_max]
-    if in_max <= in_min { return 0; }
-    let v = v.clamp(in_min, in_max) - in_min;
-    (v as i64 * out_max as i64 / (in_max - in_min) as i64) as i32
-}
-
-
 impl Gui {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -191,11 +144,12 @@ impl Gui {
             .with_scl(touch_scl)
             .with_sda(touch_sda);
         let touch_reset = Output::new(touch_rst, Level::High, OutputConfig::default());
+        // Match reference C code EXACTLY: rotation=0, width=172, height=320
         let mut touch_driver = Axs5106l::new(
             i2c,
             touch_reset,
-            TOUCH_SENSOR_WIDTH,
-            TOUCH_SENSOR_HEIGHT,
+            172,  // Same as reference C code
+            320,  // Same as reference C code
             DRIVER_ROTATION,
         );
         let mut touch_ready = false;
@@ -344,36 +298,33 @@ impl Gui {
             return None;
         }
 
-        // >>> CHANGED: read raw, not get_touch_data() <<<
-        let touch_present = match touch.read_raw_touch_data() {
-            Ok(data) if data.count > 0 => data.first_touch(),
+        let raw = match touch.get_touch_data() {
+            Ok(Some(data)) => match data.first_touch() {
+                Some(coords) => coords,
+                None => {
+                    self.clear_touch_latch();
+                    return None;
+                }
+            },
             _ => {
                 self.clear_touch_latch();
                 return None;
             }
         };
 
-        let raw = match touch_present {
-            Some(p) => p,
-            None => {
-                self.clear_touch_latch();
-                return None;
-            }
-        };
-
-        // store *true* raw
+        // Store true raw before transformation
         self.debug_touch_raw = Some((raw.x, raw.y));
 
-        // map full-range (no cropping)
-        let mapped = map_touch_point_raw(raw);
-        let mut msg = heapless::String::<48>::new();
-        let _ = core::fmt::Write::write_fmt(&mut msg, format_args!("map {},{}  raw {},{}\r\n", mapped.x, mapped.y, raw.x, raw.y));
+        // Return raw sensor values with NO transformation
+        // Let's see what the sensor actually reports
+        let transformed = raw;
+
         if self.touch_active {
             None
         } else {
             self.touch_active = true;
-            self.draw_touch_debug(&mapped);
-            Some(mapped)
+            self.draw_touch_debug(&transformed);
+            Some(transformed)
         }
     }
 
@@ -730,17 +681,6 @@ fn header_height() -> i32 {
 }
 fn row_height() -> i32 {
     (BOOT_LOGO_HEIGHT as i32) / 5
-}
-
-fn map_touch_point_raw(raw: Coordinates) -> Coordinates {
-    // Adjust to spread raw 0-15 across screen 0-171
-    let x = ((raw.x as i32 * 16) - 5).clamp(0, 171);
-    let y = (raw.y as i32 * 319) / 304;
-    
-    Coordinates {
-        x: x as u16,
-        y: y as u16,
-    }
 }
 
 #[inline]

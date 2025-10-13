@@ -12,10 +12,10 @@ pub use touch::ScreenPoint;
 
 use constants::*;
 use embedded_graphics::{draw_target::DrawTarget, prelude::Point};
-use layout::{button_from_point_confirm, button_from_point_keypad, confirm_buttons};
+use layout::{button_from_point_confirm, button_from_point_keypad};
 use render::{
     blit_boot_logo, draw_button, draw_centered_message, draw_keypad, draw_unlock_spinner_frame,
-    render_header,
+    render_confirm_overlay, render_header, render_idle_overlay,
 };
 use state::{Button, ButtonHit, InteractionState};
 use touch::transform_raw_touch;
@@ -66,6 +66,7 @@ pub struct Gui<'d> {
     pin_expected: Option<u8>,
     pin_entered: HVec<u8, PIN_BUFFER_LEN>,
     confirm_prompt: HString<64>,
+    idle_message: HString<48>,
     unlock_anim: u16,
     current_spinner_frame: u8,
     confirm_result: Option<bool>,
@@ -73,6 +74,8 @@ pub struct Gui<'d> {
     unlock_demo_state: Option<demo::AnimationState>,
     unlock_demo_last_frame_start: Option<Instant>,
     unlock_demo_frames_rendered: u32,
+    unlock_demo_paused: bool,
+    overlay_dirty: bool,
 }
 
 impl<'d> Gui<'d> {
@@ -146,6 +149,7 @@ impl<'d> Gui<'d> {
             pin_expected: None,
             pin_entered: HVec::new(),
             confirm_prompt: HString::new(),
+            idle_message: HString::new(),
             unlock_anim: 0,
             current_spinner_frame: 0,
             confirm_result: None,
@@ -153,6 +157,8 @@ impl<'d> Gui<'d> {
             unlock_demo_state: None,
             unlock_demo_last_frame_start: None,
             unlock_demo_frames_rendered: 0,
+            unlock_demo_paused: false,
+            overlay_dirty: false,
         };
 
         blit_boot_logo(&mut gui.display);
@@ -214,42 +220,53 @@ impl<'d> Gui<'d> {
         self.unlock_anim = 0;
         self.current_spinner_frame = 0;
         let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Unlocking...", COLOR_BACKGROUND);
+        render_header(&mut self.display, "Unlocking...", COLOR_SURFACE_HIGH);
         draw_unlock_spinner_frame(&mut self.display, 0);
     }
 
     pub fn show_unlock_success(&mut self) {
         self.disarm_active();
-        self.stop_unlock_demo();
         self.mode = GuiMode::Unlocked;
-        let _ = self.display.clear(COLOR_UNLOCK_BG);
-        draw_centered_message(&mut self.display, "Unlocked");
-        self.unlock_demo_state = Some(demo::AnimationState::new());
-        self.unlock_demo_last_frame_start = None;
-        self.unlock_demo_frames_rendered = 0;
+        self.restart_unlock_demo();
+        let _ = self.display.clear(COLOR_BACKGROUND);
+        render_header(&mut self.display, "Unlocked", COLOR_SURFACE_HIGH);
+        self.set_idle_message("Unlocked");
+        self.render_current_overlay();
     }
 
     fn advance_unlock_success(&mut self) {
-        let frame_complete = {
-            let Some(state) = self.unlock_demo_state.as_mut() else {
-                return;
-            };
-
-            if state.is_frame_start() {
-                let now = Instant::now();
-                if let Some(last) = self.unlock_demo_last_frame_start {
-                    if now - last < Duration::from_millis(33) {
-                        return;
-                    }
-                }
-                self.unlock_demo_last_frame_start = Some(now);
-            }
-
-            match demo::render_next_chunk(&mut self.display, state) {
-                Ok(done) => done,
-                Err(_) => false,
-            }
+        let clip_row = if matches!(self.mode, GuiMode::Unlocked) {
+            self.idle_overlay_top_row()
+        } else {
+            None
         };
+
+        let Some(state) = self.unlock_demo_state.as_mut() else {
+            return;
+        };
+
+        if self.unlock_demo_paused {
+            self.render_current_overlay();
+            return;
+        }
+
+        if state.is_frame_start() {
+            let now = Instant::now();
+            if let Some(last) = self.unlock_demo_last_frame_start {
+                if now - last < Duration::from_millis(33) {
+                    return;
+                }
+            }
+            self.unlock_demo_last_frame_start = Some(now);
+        }
+
+        let frame_complete = match demo::render_next_chunk(&mut self.display, state, clip_row) {
+            Ok(done) => done,
+            Err(_) => false,
+        };
+        if clip_row.is_some() {
+            self.render_current_overlay();
+        }
 
         if frame_complete {
             self.unlock_demo_frames_rendered =
@@ -257,6 +274,7 @@ impl<'d> Gui<'d> {
             if let Some(limit) = UNLOCK_DEMO_MAX_FRAMES {
                 if self.unlock_demo_frames_rendered >= limit {
                     self.stop_unlock_demo();
+                    self.render_current_overlay();
                 }
             }
         }
@@ -266,14 +284,83 @@ impl<'d> Gui<'d> {
         self.unlock_demo_state = None;
         self.unlock_demo_last_frame_start = None;
         self.unlock_demo_frames_rendered = 0;
+        self.unlock_demo_paused = false;
+        self.idle_message.clear();
+        self.mark_overlay_dirty();
+    }
+
+    fn restart_unlock_demo(&mut self) {
+        self.unlock_demo_state = Some(demo::AnimationState::new());
+        self.unlock_demo_last_frame_start = None;
+        self.unlock_demo_frames_rendered = 0;
+        self.unlock_demo_paused = false;
+        self.mark_overlay_dirty();
+    }
+
+    fn set_idle_message(&mut self, text: &str) {
+        if self.idle_message.as_str() != text {
+            self.idle_message.clear();
+            let _ = self.idle_message.push_str(text);
+            self.mark_overlay_dirty();
+        }
+    }
+
+    fn render_current_overlay(&mut self) {
+        if !self.overlay_dirty {
+            return;
+        }
+        match self.mode {
+            GuiMode::Unlocked => {
+                if self.idle_message.is_empty() {
+                    // Nothing to draw, but avoid repeated attempts
+                } else {
+                    render_idle_overlay(&mut self.display, self.idle_message.as_str());
+                }
+            }
+            GuiMode::Confirm => {
+                let subtitle = if self.idle_message.is_empty() {
+                    None
+                } else {
+                    Some(self.idle_message.as_str())
+                };
+                render_confirm_overlay(
+                    &mut self.display,
+                    self.confirm_prompt.as_str(),
+                    subtitle,
+                    self.interaction.active_button.map(|hit| hit.button),
+                );
+            }
+            _ => {}
+        }
+        self.overlay_dirty = false;
+    }
+
+    fn mark_overlay_dirty(&mut self) {
+        self.overlay_dirty = true;
+    }
+
+    fn idle_overlay_top_row(&self) -> Option<u16> {
+        if self.idle_message.is_empty() {
+            return None;
+        }
+        let top = SCREEN_HEIGHT as i32 - IDLE_OVERLAY_MARGIN - IDLE_OVERLAY_HEIGHT;
+        if top <= 0 {
+            None
+        } else {
+            Some(top as u16)
+        }
     }
 
     pub fn show_idle_message(&mut self, text: &str) {
         self.disarm_active();
-        self.stop_unlock_demo();
         self.mode = GuiMode::Unlocked;
-        let _ = self.display.clear(COLOR_UNLOCK_BG);
-        draw_centered_message(&mut self.display, text);
+        if self.unlock_demo_state.is_none() {
+            self.restart_unlock_demo();
+            let _ = self.display.clear(COLOR_BACKGROUND);
+        }
+        render_header(&mut self.display, "Unlocked", COLOR_SURFACE_HIGH);
+        self.set_idle_message(text);
+        self.render_current_overlay();
     }
 
     pub fn show_pin_failure(&mut self, attempts_remaining: Option<u8>) {
@@ -281,13 +368,14 @@ impl<'d> Gui<'d> {
         self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Locked;
+        let _ = self.display.clear(COLOR_BACKGROUND);
         draw_keypad(&mut self.display);
         let mut msg = HString::<32>::new();
         let _ = msg.push_str("Bad PIN");
         if let Some(remaining) = attempts_remaining {
             let _ = write!(msg, " ({} left)", remaining);
         }
-        render_header(&mut self.display, msg.as_str(), COLOR_BUTTON_ACTIVE);
+        render_header(&mut self.display, msg.as_str(), COLOR_SURFACE_HIGH);
     }
 
     pub fn show_pin_locked_out(&mut self) {
@@ -296,6 +384,7 @@ impl<'d> Gui<'d> {
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
         let _ = self.display.clear(COLOR_BACKGROUND);
+        render_header(&mut self.display, "Locked Out", COLOR_SURFACE_HIGH);
         draw_centered_message(&mut self.display, "Lockout :(");
     }
 
@@ -305,6 +394,7 @@ impl<'d> Gui<'d> {
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
         let _ = self.display.clear(COLOR_BACKGROUND);
+        render_header(&mut self.display, "PIN Required", COLOR_SURFACE_HIGH);
         draw_centered_message(&mut self.display, "PIN Not Set");
     }
 
@@ -315,19 +405,18 @@ impl<'d> Gui<'d> {
     pub fn request_confirmation(&mut self, prompt: &str) {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
+        self.mark_overlay_dirty();
         self.disarm_active();
-        self.stop_unlock_demo();
         self.confirm_result = None;
         self.mode = GuiMode::Confirm;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(
-            &mut self.display,
-            self.confirm_prompt.as_str(),
-            COLOR_BACKGROUND,
-        );
-        for hit in confirm_buttons() {
-            draw_button(&mut self.display, self.mode, hit, false);
+        if self.unlock_demo_state.is_none() {
+            self.restart_unlock_demo();
+            let _ = self.display.clear(COLOR_BACKGROUND);
         }
+        self.unlock_demo_paused = true;
+        render_header(&mut self.display, "Confirm", COLOR_SURFACE_HIGH);
+        self.set_idle_message("Tap to respond");
+        self.render_current_overlay();
     }
 
     fn process_touch_point(&mut self, now: Instant, point: ScreenPoint) {
@@ -442,15 +531,32 @@ impl<'d> Gui<'d> {
             return;
         }
         self.deactivate_button();
-        draw_button(&mut self.display, self.mode, hit, true);
-        self.interaction.active_button = Some(hit);
-        self.interaction.active_seen_at = Some(now);
-        self.interaction.press_started_at = Some(now);
+        match self.mode {
+            GuiMode::Confirm => {
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+                self.mark_overlay_dirty();
+                self.render_current_overlay();
+            }
+            _ => {
+                draw_button(&mut self.display, self.mode, hit, true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
+        }
     }
 
     fn deactivate_button(&mut self) {
         if let Some(old) = self.interaction.active_button.take() {
-            draw_button(&mut self.display, self.mode, old, false);
+            match self.mode {
+                GuiMode::Confirm => {
+                    self.mark_overlay_dirty();
+                    self.render_current_overlay();
+                }
+                _ => draw_button(&mut self.display, self.mode, old, false),
+            }
         }
     }
 

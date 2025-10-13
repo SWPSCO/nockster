@@ -213,13 +213,13 @@ impl<'d> Gui<'d> {
         self.mode = GuiMode::Unlocked;
         let _ = self.display.clear(COLOR_UNLOCK_BG);
         draw_centered_message(&mut self.display, "Unlocked");
-          // let mut frame = 0u32;
-          // loop {
-          //     let _ = demo::render_frame_bulk(&mut self.display, frame);
-          //     frame = frame.wrapping_add(1);
-          //     let delay = Delay::new();
-          //     delay.delay_millis(33u32);
-          // }
+          let mut frame = 0u32;
+          loop {
+              let _ = demo::render_frame_bulk(&mut self.display, frame);
+              frame = frame.wrapping_add(1);
+              let delay = Delay::new();
+              delay.delay_millis(33u32);
+          }
     }
 
     pub fn show_idle_message(&mut self, text: &str) {

@@ -12,6 +12,7 @@ use cobs::encode;
 use core::cell::RefCell;
 use critical_section::Mutex;
 use esp_hal::system::{CpuControl, Stack};
+use esp_hal::time::{Duration, Instant};
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
@@ -107,12 +108,28 @@ static UNLOCK_RESULT: Mutex<RefCell<Option<UnlockOutcome>>> = Mutex::new(RefCell
 
 struct UnlockController {
     awaiting_result: bool,
+    submitted_at: Option<Instant>,
+    last_pin: Option<HString<16>>,
+    ignore_next_result: bool,
 }
+
+struct PendingConfirmation {
+    msg_id: u32,
+    frame: Frame,
+    prompt: &'static str,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static PENDING_CONFIRMATION: Mutex<RefCell<Option<PendingConfirmation>>> =
+    Mutex::new(RefCell::new(None));
 
 impl UnlockController {
     fn new() -> Self {
         Self {
             awaiting_result: false,
+            submitted_at: None,
+            last_pin: None,
+            ignore_next_result: false,
         }
     }
 
@@ -123,6 +140,7 @@ impl UnlockController {
 
         let mut pin_buf = HString::<16>::new();
         pin_buf.push_str(pin.as_str()).map_err(|_| ())?;
+        let stored_pin = pin_buf.clone();
 
         critical_section::with(|cs| {
             let mut pending = UNLOCK_REQUEST.borrow_ref_mut(cs);
@@ -137,20 +155,50 @@ impl UnlockController {
         })?;
 
         self.awaiting_result = true;
+        self.submitted_at = Some(Instant::now());
+        self.last_pin = Some(stored_pin);
+        self.ignore_next_result = false;
         Ok(())
     }
 
     fn poll(&mut self) -> Option<UnlockOutcome> {
-        critical_section::with(|cs| {
+        let outcome = critical_section::with(|cs| {
             let mut slot = UNLOCK_RESULT.borrow_ref_mut(cs);
             let outcome = slot.take();
             if outcome.is_some() {
                 self.awaiting_result = false;
+                self.submitted_at = None;
+                self.last_pin = None;
             }
             outcome
-        })
-    }
+        });
 
+        if let Some(result) = outcome {
+            if self.ignore_next_result {
+                self.ignore_next_result = false;
+                return None;
+            }
+            return Some(result);
+        }
+
+        if self.awaiting_result {
+            if let Some(start) = self.submitted_at {
+                if Instant::now() - start >= Duration::from_millis(2000) {
+                    if let Some(pin) = self.last_pin.clone() {
+                        let outcome = compute_unlock_outcome(pin.as_str());
+                        self.awaiting_result = false;
+                        self.submitted_at = None;
+                        self.last_pin = None;
+                        self.ignore_next_result = true;
+                        return Some(outcome);
+                    }
+                    self.submitted_at = Some(Instant::now());
+                }
+            }
+        }
+
+        None
+    }
 }
 
 fn take_unlock_request() -> Option<UnlockRequest> {
@@ -177,6 +225,45 @@ fn unlock_worker_loop() -> ! {
             delay.delay_millis(5);
         }
     }
+}
+
+fn begin_confirmation(
+    msg_id: u32,
+    frame: Frame,
+    prompt: &'static str,
+    ui: Option<&mut Gui<'_>>,
+) -> Result<(), ()> {
+    let mut frame_slot = Some(frame);
+    let stored = critical_section::with(|cs| {
+        let mut pending = PENDING_CONFIRMATION.borrow_ref_mut(cs);
+        if pending.is_some() {
+            false
+        } else {
+            pending.replace(PendingConfirmation {
+                msg_id,
+                frame: frame_slot.take().unwrap(),
+                prompt,
+            });
+            true
+        }
+    });
+
+    if !stored {
+        return Err(());
+    }
+
+    if let Some(ui) = ui {
+        ui.request_confirmation(prompt);
+    }
+
+    Ok(())
+}
+
+fn take_pending_confirmation() -> Option<PendingConfirmation> {
+    critical_section::with(|cs| {
+        let mut slot = PENDING_CONFIRMATION.borrow_ref_mut(cs);
+        slot.take()
+    })
 }
 
 /// cobs test
@@ -277,11 +364,38 @@ fn main() -> ! {
     loop {
         if let Some(ui) = ui.as_mut() {
             let event = ui.tick();
-            if let Some(result) = ui.poll_confirmation_result() {
-                if result {
-                    let _ = usb_write(&mut usb, b"confirm accepted\r\n");
-                } else {
-                    let _ = usb_write(&mut usb, b"confirm rejected\r\n");
+            if let Some(decision) = ui.poll_confirmation_result() {
+                if let Some(pending) = take_pending_confirmation() {
+                    let resp_msg = if decision {
+                        ui.show_idle_message("Approved");
+                        let body = handle_frame_v1(pending.msg_id, &pending.frame);
+                        Msg {
+                            v: PROTO_V1,
+                            id: pending.msg_id,
+                            msg: body,
+                        }
+                    } else {
+                        ui.show_idle_message("Rejected");
+                        Msg {
+                            v: PROTO_V1,
+                            id: pending.msg_id,
+                            msg: Response::Err {
+                                code: ERR_REJECTED_BY_USER,
+                            },
+                        }
+                    };
+                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                        let n = encode(used, &mut enc);
+                        let _ = usb.write(&enc[..n]);
+                        let _ = usb.write(&[0]);
+                    } else {
+                        send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                    }
+                    if decision {
+                        let _ = usb_write(&mut usb, b"confirm accepted\r\n");
+                    } else {
+                        let _ = usb_write(&mut usb, b"confirm rejected\r\n");
+                    }
                 }
             }
             if let Some(event) = event {
@@ -291,11 +405,6 @@ fn main() -> ! {
                         for digit in digits.iter() {
                             let ch = char::from(b'0' + *digit);
                             let _ = pin.push(ch);
-                        }
-                        if !is_device_locked() {
-                            ui.show_unlock_success();
-                            let _ = usb_write(&mut usb, b"unlock success\r\n");
-                            continue;
                         }
                         match unlock_controller.submit(&pin) {
                             Ok(()) => {
@@ -373,66 +482,51 @@ fn main() -> ! {
                 let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
                     Ok(m) if m.v == PROTO_V1 => {
                         if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
-                            let approved = {
-                                if let Some(ui_ref) = ui.as_mut() {
-                                    let decision =
-                                        wait_for_confirmation(ui_ref, prompt, &mut delay);
-                                    if decision {
-                                        ui_ref.show_idle_message("Approved");
-                                    } else {
-                                        ui_ref.show_idle_message("Rejected");
-                                    }
-                                    decision
-                                } else {
-                                    true
-                                }
+                            let frame_clone = m.msg.clone();
+                            let begin_result = {
+                                let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                begin_confirmation(m.id, frame_clone, prompt, ui_ref)
                             };
-                            if !approved {
-                                Msg {
+                            match begin_result {
+                                Ok(()) => None,
+                                Err(()) => Some(Msg {
                                     v: PROTO_V1,
                                     id: m.id,
-                                    msg: Response::Err {
-                                        code: ERR_REJECTED_BY_USER,
-                                    },
-                                }
-                            } else {
-                                let body = handle_frame_v1(m.id, &m.msg);
-                                Msg {
-                                    v: PROTO_V1,
-                                    id: m.id,
-                                    msg: body,
-                                }
+                                    msg: Response::Err { code: ERR_BUSY },
+                                }),
                             }
                         } else {
                             let body = handle_frame_v1(m.id, &m.msg);
-                            Msg {
+                            Some(Msg {
                                 v: PROTO_V1,
                                 id: m.id,
                                 msg: body,
-                            }
+                            })
                         }
                     }
-                    Ok(_) => Msg {
+                    Ok(_) => Some(Msg {
                         v: PROTO_V1,
                         id: 0,
                         msg: Response::Err {
                             code: ERR_UNSUPPORTED_VERSION,
                         },
-                    },
-                    Err(_) => Msg {
+                    }),
+                    Err(_) => Some(Msg {
                         v: PROTO_V1,
                         id: 0,
                         msg: Response::Err {
                             code: ERR_BAD_COBS_OR_POSTCARD,
                         },
-                    },
+                    }),
                 };
-                if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
-                    let n = encode(used, &mut enc);
-                    let _ = usb.write(&enc[..n]);
-                    let _ = usb.write(&[0]);
-                } else {
-                    send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                if let Some(resp_msg) = resp_msg {
+                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                        let n = encode(used, &mut enc);
+                        let _ = usb.write(&enc[..n]);
+                        let _ = usb.write(&[0]);
+                    } else {
+                        send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                    }
                 }
                 rx.clear();
             }
@@ -855,16 +949,6 @@ fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
     }
 }
 
-fn wait_for_confirmation<'d>(ui: &mut Gui<'d>, prompt: &str, delay: &mut Delay) -> bool {
-    ui.request_confirmation(prompt);
-    loop {
-        if let Some(result) = ui.poll_confirmation_result() {
-            return result;
-        }
-        let _ = ui.tick();
-        delay.delay_millis(16);
-    }
-}
 fn is_device_locked() -> bool {
     unsafe { DEVICE_LOCKED }
 }

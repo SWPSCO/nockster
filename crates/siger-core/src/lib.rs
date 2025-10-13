@@ -43,6 +43,7 @@ pub const ERR_WRONG_PIN: u16 = 131;
 pub const ERR_PIN_LOCKED_OUT: u16 = 132;
 pub const ERR_ALREADY_INITIALIZED: u16 = 133;
 pub const ERR_REJECTED_BY_USER: u16 = 134;
+pub const ERR_BUSY: u16 = 135;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Msg<T> {

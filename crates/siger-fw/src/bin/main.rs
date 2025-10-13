@@ -6,8 +6,12 @@ mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
+use alloc::vec::Vec;
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use cobs::encode;
+use core::cell::RefCell;
+use critical_section::Mutex;
+use esp_hal::system::{CpuControl, Stack};
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
@@ -33,6 +37,7 @@ const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
 static mut DEVICE_LOCKED: bool = true;
 static mut MASTER_KEY: [u8; 32] = [0; 32];
 static mut MASTER_KEY_SET: bool = false;
+static mut APP_CORE_STACK: Stack<8192> = Stack::new();
 esp_bootloader_esp_idf::esp_app_desc!();
 // this is necessary because if there's no serial console and you try writing
 // to the console, it will block and the device will appear to be frozen.
@@ -76,6 +81,102 @@ enum UnlockAttempt {
     LockedOut,
     NotInitialized,
     Failed,
+}
+
+enum UnlockOutcome {
+    Success {
+        seeds: Vec<[u8; 64]>,
+        master_key: [u8; 32],
+    },
+    WrongPin {
+        attempts_remaining: u8,
+    },
+    LockedOut,
+    NotInitialized,
+    Failed,
+}
+
+struct UnlockRequest {
+    pin: HString<16>,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static UNLOCK_REQUEST: Mutex<RefCell<Option<UnlockRequest>>> = Mutex::new(RefCell::new(None));
+#[allow(clippy::declare_interior_mutable_const)]
+static UNLOCK_RESULT: Mutex<RefCell<Option<UnlockOutcome>>> = Mutex::new(RefCell::new(None));
+
+struct UnlockController {
+    awaiting_result: bool,
+}
+
+impl UnlockController {
+    fn new() -> Self {
+        Self {
+            awaiting_result: false,
+        }
+    }
+
+    fn submit(&mut self, pin: &HString<16>) -> Result<(), ()> {
+        if self.awaiting_result {
+            return Err(());
+        }
+
+        let mut pin_buf = HString::<16>::new();
+        pin_buf.push_str(pin.as_str()).map_err(|_| ())?;
+
+        critical_section::with(|cs| {
+            let mut pending = UNLOCK_REQUEST.borrow_ref_mut(cs);
+            if pending.is_some() {
+                return Err(());
+            }
+            if UNLOCK_RESULT.borrow_ref(cs).is_some() {
+                return Err(());
+            }
+            *pending = Some(UnlockRequest { pin: pin_buf });
+            Ok(())
+        })?;
+
+        self.awaiting_result = true;
+        Ok(())
+    }
+
+    fn poll(&mut self) -> Option<UnlockOutcome> {
+        critical_section::with(|cs| {
+            let mut slot = UNLOCK_RESULT.borrow_ref_mut(cs);
+            let outcome = slot.take();
+            if outcome.is_some() {
+                self.awaiting_result = false;
+            }
+            outcome
+        })
+    }
+
+}
+
+fn take_unlock_request() -> Option<UnlockRequest> {
+    critical_section::with(|cs| {
+        let mut slot = UNLOCK_REQUEST.borrow_ref_mut(cs);
+        slot.take()
+    })
+}
+
+fn store_unlock_result(outcome: UnlockOutcome) {
+    critical_section::with(|cs| {
+        let mut slot = UNLOCK_RESULT.borrow_ref_mut(cs);
+        *slot = Some(outcome);
+    });
+}
+
+fn unlock_worker_loop() -> ! {
+    let mut delay = Delay::new();
+    loop {
+        if let Some(request) = take_unlock_request() {
+            let outcome = compute_unlock_outcome(request.pin.as_str());
+            store_unlock_result(outcome);
+        } else {
+            delay.delay_millis(5);
+        }
+    }
 }
 
 /// cobs test
@@ -155,6 +256,13 @@ fn main() -> ! {
             ui.begin_unlock(None);
         }
     }
+    let mut cpu_control = CpuControl::new(p.CPU_CTRL);
+    let _app_core_guard = cpu_control
+        .start_app_core(unsafe { &mut APP_CORE_STACK }, move || unlock_worker_loop())
+        .expect("failed to start app core");
+
+    let mut unlock_controller = UnlockController::new();
+
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
     if usb.read_byte().is_ok() {
         let _ = usb_write(&mut usb, b"siger-fw ready\r\n");
@@ -184,29 +292,18 @@ fn main() -> ! {
                             let ch = char::from(b'0' + *digit);
                             let _ = pin.push(ch);
                         }
-                        ui.show_unlocking();
-                        let _ = ui.tick();
-                        delay.delay_millis(16);
-                        match unlock_device_with_pin(pin.as_str()) {
-                            UnlockAttempt::Success => {
-                                ui.show_unlock_success();
-                                let _ = usb_write(&mut usb, b"unlock success\r\n");
+                        if !is_device_locked() {
+                            ui.show_unlock_success();
+                            let _ = usb_write(&mut usb, b"unlock success\r\n");
+                            continue;
+                        }
+                        match unlock_controller.submit(&pin) {
+                            Ok(()) => {
+                                ui.show_unlocking();
                             }
-                            UnlockAttempt::WrongPin { attempts_remaining } => {
-                                ui.show_pin_failure(Some(attempts_remaining));
-                                let _ = usb_write(&mut usb, b"wrong pin\r\n");
-                            }
-                            UnlockAttempt::LockedOut => {
-                                ui.show_pin_locked_out();
-                                let _ = usb_write(&mut usb, b"pin locked out\r\n");
-                            }
-                            UnlockAttempt::NotInitialized => {
-                                ui.show_pin_not_initialized();
-                                let _ = usb_write(&mut usb, b"pin not set\r\n");
-                            }
-                            UnlockAttempt::Failed => {
+                            Err(()) => {
                                 ui.show_pin_failure(None);
-                                let _ = usb_write(&mut usb, b"unlock failed\r\n");
+                                let _ = usb_write(&mut usb, b"unlock queue busy\r\n");
                             }
                         }
                     }
@@ -218,6 +315,14 @@ fn main() -> ! {
                     }
                     GuiInteraction::RawTouch(_coord) => {}
                 }
+            }
+        }
+
+        if let Some(outcome) = unlock_controller.poll() {
+            if let Some(ui_ref) = ui.as_mut() {
+                handle_unlock_outcome(outcome, Some(ui_ref), &mut usb);
+            } else {
+                handle_unlock_outcome(outcome, None, &mut usb);
             }
         }
         // 1) Proactive outbound frag, if any
@@ -763,35 +868,92 @@ fn wait_for_confirmation<'d>(ui: &mut Gui<'d>, prompt: &str, delay: &mut Delay) 
 fn is_device_locked() -> bool {
     unsafe { DEVICE_LOCKED }
 }
+fn compute_unlock_outcome(pin: &str) -> UnlockOutcome {
+    let mut nvs = NvsStore::new();
+    match nvs.unlock(pin) {
+        Ok((seeds, master_key)) => UnlockOutcome::Success { seeds, master_key },
+        Err(NvsError::WrongPin) => {
+            let remaining = nvs.get_attempts_remaining();
+            if remaining == 0 {
+                UnlockOutcome::LockedOut
+            } else {
+                UnlockOutcome::WrongPin {
+                    attempts_remaining: remaining,
+                }
+            }
+        }
+        Err(NvsError::LockedOut) => UnlockOutcome::LockedOut,
+        Err(NvsError::NotInitialized) => UnlockOutcome::NotInitialized,
+        Err(_) => UnlockOutcome::Failed,
+    }
+}
+
+fn apply_unlock_success(seeds: &[[u8; 64]], master_key: &[u8; 32]) {
+    update_seed_store_from_slice(seeds);
+    store_master_key(master_key);
+    unsafe {
+        DEVICE_LOCKED = false;
+    }
+}
+
 fn unlock_device_with_pin(pin: &str) -> UnlockAttempt {
     unsafe {
         if !DEVICE_LOCKED {
             return UnlockAttempt::Success;
         }
     }
-    let mut nvs = NvsStore::new();
-    match nvs.unlock(pin) {
-        Ok((seeds, master_key)) => {
-            update_seed_store_from_slice(seeds.as_slice());
-            store_master_key(&master_key);
-            unsafe {
-                DEVICE_LOCKED = false;
-            }
+
+    match compute_unlock_outcome(pin) {
+        UnlockOutcome::Success { seeds, master_key } => {
+            apply_unlock_success(seeds.as_slice(), &master_key);
             UnlockAttempt::Success
         }
-        Err(NvsError::WrongPin) => {
-            let remaining = nvs.get_attempts_remaining();
-            if remaining == 0 {
-                UnlockAttempt::LockedOut
-            } else {
-                UnlockAttempt::WrongPin {
-                    attempts_remaining: remaining,
-                }
-            }
+        UnlockOutcome::WrongPin { attempts_remaining } => {
+            UnlockAttempt::WrongPin { attempts_remaining }
         }
-        Err(NvsError::LockedOut) => UnlockAttempt::LockedOut,
-        Err(NvsError::NotInitialized) => UnlockAttempt::NotInitialized,
-        Err(_) => UnlockAttempt::Failed,
+        UnlockOutcome::LockedOut => UnlockAttempt::LockedOut,
+        UnlockOutcome::NotInitialized => UnlockAttempt::NotInitialized,
+        UnlockOutcome::Failed => UnlockAttempt::Failed,
+    }
+}
+
+fn handle_unlock_outcome(
+    outcome: UnlockOutcome,
+    ui: Option<&mut Gui<'_>>,
+    usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>,
+) {
+    match outcome {
+        UnlockOutcome::Success { seeds, master_key } => {
+            apply_unlock_success(seeds.as_slice(), &master_key);
+            if let Some(ui) = ui {
+                ui.show_unlock_success();
+            }
+            let _ = usb_write(usb, b"unlock success\r\n");
+        }
+        UnlockOutcome::WrongPin { attempts_remaining } => {
+            if let Some(ui) = ui {
+                ui.show_pin_failure(Some(attempts_remaining));
+            }
+            let _ = usb_write(usb, b"wrong pin\r\n");
+        }
+        UnlockOutcome::LockedOut => {
+            if let Some(ui) = ui {
+                ui.show_pin_locked_out();
+            }
+            let _ = usb_write(usb, b"pin locked out\r\n");
+        }
+        UnlockOutcome::NotInitialized => {
+            if let Some(ui) = ui {
+                ui.show_pin_not_initialized();
+            }
+            let _ = usb_write(usb, b"pin not set\r\n");
+        }
+        UnlockOutcome::Failed => {
+            if let Some(ui) = ui {
+                ui.show_pin_failure(None);
+            }
+            let _ = usb_write(usb, b"unlock failed\r\n");
+        }
     }
 }
 fn pk_uncompressed_65(sk: &SigningKey) -> [u8; 65] {

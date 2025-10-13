@@ -34,6 +34,7 @@ ripemd = { version = "0.1", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 hmac = { version = "0.12", default-features = false }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
+critical-section = "1.1"
 
 mipidsi = { version = "0.8", default-features = false }
 display-interface-spi = { version = "0.5", default-features = false }

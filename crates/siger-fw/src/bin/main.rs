@@ -8,7 +8,6 @@ use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use cobs::encode;
-use core::fmt::Write as _;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};

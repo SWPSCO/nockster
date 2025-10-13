@@ -351,12 +351,6 @@ fn main() -> ! {
     let mut unlock_controller = UnlockController::new();
 
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
-    if usb.read_byte().is_ok() {
-        let _ = usb_write(&mut usb, b"siger-fw ready\r\n");
-    }
-    if ui.is_none() {
-        let _ = usb_write(&mut usb, b"gui init failed\r\n");
-    }
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; PLAIN_BUF_LEN];
@@ -386,8 +380,8 @@ fn main() -> ! {
                     };
                     if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                         let n = encode(used, &mut enc);
-                        let _ = usb.write(&enc[..n]);
-                        let _ = usb.write(&[0]);
+                        let _ = usb_write(&mut usb, &enc[..n]);
+                        let _ = usb_write(&mut usb, &[0]);
                     } else {
                         send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                     }
@@ -453,8 +447,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb.write(&enc[..n]);
-                    let _ = usb.write(&[0]);
+                    let _ = usb_write(&mut usb, &enc[..n]);
+                    let _ = usb_write(&mut usb, &[0]);
                 }
                 of.off = end as u32;
                 if last {
@@ -522,8 +516,8 @@ fn main() -> ! {
                 if let Some(resp_msg) = resp_msg {
                     if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                         let n = encode(used, &mut enc);
-                        let _ = usb.write(&enc[..n]);
-                        let _ = usb.write(&[0]);
+                        let _ = usb_write(&mut usb, &enc[..n]);
+                        let _ = usb_write(&mut usb, &[0]);
                     } else {
                         send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                     }
@@ -533,6 +527,7 @@ fn main() -> ! {
         }
     }
 }
+
 fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
     match frame {
         Frame::One(req) => handle_request_v1(req),
@@ -623,6 +618,7 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
         }
     }
 }
+
 fn handle_request_v1(req: &Request) -> Response {
     match req {
         Request::Hello => Response::Hello(Caps {
@@ -952,6 +948,7 @@ fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
 fn is_device_locked() -> bool {
     unsafe { DEVICE_LOCKED }
 }
+
 fn compute_unlock_outcome(pin: &str) -> UnlockOutcome {
     let mut nvs = NvsStore::new();
     match nvs.unlock(pin) {
@@ -1040,21 +1037,21 @@ fn handle_unlock_outcome(
         }
     }
 }
+
 fn pk_uncompressed_65(sk: &SigningKey) -> [u8; 65] {
     let ep = sk.verifying_key().to_encoded_point(false);
     let mut out = [0u8; 65];
     out.copy_from_slice(ep.as_bytes());
     out
 }
+
 fn pk_compressed_33(sk: &SigningKey) -> [u8; 33] {
     let ep = sk.verifying_key().to_encoded_point(true);
     let mut out = [0u8; 33];
     out.copy_from_slice(ep.as_bytes());
     out
 }
-fn signing_key_demo() -> k256::ecdsa::SigningKey {
-    k256::ecdsa::SigningKey::from_bytes((&DEMO_SK).into()).unwrap()
-}
+
 fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut [u8]) {
     let msg = Msg {
         v: PROTO_V1,
@@ -1064,10 +1061,11 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
     let mut tmp = [0u8; 64];
     if let Ok(used) = postcard::to_slice(&msg, &mut tmp) {
         let n = cobs::encode(used, enc);
-        let _ = usb.write(&enc[..n]);
-        let _ = usb.write(&[0]);
+        let _ = usb_write(usb, &enc[..n]);
+        let _ = usb_write(usb, &[0]);
     }
 }
+
 fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
     let seed = get_active_seed_copy()?;
     let dp = path_to_derivation(path);
@@ -1088,6 +1086,7 @@ fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
         pubkey33,
     })
 }
+
 fn master_key_copy() -> Option<[u8; 32]> {
     unsafe {
         if MASTER_KEY_SET {
@@ -1097,21 +1096,25 @@ fn master_key_copy() -> Option<[u8; 32]> {
         }
     }
 }
+
 fn store_master_key(key: &[u8; 32]) {
     unsafe {
         MASTER_KEY.copy_from_slice(key);
         MASTER_KEY_SET = true;
     }
 }
+
 fn clear_master_key() {
     unsafe {
         MASTER_KEY.zeroize();
         MASTER_KEY_SET = false;
     }
 }
+
 fn set_seed(seed64: &[u8; 64]) {
     update_seed_store_from_slice(core::slice::from_ref(seed64));
 }
+
 fn update_seed_store_from_slice(seeds: &[[u8; 64]]) {
     unsafe {
         SEED_STORE.slots.clear();
@@ -1122,6 +1125,7 @@ fn update_seed_store_from_slice(seeds: &[[u8; 64]]) {
         DEVICE_LOCKED = SEED_STORE.slots.is_empty();
     }
 }
+
 fn append_seed_slot(seed64: &[u8; 64]) {
     unsafe {
         if SEED_STORE.slots.len() < MAX_SEED_SLOTS {
@@ -1129,6 +1133,7 @@ fn append_seed_slot(seed64: &[u8; 64]) {
         }
     }
 }
+
 fn remove_seed_slot(index: usize) {
     unsafe {
         if index < SEED_STORE.slots.len() {
@@ -1146,6 +1151,7 @@ fn remove_seed_slot(index: usize) {
         }
     }
 }
+
 fn wipe_seed() {
     unsafe {
         SEED_STORE.slots.clear();
@@ -1154,6 +1160,7 @@ fn wipe_seed() {
     }
     clear_master_key();
 }
+
 fn collect_info_pubs() -> alloc::vec::Vec<CheetahPub> {
     let mut nvs = NvsStore::new();
     match nvs.list_seed_pubs() {
@@ -1161,6 +1168,7 @@ fn collect_info_pubs() -> alloc::vec::Vec<CheetahPub> {
         _ => collect_info_pubs_from_ram(),
     }
 }
+
 fn collect_info_pubs_from_ram() -> alloc::vec::Vec<CheetahPub> {
     let mut out = alloc::vec::Vec::new();
     unsafe {
@@ -1177,6 +1185,7 @@ fn collect_info_pubs_from_ram() -> alloc::vec::Vec<CheetahPub> {
     }
     out
 }
+
 fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     let mut dp = DerivationPath::default();
     for &p in path.iter() {
@@ -1186,6 +1195,7 @@ fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
     }
     dp
 }
+
 fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<SigningKey, ()> {
     let seed = get_seed_for_slot(slot)?;
     let mut key = XPrv::new(&seed).map_err(|_| ())?;
@@ -1196,6 +1206,7 @@ fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<Sign
     let sk_bytes = key.private_key().to_bytes();
     SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())
 }
+
 fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
     let seed = get_active_seed_copy()?;
     let xprv = XPrv::new(&seed).map_err(|_| ())?;
@@ -1207,6 +1218,7 @@ fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
     fp4.copy_from_slice(&ripe[..4]);
     Ok(fp4)
 }
+
 fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32], ()> {
     let seed = get_seed_for_slot(slot)?;
     let (sk, cc) = cheetah::master_from_seed(&seed);
@@ -1216,10 +1228,12 @@ fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32
     }
     xk.sk.ok_or(())
 }
+
 fn root_pub_from_seed(seed: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
     let (sk, _cc) = cheetah::master_from_seed(seed);
     cheetah::cheetah_pub_from_sk(sk)
 }
+
 fn get_seed_for_slot(slot: usize) -> Result<[u8; 64], ()> {
     unsafe {
         if slot >= SEED_STORE.slots.len() {
@@ -1228,6 +1242,7 @@ fn get_seed_for_slot(slot: usize) -> Result<[u8; 64], ()> {
         Ok(SEED_STORE.slots[slot])
     }
 }
+
 fn get_active_seed_copy() -> Result<[u8; 64], ()> {
     unsafe {
         if SEED_STORE.slots.is_empty() {
@@ -1237,6 +1252,7 @@ fn get_active_seed_copy() -> Result<[u8; 64], ()> {
         Ok(SEED_STORE.slots[idx])
     }
 }
+
 fn set_active_slot(slot: usize) -> Result<(), ()> {
     unsafe {
         if slot >= SEED_STORE.slots.len() {
@@ -1246,6 +1262,7 @@ fn set_active_slot(slot: usize) -> Result<(), ()> {
     }
     Ok(())
 }
+
 fn active_slot_index() -> Result<usize, ()> {
     unsafe {
         if SEED_STORE.slots.is_empty() {
@@ -1254,10 +1271,12 @@ fn active_slot_index() -> Result<usize, ()> {
         Ok(SEED_STORE.active.min(SEED_STORE.slots.len() - 1))
     }
 }
+
 fn derive_signing_key_active(path: &pathmod::Path) -> Result<SigningKey, ()> {
     let slot = active_slot_index()?;
     derive_signing_key_for_slot(path, slot)
 }
+
 fn usb_connected(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) -> bool {
     usb.read_byte().is_ok()
 }

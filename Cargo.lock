@@ -2489,6 +2489,7 @@ dependencies = [
  "hmac",
  "image",
  "k256",
+ "micromath",
  "mipidsi",
  "panic-halt",
  "pbkdf2",

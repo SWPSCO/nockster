@@ -1,9 +1,10 @@
-use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::{pixelcolor::Rgb565, prelude::RgbColor};
 
 const WIDTH: usize = 172;
 const HEIGHT: usize = 320;
+const CHUNK_ROWS: usize = 8;
 
-static mut FRAMEBUFFER: [u16; WIDTH * HEIGHT] = [0u16; WIDTH * HEIGHT];
+static mut ROW_BUFFER: [Rgb565; WIDTH * CHUNK_ROWS] = [Rgb565::BLACK; WIDTH * CHUNK_ROWS];
 
 const SINE_TABLE: [i8; 256] = [
     0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45,
@@ -32,54 +33,99 @@ const BAYER_MATRIX: [[u8; 4]; 4] = [
     [15,  7, 13,  5]
 ];
 
-pub fn render_frame_bulk(display: &mut super::GuiDisplay, frame: u32) -> Result<(), core::convert::Infallible> {
-    let t = (frame & 0xFF) as u8;
-    
+#[derive(Clone, Copy)]
+pub struct AnimationState {
+    frame: u32,
+    next_row: u16,
+}
+
+impl AnimationState {
+    pub const fn new() -> Self {
+        Self {
+            frame: 0,
+            next_row: 0,
+        }
+    }
+
+    pub fn is_frame_start(&self) -> bool {
+        self.next_row == 0
+    }
+
+    pub fn frame_index(&self) -> u32 {
+        self.frame
+    }
+}
+
+pub fn render_next_chunk(
+    display: &mut super::GuiDisplay,
+    state: &mut AnimationState,
+) -> Result<bool, ()> {
+    let start_row = state.next_row as usize;
+    if start_row >= HEIGHT {
+        state.next_row = 0;
+        return render_next_chunk(display, state);
+    }
+
+    let rows_remaining = HEIGHT - start_row;
+    let rows_to_draw = rows_remaining.min(CHUNK_ROWS);
+    if rows_to_draw == 0 {
+        return Ok(false);
+    }
+
+    let t = (state.frame & 0xFF) as u8;
+
     unsafe {
-        for y in 0..HEIGHT {
+        for row in 0..rows_to_draw {
+            let y = start_row + row;
             let y_wave = ((y as u16 * 3 / 2 + t as u16 * 2) & 0xFF) as usize;
             let wave1 = SINE_TABLE[y_wave] as i32;
-            
+
+            let row_base = row * WIDTH;
             for x in 0..WIDTH {
                 let x_wave = ((x as u16 * 2 + t as u16) & 0xFF) as usize;
                 let wave2 = SINE_TABLE[x_wave] as i32;
-                let wave3 = SINE_TABLE[((x + y) as u16 / 2 + t as u16 * 3) as usize & 0xFF] as i32;
-                
+                let wave3 =
+                    SINE_TABLE[((x + y) as u16 / 2 + t as u16 * 3) as usize & 0xFF] as i32;
+
                 let combined = ((wave1 + wave2 + wave3) / 3 + 127) as u8;
-                
-                // Dithering threshold
+
                 let threshold = BAYER_MATRIX[y % 4][x % 4] * 16;
-                let dithered = if combined > threshold { 
+                let dithered = if combined > threshold {
                     combined.saturating_sub(threshold / 2)
                 } else {
                     combined / 2
                 };
-                
-                // Greyscale with slight green tint for CRT feel
+
                 let intensity = dithered / 3;
                 let r = intensity.min(31);
-                let g = (intensity + intensity / 4).min(63);  // Slightly more green
+                let g = (intensity + intensity / 4).min(63);
                 let b = intensity.min(31);
-                
-                let raw: u16 = ((r as u16) << 11) | ((g as u16) << 5) | (b as u16);
-                FRAMEBUFFER[y * WIDTH + x] = raw;
+
+                ROW_BUFFER[row_base + x] = Rgb565::new(r, g, b);
             }
         }
-    }
-    
-    let _ = display.set_pixels(
-        0, 0,
-        (WIDTH - 1) as u16,
-        (HEIGHT - 1) as u16,
-        unsafe { 
-            FRAMEBUFFER.iter().map(|&raw| {
-                let r = ((raw >> 11) & 0x1F) as u8;
-                let g = ((raw >> 5) & 0x3F) as u8;
-                let b = (raw & 0x1F) as u8;
-                Rgb565::new(r, g, b)
-            })
+
+        let end_row = start_row + rows_to_draw - 1;
+        if display
+            .set_pixels(
+                0,
+                start_row as u16,
+                (WIDTH - 1) as u16,
+                end_row as u16,
+                ROW_BUFFER[..rows_to_draw * WIDTH].iter().copied(),
+            )
+            .is_err()
+        {
+            return Err(());
         }
-    );
-    
-    Ok(())
+    }
+
+    state.next_row += rows_to_draw as u16;
+    if state.next_row as usize >= HEIGHT {
+        state.next_row = 0;
+        state.frame = state.frame.wrapping_add(1);
+        Ok(true)
+    } else {
+        Ok(false)
+    }
 }

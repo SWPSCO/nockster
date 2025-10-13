@@ -19,7 +19,6 @@ use render::{
 };
 use state::{Button, ButtonHit, InteractionState};
 use touch::transform_raw_touch;
-
 use display_interface_spi::SPIInterface;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use esp_hal::{
@@ -33,7 +32,7 @@ use esp_hal::{
         master::{Config as SpiConfig, ConfigError as SpiConfigError, Spi},
         Mode,
     },
-    time::Instant,
+    time::{Instant, Duration},
     Blocking,
 };
 use heapless::{String as HString, Vec as HVec};
@@ -42,6 +41,8 @@ use mipidsi::{
     Builder as DisplayBuilder, Display,
 };
 use siger_fw::axs5106l::{Axs5106l, Rotation};
+
+const UNLOCK_DEMO_MAX_FRAMES: Option<u32> = None; // you can limit demo frames here eg Some(180)
 
 type DisplaySpi<'d> = ExclusiveDevice<Spi<'d, Blocking>, Output<'d>, NoDelay>;
 type DisplayInterface<'d> = SPIInterface<DisplaySpi<'d>, Output<'d>>;
@@ -69,6 +70,9 @@ pub struct Gui<'d> {
     current_spinner_frame: u8,
     confirm_result: Option<bool>,
     interaction: InteractionState,
+    unlock_demo_state: Option<demo::AnimationState>,
+    unlock_demo_last_frame_start: Option<Instant>,
+    unlock_demo_frames_rendered: u32,
 }
 
 impl<'d> Gui<'d> {
@@ -146,6 +150,9 @@ impl<'d> Gui<'d> {
             current_spinner_frame: 0,
             confirm_result: None,
             interaction: InteractionState::default(),
+            unlock_demo_state: None,
+            unlock_demo_last_frame_start: None,
+            unlock_demo_frames_rendered: 0,
         };
 
         blit_boot_logo(&mut gui.display);
@@ -159,6 +166,7 @@ impl<'d> Gui<'d> {
 
     pub fn tick(&mut self) -> Option<GuiInteraction> {
         self.advance_unlocking();
+        self.advance_unlock_success();
 
         let now = Instant::now();
         if let Some(until) = self.interaction.cooldown_until {
@@ -194,12 +202,14 @@ impl<'d> Gui<'d> {
         self.pin_entered.clear();
         self.mode = GuiMode::Locked;
         self.disarm_active();
+        self.stop_unlock_demo();
         draw_keypad(&mut self.display);
         self.render_pin_header();
     }
 
     pub fn show_unlocking(&mut self) {
         self.disarm_active();
+        self.stop_unlock_demo();
         self.mode = GuiMode::Unlocking;
         self.unlock_anim = 0;
         self.current_spinner_frame = 0;
@@ -210,20 +220,57 @@ impl<'d> Gui<'d> {
 
     pub fn show_unlock_success(&mut self) {
         self.disarm_active();
+        self.stop_unlock_demo();
         self.mode = GuiMode::Unlocked;
         let _ = self.display.clear(COLOR_UNLOCK_BG);
         draw_centered_message(&mut self.display, "Unlocked");
-          let mut frame = 0u32;
-          loop {
-              let _ = demo::render_frame_bulk(&mut self.display, frame);
-              frame = frame.wrapping_add(1);
-              let delay = Delay::new();
-              delay.delay_millis(33u32);
-          }
+        self.unlock_demo_state = Some(demo::AnimationState::new());
+        self.unlock_demo_last_frame_start = None;
+        self.unlock_demo_frames_rendered = 0;
+    }
+
+    fn advance_unlock_success(&mut self) {
+        let frame_complete = {
+            let Some(state) = self.unlock_demo_state.as_mut() else {
+                return;
+            };
+
+            if state.is_frame_start() {
+                let now = Instant::now();
+                if let Some(last) = self.unlock_demo_last_frame_start {
+                    if now - last < Duration::from_millis(33) {
+                        return;
+                    }
+                }
+                self.unlock_demo_last_frame_start = Some(now);
+            }
+
+            match demo::render_next_chunk(&mut self.display, state) {
+                Ok(done) => done,
+                Err(_) => false,
+            }
+        };
+
+        if frame_complete {
+            self.unlock_demo_frames_rendered =
+                self.unlock_demo_frames_rendered.saturating_add(1);
+            if let Some(limit) = UNLOCK_DEMO_MAX_FRAMES {
+                if self.unlock_demo_frames_rendered >= limit {
+                    self.stop_unlock_demo();
+                }
+            }
+        }
+    }
+
+    fn stop_unlock_demo(&mut self) {
+        self.unlock_demo_state = None;
+        self.unlock_demo_last_frame_start = None;
+        self.unlock_demo_frames_rendered = 0;
     }
 
     pub fn show_idle_message(&mut self, text: &str) {
         self.disarm_active();
+        self.stop_unlock_demo();
         self.mode = GuiMode::Unlocked;
         let _ = self.display.clear(COLOR_UNLOCK_BG);
         draw_centered_message(&mut self.display, text);
@@ -231,6 +278,7 @@ impl<'d> Gui<'d> {
 
     pub fn show_pin_failure(&mut self, attempts_remaining: Option<u8>) {
         self.disarm_active();
+        self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Locked;
         draw_keypad(&mut self.display);
@@ -244,6 +292,7 @@ impl<'d> Gui<'d> {
 
     pub fn show_pin_locked_out(&mut self) {
         self.disarm_active();
+        self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
         let _ = self.display.clear(COLOR_BACKGROUND);
@@ -252,6 +301,7 @@ impl<'d> Gui<'d> {
 
     pub fn show_pin_not_initialized(&mut self) {
         self.disarm_active();
+        self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
         let _ = self.display.clear(COLOR_BACKGROUND);
@@ -266,6 +316,7 @@ impl<'d> Gui<'d> {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
         self.disarm_active();
+        self.stop_unlock_demo();
         self.confirm_result = None;
         self.mode = GuiMode::Confirm;
         let _ = self.display.clear(COLOR_BACKGROUND);
@@ -487,8 +538,8 @@ impl<'d> Gui<'d> {
             return;
         }
         self.unlock_anim = self.unlock_anim.wrapping_add(1);
-        if self.unlock_anim % 8 == 0 {
-            let frame = ((self.unlock_anim / 8) % SPINNER_FRAMES.len() as u16) as u8;
+        if self.unlock_anim % 320 == 0 {
+            let frame = ((self.unlock_anim / 320) % SPINNER_FRAMES.len() as u16) as u8;
             if frame != self.current_spinner_frame {
                 self.current_spinner_frame = frame;
                 draw_unlock_spinner_frame(&mut self.display, frame);

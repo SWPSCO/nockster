@@ -43,12 +43,49 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // this is necessary because if there's no serial console and you try writing
 // to the console, it will block and the device will appear to be frozen.
 // this shit was really annoying!
+struct UsbTxQueue {
+    buf: HVec<u8, ENC_BUF_LEN>,
+    pos: usize,
+}
+
+static mut USB_TX_QUEUE: Option<UsbTxQueue> = None;
+
+#[inline]
+fn usb_service_tx(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) {
+    unsafe {
+        if let Some(queue) = USB_TX_QUEUE.as_mut() {
+            while queue.pos < queue.buf.len() {
+                match usb.write_byte_nb(queue.buf[queue.pos]) {
+                    Ok(()) => queue.pos += 1,
+                    Err(nb::Error::WouldBlock) => {
+                        let _ = usb.flush_tx_nb();
+                        return;
+                    }
+                    Err(_) => {
+                        USB_TX_QUEUE = None;
+                        return;
+                    }
+                }
+            }
+            let _ = usb.flush_tx_nb();
+            USB_TX_QUEUE = None;
+        }
+    }
+}
+
 #[inline]
 fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
-    for &byte in buf {
-        let _ = usb.write_byte_nb(byte);
+    unsafe {
+        let queue = USB_TX_QUEUE.get_or_insert_with(|| UsbTxQueue {
+            buf: HVec::new(),
+            pos: 0,
+        });
+        if queue.buf.is_empty() {
+            queue.pos = 0;
+        }
+        let _ = queue.buf.extend_from_slice(buf);
     }
-    let _ = usb.flush_tx_nb();
+    usb_service_tx(usb);
 }
 
 struct SeedStore {
@@ -355,7 +392,8 @@ fn main() -> ! {
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; PLAIN_BUF_LEN];
     let mut enc = [0u8; ENC_BUF_LEN];
-    loop {
+    'main: loop {
+        usb_service_tx(&mut usb);
         if let Some(ui) = ui.as_mut() {
             let event = ui.tick();
             if let Some(decision) = ui.poll_confirmation_result() {
@@ -459,70 +497,76 @@ fn main() -> ! {
             }
         }
         // 2) RX path
-        if let Ok(b) = usb.read_byte() {
-            if b == 0 && rx.is_empty() {
-                continue;
-            }
-            if rx.push(b).is_err() {
-                rx.clear();
-                // Only send error if connected - avoid blocking
-                if usb_connected(&mut usb) {
-                    send_err(&mut usb, ERR_OVERFLOW, &mut enc);
-                }
-                continue;
-            }
-            if b == 0 {
-                // decode Msg<Frame>
-                let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
-                    Ok(m) if m.v == PROTO_V1 => {
-                        if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
-                            let frame_clone = m.msg.clone();
-                            let begin_result = {
-                                let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
-                                begin_confirmation(m.id, frame_clone, prompt, ui_ref)
-                            };
-                            match begin_result {
-                                Ok(()) => None,
-                                Err(()) => Some(Msg {
-                                    v: PROTO_V1,
-                                    id: m.id,
-                                    msg: Response::Err { code: ERR_BUSY },
-                                }),
-                            }
-                        } else {
-                            let body = handle_frame_v1(m.id, &m.msg);
-                            Some(Msg {
-                                v: PROTO_V1,
-                                id: m.id,
-                                msg: body,
-                            })
+        loop {
+            match usb.read_byte() {
+                Ok(b) => {
+                    if b == 0 && rx.is_empty() {
+                        continue 'main;
+                    }
+                    if rx.push(b).is_err() {
+                        rx.clear();
+                        // Only send error if connected - avoid blocking
+                        if usb_connected(&mut usb) {
+                            send_err(&mut usb, ERR_OVERFLOW, &mut enc);
                         }
+                        continue 'main;
                     }
-                    Ok(_) => Some(Msg {
-                        v: PROTO_V1,
-                        id: 0,
-                        msg: Response::Err {
-                            code: ERR_UNSUPPORTED_VERSION,
-                        },
-                    }),
-                    Err(_) => Some(Msg {
-                        v: PROTO_V1,
-                        id: 0,
-                        msg: Response::Err {
-                            code: ERR_BAD_COBS_OR_POSTCARD,
-                        },
-                    }),
-                };
-                if let Some(resp_msg) = resp_msg {
-                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
-                        let n = encode(used, &mut enc);
-                        let _ = usb_write(&mut usb, &enc[..n]);
-                        let _ = usb_write(&mut usb, &[0]);
-                    } else {
-                        send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                    if b == 0 {
+                        // decode Msg<Frame>
+                        let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
+                            Ok(m) if m.v == PROTO_V1 => {
+                                if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
+                                    let frame_clone = m.msg.clone();
+                                    let begin_result = {
+                                        let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                        begin_confirmation(m.id, frame_clone, prompt, ui_ref)
+                                    };
+                                    match begin_result {
+                                        Ok(()) => None,
+                                        Err(()) => Some(Msg {
+                                            v: PROTO_V1,
+                                            id: m.id,
+                                            msg: Response::Err { code: ERR_BUSY },
+                                        }),
+                                    }
+                                } else {
+                                    let body = handle_frame_v1(m.id, &m.msg);
+                                    Some(Msg {
+                                        v: PROTO_V1,
+                                        id: m.id,
+                                        msg: body,
+                                    })
+                                }
+                            }
+                            Ok(_) => Some(Msg {
+                                v: PROTO_V1,
+                                id: 0,
+                                msg: Response::Err {
+                                    code: ERR_UNSUPPORTED_VERSION,
+                                },
+                            }),
+                            Err(_) => Some(Msg {
+                                v: PROTO_V1,
+                                id: 0,
+                                msg: Response::Err {
+                                    code: ERR_BAD_COBS_OR_POSTCARD,
+                                },
+                            }),
+                        };
+                        if let Some(resp_msg) = resp_msg {
+                            if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                                let n = encode(used, &mut enc);
+                                let _ = usb_write(&mut usb, &enc[..n]);
+                                let _ = usb_write(&mut usb, &[0]);
+                            } else {
+                                send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                            }
+                        }
+                        rx.clear();
+                        continue 'main;
                     }
                 }
-                rx.clear();
+                Err(_) => break,
             }
         }
     }

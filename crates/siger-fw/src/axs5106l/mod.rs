@@ -227,7 +227,7 @@ where
     ///
     /// # Errors
     /// Returns `Err(Axs5106lError)` if I2C communication fails
-    pub fn read_raw_touch_data(&mut self) -> Result<TouchData, Axs5106lError<E>> {
+    pub fn read_raw_touch_data(&mut self) -> Result<(TouchData, [u8; 14]), Axs5106lError<E>> {
         // Read 14 bytes of touch data (matches the C implementation)
         let mut data = [0u8; 14];
         self.read_register(Self::TOUCH_DATA_REG, &mut data)?;
@@ -249,35 +249,21 @@ where
             for i in 0..max_points {
                 let base_idx = 2 + i * 6; // Start after the header bytes
 
-                // Read bytes as the sensor sends them
-                let byte0 = data[base_idx];
-                let byte1 = data[base_idx + 1];
-                let byte2 = data[base_idx + 2];
-                let byte3 = data[base_idx + 3];
+                // Extract X coordinate (12-bit value: high nibble stored in low bits of first byte)
+                let x = ((u16::from(data[base_idx] & 0x0f)) << 8) | u16::from(data[base_idx + 1]);
 
-                // Extract raw 12-bit values EXACTLY as C code does
-                let sensor_x = (u16::from(byte0 & 0x0f) << 8) | u16::from(byte1);
-                let sensor_y = (u16::from(byte2 & 0x0f) << 8) | u16::from(byte3);
+                // Extract Y coordinate (12-bit value)
+                let y =
+                    ((u16::from(data[base_idx + 2] & 0x0f)) << 8) | u16::from(data[base_idx + 3]);
 
-                // The sensor reports X in 0-~130 range, Y in 0-~320 range
-                // We need to swap and scale to match display (172×320 portrait)
-                // Swap: sensor Y → display X, sensor X → display Y
-                // Scale X: sensor_y (0-320) → display X (0-171)
-                // Scale Y: sensor_x (0-130) → display Y (0-319)
-                let display_x = (sensor_y as u32 * 172 / 320).min(171) as u16;
-                let display_y = (sensor_x as u32 * 320 / 130).min(319) as u16;
-
-                // Apply flip for .flip_horizontal()
-                let x_flipped = 171u16.saturating_sub(display_x);
-
-                let coords = Coordinates { x: x_flipped, y: display_y };
+                let coords = Coordinates { x, y };
 
                 // Add to our touch data (heapless::Vec will handle capacity limits)
                 let _ = touch_data.points.push(coords);
             }
         }
 
-        Ok(touch_data)
+        Ok((touch_data, data))
     }
 
     /// Get the processed touch data with rotation applied
@@ -290,12 +276,13 @@ where
     /// # Errors
     /// Returns `Err(Axs5106lError)` if I2C communication fails
     pub fn get_touch_data(&mut self) -> Result<Option<TouchData>, Axs5106lError<E>> {
-        let mut touch_data = self.read_raw_touch_data()?;
+        let (mut touch_data, _) = self.read_raw_touch_data()?;
         if touch_data.count == 0 {
             return Ok(None);
         }
 
-        // Skip rotation transformation - return swapped coordinates directly
+        // Apply rotation transformation to each touch point
+        touch_data.apply_transform(|coords| self.apply_rotation(coords));
         Ok(Some(touch_data))
     }
 

@@ -6,18 +6,18 @@ mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
+use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use cobs::encode;
 use core::fmt::Write as _;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction};
 use heapless::{String as HString, Vec as HVec};
-use siger_core::alloc_path as pathmod;
-use siger_core::{CheetahPub, *};
-use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
+use siger_core::alloc_path as pathmod;
+use siger_core::{CheetahPub, *};
 use zeroize::Zeroize;
 const DEMO_SK: [u8; 32] = [0x11; 32];
 const FW_MAJOR: u16 = 0;
@@ -174,6 +174,18 @@ fn main() -> ! {
                 let _ = write!(msg, "raw {},{}\r\n", raw_x, raw_y);
                 let _ = usb_write(&mut usb, msg.as_bytes());
             }
+            if let Some(raw_bytes) = ui.take_debug_touch_bytes() {
+                let mut msg = HString::<80>::new();
+                let _ = msg.push_str("raw_bytes ");
+                for (idx, byte) in raw_bytes.iter().enumerate() {
+                    if idx > 0 {
+                        let _ = msg.push(' ');
+                    }
+                    let _ = write!(msg, "{:02x}", byte);
+                }
+                let _ = msg.push_str("\r\n");
+                let _ = usb_write(&mut usb, msg.as_bytes());
+            }
             let event = ui.tick();
             if let Some(result) = ui.poll_confirmation_result() {
                 if result {
@@ -220,11 +232,7 @@ fn main() -> ! {
                     GuiInteraction::ConfirmRejected => {
                         let _ = usb_write(&mut usb, b"confirm rejected\r\n");
                     }
-                    GuiInteraction::RawTouch(coord) => {
-                        let mut msg = HString::<32>::new();
-                        let _ = write!(msg, "touch {},{}\r\n", coord.x, coord.y);
-                        let _ =  usb_write(&mut usb, msg.as_bytes());
-                    }
+                    GuiInteraction::RawTouch(_coord) => {}
                 }
             }
         }
@@ -263,14 +271,14 @@ fn main() -> ! {
             if b == 0 && rx.is_empty() {
                 continue;
             }
-        if rx.push(b).is_err() {
-            rx.clear();
-            // Only send error if connected - avoid blocking
-            if usb_connected(&mut usb) {
-                send_err(&mut usb, ERR_OVERFLOW, &mut enc);
+            if rx.push(b).is_err() {
+                rx.clear();
+                // Only send error if connected - avoid blocking
+                if usb_connected(&mut usb) {
+                    send_err(&mut usb, ERR_OVERFLOW, &mut enc);
+                }
+                continue;
             }
-            continue;
-        }
             if b == 0 {
                 // decode Msg<Frame>
                 let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {

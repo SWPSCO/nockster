@@ -169,23 +169,6 @@ fn main() -> ! {
     let mut enc = [0u8; ENC_BUF_LEN];
     loop {
         if let Some(ui) = ui.as_mut() {
-            if let Some((raw_x, raw_y)) = ui.take_debug_touch_raw() {
-                let mut msg = HString::<40>::new();
-                let _ = write!(msg, "raw {},{}\r\n", raw_x, raw_y);
-                let _ = usb_write(&mut usb, msg.as_bytes());
-            }
-            if let Some(raw_bytes) = ui.take_debug_touch_bytes() {
-                let mut msg = HString::<80>::new();
-                let _ = msg.push_str("raw_bytes ");
-                for (idx, byte) in raw_bytes.iter().enumerate() {
-                    if idx > 0 {
-                        let _ = msg.push(' ');
-                    }
-                    let _ = write!(msg, "{:02x}", byte);
-                }
-                let _ = msg.push_str("\r\n");
-                let _ = usb_write(&mut usb, msg.as_bytes());
-            }
             let event = ui.tick();
             if let Some(result) = ui.poll_confirmation_result() {
                 if result {
@@ -203,6 +186,8 @@ fn main() -> ! {
                             let _ = pin.push(ch);
                         }
                         ui.show_unlocking();
+                        let _ = ui.tick();
+                        delay.delay_millis(16);
                         match unlock_device_with_pin(pin.as_str()) {
                             UnlockAttempt::Success => {
                                 ui.show_unlock_success();
@@ -283,11 +268,44 @@ fn main() -> ! {
                 // decode Msg<Frame>
                 let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
                     Ok(m) if m.v == PROTO_V1 => {
-                        let body = handle_frame_v1(m.id, &m.msg);
-                        Msg {
-                            v: PROTO_V1,
-                            id: m.id,
-                            msg: body,
+                        if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
+                            let approved = {
+                                if let Some(ui_ref) = ui.as_mut() {
+                                    let decision =
+                                        wait_for_confirmation(ui_ref, prompt, &mut delay);
+                                    if decision {
+                                        ui_ref.show_idle_message("Approved");
+                                    } else {
+                                        ui_ref.show_idle_message("Rejected");
+                                    }
+                                    decision
+                                } else {
+                                    true
+                                }
+                            };
+                            if !approved {
+                                Msg {
+                                    v: PROTO_V1,
+                                    id: m.id,
+                                    msg: Response::Err {
+                                        code: ERR_REJECTED_BY_USER,
+                                    },
+                                }
+                            } else {
+                                let body = handle_frame_v1(m.id, &m.msg);
+                                Msg {
+                                    v: PROTO_V1,
+                                    id: m.id,
+                                    msg: body,
+                                }
+                            }
+                        } else {
+                            let body = handle_frame_v1(m.id, &m.msg);
+                            Msg {
+                                v: PROTO_V1,
+                                id: m.id,
+                                msg: body,
+                            }
                         }
                     }
                     Ok(_) => Msg {
@@ -721,6 +739,26 @@ fn handle_request_v1(req: &Request) -> Response {
                 attempts_remaining,
             }
         }
+    }
+}
+
+fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
+    match frame {
+        Frame::One(Request::SignDigest { .. }) => Some("Sign digest?"),
+        Frame::One(Request::SignSpendHash { .. }) => Some("Approve spend?"),
+        Frame::One(Request::SignSpendHashFor { .. }) => Some("Approve spend?"),
+        _ => None,
+    }
+}
+
+fn wait_for_confirmation<'d>(ui: &mut Gui<'d>, prompt: &str, delay: &mut Delay) -> bool {
+    ui.request_confirmation(prompt);
+    loop {
+        if let Some(result) = ui.poll_confirmation_result() {
+            return result;
+        }
+        let _ = ui.tick();
+        delay.delay_millis(16);
     }
 }
 fn is_device_locked() -> bool {

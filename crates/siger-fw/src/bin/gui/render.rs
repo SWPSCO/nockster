@@ -269,6 +269,34 @@ pub fn render_idle_overlay(display: &mut GuiDisplay<'_>, message: &str) {
     .draw(display);
 }
 
+pub fn clear_idle_overlay(display: &mut GuiDisplay<'_>) {
+    let margin = IDLE_OVERLAY_MARGIN;
+    let height = IDLE_OVERLAY_HEIGHT;
+    if height <= 0 {
+        return;
+    }
+    let width = SCREEN_WIDTH as i32 - margin * 2;
+    if width <= 0 {
+        return;
+    }
+    let top = SCREEN_HEIGHT as i32 - height - margin;
+    if top < 0 {
+        return;
+    }
+    let rect = Rectangle::new(
+        Point::new(margin, top),
+        Size::new(width as u32, height as u32),
+    );
+    let _ = rect
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(COLOR_BACKGROUND)
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+}
+
 pub fn render_confirm_overlay(
     display: &mut GuiDisplay<'_>,
     prompt: &str,
@@ -342,6 +370,70 @@ pub fn render_confirm_overlay(
             .draw(display);
         }
     }
+}
+
+pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
+    let header_h = header_height();
+    let width = SCREEN_WIDTH as i32;
+    let base = if active {
+        COLOR_KEYPAD_ACTIVE
+    } else {
+        COLOR_SURFACE_HIGH
+    };
+
+    let header_rect = Rectangle::new(
+        Point::new(0, 0),
+        Size::new(width as u32, header_h as u32),
+    );
+    let _ = header_rect
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(base)
+                .stroke_color(COLOR_DIVIDER)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+
+    if header_h > 4 {
+        let highlight = Rectangle::new(
+            Point::new(1, 1),
+            Size::new((width - 2) as u32, (header_h / 3).max(2) as u32),
+        );
+        let _ = highlight
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_PANEL_HIGHLIGHT)
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
+
+        let shadow_height = (header_h / 3).max(2);
+        let shadow_top = header_h - shadow_height - 1;
+        let shadow = Rectangle::new(
+            Point::new(1, shadow_top),
+            Size::new((width - 2) as u32, shadow_height as u32),
+        );
+        let _ = shadow
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_PANEL_SHADOW)
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
+    }
+
+    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let baseline = header_h / 2 + FONT_10X20.character_size.height as i32 / 3;
+    let _ = Text::with_alignment(
+        "Tap to Lock",
+        Point::new(width / 2, baseline),
+        style,
+        Alignment::Center,
+    )
+    .draw(display);
 }
 
 fn draw_button_skeuo(
@@ -445,32 +537,58 @@ struct Palette {
 }
 
 fn button_palette(mode: GuiMode, button: Button, active: bool) -> Palette {
-    let (base, light, dark) = match (mode, button) {
-        (GuiMode::Confirm, Button::Ok) => (
-            COLOR_BTN_PRIMARY_BASE,
-            COLOR_BTN_PRIMARY_LIGHT,
-            COLOR_BTN_PRIMARY_DARK,
-        ),
-        (GuiMode::Confirm, Button::Clear) => (
-            COLOR_BTN_SECONDARY_BASE,
-            COLOR_BTN_SECONDARY_LIGHT,
-            COLOR_BTN_SECONDARY_DARK,
-        ),
-        _ => (
-            COLOR_KEYPAD_IDLE,
-            COLOR_BTN_DISABLED_LIGHT,
-            COLOR_BTN_DISABLED_DARK,
-        ),
-    };
-
-    let adjusted_base = if active { light } else { base };
-    let adjusted_light = if active { light } else { light };
-    let adjusted_dark = if active { base } else { dark };
-
-    Palette {
-        base: adjusted_base,
-        light: adjusted_light,
-        dark: adjusted_dark,
-        border: COLOR_DIVIDER,
+    match mode {
+        GuiMode::Confirm => {
+            let (base, light, dark) = match button {
+                Button::Ok => (
+                    COLOR_BTN_PRIMARY_BASE,
+                    COLOR_BTN_PRIMARY_LIGHT,
+                    COLOR_BTN_PRIMARY_DARK,
+                ),
+                Button::Clear => (
+                    COLOR_BTN_SECONDARY_BASE,
+                    COLOR_BTN_SECONDARY_LIGHT,
+                    COLOR_BTN_SECONDARY_DARK,
+                ),
+                _ => (
+                    COLOR_KEYPAD_IDLE,
+                    COLOR_BTN_DISABLED_LIGHT,
+                    COLOR_BTN_DISABLED_DARK,
+                ),
+            };
+            let base_color = if active { light } else { base };
+            let dark_color = if active {
+                match button {
+                    Button::Ok => COLOR_BTN_PRIMARY_DARK,
+                    Button::Clear => COLOR_BTN_SECONDARY_DARK,
+                    _ => dark,
+                }
+            } else {
+                dark
+            };
+            Palette {
+                base: base_color,
+                light,
+                dark: dark_color,
+                border: COLOR_DIVIDER,
+            }
+        }
+        _ => {
+            if active {
+                Palette {
+                    base: COLOR_KEYPAD_ACTIVE,
+                    light: COLOR_KEYPAD_ACTIVE_LIGHT,
+                    dark: COLOR_KEYPAD_ACTIVE_DARK,
+                    border: COLOR_KEYPAD_BORDER,
+                }
+            } else {
+                Palette {
+                    base: COLOR_KEYPAD_IDLE,
+                    light: COLOR_BTN_DISABLED_LIGHT,
+                    dark: COLOR_BTN_DISABLED_DARK,
+                    border: COLOR_KEYPAD_BORDER,
+                }
+            }
+        }
     }
 }

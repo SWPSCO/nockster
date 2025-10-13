@@ -59,39 +59,45 @@ impl AnimationState {
 pub fn render_next_chunk(
     display: &mut super::GuiDisplay,
     state: &mut AnimationState,
-    clip_from_row: Option<u16>,
+    clip_range: Option<(u16, u16)>,
 ) -> Result<bool, ()> {
-    let start_row = state.next_row as usize;
-    if start_row >= HEIGHT {
+    let (clip_start, clip_end) = clip_range
+        .map(|(s, e)| (s.min(HEIGHT as u16), e.min(HEIGHT as u16)))
+        .unwrap_or((0, HEIGHT as u16));
+
+    let clip_start_usize = clip_start as usize;
+    let clip_end_usize = clip_end as usize;
+
+    if clip_start_usize >= clip_end_usize {
         state.next_row = 0;
-        return render_next_chunk(display, state, clip_from_row);
-    }
-
-    let clip_limit = clip_from_row
-        .map(|row| row.min(HEIGHT as u16) as usize)
-        .unwrap_or(HEIGHT);
-
-    if start_row >= clip_limit {
-        state.next_row = HEIGHT as u16;
         state.frame = state.frame.wrapping_add(1);
-        state.next_row = 0;
         return Ok(true);
     }
 
-    let rows_remaining = HEIGHT - start_row;
-    let mut rows_to_draw = rows_remaining.min(CHUNK_ROWS);
-    if clip_limit < HEIGHT {
-        let allowed = clip_limit.saturating_sub(start_row);
-        rows_to_draw = rows_to_draw.min(allowed);
+    let mut start_row = state.next_row as usize;
+    if start_row < clip_start_usize {
+        start_row = clip_start_usize;
+        state.next_row = clip_start;
     }
+
+    if start_row >= clip_end_usize {
+        state.next_row = 0;
+        state.frame = state.frame.wrapping_add(1);
+        return Ok(true);
+    }
+
+    if start_row >= HEIGHT {
+        state.next_row = 0;
+        state.frame = state.frame.wrapping_add(1);
+        return Ok(true);
+    }
+
+    let rows_remaining = clip_end_usize - start_row;
+    let rows_to_draw = rows_remaining.min(CHUNK_ROWS);
     if rows_to_draw == 0 {
-        state.next_row = clip_limit.min(HEIGHT) as u16;
-        if state.next_row as usize >= HEIGHT {
-            state.next_row = 0;
-            state.frame = state.frame.wrapping_add(1);
-            return Ok(true);
-        }
-        return Ok(false);
+        state.next_row = 0;
+        state.frame = state.frame.wrapping_add(1);
+        return Ok(true);
     }
 
     let t = (state.frame & 0xFF) as u8;
@@ -142,12 +148,12 @@ pub fn render_next_chunk(
         }
     }
 
-    state.next_row += rows_to_draw as u16;
-    if state.next_row as usize >= clip_limit && clip_limit < HEIGHT {
-        state.next_row = HEIGHT as u16;
-    }
+    state.next_row = state
+        .next_row
+        .saturating_add(rows_to_draw as u16)
+        .min(HEIGHT as u16);
 
-    if state.next_row as usize >= HEIGHT {
+    if state.next_row as usize >= clip_end_usize {
         state.next_row = 0;
         state.frame = state.frame.wrapping_add(1);
         Ok(true)

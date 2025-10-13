@@ -35,6 +35,7 @@ pub enum GuiInteraction {
     ConfirmAccepted,
     ConfirmRejected,
     RawTouch(ScreenPoint),
+    LockRequested,
 }
 
 pub struct TextBuffers {

@@ -12,10 +12,11 @@ pub use touch::ScreenPoint;
 
 use constants::*;
 use embedded_graphics::{draw_target::DrawTarget, prelude::Point};
-use layout::{button_from_point_confirm, button_from_point_keypad};
+use layout::{button_from_point_confirm, button_from_point_keypad, header_height, lock_button_rect};
 use render::{
-    blit_boot_logo, draw_button, draw_centered_message, draw_keypad, draw_unlock_spinner_frame,
-    render_confirm_overlay, render_header, render_idle_overlay,
+    blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message, draw_keypad,
+    draw_unlock_header, draw_unlock_spinner_frame, render_confirm_overlay, render_header,
+    render_idle_overlay,
 };
 use state::{Button, ButtonHit, InteractionState};
 use touch::transform_raw_touch;
@@ -75,7 +76,12 @@ pub struct Gui<'d> {
     unlock_demo_last_frame_start: Option<Instant>,
     unlock_demo_frames_rendered: u32,
     unlock_demo_paused: bool,
+    idle_message_until: Option<Instant>,
+    lock_button_active: bool,
+    lock_button_pressed_at: Option<Instant>,
+    header_dirty: bool,
     overlay_dirty: bool,
+    auto_lock_deadline: Option<Instant>,
 }
 
 impl<'d> Gui<'d> {
@@ -158,7 +164,12 @@ impl<'d> Gui<'d> {
             unlock_demo_last_frame_start: None,
             unlock_demo_frames_rendered: 0,
             unlock_demo_paused: false,
+            idle_message_until: None,
+            lock_button_active: false,
+            lock_button_pressed_at: None,
+            header_dirty: true,
             overlay_dirty: false,
+            auto_lock_deadline: None,
         };
 
         blit_boot_logo(&mut gui.display);
@@ -175,6 +186,37 @@ impl<'d> Gui<'d> {
         self.advance_unlock_success();
 
         let now = Instant::now();
+
+        if let Some(until) = self.idle_message_until {
+            if now >= until {
+                self.idle_message_until = None;
+                if self.mode == GuiMode::Unlocked {
+                    self.set_idle_message("");
+                    self.mark_overlay_dirty();
+                    self.render_current_overlay();
+                }
+            }
+        }
+        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm) {
+            match self.auto_lock_deadline {
+                Some(deadline) => {
+                    if now >= deadline {
+                        self.auto_lock_deadline = None;
+                        self.lock_button_active = false;
+                        self.lock_button_pressed_at = None;
+                        self.mark_header_dirty();
+                        self.render_unlock_header();
+                        if self.mode == GuiMode::Unlocked {
+                            self.stop_unlock_demo();
+                        }
+                        return Some(GuiInteraction::LockRequested);
+                    }
+                }
+                None => self.refresh_auto_lock(now),
+            }
+        } else {
+            self.clear_auto_lock();
+        }
         if let Some(until) = self.interaction.cooldown_until {
             if now >= until {
                 self.interaction.cooldown_until = None;
@@ -228,17 +270,24 @@ impl<'d> Gui<'d> {
         self.disarm_active();
         self.mode = GuiMode::Unlocked;
         self.restart_unlock_demo();
+        self.lock_button_active = false;
+        self.lock_button_pressed_at = None;
+        self.idle_message_until = None;
         let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Unlocked", COLOR_SURFACE_HIGH);
-        self.set_idle_message("Unlocked");
+        self.mark_header_dirty();
+        self.render_unlock_header();
+        self.set_idle_message("");
+        self.mark_overlay_dirty();
+        self.refresh_auto_lock(Instant::now());
         self.render_current_overlay();
     }
 
     fn advance_unlock_success(&mut self) {
-        let clip_row = if matches!(self.mode, GuiMode::Unlocked) {
-            self.idle_overlay_top_row()
-        } else {
+        let (range_start, range_end) = self.demo_render_range();
+        let clip_range = if range_start == 0 && range_end as usize == SCREEN_HEIGHT as usize {
             None
+        } else {
+            Some((range_start, range_end))
         };
 
         let Some(state) = self.unlock_demo_state.as_mut() else {
@@ -260,13 +309,11 @@ impl<'d> Gui<'d> {
             self.unlock_demo_last_frame_start = Some(now);
         }
 
-        let frame_complete = match demo::render_next_chunk(&mut self.display, state, clip_row) {
+        let frame_complete = match demo::render_next_chunk(&mut self.display, state, clip_range) {
             Ok(done) => done,
             Err(_) => false,
         };
-        if clip_row.is_some() {
-            self.render_current_overlay();
-        }
+        self.render_current_overlay();
 
         if frame_complete {
             self.unlock_demo_frames_rendered =
@@ -287,6 +334,8 @@ impl<'d> Gui<'d> {
         self.unlock_demo_paused = false;
         self.idle_message.clear();
         self.mark_overlay_dirty();
+        self.mark_header_dirty();
+        self.clear_auto_lock();
     }
 
     fn restart_unlock_demo(&mut self) {
@@ -295,6 +344,7 @@ impl<'d> Gui<'d> {
         self.unlock_demo_frames_rendered = 0;
         self.unlock_demo_paused = false;
         self.mark_overlay_dirty();
+        self.mark_header_dirty();
     }
 
     fn set_idle_message(&mut self, text: &str) {
@@ -306,13 +356,16 @@ impl<'d> Gui<'d> {
     }
 
     fn render_current_overlay(&mut self) {
+        if self.header_dirty && matches!(self.mode, GuiMode::Unlocked) {
+            self.render_unlock_header();
+        }
         if !self.overlay_dirty {
             return;
         }
         match self.mode {
             GuiMode::Unlocked => {
                 if self.idle_message.is_empty() {
-                    // Nothing to draw, but avoid repeated attempts
+                    clear_idle_overlay(&mut self.display);
                 } else {
                     render_idle_overlay(&mut self.display, self.idle_message.as_str());
                 }
@@ -339,6 +392,49 @@ impl<'d> Gui<'d> {
         self.overlay_dirty = true;
     }
 
+    fn mark_header_dirty(&mut self) {
+        self.header_dirty = true;
+    }
+
+    fn render_unlock_header(&mut self) {
+        draw_unlock_header(&mut self.display, self.lock_button_active);
+        self.header_dirty = false;
+    }
+
+    fn refresh_auto_lock(&mut self, now: Instant) {
+        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm) {
+            self.auto_lock_deadline = Some(now + AUTO_LOCK_TIMEOUT);
+        }
+    }
+
+    fn clear_auto_lock(&mut self) {
+        self.auto_lock_deadline = None;
+    }
+
+    fn clear_lock_button(&mut self) {
+        if self.lock_button_active || self.lock_button_pressed_at.is_some() {
+            self.lock_button_active = false;
+            self.lock_button_pressed_at = None;
+            self.mark_header_dirty();
+            if matches!(self.mode, GuiMode::Unlocked) {
+                self.render_unlock_header();
+            }
+        }
+    }
+
+    fn finalize_lock_button(&mut self, now: Instant) -> Option<GuiInteraction> {
+        if let Some(start) = self.lock_button_pressed_at.take() {
+            let was_active = self.lock_button_active;
+            self.lock_button_active = false;
+            self.mark_header_dirty();
+            self.render_unlock_header();
+            if was_active && now - start >= MIN_PRESS_DURATION {
+                return Some(GuiInteraction::LockRequested);
+            }
+        }
+        None
+    }
+
     fn idle_overlay_top_row(&self) -> Option<u16> {
         if self.idle_message.is_empty() {
             return None;
@@ -351,15 +447,45 @@ impl<'d> Gui<'d> {
         }
     }
 
+    fn demo_render_range(&self) -> (u16, u16) {
+        let mut start: u16 = if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm) {
+            header_height().max(0) as u16
+        } else {
+            0
+        };
+        let mut end: u16 = SCREEN_HEIGHT;
+        if self.mode == GuiMode::Unlocked {
+            if let Some(bottom) = self.idle_overlay_top_row() {
+                end = end.min(bottom);
+            }
+        }
+        if start > end {
+            start = end;
+        }
+        (start, end)
+    }
+
     pub fn show_idle_message(&mut self, text: &str) {
+        self.show_idle_message_with_timeout(text, None);
+    }
+
+    pub fn show_idle_message_timed(&mut self, text: &str, timeout: Duration) {
+        self.show_idle_message_with_timeout(text, Some(timeout));
+    }
+
+    fn show_idle_message_with_timeout(&mut self, text: &str, timeout: Option<Duration>) {
         self.disarm_active();
         self.mode = GuiMode::Unlocked;
         if self.unlock_demo_state.is_none() {
             self.restart_unlock_demo();
             let _ = self.display.clear(COLOR_BACKGROUND);
         }
-        render_header(&mut self.display, "Unlocked", COLOR_SURFACE_HIGH);
+        self.unlock_demo_paused = false;
+        self.mark_header_dirty();
+        self.render_unlock_header();
+        self.idle_message_until = timeout.map(|d| Instant::now() + d);
         self.set_idle_message(text);
+        self.refresh_auto_lock(Instant::now());
         self.render_current_overlay();
     }
 
@@ -415,11 +541,36 @@ impl<'d> Gui<'d> {
         }
         self.unlock_demo_paused = true;
         render_header(&mut self.display, "Confirm", COLOR_SURFACE_HIGH);
-        self.set_idle_message("Tap to respond");
+        self.set_idle_message("");
         self.render_current_overlay();
+        self.refresh_auto_lock(Instant::now());
     }
 
     fn process_touch_point(&mut self, now: Instant, point: ScreenPoint) {
+        self.refresh_auto_lock(now);
+        if self.mode == GuiMode::Unlocked {
+            let rect = lock_button_rect();
+            let pt = Point::new(point.x as i32, point.y as i32);
+            if rect.contains(pt) {
+                if !self.lock_button_active {
+                    self.lock_button_active = true;
+                    if self.lock_button_pressed_at.is_none() {
+                        self.lock_button_pressed_at = Some(now);
+                    }
+                    self.mark_header_dirty();
+                    self.render_unlock_header();
+                }
+            } else {
+                if self.lock_button_active || self.lock_button_pressed_at.is_some() {
+                    self.lock_button_active = false;
+                    self.lock_button_pressed_at = None;
+                    self.mark_header_dirty();
+                    self.render_unlock_header();
+                }
+            }
+            return;
+        }
+
         let candidate = match self.mode {
             GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
             GuiMode::Confirm => {
@@ -495,13 +646,24 @@ impl<'d> Gui<'d> {
                         self.disarm_active();
                         return None;
                     }
-                    return self.finalize_press(now);
+                    if let Some(result) = self.finalize_press(now) {
+                        return Some(result);
+                    }
+                    if self.mode == GuiMode::Unlocked {
+                        return self.finalize_lock_button(now);
+                    }
+                    return None;
                 }
             }
             return None;
         }
 
         self.disarm_active();
+        if self.mode == GuiMode::Unlocked {
+            if let Some(result) = self.finalize_lock_button(now) {
+                return Some(result);
+            }
+        }
         None
     }
 
@@ -566,6 +728,7 @@ impl<'d> Gui<'d> {
         self.interaction.press_started_at = None;
         self.interaction.active_seen_at = None;
         self.interaction.cooldown_until = None;
+        self.clear_lock_button();
     }
 
     fn clear_pending(&mut self) {

@@ -399,7 +399,7 @@ fn main() -> ! {
             if let Some(decision) = ui.poll_confirmation_result() {
                 if let Some(pending) = take_pending_confirmation() {
                     let resp_msg = if decision {
-                        ui.show_idle_message("Approved");
+                        ui.show_idle_message_timed("Approved", Duration::from_millis(3_000));
                         let body = handle_frame_v1(pending.msg_id, &pending.frame);
                         Msg {
                             v: PROTO_V1,
@@ -407,7 +407,7 @@ fn main() -> ! {
                             msg: body,
                         }
                     } else {
-                        ui.show_idle_message("Rejected");
+                        ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
                         Msg {
                             v: PROTO_V1,
                             id: pending.msg_id,
@@ -453,6 +453,11 @@ fn main() -> ! {
                     }
                     GuiInteraction::ConfirmRejected => {
                         let _ = usb_write(&mut usb, b"confirm rejected\r\n");
+                    }
+                    GuiInteraction::LockRequested => {
+                        wipe_seed();
+                        ui.begin_unlock(None);
+                        let _ = usb_write(&mut usb, b"locked\r\n");
                     }
                     GuiInteraction::RawTouch(_coord) => {}
                 }

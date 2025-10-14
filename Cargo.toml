@@ -4,6 +4,7 @@ members = [
     "crates/siger-fw",
     "crates/siger-cli", 
     "crates/siger-wasm",
+    "src-tauri",
 ]
 resolver = "2"
 

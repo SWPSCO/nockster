@@ -1,0 +1,27 @@
+[package]
+name = "nockster-pc"
+version = "0.1.0"
+description = "Management app for Nockster hardware wallet"
+authors = ["Southwestern Pool Supply Co"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools", "protocol-asset"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+serialport = "4.5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[[bin]]
+name = "nockster-pc"
+path = "src/main.rs"

@@ -1,0 +1,6 @@
+# Tauri build artifacts
+/target
+/gen
+
+# Cargo
+Cargo.lock

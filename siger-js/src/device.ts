@@ -9,10 +9,16 @@ import {
   getErrorMessage,
 } from './protocol';
 
-/**
- * Siger hardware wallet device connection via Web Serial
- */
+export interface SerialTransport {
+  connect(): Promise<void>;
+  disconnect(): Promise<void>;
+  write(data: Uint8Array): Promise<void>;
+  startReading(onData: (data: Uint8Array) => void): void;
+  isConnected(): boolean;
+}
+
 export class SigerDevice {
+  private transport: SerialTransport | null = null;
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
@@ -24,51 +30,56 @@ export class SigerDevice {
   }>();
   private debug: boolean;
 
-  constructor(options?: { debug?: boolean }) {
-    this.debug = options?.debug ?? false;
+  constructor(transportOrOptions?: SerialTransport | { debug?: boolean }) {
+    if (transportOrOptions && 'connect' in transportOrOptions) {
+      this.transport = transportOrOptions;
+      this.debug = false;
+    } else {
+      this.debug = (transportOrOptions as { debug?: boolean })?.debug ?? false;
+    }
   }
 
-  /**
-   * Check if Web Serial API is available
-   */
   static isSupported(): boolean {
-    return 'serial' in navigator;
+    return 'serial' in navigator || ('__TAURI__' in window);
   }
 
-  /**
-   * Request user to select device
-   */
   async connect(): Promise<void> {
-    if (!SigerDevice.isSupported()) {
+    if (this.transport) {
+      await this.transport.connect();
+      this.transport.startReading((data) => {
+        const frame = this.frameReader.push(data);
+        if (frame) {
+          this.handleFrame(frame);
+        }
+      });
+      return;
+    }
+
+    if (!('serial' in navigator)) {
       throw new Error('Web Serial API not supported in this browser');
     }
 
-    // Request port
     this.port = await navigator.serial.requestPort({
       filters: [
-        // ESP32-S3 USB-JTAG-Serial
         { usbVendorId: 0x303a, usbProductId: 0x1001 },
       ],
     });
 
-    // Open with same baud rate as CLI
     await this.port.open({ baudRate: 115200 });
-
-    // Start reading
     this.startReading();
   }
 
-  /**
-   * Disconnect from device
-   */
   async disconnect(): Promise<void> {
-    // Cancel any pending calls
     for (const [, { reject }] of this.pendingCalls) {
       reject(new Error('Device disconnected'));
     }
     this.pendingCalls.clear();
 
-    // Close reader/writer
+    if (this.transport) {
+      await this.transport.disconnect();
+      return;
+    }
+
     if (this.reader) {
       await this.reader.cancel();
       this.reader = null;
@@ -77,32 +88,25 @@ export class SigerDevice {
       await this.writer.close();
       this.writer = null;
     }
-
-    // Close port
     if (this.port) {
       await this.port.close();
       this.port = null;
     }
   }
 
-  /**
-   * Check if connected
-   */
   isConnected(): boolean {
+    if (this.transport) {
+      return this.transport.isConnected();
+    }
     return this.port !== null && this.writer !== null;
   }
 
-  /**
-   * Send request and wait for response
-   */
-  async call(request: Request): Promise<Response> {
+  async call(request: Request, timeoutMs: number = 30000): Promise<Response> {
     if (!this.isConnected()) {
       throw new Error('Device not connected');
     }
 
     const msgId = this.nextMsgId++;
-
-    // Serialize message
     const msg: Msg<Request> = {
       v: PROTO_V1,
       id: msgId,
@@ -119,7 +123,6 @@ export class SigerDevice {
       });
     }
 
-    // Encode with COBS
     const encoded = COBSEncoder.encode(serialized);
 
     if (this.debug) {
@@ -129,21 +132,33 @@ export class SigerDevice {
       });
     }
 
-    // Create promise for response
     const promise = new Promise<Response>((resolve, reject) => {
-      this.pendingCalls.set(msgId, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pendingCalls.delete(msgId);
+        reject(new Error(`Request timeout after ${timeoutMs}ms (msgId: ${msgId}, type: ${request.type})`));
+      }, timeoutMs);
+
+      this.pendingCalls.set(msgId, {
+        resolve: (response: Response) => {
+          clearTimeout(timer);
+          resolve(response);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      });
     });
 
-    // Send
-    await this.writer!.write(encoded);
+    if (this.transport) {
+      await this.transport.write(encoded);
+    } else {
+      await this.writer!.write(encoded);
+    }
 
-    // Wait for response
     return promise;
   }
 
-  /**
-   * Convenience methods
-   */
   async getInfo() {
     return await this.call({ type: 'GetInfo' });
   }
@@ -172,7 +187,8 @@ export class SigerDevice {
   }
 
   async unlock(pin: string) {
-    const resp = await this.call({ type: 'Unlock', pin });
+    // Unlock takes ~5 seconds due to PBKDF2, use longer timeout
+    const resp = await this.call({ type: 'Unlock', pin }, 15000);
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
     }
@@ -188,7 +204,8 @@ export class SigerDevice {
   }
 
   async initializePIN(pin: string, seed64: Uint8Array) {
-    const resp = await this.call({ type: 'InitializePIN', pin, seed64 });
+    // InitializePIN takes ~5 seconds due to PBKDF2, use longer timeout
+    const resp = await this.call({ type: 'InitializePIN', pin, seed64 }, 15000);
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
     }
@@ -256,9 +273,6 @@ export class SigerDevice {
     return resp;
   }
 
-  /**
-   * Start reading from serial port
-   */
   private async startReading() {
     if (!this.port || !this.port.readable) {
       return;
@@ -272,7 +286,6 @@ export class SigerDevice {
         const { value, done } = await this.reader.read();
         if (done) break;
 
-        // Feed to frame reader
         const frame = this.frameReader.push(value);
         if (frame) {
           this.handleFrame(frame);
@@ -285,9 +298,6 @@ export class SigerDevice {
     }
   }
 
-  /**
-   * Handle a complete COBS frame
-   */
   private handleFrame(frame: Uint8Array) {
     try {
       if (this.debug) {
@@ -309,7 +319,6 @@ export class SigerDevice {
         });
       }
 
-      // Find pending call
       const pending = this.pendingCalls.get(msg.id);
       if (!pending) {
         if (this.debug) {

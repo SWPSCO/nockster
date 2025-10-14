@@ -71,6 +71,7 @@ export const ERR_DEVICE_LOCKED = 130;
 export const ERR_WRONG_PIN = 131;
 export const ERR_PIN_LOCKED_OUT = 132;
 export const ERR_ALREADY_INITIALIZED = 133;
+export const ERR_BUSY = 135;
 
 export const PROTO_V1 = 1;
 
@@ -440,6 +441,8 @@ export function getErrorMessage(code: number): string {
       return 'Device locked out (too many failed attempts)';
     case ERR_ALREADY_INITIALIZED:
       return 'Device already initialized';
+    case ERR_BUSY:
+      return 'Device is busy';
     case ERR_WRONG_PUBKEY:
       return 'Wrong public key';
     default:

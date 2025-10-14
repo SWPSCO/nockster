@@ -1,16 +1,50 @@
 import { useState, useEffect, useRef } from 'react';
-import { SigerDevice, formatCheetahPubkey } from 'siger-js';
-import type { Response } from 'siger-js';
+import { invoke } from '@tauri-apps/api/core';
+import { SigerDevice, Response, formatCheetahPubkey } from 'siger-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import init, { ParsedTransaction } from 'siger-wasm';
+import { createSerialTransport  } from './serial';
 import './App.css';
+
+const isTauri = typeof window !== 'undefined' && (
+  '__TAURI__' in window || 
+  '__TAURI_INTERNALS__' in window ||
+  window.location.protocol === 'tauri:'
+);
+
+export function isSerialSupported(): boolean {
+  if (isTauri) return true;
+  return 'serial' in navigator;
+}
+
+export async function connectSerial(): Promise<SerialPort | string> {
+  if (isTauri) {
+    const ports = await invoke<string[]>('list_serial_ports');
+    if (ports.length === 0) throw new Error('No serial ports found');
+    await invoke('connect_serial', { port: ports[0], baudRate: 115200 });
+    return ports[0];
+  }
+  
+  const port = await navigator.serial.requestPort();
+  await port.open({ baudRate: 115200 });
+  return port;
+}
 
 type DeviceKey = { slot: number; path: number[]; x: bigint[]; y: bigint[] };
 type InputDeviceKey = { slot: number; path: number[] };
 type InfoResponse = Extract<Response, { type: 'Info' }>;
 
 function App() {
-  const [device] = useState(() => new SigerDevice());
+
+  const isTauri = typeof window !== 'undefined' && (
+    '__TAURI__' in window || 
+    '__TAURI_INTERNALS__' in window ||
+    window.location.protocol === 'tauri:'
+  );
+  const [transport] = useState(() => isTauri ? createSerialTransport() : null);
+  const [device] = useState(() =>
+    transport ? new SigerDevice(transport) : new SigerDevice()
+  );
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [locked, setLocked] = useState<boolean | null>(null);
@@ -57,7 +91,7 @@ function App() {
   }, []);
 
   // Check Web Serial support
-  const isSupported = SigerDevice.isSupported();
+  const isSupported = isTauri || SigerDevice.isSupported();
   const showSeedForm = connected && locked === false;
   const hasSeeds = !!info?.has_seed || deviceKeys.length > 0;
   const isInitialSeed = !hasSeeds;
@@ -96,15 +130,37 @@ function App() {
 
   const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+  const [availablePorts, setAvailablePorts] = useState<string[]>([]);
+  const [selectedPort, setSelectedPort] = useState<string>('');
+
+  const showPortSelector = async () => {
+    console.log('showPortSelector called, isTauri:', isTauri, 'transport:', transport);
+    if (isTauri && transport && transport.getAvailablePorts) {
+      console.log('Calling getAvailablePorts...');
+      const ports = await transport.getAvailablePorts();
+      console.log('Got ports:', ports);
+      setAvailablePorts(ports);
+      if (ports.length > 0) setSelectedPort(ports[0]);
+    }
+  };
+
   const connect = async () => {
     try {
+      console.log('Connect clicked, isTauri:', isTauri);
       setStatus('Connecting...');
+      
+      if (isTauri && transport && selectedPort && transport.setSelectedPort) {
+        console.log('Setting port:', selectedPort);
+        transport.setSelectedPort(selectedPort);
+      }
+      
       await device.connect();
       setConnected(true);
       setStatus('Connected!');
       await sleep(1000);
       await refreshStatus();
     } catch (error: any) {
+      console.error('Connection error:', error);
       setStatus(`Connection failed: ${error.message}`);
     }
   };
@@ -183,6 +239,8 @@ function App() {
 
   const [pollMs] = useState(2000);
   const refreshingRef = useRef(false);
+  const deviceBusyRef = useRef(false);
+  const [deviceBusy, setDeviceBusy] = useState(false);
 
   useEffect(() => {
     if (!connected) return;
@@ -192,7 +250,8 @@ function App() {
 
     const tick = async () => {
       if (cancelled) return;
-      if (!refreshingRef.current) {
+      // Don't poll if device is busy with a long operation
+      if (!refreshingRef.current && !deviceBusyRef.current) {
         try {
           refreshingRef.current = true;
           await refreshStatus();
@@ -230,6 +289,8 @@ function App() {
     }
 
     try {
+      deviceBusyRef.current = true;
+      setDeviceBusy(true);
       setStatus('Unlocking...');
       await device.unlock(pin);
       setStatus('Unlocked successfully!');
@@ -238,6 +299,9 @@ function App() {
     } catch (error: any) {
       setStatus(`Unlock failed: ${error.message}`);
       await refreshStatus(); // Refresh attempts remaining
+    } finally {
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -289,6 +353,8 @@ function App() {
       if (seedPinRequired && !trimmedPin) {
         throw new Error('Enter a device PIN before seeding');
       }
+      deviceBusyRef.current = true;
+      setDeviceBusy(true);
       setSeeding(true);
       setStatus('Seeding device...');
       const seed = await mnemonicToSeed(trimmedMnemonic, seedPassphrase);
@@ -321,6 +387,8 @@ function App() {
       setStatus(`Seeding failed: ${message}`);
     } finally {
       setSeeding(false);
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -466,7 +534,6 @@ function App() {
       setSigningInputs([]); // Reset signing inputs
       setStatus(`Loaded transaction: ${info.tx_id} (${info.input_count} inputs)`);
 
-      // Don't automatically find signing inputs - wait for user to click "prepare to sign"
     } catch (error: any) {
       console.error('Transaction load error:', error);
       console.error('Error stack:', error.stack);
@@ -481,6 +548,8 @@ function App() {
     }
 
     try {
+      deviceBusyRef.current = true;
+      setDeviceBusy(true);
       setSigning(true);
       setStatus('Finding inputs to sign...');
 
@@ -584,7 +653,7 @@ function App() {
         throw new Error('No inputs found to sign with available device keys');
       }
 
-      setStatus('Applying signatures in browser...');
+      setStatus('Reconstructing transaction with signatures...');
       tx.apply_signatures(signatures);
 
       const signedBytes = tx.to_bytes();
@@ -612,6 +681,8 @@ function App() {
       setStatus(`Signing failed: ${errorMsg}`);
     } finally {
       setSigning(false);
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -689,7 +760,7 @@ function App() {
                       onChange={(e) => setMnemonic(e.target.value)}
                       placeholder="twelve or twenty-four words, separated by spaces"
                       spellCheck={false}
-                      disabled={seeding}
+                      disabled={deviceBusy || seeding}
                     />
                     {isInitialSeed && (
                       <input
@@ -698,7 +769,7 @@ function App() {
                         value={seedPin}
                         onChange={(e) => setSeedPin(e.target.value)}
                         placeholder="set a device PIN"
-                        disabled={seeding}
+                        disabled={deviceBusy || seeding}
                         autoComplete="off"
                       />
                     )}
@@ -708,13 +779,13 @@ function App() {
                       value={seedPassphrase}
                       onChange={(e) => setSeedPassphrase(e.target.value)}
                       placeholder="optional bip39 passphrase"
-                      disabled={seeding}
+                      disabled={deviceBusy || seeding}
                     />
                     <div className="seed-actions">
                       <button
                         type="button"
                         onClick={seedDevice}
-                        disabled={seeding || !canSubmitSeed}
+                        disabled={deviceBusy || seeding || !canSubmitSeed}
                         className="btn btn-success"
                       >
                         {seeding ? 'seeding...' : isInitialSeed ? 'load seed' : 'add seed'}
@@ -726,7 +797,7 @@ function App() {
                           setSeedPassphrase('');
                           setSeedPin('');
                         }}
-                        disabled={seeding}
+                        disabled={deviceBusy || seeding}
                         className="btn btn-secondary"
                       >
                         clear
@@ -828,7 +899,7 @@ function App() {
                                   <button
                                     onClick={() => deleteSeedSlot(pub.slot)}
                                     className="btn btn-small btn-danger"
-                                    disabled={deletingSlot === pub.slot || seeding || signing}
+                                    disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
                                   >
                                     {deletingSlot === pub.slot ? 'removing...' : 'remove'}
                                   </button>
@@ -843,7 +914,7 @@ function App() {
                 </>
               )}
             </div>
-            <button onClick={() => refreshStatus()} className="btn btn-small">
+            <button onClick={() => refreshStatus()} disabled={deviceBusy} className="btn btn-small">
               refresh status
             </button>
           </div>
@@ -860,8 +931,9 @@ function App() {
                   onChange={(e) => setPin(e.target.value)}
                   placeholder="enter PIN"
                   className="input"
+                  disabled={deviceBusy}
                   onKeyPress={(e) => {
-                    if (e.key === 'Enter' && locked) {
+                    if (e.key === 'Enter' && locked && !deviceBusy) {
                       unlock();
                     }
                   }}
@@ -870,29 +942,29 @@ function App() {
               <div className="button-group" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
                 <button
                   onClick={unlock}
-                  disabled={!locked || !pin}
+                  disabled={deviceBusy || !locked || !pin}
                   className="btn btn-success"
                 >
                   unlock
                 </button>
                 <button
                   onClick={lock}
-                  disabled={locked || locked === null}
+                  disabled={deviceBusy || locked || locked === null}
                   className="btn btn-warning"
                 >
                   lock
                 </button>
-                <button onClick={ping} className="btn btn-small">
+                <button onClick={ping} disabled={deviceBusy} className="btn btn-small">
                   test
                 </button>
                 <button
                   onClick={resetDevice}
-                  disabled={seeding || signing}
+                  disabled={deviceBusy || seeding || signing}
                   className="btn btn-danger"
                 >
                   reset
                 </button>
-                <button onClick={disconnect} className="btn btn-secondary">
+                <button onClick={disconnect} disabled={deviceBusy} className="btn btn-secondary">
                   disconnect
                 </button>
               </div>
@@ -908,7 +980,7 @@ function App() {
                     value={pinResetCurrent}
                     onChange={(e) => setPinResetCurrent(e.target.value)}
                     placeholder="current PIN"
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     autoComplete="off"
                   />
                   <input
@@ -917,7 +989,7 @@ function App() {
                     value={pinResetNew}
                     onChange={(e) => setPinResetNew(e.target.value)}
                     placeholder="new PIN"
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     autoComplete="off"
                   />
                   <input
@@ -926,7 +998,7 @@ function App() {
                     value={pinResetConfirm}
                     onChange={(e) => setPinResetConfirm(e.target.value)}
                     placeholder="confirm new PIN"
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     autoComplete="off"
                   />
                 </div>
@@ -938,7 +1010,7 @@ function App() {
                       setPinResetNew('');
                       setPinResetConfirm('');
                     }}
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     className="btn btn-secondary btn-small"
                   >
                     clear
@@ -947,6 +1019,7 @@ function App() {
                     type="button"
                     onClick={resetPin}
                     disabled={
+                      deviceBusy ||
                       resettingPin ||
                       locked !== false ||
                       !pinResetCurrent.trim() ||
@@ -962,7 +1035,7 @@ function App() {
             )}
           </div>
 
-          {wasmReady && (
+          {wasmReady && info && (
             <div className="section">
               <h2>Transaction signing</h2>
 
@@ -1014,21 +1087,21 @@ function App() {
                       <>
                         <button
                           onClick={signTransaction}
-                          disabled={signing || locked === true}
+                          disabled={deviceBusy || signing || locked === true}
                           className="btn btn-success"
                         >
                           {signing ? 'signing...' : 'sign transaction'}
                         </button>
-                        <button onClick={clearTransaction} className="btn btn-secondary">
+                        <button onClick={clearTransaction} disabled={deviceBusy || signing} className="btn btn-secondary">
                           clear
                         </button>
                       </>
                     ) : (
                       <>
-                        <button onClick={downloadSignedTx} className="btn btn-success">
+                        <button onClick={downloadSignedTx} disabled={deviceBusy} className="btn btn-success">
                           download signed .tx
                         </button>
-                        <button onClick={clearTransaction} className="btn btn-secondary">
+                        <button onClick={clearTransaction} disabled={deviceBusy} className="btn btn-secondary">
                           sign another
                         </button>
                       </>
@@ -1043,8 +1116,23 @@ function App() {
 
       {!connected && (
         <div className="section">
+          {isTauri && availablePorts.length === 0 && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              
+              <button onClick={showPortSelector} className="btn btn-secondary">
+                select port
+              </button>
+            </div>
+          )}
+          {isTauri && availablePorts.length > 0 && (
+            <select value={selectedPort} onChange={(e) => setSelectedPort(e.target.value)} className="input">
+              {availablePorts.map(port => (
+                <option key={port} value={port}>{port}</option>
+              ))}
+            </select>
+          )}
           <div style={{ display: 'flex', justifyContent: 'center' }}>
-            <button onClick={connect} className="btn btn-primary">
+            <button onClick={connect} className="btn btn-primary" disabled={isTauri && !selectedPort}>
               connect
             </button>
           </div>

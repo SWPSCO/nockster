@@ -12,6 +12,7 @@ NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash
 - `crates/siger-wasm` — wasm build of the toolchain used by the browser client
 - `siger-js` — thin typescript wrapper around the device protocol, consumed by the web app
 - `web` — demo vite/react interface to drive the device from browser
+- `src-tauri` — cross-platform desktop app bundler (see [TAURI_SETUP.md](TAURI_SETUP.md))
 
 ## Device protocol
 - Transport is plain USB CDC with COBS framing; every message is a postcard-encoded `Request` or `Response` enum from `siger-core`.
@@ -46,6 +47,7 @@ NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash
   - `make fw` builds the ESP32-S3 image, `make monitor` tails the serial console.
   - `make wasm` rebuilds the web bundle (`crates/siger-wasm/pkg`) for the browser client.
     - `cd web && npm run dev` to use webapp wallet
+    - `make tauri-dev` to run the desktop app (see [TAURI_SETUP.md](TAURI_SETUP.md))
   - `make cli` and `make core` keep the host tooling and shared library honest between firmware iterations.
     - CLI app available at `target/x86_64-unknown-linux-gnu/release/siger-cli`
 

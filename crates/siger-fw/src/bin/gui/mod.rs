@@ -71,6 +71,7 @@ pub struct Gui<'d> {
     confirm_prompt: HString<64>,
     idle_message: HString<48>,
     unlock_anim: u16,
+    unlocking_started_at: Option<Instant>,
     current_spinner_frame: u8,
     confirm_result: Option<bool>,
     interaction: InteractionState,
@@ -160,6 +161,7 @@ impl<'d> Gui<'d> {
             confirm_prompt: HString::new(),
             idle_message: HString::new(),
             unlock_anim: 0,
+            unlocking_started_at: None,
             current_spinner_frame: 0,
             confirm_result: None,
             interaction: InteractionState::default(),
@@ -264,6 +266,7 @@ impl<'d> Gui<'d> {
         self.stop_unlock_demo();
         self.mode = GuiMode::Unlocking;
         self.unlock_anim = 0;
+        self.unlocking_started_at = Some(Instant::now());
         self.current_spinner_frame = 0;
         let _ = self.display.clear(COLOR_BACKGROUND);
         render_header(&mut self.display, "Unlocking...", COLOR_SURFACE_HIGH);
@@ -928,13 +931,24 @@ impl<'d> Gui<'d> {
         if self.mode != GuiMode::Unlocking {
             return;
         }
-        self.unlock_anim = self.unlock_anim.wrapping_add(1);
-        if self.unlock_anim % 320 == 0 {
-            let frame = ((self.unlock_anim / 320) % SPINNER_FRAMES.len() as u16) as u8;
-            if frame != self.current_spinner_frame {
-                self.current_spinner_frame = frame;
-                draw_unlock_spinner_frame(&mut self.display, frame);
-            }
+
+        let Some(started_at) = self.unlocking_started_at else {
+            return;
+        };
+
+        // 5 fps = 200ms per frame
+        let now = Instant::now();
+        if now < started_at {
+            return;
+        }
+        let elapsed = now - started_at;
+        let elapsed_ms = elapsed.as_micros() / 1000;
+        let frame_index = (elapsed_ms / 200) as usize;
+        let frame = (frame_index % SPINNER_FRAMES.len()) as u8;
+
+        if frame != self.current_spinner_frame {
+            self.current_spinner_frame = frame;
+            draw_unlock_spinner_frame(&mut self.display, frame);
         }
     }
 }

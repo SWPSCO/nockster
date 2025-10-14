@@ -15,6 +15,7 @@ pub enum GuiMode {
     Error,
     SeedFirstBoot,
     SeedEntry,
+    SeedConfirm,
 }
 
 use super::seed::SeedButton;

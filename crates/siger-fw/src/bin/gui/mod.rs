@@ -601,6 +601,9 @@ impl<'d> Gui<'d> {
             GuiMode::SeedEntry => {
                 seed::button_from_point_seed_entry(Point::new(point.x as i32, point.y as i32))
             }
+            GuiMode::SeedConfirm => {
+                seed::button_from_point_seed_confirm(Point::new(point.x as i32, point.y as i32))
+            }
             _ => None,
         };
 
@@ -705,7 +708,7 @@ impl<'d> Gui<'d> {
                 return match self.mode {
                     GuiMode::Locked => self.handle_pin_button(hit.button),
                     GuiMode::Confirm => self.handle_confirm_button(hit.button),
-                    GuiMode::SeedFirstBoot | GuiMode::SeedEntry => self.handle_seed_button(hit.button),
+                    GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => self.handle_seed_button(hit.button),
                     _ => None,
                 };
             }
@@ -727,7 +730,7 @@ impl<'d> Gui<'d> {
                 self.mark_overlay_dirty();
                 self.render_current_overlay();
             }
-            GuiMode::SeedFirstBoot | GuiMode::SeedEntry => {
+            GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
                 seed::draw_seed_button(&mut self.display, self.mode, hit, Some(&self.seed_entry_state), true);
                 self.interaction.active_button = Some(hit);
                 self.interaction.active_seen_at = Some(now);
@@ -749,7 +752,7 @@ impl<'d> Gui<'d> {
                     self.mark_overlay_dirty();
                     self.render_current_overlay();
                 }
-                GuiMode::SeedFirstBoot | GuiMode::SeedEntry => {
+                GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
                     seed::draw_seed_button(&mut self.display, self.mode, old, Some(&self.seed_entry_state), false);
                 }
                 _ => draw_button(&mut self.display, self.mode, old, false),
@@ -866,13 +869,35 @@ impl<'d> Gui<'d> {
                 }
             }
             SeedButton::Finish => {
-                if let Some(phrase) = self.seed_entry_state.finish() {
-                    SeedInteraction::EntryCompleted(phrase)
+                // If we're in entry mode, show confirmation screen
+                if self.mode == GuiMode::SeedEntry {
+                    if self.seed_entry_state.finish().is_some() {
+                        self.mode = GuiMode::SeedConfirm;
+                        seed::render_seed_confirm(&mut self.display, &self.seed_entry_state);
+                        return None;
+                    } else {
+                        return None;
+                    }
+                }
+                // If we're in confirm mode, actually finish
+                if self.mode == GuiMode::SeedConfirm {
+                    if let Some(phrase) = self.seed_entry_state.finish() {
+                        SeedInteraction::EntryCompleted(phrase)
+                    } else {
+                        return None;
+                    }
                 } else {
                     return None;
                 }
             }
             SeedButton::Cancel => {
+                // If we're in confirm mode, go back to entry
+                if self.mode == GuiMode::SeedConfirm {
+                    self.mode = GuiMode::SeedEntry;
+                    seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+                    return None;
+                }
+                // Otherwise go back to setup screen
                 self.show_seed_setup();
                 SeedInteraction::EntryCancelled
             }

@@ -214,11 +214,13 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
     render_header(display, "Seed Required", COLOR_SURFACE_HIGH);
 
     let mut body = HString::<96>::new();
-    let _ = body.push_str("Welcome! This wallet needs your seed words before it can unlock.");
+    let _ = body.push_str("This wallet needs your seed words before it can unlock.");
 
     let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
     let mut y = header_height() + 24;
-    for line in split_text(body.as_str(), SCREEN_WIDTH as usize - 16) {
+    // Estimate character width for FONT_6X10 is 6 pixels
+    let max_chars = (SCREEN_WIDTH as usize - 32) / 6;
+    for line in split_text(body.as_str(), max_chars) {
         let _ = Text::with_alignment(
             line,
             Point::new((SCREEN_WIDTH / 2) as i32, y),
@@ -235,8 +237,33 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
 
 pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     let _ = display.clear(COLOR_BACKGROUND);
-    draw_info_header(display, state);
+
+    // Build header text showing current word
+    let mut header_text = HString::<48>::new();
+    if !state.digits.is_empty() {
+        if let Some(suggestion) = state.current_suggestion() {
+            // Show typed prefix
+            for (idx, ch) in suggestion.chars().enumerate() {
+                if idx < state.digits.len() {
+                    let _ = header_text.push(ch);
+                }
+            }
+            // Add suggestion count if available
+            if let Some((pos, total)) = state.suggestion_position() {
+                let _ = write!(header_text, " ({}/{})", pos, total);
+            }
+        } else {
+            let _ = header_text.push_str("???");
+        }
+    } else if state.words.is_empty() {
+        let _ = write!(header_text, "Word 1/{}", MAX_SEED_WORDS);
+    } else {
+        let _ = write!(header_text, "Word {}/{}", state.words.len() + 1, MAX_SEED_WORDS);
+    }
+
+    render_header(display, header_text.as_str(), COLOR_SURFACE_HIGH);
     draw_keypad(display, state);
+    draw_corner_buttons(display, state);
 }
 
 pub fn button_from_point_seed_setup(point: Point) -> Option<ButtonHit> {
@@ -249,22 +276,15 @@ pub fn button_from_point_seed_setup(point: Point) -> Option<ButtonHit> {
 }
 
 pub fn button_from_point_seed_entry(point: Point) -> Option<ButtonHit> {
-    // Check header buttons first
-    for button in &header_buttons() {
+    // Check corner buttons first
+    for button in &corner_buttons() {
         if within_hit(button, point, 4) {
             return Some(*button);
         }
     }
-    // Then check keypad
+
+    // Check keypad
     let geo = keypad_geometry();
-
-    // Check the wide ADD button
-    let add_button = add_word_button_hit(&geo);
-    if within_hit(&add_button, point, 10) {
-        return Some(add_button);
-    }
-
-    // Check regular keypad buttons
     for row in 0..keypad_layout().len() {
         for col in 0..keypad_layout()[row].len() {
             let hit = keypad_button_hit(row, col, &geo);
@@ -287,6 +307,9 @@ pub fn draw_seed_button(
         Button::Seed(SeedButton::EnterSeed) => draw_enter_seed_button(display, hit, active),
         Button::Seed(_) if mode == GuiMode::SeedEntry => {
             draw_keypad_button(display, hit, state.expect("seed state required"), active)
+        }
+        Button::Seed(_) if mode == GuiMode::SeedConfirm => {
+            draw_confirm_button(display, hit, active)
         }
         Button::Seed(_) if mode == GuiMode::SeedFirstBoot => {
             draw_enter_seed_button(display, hit, active)
@@ -318,109 +341,6 @@ fn draw_enter_seed_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: 
     let _ = Text::with_alignment(label, center, style, Alignment::Center).draw(display);
 }
 
-fn draw_info_header(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
-    let header_h = header_height();
-    let info_h = INFO_AREA_HEIGHT;
-
-    // Draw background for info area
-    let info_rect = Rectangle::new(
-        Point::new(0, header_h),
-        Size::new(SCREEN_WIDTH.into(), info_h as u32),
-    );
-    let _ = info_rect
-        .into_styled(PrimitiveStyleBuilder::new().fill_color(COLOR_SURFACE_HIGH).build())
-        .draw(display);
-
-    // Draw header buttons
-    for hit in header_buttons() {
-        draw_keypad_button(display, hit, state, false);
-    }
-
-    // Draw current word being typed (white text!)
-    let text_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);  // White, not subtle!
-    let center_x = (SCREEN_WIDTH / 2) as i32;
-    let word_y = header_h + info_h / 2 + 6;
-
-    let mut display_text = HString::<32>::new();
-
-    // Show typed prefix if we have digits
-    if !state.digits.is_empty() {
-        if let Some(suggestion) = state.current_suggestion() {
-            // Show typed portion
-            for (idx, ch) in suggestion.chars().enumerate() {
-                if idx < state.digits.len() {
-                    let _ = display_text.push(ch);
-                }
-            }
-            // Show rest in gray
-            let remaining: HString<16> = suggestion.chars().skip(state.digits.len()).collect();
-
-            let _ = Text::with_alignment(
-                display_text.as_str(),
-                Point::new(center_x, word_y),
-                text_style,
-                Alignment::Center,
-            )
-            .draw(display);
-
-            // Draw remaining in subtle color
-            let subtle_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT_SUBTLE);
-            let typed_width = (display_text.len() * 10) as i32;  // Approximate width
-            let _ = Text::new(
-                remaining.as_str(),
-                Point::new(center_x + typed_width / 2, word_y),
-                subtle_style,
-            )
-            .draw(display);
-
-            // Show match count
-            if let Some((pos, total)) = state.suggestion_position() {
-                let mut count_buf = HString::<16>::new();
-                let _ = write!(count_buf, "{}/{}", pos, total);
-                let count_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
-                let _ = Text::with_alignment(
-                    count_buf.as_str(),
-                    Point::new(center_x, header_h + info_h - 8),
-                    count_style,
-                    Alignment::Center,
-                )
-                .draw(display);
-            }
-        } else {
-            // No match
-            let _ = display_text.push_str("???");
-            let _ = Text::with_alignment(
-                display_text.as_str(),
-                Point::new(center_x, word_y),
-                text_style,
-                Alignment::Center,
-            )
-            .draw(display);
-        }
-    } else if state.words.is_empty() {
-        let _ = display_text.push_str("--");
-        let subtle_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT_SUBTLE);
-        let _ = Text::with_alignment(
-            display_text.as_str(),
-            Point::new(center_x, word_y),
-            subtle_style,
-            Alignment::Center,
-        )
-        .draw(display);
-    }
-
-    // Draw word count at top
-    let mut word_count = HString::<24>::new();
-    let _ = write!(word_count, "Word {}/{}", min(state.words.len() + 1, MAX_SEED_WORDS), MAX_SEED_WORDS);
-    let small_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
-    let _ = Text::with_alignment(
-        word_count.as_str(),
-        Point::new(center_x, header_h + 12),
-        small_style,
-        Alignment::Center,
-    )
-    .draw(display);
-}
 
 fn draw_keypad(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     let layout = keypad_layout();
@@ -431,9 +351,6 @@ fn draw_keypad(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
             draw_keypad_button(display, hit, state, false);
         }
     }
-    // Draw the wide ADD WORD button at the bottom
-    let add_button = add_word_button_hit(&geo);
-    draw_keypad_button(display, add_button, state, false);
 }
 
 fn draw_keypad_button(
@@ -478,8 +395,8 @@ fn draw_keypad_button(
             )
             .draw(display);
         }
-        SeedButton::PrevSuggestion => draw_label(display, center_x, center_y, "PREV"),
-        SeedButton::NextSuggestion => draw_label(display, center_x, center_y, "NEXT"),
+        SeedButton::PrevSuggestion => draw_label(display, center_x, center_y, "<"),
+        SeedButton::NextSuggestion => draw_label(display, center_x, center_y, ">"),
         SeedButton::Backspace => draw_label(display, center_x, center_y, "DEL"),
         SeedButton::CommitWord => {
             let label = if state.current_suggestion().is_some() {
@@ -578,36 +495,24 @@ fn palette(active: bool) -> Palette {
     }
 }
 
-fn header_buttons() -> [ButtonHit; 4] {
-    let header_h = header_height();
-    let button_size = 28i32;
+fn corner_buttons() -> [ButtonHit; 2] {
+    let button_width = 50i32;
+    let button_height = 36i32;
     let margin = 4i32;
-    let y = header_h + margin;
+    let y = SCREEN_HEIGHT as i32 - button_height - margin;
 
     [
-        // Cancel button (left)
+        // DEL button (bottom left)
         ButtonHit {
-            button: Button::Seed(SeedButton::Cancel),
+            button: Button::Seed(SeedButton::Backspace),
             top_left: Point::new(margin, y),
-            size: Size::new(button_size as u32, button_size as u32),
+            size: Size::new(button_width as u32, button_height as u32),
         },
-        // Finish button (right)
+        // ADD button (bottom right)
         ButtonHit {
-            button: Button::Seed(SeedButton::Finish),
-            top_left: Point::new((SCREEN_WIDTH as i32 - button_size - margin), y),
-            size: Size::new(button_size as u32, button_size as u32),
-        },
-        // Prev button (left center)
-        ButtonHit {
-            button: Button::Seed(SeedButton::PrevSuggestion),
-            top_left: Point::new(margin, y + button_size + margin),
-            size: Size::new(button_size as u32, button_size as u32),
-        },
-        // Next button (right center)
-        ButtonHit {
-            button: Button::Seed(SeedButton::NextSuggestion),
-            top_left: Point::new((SCREEN_WIDTH as i32 - button_size - margin), y + button_size + margin),
-            size: Size::new(button_size as u32, button_size as u32),
+            button: Button::Seed(SeedButton::CommitWord),
+            top_left: Point::new(SCREEN_WIDTH as i32 - button_width - margin, y),
+            size: Size::new(button_width as u32, button_height as u32),
         },
     ]
 }
@@ -627,7 +532,7 @@ fn keypad_layout() -> [[SeedButton; 3]; 3] {
         [
             SeedButton::Key(8),
             SeedButton::Key(9),
-            SeedButton::Backspace,
+            SeedButton::NextSuggestion,  // Use > for cycling through suggestions
         ],
     ]
 }
@@ -639,15 +544,17 @@ struct KeypadGeometry {
 }
 
 fn keypad_geometry() -> KeypadGeometry {
-    let top = header_height() + INFO_AREA_HEIGHT + KEYPAD_MARGIN;
-    let available_height = max(0, SCREEN_HEIGHT as i32 - top - KEYPAD_MARGIN);
+    let top = header_height() + KEYPAD_MARGIN * 2;
+    // Reserve space at bottom for corner buttons
+    let bottom_button_height = 36i32;
+    let available_height = max(0, SCREEN_HEIGHT as i32 - top - bottom_button_height - KEYPAD_MARGIN * 2);
     let button_width = max(
         32,
         (SCREEN_WIDTH as i32 - KEYPAD_MARGIN * 4) / 3,
     );
     let button_height = max(
         28,
-        (available_height - KEYPAD_MARGIN * 4) / 4,  // 4 rows total (3 keypad + 1 ADD button)
+        (available_height - KEYPAD_MARGIN * 2) / 3,  // 3 rows
     );
     KeypadGeometry {
         top,
@@ -671,15 +578,9 @@ fn keypad_button_hit(row: usize, col: usize, geo: &KeypadGeometry) -> ButtonHit 
     }
 }
 
-fn add_word_button_hit(geo: &KeypadGeometry) -> ButtonHit {
-    let layout = keypad_layout();
-    let bottom_row = layout.len();
-    let y = geo.top + bottom_row as i32 * (geo.button_height + KEYPAD_MARGIN);
-    let width = (SCREEN_WIDTH as i32 - KEYPAD_MARGIN * 2);
-    ButtonHit {
-        button: Button::Seed(SeedButton::CommitWord),
-        top_left: Point::new(KEYPAD_MARGIN, y),
-        size: Size::new(width as u32, geo.button_height as u32),
+fn draw_corner_buttons(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
+    for hit in corner_buttons() {
+        draw_keypad_button(display, hit, state, false);
     }
 }
 
@@ -790,4 +691,93 @@ fn t9_letters(digit: u8) -> &'static str {
         9 => "WXYZ",
         _ => "",
     }
+}
+
+pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
+    let _ = display.clear(COLOR_BACKGROUND);
+    render_header(display, "Confirm Seed", COLOR_SURFACE_HIGH);
+
+    // Display all words
+    let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let header_h = header_height();
+    let mut y = header_h + 16;
+    let line_height = (FONT_6X10.character_size.height as i32) + 4;
+
+    // Show up to 24 words in a scrollable fashion
+    for (idx, word) in state.words.iter().enumerate() {
+        let mut line_buf = HString::<24>::new();
+        let _ = write!(line_buf, "{:2}. {}", idx + 1, word.as_str());
+
+        let _ = Text::new(
+            line_buf.as_str(),
+            Point::new(8, y),
+            text_style,
+        )
+        .draw(display);
+
+        y += line_height;
+
+        // Stop if we run out of screen space
+        if y > SCREEN_HEIGHT as i32 - 50 {
+            break;
+        }
+    }
+
+    // Draw confirm/cancel buttons at bottom
+    for hit in confirm_buttons() {
+        draw_confirm_button(display, hit, false);
+    }
+}
+
+pub fn button_from_point_seed_confirm(point: Point) -> Option<ButtonHit> {
+    for button in &confirm_buttons() {
+        if within_hit(button, point, 4) {
+            return Some(*button);
+        }
+    }
+    None
+}
+
+fn confirm_buttons() -> [ButtonHit; 2] {
+    let button_width = 60i32;
+    let button_height = 40i32;
+    let margin = 8i32;
+    let y = SCREEN_HEIGHT as i32 - button_height - margin;
+
+    [
+        // Cancel button (bottom left)
+        ButtonHit {
+            button: Button::Seed(SeedButton::Cancel),
+            top_left: Point::new(margin, y),
+            size: Size::new(button_width as u32, button_height as u32),
+        },
+        // Finish button (bottom right)
+        ButtonHit {
+            button: Button::Seed(SeedButton::Finish),
+            top_left: Point::new(SCREEN_WIDTH as i32 - button_width - margin, y),
+            size: Size::new(button_width as u32, button_height as u32),
+        },
+    ]
+}
+
+fn draw_confirm_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool) {
+    draw_button_frame(display, hit, active);
+
+    let button = match hit.button {
+        Button::Seed(button) => button,
+        _ => return,
+    };
+
+    let label = match button {
+        SeedButton::Cancel => "BACK",
+        SeedButton::Finish => "CONFIRM",
+        _ => "",
+    };
+
+    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let center = Point::new(
+        hit.top_left.x + hit.size.width as i32 / 2,
+        hit.top_left.y + hit.size.height as i32 / 2 + 4,
+    );
+    let _ = Text::with_alignment(label, center, style, Alignment::Center).draw(display);
 }

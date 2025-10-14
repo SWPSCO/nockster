@@ -95,7 +95,7 @@ export class SigerDevice {
   /**
    * Send request and wait for response
    */
-  async call(request: Request): Promise<Response> {
+  async call(request: Request, timeoutMs: number = 30000): Promise<Response> {
     if (!this.isConnected()) {
       throw new Error('Device not connected');
     }
@@ -129,9 +129,24 @@ export class SigerDevice {
       });
     }
 
-    // Create promise for response
+    // Create promise for response with timeout
     const promise = new Promise<Response>((resolve, reject) => {
-      this.pendingCalls.set(msgId, { resolve, reject });
+      // Set timeout
+      const timer = setTimeout(() => {
+        this.pendingCalls.delete(msgId);
+        reject(new Error(`Request timeout after ${timeoutMs}ms (msgId: ${msgId}, type: ${request.type})`));
+      }, timeoutMs);
+
+      this.pendingCalls.set(msgId, {
+        resolve: (response: Response) => {
+          clearTimeout(timer);
+          resolve(response);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      });
     });
 
     // Send

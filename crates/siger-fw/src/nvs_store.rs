@@ -175,7 +175,7 @@ impl NvsStore {
         pin: &str,
         seed64: &[u8; 64],
         pub_xy: ([u64; 6], [u64; 6]),
-    ) -> Result<u8, NvsError> {
+    ) -> Result<([u8; 32], u8), NvsError> {
         if let Ok(Some(header)) = self.read_header() {
             if header.initialized() {
                 return Err(NvsError::AlreadyInitialized);
@@ -189,11 +189,10 @@ impl NvsStore {
 
         let key = Self::derive_master_key(pin, &header.salt)?;
         let slot_record = self.encrypt_seed_record(&key, seed64, pub_xy)?;
-        drop(key);
 
         self.write_header(&header)?;
         self.write_slot(0, &slot_record)?;
-        Ok(0)
+        Ok((key, 0))
     }
 
     pub fn add_seed_with_key(

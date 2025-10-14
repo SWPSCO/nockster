@@ -1,18 +1,18 @@
 {
   "productName": "Siger Wallet",
   "version": "0.1.0",
-  "identifier": "com.nockchain.siger",
+  "identifier": "io.swps.nockster",
   "build": {
-    "beforeDevCommand": "cd ../web && npm run dev",
-    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd web && npm run dev",
+    "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "cd .. && make web",
-    "frontendDist": "../web/dist"
+    "frontendDist": "web/dist"
   },
   "app": {
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "Siger Hardware Wallet",
+        "title": "Nockster hardware wallet",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -21,22 +21,20 @@
         "fullscreen": false,
         "decorations": true,
         "center": true,
-        "transparent": false,
-        "fileDropEnabled": false
+        "transparent": false
       }
     ],
     "security": {
       "csp": {
         "default-src": "'self' 'unsafe-inline' 'unsafe-eval' asset: http://asset.localhost",
         "script-src": "'self' 'unsafe-inline' 'wasm-unsafe-eval'",
-        "style-src": "'self" "'unsafe-inline'",
+        "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data: asset: http://asset.localhost",
         "connect-src": "'self' ipc: http://ipc.localhost",
         "worker-src": "'self' blob:",
         "font-src": "'self' data:",
         "media-src": "'self'"
       },
-      "dangerousRemoteDomainIpcAccess": [],
       "dangerousDisableAssetCspModification": false,
       "assetProtocol": {
         "enable": true,
@@ -63,10 +61,10 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "deb", "appimage"],
-    "publisher": "Nockchain",
+    "publisher": "Southwestern Pool Supply Co",
     "copyright": "Copyright (c) 2025",
     "category": "Finance",
-    "shortDescription": "Hardware wallet for Nockchain transactions",
+    "shortDescription": "Hardware wallet for signing Nockchain transactions",
     "longDescription": "Secure desktop application for managing your Nockchain hardware wallet and signing transactions",
     "icon": [
       "icons/32x32.png",
@@ -86,7 +84,6 @@
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.15",
-      "useBootstrapper": true,
       "entitlements": null,
       "exceptionDomain": ""
     },

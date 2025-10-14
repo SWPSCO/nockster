@@ -1,9 +1,10 @@
+import { validateMnemonic } from '@scure/bip39';
+import { wordlist } from '@scure/bip39/wordlists/english.js';
+
 const PBKDF2_ITERATIONS = 2048;
 
-const VALID_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
-
 export function isValidMnemonicWordCount(count: number): boolean {
-  return VALID_WORD_COUNTS.has(count);
+  return count === 24;
 }
 
 function ensureWebCrypto() {
@@ -18,8 +19,11 @@ export function validateMnemonicWords(input: string): void {
   if (words.length === 0) {
     throw new Error('Provide your seed words');
   }
-  if (!isValidMnemonicWordCount(words.length)) {
-    throw new Error(`Seed words should be 12, 15, 18, 21, or 24 words (received ${words.length})`);
+  if (words.length !== 24) {
+    throw new Error(`Seed must be exactly 24 words (received ${words.length})`);
+  }
+  if (!validateMnemonic(input, wordlist)) {
+    throw new Error('Invalid mnemonic: check spelling and word count');
   }
 }
 

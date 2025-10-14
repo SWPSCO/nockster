@@ -5,7 +5,7 @@ FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
 WASM_TOOLCHAIN := nightly
 WASM_TARGET := wasm32-unknown-unknown
 
-.PHONY: all build flash test clean fw cli core wasm js web
+.PHONY: all build flash test clean fw cli core wasm js web tauri tauri-dev tauri-build
 
 all: build
 
@@ -135,6 +135,14 @@ disconnect:
 	fi; \
 	fuser -k /dev/$$DEV 2>/dev/null || true
 
+tauri-dev: web
+	@cd src-tauri && cargo tauri dev
+
+tauri-build: web
+	@cd src-tauri && cargo tauri build
+
+tauri: tauri-build
+
 help:
 	@echo "Available targets:"
 	@echo "  make flash      - Build and flash firmware (preserves keys)"
@@ -146,6 +154,9 @@ help:
 	@echo "    make wasm       - Build WASM package for web"
 	@echo "    make js         - Build siger-js lib for web"
 	@echo "    make web        - Build demo UI for web"
+	@echo "  make tauri-dev  - Run Tauri desktop app in dev mode"
+	@echo "  make tauri-build- Build Tauri desktop app for production"
+	@echo "  make tauri      - Build Tauri desktop app (alias for tauri-build)"
 	@echo "  make core       - Build siger-core library"
 	@echo "  make monitor    - Open serial monitor"
 	@echo "  make disconnect - Disconnect USB device"

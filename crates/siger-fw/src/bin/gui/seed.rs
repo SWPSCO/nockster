@@ -211,12 +211,11 @@ impl SeedEntryState {
 
 pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
     let _ = display.clear(COLOR_BACKGROUND);
-    render_header(display, "Seed Required", COLOR_SURFACE_HIGH);
+    render_header(display, "No seeds", COLOR_SURFACE_HIGH);
 
     let mut body = HString::<96>::new();
-    let _ = body.push_str("This wallet needs your seed words before it can unlock.");
-
-    let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let _ = body.push_str("Enter your seedphrase. You can enter it from your computer too, via web or nockster-cli.");
+    let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
     let mut y = header_height() + 24;
     // Estimate character width for FONT_6X10 is 6 pixels
     let max_chars = (SCREEN_WIDTH as usize - 32) / 6;

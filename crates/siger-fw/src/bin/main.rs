@@ -39,6 +39,7 @@ const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
 const TX_QUEUE_LEN: usize = ENC_BUF_LEN * 3;
 // lock state (locked by default)
 static mut DEVICE_LOCKED: bool = true;
+static mut DEVICE_BUSY: bool = false;
 static mut MASTER_KEY: [u8; 32] = [0; 32];
 static mut MASTER_KEY_SET: bool = false;
 static mut APP_CORE_STACK: Stack<8192> = Stack::new();
@@ -559,7 +560,34 @@ fn main() -> ! {
                         // decode Msg<Frame>
                         let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
                             Ok(m) if m.v == PROTO_V1 => {
-                                if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
+                                // Check if device is busy with a long operation (PBKDF2, etc.)
+                                // Reject all requests except Ping/GetInfo to prevent queue buildup
+                                let is_blocking_request = unsafe { DEVICE_BUSY };
+                                let is_ping_or_info = matches!(&m.msg,
+                                    Frame::One(Request::Ping) | Frame::One(Request::GetInfo));
+
+                                if is_blocking_request && !is_ping_or_info {
+                                    Some(Msg {
+                                        v: PROTO_V1,
+                                        id: m.id,
+                                        msg: Response::Err { code: ERR_BUSY },
+                                    })
+                                } else {
+                                    // Show GUI unlock animation if unlock request comes over serial
+                                    if let Frame::One(Request::Unlock { .. }) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            ui.show_unlocking();
+                                        }
+                                    }
+
+                                    // Show GUI lock screen if lock request comes over serial
+                                    if let Frame::One(Request::Lock) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            ui.begin_unlock(None);
+                                        }
+                                    }
+
+                                    if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
                                     let frame_clone = m.msg.clone();
                                     let begin_result = {
                                         let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
@@ -575,11 +603,32 @@ fn main() -> ! {
                                     }
                                 } else {
                                     let body = handle_frame_v1(m.id, &m.msg);
+
+                                    // Show result on GUI after unlock completes
+                                    if let Frame::One(Request::Unlock { .. }) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            match &body {
+                                                Response::Ok => ui.show_unlock_success(),
+                                                Response::Err { code } if *code == ERR_WRONG_PIN => {
+                                                    // Get attempts remaining from lock status
+                                                    let mut nvs = NvsStore::new();
+                                                    let remaining = nvs.get_attempts_remaining();
+                                                    ui.show_pin_failure(if remaining > 0 { Some(remaining) } else { None });
+                                                }
+                                                Response::Err { code } if *code == ERR_PIN_LOCKED_OUT => {
+                                                    ui.show_pin_locked_out();
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+
                                     Some(Msg {
                                         v: PROTO_V1,
                                         id: m.id,
                                         msg: body,
                                     })
+                                }
                                 }
                             }
                             Ok(_) => Some(Msg {
@@ -864,9 +913,10 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
         Request::InitializePIN { pin, seed64 } => {
+            unsafe { DEVICE_BUSY = true; }
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
-            match nvs.initialize_pin(pin.as_str(), seed64, pub_xy) {
+            let result = match nvs.initialize_pin(pin.as_str(), seed64, pub_xy) {
                 Ok((master_key, _slot)) => {
                     // Store the master key (already derived during initialize_pin)
                     store_master_key(&master_key);
@@ -881,7 +931,9 @@ fn handle_request_v1(req: &Request) -> Response {
                     code: ERR_ALREADY_INITIALIZED,
                 },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
-            }
+            };
+            unsafe { DEVICE_BUSY = false; }
+            result
         }
         Request::AddSeed { seed64 } => {
             if is_device_locked() {
@@ -945,16 +997,24 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-        Request::Unlock { pin } => match unlock_device_with_pin(pin.as_str()) {
-            UnlockAttempt::Success => Response::Ok,
-            UnlockAttempt::WrongPin { .. } => Response::Err {
-                code: ERR_WRONG_PIN,
-            },
-            UnlockAttempt::LockedOut => Response::Err {
-                code: ERR_PIN_LOCKED_OUT,
-            },
-            UnlockAttempt::NotInitialized => Response::Err { code: ERR_NO_SEED },
-            UnlockAttempt::Failed => Response::Err { code: ERR_NO_SEED },
+        Request::Unlock { pin } => {
+            // WARNING: This blocks main thread for ~5s during PBKDF2
+            // GUI unlock animation will freeze during this time (only for serial unlock)
+            // GUI-initiated unlock uses APP_CORE worker and doesn't have this issue
+            unsafe { DEVICE_BUSY = true; }
+            let result = match unlock_device_with_pin(pin.as_str()) {
+                UnlockAttempt::Success => Response::Ok,
+                UnlockAttempt::WrongPin { .. } => Response::Err {
+                    code: ERR_WRONG_PIN,
+                },
+                UnlockAttempt::LockedOut => Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                },
+                UnlockAttempt::NotInitialized => Response::Err { code: ERR_NO_SEED },
+                UnlockAttempt::Failed => Response::Err { code: ERR_NO_SEED },
+            };
+            unsafe { DEVICE_BUSY = false; }
+            result
         },
         Request::Lock => {
             wipe_seed();

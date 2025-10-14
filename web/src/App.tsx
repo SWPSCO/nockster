@@ -239,6 +239,8 @@ function App() {
 
   const [pollMs] = useState(2000);
   const refreshingRef = useRef(false);
+  const deviceBusyRef = useRef(false);
+  const [deviceBusy, setDeviceBusy] = useState(false);
 
   useEffect(() => {
     if (!connected) return;
@@ -248,7 +250,8 @@ function App() {
 
     const tick = async () => {
       if (cancelled) return;
-      if (!refreshingRef.current) {
+      // Don't poll if device is busy with a long operation
+      if (!refreshingRef.current && !deviceBusyRef.current) {
         try {
           refreshingRef.current = true;
           await refreshStatus();
@@ -286,6 +289,8 @@ function App() {
     }
 
     try {
+      deviceBusyRef.current = true;
+      setDeviceBusy(true);
       setStatus('Unlocking...');
       await device.unlock(pin);
       setStatus('Unlocked successfully!');
@@ -294,6 +299,9 @@ function App() {
     } catch (error: any) {
       setStatus(`Unlock failed: ${error.message}`);
       await refreshStatus(); // Refresh attempts remaining
+    } finally {
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -345,6 +353,8 @@ function App() {
       if (seedPinRequired && !trimmedPin) {
         throw new Error('Enter a device PIN before seeding');
       }
+      deviceBusyRef.current = true;
+      setDeviceBusy(true);
       setSeeding(true);
       setStatus('Seeding device...');
       const seed = await mnemonicToSeed(trimmedMnemonic, seedPassphrase);
@@ -377,6 +387,8 @@ function App() {
       setStatus(`Seeding failed: ${message}`);
     } finally {
       setSeeding(false);
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -536,6 +548,8 @@ function App() {
     }
 
     try {
+      deviceBusyRef.current = true;
+      setDeviceBusy(true);
       setSigning(true);
       setStatus('Finding inputs to sign...');
 
@@ -667,6 +681,8 @@ function App() {
       setStatus(`Signing failed: ${errorMsg}`);
     } finally {
       setSigning(false);
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -744,7 +760,7 @@ function App() {
                       onChange={(e) => setMnemonic(e.target.value)}
                       placeholder="twelve or twenty-four words, separated by spaces"
                       spellCheck={false}
-                      disabled={seeding}
+                      disabled={deviceBusy || seeding}
                     />
                     {isInitialSeed && (
                       <input
@@ -753,7 +769,7 @@ function App() {
                         value={seedPin}
                         onChange={(e) => setSeedPin(e.target.value)}
                         placeholder="set a device PIN"
-                        disabled={seeding}
+                        disabled={deviceBusy || seeding}
                         autoComplete="off"
                       />
                     )}
@@ -763,13 +779,13 @@ function App() {
                       value={seedPassphrase}
                       onChange={(e) => setSeedPassphrase(e.target.value)}
                       placeholder="optional bip39 passphrase"
-                      disabled={seeding}
+                      disabled={deviceBusy || seeding}
                     />
                     <div className="seed-actions">
                       <button
                         type="button"
                         onClick={seedDevice}
-                        disabled={seeding || !canSubmitSeed}
+                        disabled={deviceBusy || seeding || !canSubmitSeed}
                         className="btn btn-success"
                       >
                         {seeding ? 'seeding...' : isInitialSeed ? 'load seed' : 'add seed'}
@@ -781,7 +797,7 @@ function App() {
                           setSeedPassphrase('');
                           setSeedPin('');
                         }}
-                        disabled={seeding}
+                        disabled={deviceBusy || seeding}
                         className="btn btn-secondary"
                       >
                         clear
@@ -883,7 +899,7 @@ function App() {
                                   <button
                                     onClick={() => deleteSeedSlot(pub.slot)}
                                     className="btn btn-small btn-danger"
-                                    disabled={deletingSlot === pub.slot || seeding || signing}
+                                    disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
                                   >
                                     {deletingSlot === pub.slot ? 'removing...' : 'remove'}
                                   </button>
@@ -898,7 +914,7 @@ function App() {
                 </>
               )}
             </div>
-            <button onClick={() => refreshStatus()} className="btn btn-small">
+            <button onClick={() => refreshStatus()} disabled={deviceBusy} className="btn btn-small">
               refresh status
             </button>
           </div>
@@ -915,8 +931,9 @@ function App() {
                   onChange={(e) => setPin(e.target.value)}
                   placeholder="enter PIN"
                   className="input"
+                  disabled={deviceBusy}
                   onKeyPress={(e) => {
-                    if (e.key === 'Enter' && locked) {
+                    if (e.key === 'Enter' && locked && !deviceBusy) {
                       unlock();
                     }
                   }}
@@ -925,29 +942,29 @@ function App() {
               <div className="button-group" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
                 <button
                   onClick={unlock}
-                  disabled={!locked || !pin}
+                  disabled={deviceBusy || !locked || !pin}
                   className="btn btn-success"
                 >
                   unlock
                 </button>
                 <button
                   onClick={lock}
-                  disabled={locked || locked === null}
+                  disabled={deviceBusy || locked || locked === null}
                   className="btn btn-warning"
                 >
                   lock
                 </button>
-                <button onClick={ping} className="btn btn-small">
+                <button onClick={ping} disabled={deviceBusy} className="btn btn-small">
                   test
                 </button>
                 <button
                   onClick={resetDevice}
-                  disabled={seeding || signing}
+                  disabled={deviceBusy || seeding || signing}
                   className="btn btn-danger"
                 >
                   reset
                 </button>
-                <button onClick={disconnect} className="btn btn-secondary">
+                <button onClick={disconnect} disabled={deviceBusy} className="btn btn-secondary">
                   disconnect
                 </button>
               </div>
@@ -963,7 +980,7 @@ function App() {
                     value={pinResetCurrent}
                     onChange={(e) => setPinResetCurrent(e.target.value)}
                     placeholder="current PIN"
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     autoComplete="off"
                   />
                   <input
@@ -972,7 +989,7 @@ function App() {
                     value={pinResetNew}
                     onChange={(e) => setPinResetNew(e.target.value)}
                     placeholder="new PIN"
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     autoComplete="off"
                   />
                   <input
@@ -981,7 +998,7 @@ function App() {
                     value={pinResetConfirm}
                     onChange={(e) => setPinResetConfirm(e.target.value)}
                     placeholder="confirm new PIN"
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     autoComplete="off"
                   />
                 </div>
@@ -993,7 +1010,7 @@ function App() {
                       setPinResetNew('');
                       setPinResetConfirm('');
                     }}
-                    disabled={resettingPin}
+                    disabled={deviceBusy || resettingPin}
                     className="btn btn-secondary btn-small"
                   >
                     clear
@@ -1002,6 +1019,7 @@ function App() {
                     type="button"
                     onClick={resetPin}
                     disabled={
+                      deviceBusy ||
                       resettingPin ||
                       locked !== false ||
                       !pinResetCurrent.trim() ||
@@ -1069,21 +1087,21 @@ function App() {
                       <>
                         <button
                           onClick={signTransaction}
-                          disabled={signing || locked === true}
+                          disabled={deviceBusy || signing || locked === true}
                           className="btn btn-success"
                         >
                           {signing ? 'signing...' : 'sign transaction'}
                         </button>
-                        <button onClick={clearTransaction} className="btn btn-secondary">
+                        <button onClick={clearTransaction} disabled={deviceBusy || signing} className="btn btn-secondary">
                           clear
                         </button>
                       </>
                     ) : (
                       <>
-                        <button onClick={downloadSignedTx} className="btn btn-success">
+                        <button onClick={downloadSignedTx} disabled={deviceBusy} className="btn btn-success">
                           download signed .tx
                         </button>
-                        <button onClick={clearTransaction} className="btn btn-secondary">
+                        <button onClick={clearTransaction} disabled={deviceBusy} className="btn btn-secondary">
                           sign another
                         </button>
                       </>

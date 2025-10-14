@@ -187,7 +187,8 @@ export class SigerDevice {
   }
 
   async unlock(pin: string) {
-    const resp = await this.call({ type: 'Unlock', pin });
+    // Unlock takes ~5 seconds due to PBKDF2, use longer timeout
+    const resp = await this.call({ type: 'Unlock', pin }, 15000);
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
     }
@@ -203,7 +204,8 @@ export class SigerDevice {
   }
 
   async initializePIN(pin: string, seed64: Uint8Array) {
-    const resp = await this.call({ type: 'InitializePIN', pin, seed64 });
+    // InitializePIN takes ~5 seconds due to PBKDF2, use longer timeout
+    const resp = await this.call({ type: 'InitializePIN', pin, seed64 }, 15000);
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
     }

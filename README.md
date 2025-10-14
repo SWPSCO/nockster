@@ -47,8 +47,8 @@ NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash
   - `make fw` builds the ESP32-S3 image, `make monitor` tails the serial console.
   - `make wasm` rebuilds the web bundle (`crates/siger-wasm/pkg`) for the browser client.
     - `cd web && npm run dev` to use webapp wallet
-    - `make tauri-dev` to run the desktop app (see [TAURI_SETUP.md](TAURI_SETUP.md))
-  - `make cli` and `make core` keep the host tooling and shared library honest between firmware iterations.
+    - `make tauri-dev` to run the desktop app
+  - `make cli` and `make core` build the host tooling and shared library shared between firmware iterations.
     - CLI app available at `target/x86_64-unknown-linux-gnu/release/siger-cli`
 
 ## Notes
@@ -64,10 +64,11 @@ NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup toolchain install nightly
 rustup +nightly target add wasm32-unknown-unknown
-
+cargo install tauri-cli --version "^2.8.4"
 # esp-idf
 ## linux/debian deriv
-sudo apt-get install git wget flex bison gperf python3 python3-pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
+sudo apt-get install git wget flex bison gperf python3 python3-pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0 libwebkit2gtk-4.1-dev build-essential wget file libayatana-appindicator3-dev librsvg2-dev libudev-dev libusb-1.0-0-dev patchelf
+
 ## macos
 brew install cmake ninja dfu-util
 
@@ -94,3 +95,4 @@ You probably just want to run one of these:
   - `make wipe` to re-flash and erase persistent data (keys)
 - `make serve` to build and serve the demo webui (includes wasm build)
 - `make cli` to build the CLI tool `siger-cli`
+- `make tauri` to build the desktop app

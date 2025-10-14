@@ -26,7 +26,8 @@ flash: fw
 		DEV="ttyACM0"; \
 		fuser -k /dev/ttyACM0 2>/dev/null || true; \
 	fi; \
-	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY)
+	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY); #\
+	#pyserial-miniterm --dtr 0 --rts 0 /dev/$$DEV 115200
 
 wipe: fw
 	@if [[ "$$OSTYPE" == "darwin"* ]]; then \

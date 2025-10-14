@@ -1,28 +1,28 @@
 #![no_std]
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
-
+mod gui;
 mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
 extern crate alloc;
-use cobs::encode;
-use esp_hal::usb_serial_jtag::UsbSerialJtag;
-use esp_hal::{clock::CpuClock, main};
-use heapless::Vec as HVec;
-
-use siger_core::alloc_path as pathmod;
-use siger_core::{CheetahPub, *};
-
+use alloc::vec::Vec;
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
-use k256::{
-    ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey},
-    EncodedPoint,
-};
+use cobs::encode;
+use core::cell::RefCell;
+use critical_section::Mutex;
+use esp_hal::system::{CpuControl, Stack};
+use esp_hal::time::{Duration, Instant};
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
+use esp_hal::{clock::CpuClock, delay::Delay, main};
+use gui::{Gui, GuiInteraction};
+use heapless::{String as HString, Vec as HVec};
+use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
+use siger_core::alloc_path as pathmod;
+use siger_core::{CheetahPub, *};
 use zeroize::Zeroize;
-
 const DEMO_SK: [u8; 32] = [0x11; 32];
 const FW_MAJOR: u16 = 0;
 const FW_MINOR: u16 = 1;
@@ -30,11 +30,63 @@ const FW_MINOR: u16 = 1;
 const FEAT_CHEETAH: u32 = 1 << 0;
 const FEAT_FRAG: u32 = 1 << 1;
 const FEAT_XPUB: u32 = 1 << 2;
-
 const MAX_FRAG: usize = 4096; // arbitrary
 const TX_CHUNK: usize = 200;
 const PLAIN_BUF_LEN: usize = 4096;
 const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
+// lock state (locked by default)
+static mut DEVICE_LOCKED: bool = true;
+static mut MASTER_KEY: [u8; 32] = [0; 32];
+static mut MASTER_KEY_SET: bool = false;
+static mut APP_CORE_STACK: Stack<8192> = Stack::new();
+esp_bootloader_esp_idf::esp_app_desc!();
+// this is necessary because if there's no serial console and you try writing
+// to the console, it will block and the device will appear to be frozen.
+// this shit was really annoying!
+struct UsbTxQueue {
+    buf: HVec<u8, ENC_BUF_LEN>,
+    pos: usize,
+}
+
+static mut USB_TX_QUEUE: Option<UsbTxQueue> = None;
+
+#[inline]
+fn usb_service_tx(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) {
+    unsafe {
+        if let Some(queue) = USB_TX_QUEUE.as_mut() {
+            while queue.pos < queue.buf.len() {
+                match usb.write_byte_nb(queue.buf[queue.pos]) {
+                    Ok(()) => queue.pos += 1,
+                    Err(nb::Error::WouldBlock) => {
+                        let _ = usb.flush_tx_nb();
+                        return;
+                    }
+                    Err(_) => {
+                        USB_TX_QUEUE = None;
+                        return;
+                    }
+                }
+            }
+            let _ = usb.flush_tx_nb();
+            USB_TX_QUEUE = None;
+        }
+    }
+}
+
+#[inline]
+fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
+    unsafe {
+        let queue = USB_TX_QUEUE.get_or_insert_with(|| UsbTxQueue {
+            buf: HVec::new(),
+            pos: 0,
+        });
+        if queue.buf.is_empty() {
+            queue.pos = 0;
+        }
+        let _ = queue.buf.extend_from_slice(buf);
+    }
+    usb_service_tx(usb);
+}
 
 struct SeedStore {
     slots: HVec<[u8; 64], MAX_SEED_SLOTS>,
@@ -44,14 +96,6 @@ static mut SEED_STORE: SeedStore = SeedStore {
     slots: HVec::new(),
     active: 0,
 };
-
-// Lock state (device is locked by default)
-static mut DEVICE_LOCKED: bool = true;
-static mut MASTER_KEY: [u8; 32] = [0; 32];
-static mut MASTER_KEY_SET: bool = false;
-
-esp_bootloader_esp_idf::esp_app_desc!();
-
 struct FragState {
     id: u16,
     kind: FragKind,
@@ -59,9 +103,7 @@ struct FragState {
     next_off: u32,
     buf: HVec<u8, MAX_FRAG>,
 }
-
 static mut FRAG: Option<FragState> = None;
-
 // outbound fragment queue
 struct OutFrag {
     msg_id: u32,
@@ -70,8 +112,196 @@ struct OutFrag {
     off: u32,
     data: HVec<u8, MAX_FRAG>,
 }
-
 static mut OUT_FRAG: Option<OutFrag> = None;
+enum UnlockAttempt {
+    Success,
+    WrongPin { attempts_remaining: u8 },
+    LockedOut,
+    NotInitialized,
+    Failed,
+}
+
+enum UnlockOutcome {
+    Success {
+        seeds: Vec<[u8; 64]>,
+        master_key: [u8; 32],
+    },
+    WrongPin {
+        attempts_remaining: u8,
+    },
+    LockedOut,
+    NotInitialized,
+    Failed,
+}
+
+struct UnlockRequest {
+    pin: HString<16>,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static UNLOCK_REQUEST: Mutex<RefCell<Option<UnlockRequest>>> = Mutex::new(RefCell::new(None));
+#[allow(clippy::declare_interior_mutable_const)]
+static UNLOCK_RESULT: Mutex<RefCell<Option<UnlockOutcome>>> = Mutex::new(RefCell::new(None));
+
+struct UnlockController {
+    awaiting_result: bool,
+    submitted_at: Option<Instant>,
+    last_pin: Option<HString<16>>,
+    ignore_next_result: bool,
+}
+
+struct PendingConfirmation {
+    msg_id: u32,
+    frame: Frame,
+    prompt: &'static str,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static PENDING_CONFIRMATION: Mutex<RefCell<Option<PendingConfirmation>>> =
+    Mutex::new(RefCell::new(None));
+
+impl UnlockController {
+    fn new() -> Self {
+        Self {
+            awaiting_result: false,
+            submitted_at: None,
+            last_pin: None,
+            ignore_next_result: false,
+        }
+    }
+
+    fn submit(&mut self, pin: &HString<16>) -> Result<(), ()> {
+        if self.awaiting_result {
+            return Err(());
+        }
+
+        let mut pin_buf = HString::<16>::new();
+        pin_buf.push_str(pin.as_str()).map_err(|_| ())?;
+        let stored_pin = pin_buf.clone();
+
+        critical_section::with(|cs| {
+            let mut pending = UNLOCK_REQUEST.borrow_ref_mut(cs);
+            if pending.is_some() {
+                return Err(());
+            }
+            if UNLOCK_RESULT.borrow_ref(cs).is_some() {
+                return Err(());
+            }
+            *pending = Some(UnlockRequest { pin: pin_buf });
+            Ok(())
+        })?;
+
+        self.awaiting_result = true;
+        self.submitted_at = Some(Instant::now());
+        self.last_pin = Some(stored_pin);
+        self.ignore_next_result = false;
+        Ok(())
+    }
+
+    fn poll(&mut self) -> Option<UnlockOutcome> {
+        let outcome = critical_section::with(|cs| {
+            let mut slot = UNLOCK_RESULT.borrow_ref_mut(cs);
+            let outcome = slot.take();
+            if outcome.is_some() {
+                self.awaiting_result = false;
+                self.submitted_at = None;
+                self.last_pin = None;
+            }
+            outcome
+        });
+
+        if let Some(result) = outcome {
+            if self.ignore_next_result {
+                self.ignore_next_result = false;
+                return None;
+            }
+            return Some(result);
+        }
+
+        if self.awaiting_result {
+            if let Some(start) = self.submitted_at {
+                if Instant::now() - start >= Duration::from_millis(2000) {
+                    if let Some(pin) = self.last_pin.clone() {
+                        let outcome = compute_unlock_outcome(pin.as_str());
+                        self.awaiting_result = false;
+                        self.submitted_at = None;
+                        self.last_pin = None;
+                        self.ignore_next_result = true;
+                        return Some(outcome);
+                    }
+                    self.submitted_at = Some(Instant::now());
+                }
+            }
+        }
+
+        None
+    }
+}
+
+fn take_unlock_request() -> Option<UnlockRequest> {
+    critical_section::with(|cs| {
+        let mut slot = UNLOCK_REQUEST.borrow_ref_mut(cs);
+        slot.take()
+    })
+}
+
+fn store_unlock_result(outcome: UnlockOutcome) {
+    critical_section::with(|cs| {
+        let mut slot = UNLOCK_RESULT.borrow_ref_mut(cs);
+        *slot = Some(outcome);
+    });
+}
+
+fn unlock_worker_loop() -> ! {
+    let mut delay = Delay::new();
+    loop {
+        if let Some(request) = take_unlock_request() {
+            let outcome = compute_unlock_outcome(request.pin.as_str());
+            store_unlock_result(outcome);
+        } else {
+            delay.delay_millis(5);
+        }
+    }
+}
+
+fn begin_confirmation(
+    msg_id: u32,
+    frame: Frame,
+    prompt: &'static str,
+    ui: Option<&mut Gui<'_>>,
+) -> Result<(), ()> {
+    let mut frame_slot = Some(frame);
+    let stored = critical_section::with(|cs| {
+        let mut pending = PENDING_CONFIRMATION.borrow_ref_mut(cs);
+        if pending.is_some() {
+            false
+        } else {
+            pending.replace(PendingConfirmation {
+                msg_id,
+                frame: frame_slot.take().unwrap(),
+                prompt,
+            });
+            true
+        }
+    });
+
+    if !stored {
+        return Err(());
+    }
+
+    if let Some(ui) = ui {
+        ui.request_confirmation(prompt);
+    }
+
+    Ok(())
+}
+
+fn take_pending_confirmation() -> Option<PendingConfirmation> {
+    critical_section::with(|cs| {
+        let mut slot = PENDING_CONFIRMATION.borrow_ref_mut(cs);
+        slot.take()
+    })
+}
 
 /// cobs test
 #[cfg(test)]
@@ -86,7 +316,6 @@ pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
                 msg: body,
             };
             let tmp = postcard::to_allocvec(&resp).unwrap();
-
             // COBS encode into a scratch slice, then append 0x00
             let mut enc = alloc::vec::Vec::with_capacity(cobs::max_encoding_length(tmp.len()));
             enc.resize(cobs::max_encoding_length(tmp.len()), 0);
@@ -130,29 +359,133 @@ pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
     }
     out
 }
-
 #[main]
 fn main() -> ! {
     let cfg = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(cfg);
     esp_alloc::heap_allocator!(size: 64 * 1024);
+    let mut delay = Delay::new();
+    let mut ui = Gui::new(
+        p.SPI2, p.GPIO38, p.GPIO39, p.GPIO45, p.GPIO21, p.GPIO40, p.GPIO46, p.I2C0, p.GPIO41,
+        p.GPIO42, p.GPIO47, p.GPIO48, &mut delay,
+    )
+    .ok();
+    let pin_required = {
+        let mut nvs = NvsStore::new();
+        nvs.is_initialized()
+    };
+    delay.delay_millis(2_000);
+    if pin_required {
+        if let Some(ui) = ui.as_mut() {
+            ui.begin_unlock(None);
+        }
+    } else {
+        // No seed/PIN configured - show seed setup screen
+        if let Some(ui) = ui.as_mut() {
+            ui.show_seed_setup();
+        }
+    }
+    let mut cpu_control = CpuControl::new(p.CPU_CTRL);
+    let _app_core_guard = cpu_control
+        .start_app_core(unsafe { &mut APP_CORE_STACK }, move || unlock_worker_loop())
+        .expect("failed to start app core");
+
+    let mut unlock_controller = UnlockController::new();
 
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
-    let _ = usb.write(b"siger-fw ready\r\n");
-
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; PLAIN_BUF_LEN];
     let mut enc = [0u8; ENC_BUF_LEN];
+    'main: loop {
+        usb_service_tx(&mut usb);
+        if let Some(ui) = ui.as_mut() {
+            let event = ui.tick();
+            if let Some(decision) = ui.poll_confirmation_result() {
+                if let Some(pending) = take_pending_confirmation() {
+                    let resp_msg = if decision {
+                        ui.show_idle_message_timed("Approved", Duration::from_millis(3_000));
+                        let body = handle_frame_v1(pending.msg_id, &pending.frame);
+                        Msg {
+                            v: PROTO_V1,
+                            id: pending.msg_id,
+                            msg: body,
+                        }
+                    } else {
+                        ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
+                        Msg {
+                            v: PROTO_V1,
+                            id: pending.msg_id,
+                            msg: Response::Err {
+                                code: ERR_REJECTED_BY_USER,
+                            },
+                        }
+                    };
+                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                        let n = encode(used, &mut enc);
+                        let _ = usb_write(&mut usb, &enc[..n]);
+                        let _ = usb_write(&mut usb, &[0]);
+                    } else {
+                        send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                    }
+                    if decision {
+                        let _ = usb_write(&mut usb, b"confirm accepted\r\n");
+                    } else {
+                        let _ = usb_write(&mut usb, b"confirm rejected\r\n");
+                    }
+                }
+            }
+            if let Some(event) = event {
+                match event {
+                    GuiInteraction::PinComplete(digits) => {
+                        let mut pin = HString::<16>::new();
+                        for digit in digits.iter() {
+                            let ch = char::from(b'0' + *digit);
+                            let _ = pin.push(ch);
+                        }
+                        match unlock_controller.submit(&pin) {
+                            Ok(()) => {
+                                ui.show_unlocking();
+                            }
+                            Err(()) => {
+                                ui.show_pin_failure(None);
+                                let _ = usb_write(&mut usb, b"unlock queue busy\r\n");
+                            }
+                        }
+                    }
+                    GuiInteraction::ConfirmAccepted => {
+                        let _ = usb_write(&mut usb, b"confirm accepted\r\n");
+                    }
+                    GuiInteraction::ConfirmRejected => {
+                        let _ = usb_write(&mut usb, b"confirm rejected\r\n");
+                    }
+                    GuiInteraction::LockRequested => {
+                        wipe_seed();
+                        ui.begin_unlock(None);
+                        let _ = usb_write(&mut usb, b"locked\r\n");
+                    }
+                    GuiInteraction::Seed(_seed_interaction) => {
+                        // TODO: Handle seed interactions (store seed, create PIN, etc.)
+                        let _ = usb_write(&mut usb, b"seed interaction\r\n");
+                    }
+                    GuiInteraction::RawTouch(_coord) => {}
+                }
+            }
+        }
 
-    'run: loop {
+        if let Some(outcome) = unlock_controller.poll() {
+            if let Some(ui_ref) = ui.as_mut() {
+                handle_unlock_outcome(outcome, Some(ui_ref), &mut usb);
+            } else {
+                handle_unlock_outcome(outcome, None, &mut usb);
+            }
+        }
         // 1) Proactive outbound frag, if any
         unsafe {
             if let Some(of) = OUT_FRAG.as_mut() {
                 let start = of.off as usize;
                 let end = core::cmp::min(start + TX_CHUNK, of.data.len());
                 let last = end == of.data.len();
-
                 let chunk: alloc::vec::Vec<u8> = of.data[start..end].to_vec();
                 let resp = Msg {
                     v: PROTO_V1,
@@ -166,8 +499,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb.write(&enc[..n]);
-                    let _ = usb.write(&[0]);
+                    let _ = usb_write(&mut usb, &enc[..n]);
+                    let _ = usb_write(&mut usb, &[0]);
                 }
                 of.off = end as u32;
                 if last {
@@ -177,53 +510,77 @@ fn main() -> ! {
                 continue;
             }
         }
-
         // 2) RX path
-        if let Ok(b) = usb.read_byte() {
-            if b == 0 && rx.is_empty() {
-                continue;
-            }
-            if rx.push(b).is_err() {
-                rx.clear();
-                send_err(&mut usb, ERR_OVERFLOW, &mut enc);
-                continue;
-            }
-
-            if b == 0 {
-                // decode Msg<Frame>
-                let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
-                    Ok(m) if m.v == PROTO_V1 => {
-                        let body = handle_frame_v1(m.id, &m.msg);
-                        Msg {
-                            v: PROTO_V1,
-                            id: m.id,
-                            msg: body,
-                        }
+        loop {
+            match usb.read_byte() {
+                Ok(b) => {
+                    if b == 0 && rx.is_empty() {
+                        continue 'main;
                     }
-                    Ok(_) => Msg {
-                        v: PROTO_V1,
-                        id: 0,
-                        msg: Response::Err {
-                            code: ERR_UNSUPPORTED_VERSION,
-                        },
-                    },
-                    Err(_) => Msg {
-                        v: PROTO_V1,
-                        id: 0,
-                        msg: Response::Err {
-                            code: ERR_BAD_COBS_OR_POSTCARD,
-                        },
-                    },
-                };
-
-                if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
-                    let n = encode(used, &mut enc);
-                    let _ = usb.write(&enc[..n]);
-                    let _ = usb.write(&[0]);
-                } else {
-                    send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                    if rx.push(b).is_err() {
+                        rx.clear();
+                        // Only send error if connected - avoid blocking
+                        if usb_connected(&mut usb) {
+                            send_err(&mut usb, ERR_OVERFLOW, &mut enc);
+                        }
+                        continue 'main;
+                    }
+                    if b == 0 {
+                        // decode Msg<Frame>
+                        let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
+                            Ok(m) if m.v == PROTO_V1 => {
+                                if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
+                                    let frame_clone = m.msg.clone();
+                                    let begin_result = {
+                                        let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                        begin_confirmation(m.id, frame_clone, prompt, ui_ref)
+                                    };
+                                    match begin_result {
+                                        Ok(()) => None,
+                                        Err(()) => Some(Msg {
+                                            v: PROTO_V1,
+                                            id: m.id,
+                                            msg: Response::Err { code: ERR_BUSY },
+                                        }),
+                                    }
+                                } else {
+                                    let body = handle_frame_v1(m.id, &m.msg);
+                                    Some(Msg {
+                                        v: PROTO_V1,
+                                        id: m.id,
+                                        msg: body,
+                                    })
+                                }
+                            }
+                            Ok(_) => Some(Msg {
+                                v: PROTO_V1,
+                                id: 0,
+                                msg: Response::Err {
+                                    code: ERR_UNSUPPORTED_VERSION,
+                                },
+                            }),
+                            Err(_) => Some(Msg {
+                                v: PROTO_V1,
+                                id: 0,
+                                msg: Response::Err {
+                                    code: ERR_BAD_COBS_OR_POSTCARD,
+                                },
+                            }),
+                        };
+                        if let Some(resp_msg) = resp_msg {
+                            if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                                let n = encode(used, &mut enc);
+                                let _ = usb_write(&mut usb, &enc[..n]);
+                                let _ = usb_write(&mut usb, &[0]);
+                            } else {
+                                send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                            }
+                        }
+                        rx.clear();
+                        continue 'main;
+                    }
                 }
-                rx.clear();
+                Err(_) => break,
             }
         }
     }
@@ -232,7 +589,6 @@ fn main() -> ! {
 fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
     match frame {
         Frame::One(req) => handle_request_v1(req),
-
         Frame::FragBegin {
             id,
             total_len,
@@ -249,7 +605,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
             }
             Response::Ok
         }
-
         Frame::FragPart {
             id,
             offset,
@@ -271,7 +626,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                     return Response::Err { code: ERR_OVERFLOW };
                 }
                 st.next_off += chunk.len() as u32;
-
                 if *last {
                     if st.next_off != st.total_len {
                         FRAG = None;
@@ -279,7 +633,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                             code: ERR_BAD_COBS_OR_POSTCARD,
                         };
                     }
-
                     // Decide by kind
                     match st.kind {
                         FragKind::SetSeed => {
@@ -300,7 +653,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                             let mut out = HVec::<u8, MAX_FRAG>::new();
                             let _ = out.extend_from_slice(st.buf.as_slice());
                             let total = out.len() as u32;
-
                             OUT_FRAG = Some(OutFrag {
                                 msg_id: req_id,
                                 id: st.id,
@@ -309,7 +661,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                                 data: out,
                             });
                             FRAG = None;
-
                             // Kick off outbound stream with FragBegin
                             Response::FragBegin {
                                 id: *id,
@@ -332,7 +683,6 @@ fn handle_request_v1(req: &Request) -> Response {
             proto_v: PROTO_V1,
             compressed_pk: true,
         }),
-
         Request::GetInfo => {
             let mut nvs = NvsStore::new();
             let stored_pubs = nvs.list_seed_pubs().unwrap_or_default();
@@ -343,7 +693,6 @@ fn handle_request_v1(req: &Request) -> Response {
             } else {
                 stored_pubs
             };
-
             Response::Info {
                 proto_v: PROTO_V1,
                 fw_major: FW_MAJOR,
@@ -353,9 +702,7 @@ fn handle_request_v1(req: &Request) -> Response {
                 cheetah_pubs,
             }
         }
-
         Request::Ping => Response::Pong,
-
         Request::SetSeed { seed64 } => {
             set_seed(seed64);
             Response::Ok
@@ -364,12 +711,10 @@ fn handle_request_v1(req: &Request) -> Response {
             wipe_seed();
             Response::Ok
         }
-
         Request::GetFingerprint => match master_fingerprint_for_active() {
             Ok(fp4) => Response::OkFingerprint { fp4 },
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::GetPubkey { path, compressed } => match derive_signing_key_active(path) {
             Ok(sk) => {
                 let vk = sk.verifying_key();
@@ -385,7 +730,6 @@ fn handle_request_v1(req: &Request) -> Response {
             }
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::SignDigest { path, digest32 } => {
             if is_device_locked() {
                 return Response::Err {
@@ -405,12 +749,10 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::GetXpub { path } => match get_xpub(path) {
             Ok(x) => Response::OkXpub(x),
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::GetCheetahPub { slot, path } => {
             match derive_child_sk_for_slot(path, *slot as usize) {
                 Ok(sk) => {
@@ -420,7 +762,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::SignSpendHash { slot, path, msg5 } => {
             if is_device_locked() {
                 return Response::Err {
@@ -440,7 +781,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::SignSpendHashFor {
             slot,
             path,
@@ -471,7 +811,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::Health => {
             let slot = match active_slot_index() {
                 Ok(idx) => idx,
@@ -494,7 +833,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::InitializePIN { pin, seed64 } => {
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
@@ -517,14 +855,12 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::AddSeed { seed64 } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-
             let master_key = match master_key_copy() {
                 Some(key) => key,
                 None => {
@@ -533,7 +869,6 @@ fn handle_request_v1(req: &Request) -> Response {
                     }
                 }
             };
-
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
             match nvs.add_seed_with_key(&master_key, seed64, pub_xy) {
@@ -551,14 +886,12 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::DeleteSeed { slot } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-
             let master_key = match master_key_copy() {
                 Some(key) => key,
                 None => {
@@ -567,7 +900,6 @@ fn handle_request_v1(req: &Request) -> Response {
                     }
                 }
             };
-
             let mut nvs = NvsStore::new();
             match nvs.delete_seed_with_key(&master_key, *slot as usize) {
                 Ok(_) => {
@@ -585,44 +917,17 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
-        Request::Unlock { pin } => {
-            unsafe {
-                if !DEVICE_LOCKED {
-                    return Response::Ok; // Already unlocked
-                }
-            }
-
-            let mut nvs = NvsStore::new();
-            match nvs.unlock(pin.as_str()) {
-                Ok((seeds, master_key)) => {
-                    update_seed_store_from_slice(seeds.as_slice());
-                    store_master_key(&master_key);
-                    unsafe {
-                        DEVICE_LOCKED = false;
-                    }
-                    Response::Ok
-                }
-                Err(NvsError::WrongPin) => {
-                    let remaining = nvs.get_attempts_remaining();
-                    if remaining == 0 {
-                        Response::Err {
-                            code: ERR_PIN_LOCKED_OUT,
-                        }
-                    } else {
-                        Response::Err {
-                            code: ERR_WRONG_PIN,
-                        }
-                    }
-                }
-                Err(NvsError::LockedOut) => Response::Err {
-                    code: ERR_PIN_LOCKED_OUT,
-                },
-                Err(NvsError::NotInitialized) => Response::Err { code: ERR_NO_SEED },
-                Err(_) => Response::Err { code: ERR_NO_SEED },
-            }
-        }
-
+        Request::Unlock { pin } => match unlock_device_with_pin(pin.as_str()) {
+            UnlockAttempt::Success => Response::Ok,
+            UnlockAttempt::WrongPin { .. } => Response::Err {
+                code: ERR_WRONG_PIN,
+            },
+            UnlockAttempt::LockedOut => Response::Err {
+                code: ERR_PIN_LOCKED_OUT,
+            },
+            UnlockAttempt::NotInitialized => Response::Err { code: ERR_NO_SEED },
+            UnlockAttempt::Failed => Response::Err { code: ERR_NO_SEED },
+        },
         Request::Lock => {
             wipe_seed();
             clear_master_key();
@@ -631,7 +936,6 @@ fn handle_request_v1(req: &Request) -> Response {
             }
             Response::Ok
         }
-
         Request::ResetPIN {
             current_pin,
             new_pin,
@@ -641,7 +945,6 @@ fn handle_request_v1(req: &Request) -> Response {
                     code: ERR_DEVICE_LOCKED,
                 };
             }
-
             let mut nvs = NvsStore::new();
             match nvs.change_pin(current_pin.as_str(), new_pin.as_str()) {
                 Ok(_) => match nvs.derive_master_key_for_pin(new_pin.as_str()) {
@@ -660,12 +963,10 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::SelectSeed { slot } => match set_active_slot(*slot as usize) {
             Ok(()) => Response::Ok,
             Err(_) => Response::Err { code: ERR_NO_SEED },
         },
-
         Request::Reset => {
             wipe_seed();
             clear_master_key();
@@ -675,7 +976,6 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-
         Request::GetLockStatus => {
             let mut nvs = NvsStore::new();
             let has_seed_in_ram = unsafe { !SEED_STORE.slots.is_empty() };
@@ -694,8 +994,106 @@ fn handle_request_v1(req: &Request) -> Response {
     }
 }
 
+fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
+    match frame {
+        Frame::One(Request::SignDigest { .. }) => Some("Sign digest?"),
+        Frame::One(Request::SignSpendHash { .. }) => Some("Approve spend?"),
+        Frame::One(Request::SignSpendHashFor { .. }) => Some("Approve spend?"),
+        _ => None,
+    }
+}
+
 fn is_device_locked() -> bool {
     unsafe { DEVICE_LOCKED }
+}
+
+fn compute_unlock_outcome(pin: &str) -> UnlockOutcome {
+    let mut nvs = NvsStore::new();
+    match nvs.unlock(pin) {
+        Ok((seeds, master_key)) => UnlockOutcome::Success { seeds, master_key },
+        Err(NvsError::WrongPin) => {
+            let remaining = nvs.get_attempts_remaining();
+            if remaining == 0 {
+                UnlockOutcome::LockedOut
+            } else {
+                UnlockOutcome::WrongPin {
+                    attempts_remaining: remaining,
+                }
+            }
+        }
+        Err(NvsError::LockedOut) => UnlockOutcome::LockedOut,
+        Err(NvsError::NotInitialized) => UnlockOutcome::NotInitialized,
+        Err(_) => UnlockOutcome::Failed,
+    }
+}
+
+fn apply_unlock_success(seeds: &[[u8; 64]], master_key: &[u8; 32]) {
+    update_seed_store_from_slice(seeds);
+    store_master_key(master_key);
+    unsafe {
+        DEVICE_LOCKED = false;
+    }
+}
+
+fn unlock_device_with_pin(pin: &str) -> UnlockAttempt {
+    unsafe {
+        if !DEVICE_LOCKED {
+            return UnlockAttempt::Success;
+        }
+    }
+
+    match compute_unlock_outcome(pin) {
+        UnlockOutcome::Success { seeds, master_key } => {
+            apply_unlock_success(seeds.as_slice(), &master_key);
+            UnlockAttempt::Success
+        }
+        UnlockOutcome::WrongPin { attempts_remaining } => {
+            UnlockAttempt::WrongPin { attempts_remaining }
+        }
+        UnlockOutcome::LockedOut => UnlockAttempt::LockedOut,
+        UnlockOutcome::NotInitialized => UnlockAttempt::NotInitialized,
+        UnlockOutcome::Failed => UnlockAttempt::Failed,
+    }
+}
+
+fn handle_unlock_outcome(
+    outcome: UnlockOutcome,
+    ui: Option<&mut Gui<'_>>,
+    usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>,
+) {
+    match outcome {
+        UnlockOutcome::Success { seeds, master_key } => {
+            apply_unlock_success(seeds.as_slice(), &master_key);
+            if let Some(ui) = ui {
+                ui.show_unlock_success();
+            }
+            let _ = usb_write(usb, b"unlock success\r\n");
+        }
+        UnlockOutcome::WrongPin { attempts_remaining } => {
+            if let Some(ui) = ui {
+                ui.show_pin_failure(Some(attempts_remaining));
+            }
+            let _ = usb_write(usb, b"wrong pin\r\n");
+        }
+        UnlockOutcome::LockedOut => {
+            if let Some(ui) = ui {
+                ui.show_pin_locked_out();
+            }
+            let _ = usb_write(usb, b"pin locked out\r\n");
+        }
+        UnlockOutcome::NotInitialized => {
+            if let Some(ui) = ui {
+                ui.show_pin_not_initialized();
+            }
+            let _ = usb_write(usb, b"pin not set\r\n");
+        }
+        UnlockOutcome::Failed => {
+            if let Some(ui) = ui {
+                ui.show_pin_failure(None);
+            }
+            let _ = usb_write(usb, b"unlock failed\r\n");
+        }
+    }
 }
 
 fn pk_uncompressed_65(sk: &SigningKey) -> [u8; 65] {
@@ -712,10 +1110,6 @@ fn pk_compressed_33(sk: &SigningKey) -> [u8; 33] {
     out
 }
 
-fn signing_key_demo() -> k256::ecdsa::SigningKey {
-    k256::ecdsa::SigningKey::from_bytes((&DEMO_SK).into()).unwrap()
-}
-
 fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut [u8]) {
     let msg = Msg {
         v: PROTO_V1,
@@ -725,8 +1119,8 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
     let mut tmp = [0u8; 64];
     if let Ok(used) = postcard::to_slice(&msg, &mut tmp) {
         let n = cobs::encode(used, enc);
-        let _ = usb.write(&enc[..n]);
-        let _ = usb.write(&[0]);
+        let _ = usb_write(usb, &enc[..n]);
+        let _ = usb_write(usb, &[0]);
     }
 }
 
@@ -735,16 +1129,13 @@ fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
     let dp = path_to_derivation(path);
     let child = XPrv::derive_from_path(&seed, &dp).map_err(|_| ())?;
     let xpub = child.public_key();
-
     let attrs = child.attrs();
     let depth = attrs.depth;
     let child_u32 = u32::from(attrs.child_number);
     let fp4 = attrs.parent_fingerprint;
     let chain_code = attrs.chain_code;
-
     let mut pubkey33 = [0u8; 33];
     pubkey33.copy_from_slice(&xpub.public_key().to_bytes());
-
     Ok(Xpub {
         depth,
         fp4,
@@ -942,4 +1333,8 @@ fn active_slot_index() -> Result<usize, ()> {
 fn derive_signing_key_active(path: &pathmod::Path) -> Result<SigningKey, ()> {
     let slot = active_slot_index()?;
     derive_signing_key_for_slot(path, slot)
+}
+
+fn usb_connected(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) -> bool {
+    usb.read_byte().is_ok()
 }

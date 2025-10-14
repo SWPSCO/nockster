@@ -69,6 +69,7 @@ sudo apt-get install git wget flex bison gperf python3 python3-pip python3-venv 
 ## macos
 brew install cmake ninja dfu-util
 
+pip install -r pyserial-miniterm # optional for serial connections
 mkdir -p ~/esp
 cd ~/esp
 git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git

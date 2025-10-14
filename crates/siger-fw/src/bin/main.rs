@@ -379,6 +379,11 @@ fn main() -> ! {
         if let Some(ui) = ui.as_mut() {
             ui.begin_unlock(None);
         }
+    } else {
+        // No seed/PIN configured - show seed setup screen
+        if let Some(ui) = ui.as_mut() {
+            ui.show_seed_setup();
+        }
     }
     let mut cpu_control = CpuControl::new(p.CPU_CTRL);
     let _app_core_guard = cpu_control
@@ -458,6 +463,10 @@ fn main() -> ! {
                         wipe_seed();
                         ui.begin_unlock(None);
                         let _ = usb_write(&mut usb, b"locked\r\n");
+                    }
+                    GuiInteraction::Seed(_seed_interaction) => {
+                        // TODO: Handle seed interactions (store seed, create PIN, etc.)
+                        let _ = usb_write(&mut usb, b"seed interaction\r\n");
                     }
                     GuiInteraction::RawTouch(_coord) => {}
                 }

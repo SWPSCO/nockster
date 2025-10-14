@@ -13,13 +13,18 @@ pub enum GuiMode {
     Unlocking,
     Unlocked,
     Error,
+    SeedFirstBoot,
+    SeedEntry,
 }
+
+use super::seed::SeedButton;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Digit(u8),
     Clear,
     Ok,
+    Seed(SeedButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +34,8 @@ pub struct ButtonHit {
     pub size: Size,
 }
 
+use super::seed::SeedInteraction;
+
 #[derive(Clone, Debug)]
 pub enum GuiInteraction {
     PinComplete(HVec<u8, PIN_BUFFER_LEN>),
@@ -36,6 +43,7 @@ pub enum GuiInteraction {
     ConfirmRejected,
     RawTouch(ScreenPoint),
     LockRequested,
+    Seed(SeedInteraction),
 }
 
 pub struct TextBuffers {

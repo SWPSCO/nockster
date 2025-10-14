@@ -3,10 +3,12 @@ use core::fmt::Write as _;
 mod constants;
 mod layout;
 mod render;
+mod seed;
 mod state;
 mod touch;
 pub mod demo;
 
+pub use seed::{SeedInteraction, SeedPhrase, SeedWord};
 pub use state::{GuiInteraction, GuiMode};
 pub use touch::ScreenPoint;
 
@@ -82,6 +84,7 @@ pub struct Gui<'d> {
     header_dirty: bool,
     overlay_dirty: bool,
     auto_lock_deadline: Option<Instant>,
+    seed_entry_state: seed::SeedEntryState,
 }
 
 impl<'d> Gui<'d> {
@@ -170,6 +173,7 @@ impl<'d> Gui<'d> {
             header_dirty: true,
             overlay_dirty: false,
             auto_lock_deadline: None,
+            seed_entry_state: seed::SeedEntryState::new(),
         };
 
         blit_boot_logo(&mut gui.display);
@@ -524,6 +528,21 @@ impl<'d> Gui<'d> {
         draw_centered_message(&mut self.display, "PIN Not Set");
     }
 
+    pub fn show_seed_setup(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.seed_entry_state.reset();
+        self.mode = GuiMode::SeedFirstBoot;
+        seed::render_seed_setup(&mut self.display);
+    }
+
+    pub fn show_seed_entry(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::SeedEntry;
+        seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+    }
+
     pub fn poll_confirmation_result(&mut self) -> Option<bool> {
         self.confirm_result.take()
     }
@@ -575,6 +594,12 @@ impl<'d> Gui<'d> {
             GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
             GuiMode::Confirm => {
                 button_from_point_confirm(Point::new(point.x as i32, point.y as i32))
+            }
+            GuiMode::SeedFirstBoot => {
+                seed::button_from_point_seed_setup(Point::new(point.x as i32, point.y as i32))
+            }
+            GuiMode::SeedEntry => {
+                seed::button_from_point_seed_entry(Point::new(point.x as i32, point.y as i32))
             }
             _ => None,
         };
@@ -680,6 +705,7 @@ impl<'d> Gui<'d> {
                 return match self.mode {
                     GuiMode::Locked => self.handle_pin_button(hit.button),
                     GuiMode::Confirm => self.handle_confirm_button(hit.button),
+                    GuiMode::SeedFirstBoot | GuiMode::SeedEntry => self.handle_seed_button(hit.button),
                     _ => None,
                 };
             }
@@ -701,6 +727,12 @@ impl<'d> Gui<'d> {
                 self.mark_overlay_dirty();
                 self.render_current_overlay();
             }
+            GuiMode::SeedFirstBoot | GuiMode::SeedEntry => {
+                seed::draw_seed_button(&mut self.display, self.mode, hit, Some(&self.seed_entry_state), true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
             _ => {
                 draw_button(&mut self.display, self.mode, hit, true);
                 self.interaction.active_button = Some(hit);
@@ -716,6 +748,9 @@ impl<'d> Gui<'d> {
                 GuiMode::Confirm => {
                     self.mark_overlay_dirty();
                     self.render_current_overlay();
+                }
+                GuiMode::SeedFirstBoot | GuiMode::SeedEntry => {
+                    seed::draw_seed_button(&mut self.display, self.mode, old, Some(&self.seed_entry_state), false);
                 }
                 _ => draw_button(&mut self.display, self.mode, old, false),
             }
@@ -767,6 +802,7 @@ impl<'d> Gui<'d> {
                 }
                 Some(GuiInteraction::PinComplete(self.pin_entered.clone()))
             }
+            Button::Seed(_) => None,
         }
     }
 
@@ -781,7 +817,68 @@ impl<'d> Gui<'d> {
                 Some(GuiInteraction::ConfirmRejected)
             }
             Button::Digit(_) => None,
+            Button::Seed(_) => None,
         }
+    }
+
+    fn handle_seed_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        use seed::{SeedButton, SeedInteraction};
+
+        let seed_button = match button {
+            Button::Seed(sb) => sb,
+            _ => return None,
+        };
+
+        let interaction = match seed_button {
+            SeedButton::EnterSeed => {
+                self.show_seed_entry();
+                SeedInteraction::EnterSeedRequested
+            }
+            SeedButton::Key(digit) => {
+                if self.seed_entry_state.push_digit(digit) {
+                    seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+                }
+                return None;
+            }
+            SeedButton::Backspace => {
+                let removed = self.seed_entry_state.backspace();
+                seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+                SeedInteraction::WordRemoved(removed)
+            }
+            SeedButton::NextSuggestion => {
+                if self.seed_entry_state.next_suggestion() {
+                    seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+                }
+                return None;
+            }
+            SeedButton::PrevSuggestion => {
+                if self.seed_entry_state.prev_suggestion() {
+                    seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+                }
+                return None;
+            }
+            SeedButton::CommitWord => {
+                if let Some(word) = self.seed_entry_state.commit_current() {
+                    seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
+                    SeedInteraction::WordCommitted(word)
+                } else {
+                    return None;
+                }
+            }
+            SeedButton::Finish => {
+                if let Some(phrase) = self.seed_entry_state.finish() {
+                    SeedInteraction::EntryCompleted(phrase)
+                } else {
+                    return None;
+                }
+            }
+            SeedButton::Cancel => {
+                self.show_seed_setup();
+                SeedInteraction::EntryCancelled
+            }
+        };
+
+        Some(GuiInteraction::Seed(interaction))
     }
 
     fn read_touch_point(&mut self) -> Option<ScreenPoint> {

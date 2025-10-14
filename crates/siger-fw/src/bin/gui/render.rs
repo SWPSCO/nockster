@@ -518,6 +518,7 @@ fn button_label(button: Button) -> &'static str {
         Button::Digit(_) => "?",
         Button::Clear => "X",
         Button::Ok => "OK",
+        Button::Seed(_) => "",
     }
 }
 
@@ -526,6 +527,7 @@ fn confirm_button_label(button: Button) -> &'static str {
         Button::Ok => "Approve",
         Button::Clear => "Reject",
         Button::Digit(_) => "",
+        Button::Seed(_) => "",
     }
 }
 

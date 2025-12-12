@@ -136,6 +136,7 @@ pub fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
     framed.truncate(n);
     framed.push(0);
     sp.write_all(&framed)?;
+    sp.flush()?;  // Force USB serial buffer to flush
 
     let mut rx: Vec<u8> = Vec::with_capacity(512);
     loop {

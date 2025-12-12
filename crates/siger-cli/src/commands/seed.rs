@@ -82,12 +82,12 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
         // optional file outputs
         if let Some(out) = args.out.as_ref() {
             let (key, blob) =
-                keys::import_from_seed(&seed64, &args.path).map_err(|e| anyhow::anyhow!(e))?;
+                keys::import_from_seed(&seed64, &args.path, args.version).map_err(|e| anyhow::anyhow!(e))?;
             let (json_path, bin_path) =
                 keys::write_key_files(out, &key, &blob).map_err(|e| anyhow::anyhow!(e))?;
             println!("wrote key JSON to {}", json_path.display());
             println!("wrote device blob to {}", bin_path.display());
-            println!("pubkey (b58): {}", key.pk_b58);
+            println!("pubkey (b58, v{}): {}", args.version, key.pk_b58);
             if let Some(p) = &key.path {
                 println!("path: {}", p);
             }
@@ -153,10 +153,10 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
 
         if let Some(out) = args.out.as_ref() {
             let (key, blob) =
-                keys::import_from_seed(&seed64, &args.path).map_err(|e| anyhow::anyhow!(e))?;
+                keys::import_from_seed(&seed64, &args.path, args.version).map_err(|e| anyhow::anyhow!(e))?;
             let (json_path, bin_path) =
                 keys::write_key_files(out, &key, &blob).map_err(|e| anyhow::anyhow!(e))?;
-            println!("pubkey: {}", key.pk_b58);
+            println!("pubkey (b58, v{}): {}", args.version, key.pk_b58);
             println!("wrote key JSON to {}", json_path.display());
             println!("wrote device blob to {}", bin_path.display());
             if let Some(p) = &key.path {
@@ -168,33 +168,29 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
         anyhow::bail!("provide one of --seedphrase or --seed-hex");
     }
 
-    // Print device info after seeding (mirrors your test flow)
+    // Print device info after seeding
     if did_seed_device {
-        println!("seed: set ({} bytes via frag)", seeded_len);
+        // Give firmware time to finish NVS writes and display updates
+        std::thread::sleep(std::time::Duration::from_millis(500));
         if let Response::Info {
-            proto_v,
-            fw_major,
-            fw_minor,
-            features,
             has_seed,
             cheetah_pubs,
+            ..
         } = send_call(&mut *sp, 0x100, Request::GetInfo)?
         {
-            println!(
-                "info(after): proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}"
-            );
             if has_seed {
                 if cheetah_pubs.is_empty() {
-                    println!("  (device locked; pubkeys withheld)");
+                    println!("(device locked; pubkeys withheld)");
                 } else {
-                    for (idx, pubinfo) in cheetah_pubs.iter().enumerate() {
+                    for pubinfo in cheetah_pubs.iter() {
                         let pk_xy = (pubinfo.x, pubinfo.y);
-                        let b58 = keys::pubkey_to_b58(&pk_xy);
+                        let b58 = keys::pubkey_to_b58(&pk_xy, args.version);
                         println!(
-                            "  slot[{slot}] key[{idx:02}]: path={} pubkey={}",
+                            "slot[{}] path={} pubkey(v{})={}",
+                            pubinfo.slot,
                             format_path(pubinfo.path.as_slice()),
-                            b58,
-                            slot = pubinfo.slot
+                            args.version,
+                            b58
                         );
                     }
                 }

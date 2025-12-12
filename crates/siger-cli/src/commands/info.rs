@@ -3,7 +3,7 @@ use crate::serial::{open, send_call};
 use siger_core::{Request, Response};
 use std::fmt::Write as _;
 
-pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
+pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
 
     // Get device info
@@ -26,11 +26,12 @@ pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
                 } else {
                     for (idx, pubinfo) in cheetah_pubs.iter().enumerate() {
                         let pk_xy = (pubinfo.x, pubinfo.y);
-                        let b58 = pubkey_to_b58(&pk_xy);
+                        let b58 = pubkey_to_b58(&pk_xy, version);
                         let path_display = format_path(pubinfo.path.as_slice());
                         println!(
-                            "  slot[{slot}] key[{idx:02}]: path={} pubkey={}",
+                            "  slot[{slot}] key[{idx:02}]: path={} pubkey(v{})={}",
                             path_display,
+                            version,
                             b58,
                             slot = pubinfo.slot
                         );

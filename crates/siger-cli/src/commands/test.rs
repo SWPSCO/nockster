@@ -18,7 +18,7 @@ const TEST_EXPECT_B58: &str =
     "32bePYRuJ3heGVEbznc6xSCaTymgz9bGFREaZ2dtJdnepjc6RX7cMSP8ATeT8bHTfxFmS7StDTmFHfvt9GP1PUq99pN7DcEFat9SDBpQwJbnwmhn5JHcGpLsRKp4fxfHSRy5";
 const EXPECTED_TX_ID: &str = "8VKtRMuQRJNjCLgyGi2c6XtjDfinFKChfVENEZQiRPRfp5cVHPhVSSg";
 
-pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> anyhow::Result<()> {
+pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str, version: u8) -> anyhow::Result<()> {
     use siger_core::cheetah;
 
     let mut sp = open(port, baud)?;
@@ -105,16 +105,21 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
         other => anyhow::bail!("unexpected: {other:?}"),
     };
 
-    // 8b) encode to base58 (0x01||Y||X a-pt -> base58) and compare to hardcoded expected
-    let dev_pk_b58 = pubkey_to_b58(&(dev_x, dev_y));
-    println!("cheetah pub (base58 a-pt): {dev_pk_b58}");
-    let got = &dev_pk_b58;
-    let want = TEST_EXPECT_B58;
-    anyhow::ensure!(
-        got == want,
-        "pubkey base58 mismatch\n  expected: {want}\n       got: {got}"
-    );
-    println!("pubkey base58 match: OK");
+    // 8b) encode to base58 and compare to hardcoded expected
+    // Note: TEST_EXPECT_B58 is the v0 format; v1 format will differ
+    let dev_pk_b58 = pubkey_to_b58(&(dev_x, dev_y), version);
+    println!("cheetah pub (base58 v{}): {dev_pk_b58}", version);
+    if version == 0 {
+        let got = &dev_pk_b58;
+        let want = TEST_EXPECT_B58;
+        anyhow::ensure!(
+            got == want,
+            "pubkey base58 mismatch\n  expected: {want}\n       got: {got}"
+        );
+        println!("pubkey base58 match: OK");
+    } else {
+        println!("(skipping v0 base58 comparison for v{} format)", version);
+    }
 
     // 9) host-derive same path and compare affine limbs
     let (sk, cc) = cheetah::master_from_seed(&seed64);

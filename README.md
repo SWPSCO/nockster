@@ -83,6 +83,8 @@ echo "alias get_idf='. $HOME/esp/esp-idf/export.sh'" >> ~/.bashrc # or .zshrc
 
 # espup
 cargo install espup --locked
+espup install
+cargo install espflash
 ```
 
 ### Building

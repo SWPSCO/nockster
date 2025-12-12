@@ -10,6 +10,7 @@ use unicode_normalization::UnicodeNormalization;
 use siger_core::cheetah::{
     cheetah_pub_from_sk, master_from_seed, ser_a_pt, ser_a_pt_rep104, xprv_derive_child, XKey,
 };
+use tx_types::transaction_types::{SchnorrPubkey, F6LT, Hash};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
@@ -119,14 +120,14 @@ fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
 }
 
 /// import from base58 32-byte scalar (raw), no chain-code/path.
-pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
+pub fn import_from_b58_priv(b58: &str, version: u8) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
     let sk = sk_from_b58(b58)?;
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);
     // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
     let pk_tuple = (pk_xy[0], pk_xy[1]);
 
-    let pk_b58 = pubkey_to_b58(&pk_tuple);
+    let pk_b58 = pubkey_to_b58(&pk_tuple, version);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -141,6 +142,7 @@ pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_
 /// import from raw hex private key (32B)
 pub fn import_from_hex_priv(
     hex_sk: &str,
+    version: u8,
 ) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
     let mut sk = [0u8; 32];
     let v = hex::decode(hex_sk).map_err(|e| format!("hex decode: {e}"))?;
@@ -153,7 +155,7 @@ pub fn import_from_hex_priv(
     // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
     let pk_tuple = (pk_xy[0], pk_xy[1]);
 
-    let pk_b58 = pubkey_to_b58(&pk_tuple);
+    let pk_b58 = pubkey_to_b58(&pk_tuple, version);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -165,10 +167,11 @@ pub fn import_from_hex_priv(
     Ok((key, blob))
 }
 
-/// import from 64-byte seed (PBKDF’d) and path (full private derivation)
+/// import from 64-byte seed (PBKDF'd) and path (full private derivation)
 pub fn import_from_seed(
     seed64: &[u8; 64],
     path: &str,
+    version: u8,
 ) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
     let xk0 = xkey_from_seed(seed64);
     let child = derive_xprv_path(xk0, path)?;
@@ -180,7 +183,7 @@ pub fn import_from_seed(
         .pk
         .ok_or_else(|| "derived node has no public key".to_string())?;
 
-    let pk_b58 = pubkey_to_b58(&pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_xy, version);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -222,8 +225,28 @@ fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
     Ok(sk)
 }
 
-/// pubkey (affine point) to base58
-pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6])) -> String {
+/// pubkey (affine point) to base58 - v0 format (97-byte: 0x01 || Y || X)
+pub fn pubkey_to_b58_v0(pk: &([u64; 6], [u64; 6])) -> String {
     let ser = ser_a_pt(pk); // 0x01 || Y || X
     bs58::encode(ser).into_string()
+}
+
+/// pubkey (affine point) to base58 - v1 format (PKH hash)
+pub fn pubkey_to_b58_v1(pk: &([u64; 6], [u64; 6])) -> String {
+    let schnorr_pk = SchnorrPubkey {
+        x: F6LT { values: pk.0 },
+        y: F6LT { values: pk.1 },
+        inf: false,
+    };
+    // v1 uses the public key hash (PKH) in base58
+    let pkh: Hash = schnorr_pk.to_hash();
+    pkh.to_b58()
+}
+
+/// pubkey (affine point) to base58 with version selector
+pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6]), version: u8) -> String {
+    match version {
+        0 => pubkey_to_b58_v0(pk),
+        _ => pubkey_to_b58_v1(pk),
+    }
 }

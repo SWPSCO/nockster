@@ -50,6 +50,9 @@ pub struct PortArgs {
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
+    /// address version: 0 for legacy, 1 for v1 (default: 1)
+    #[arg(long, default_value_t = 1)]
+    pub version: u8,
 }
 
 #[derive(Args, Clone)]
@@ -64,6 +67,9 @@ pub struct TestArgs {
     /// Derivation path: human ("m/44'/0'/0'/0/0") or comma u32s (MSB=hard)
     #[arg(long, default_value = "m")]
     pub path: String,
+    /// address version: 0 for legacy, 1 for v1 (default: 1)
+    #[arg(long, default_value_t = 1)]
+    pub version: u8,
 }
 
 #[derive(Args, Clone)]
@@ -140,6 +146,10 @@ pub struct SeedArgs {
     /// pin for hardware wallet
     #[arg(long, required = true)]
     pub pin: Option<String>,
+
+    /// address version: 0 for legacy, 1 for v1 (default: 1)
+    #[arg(long, default_value_t = 1)]
+    pub version: u8,
 }
 
 #[derive(Args, Clone)]
@@ -157,9 +167,9 @@ pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Test(args) => {
-            commands::test::run(&args.port, args.baud, args.seed_hex.as_deref(), &args.path)
+            commands::test::run(&args.port, args.baud, args.seed_hex.as_deref(), &args.path, args.version)
         }
-        Cmd::Info(args) => commands::info::run(&args.port, args.baud),
+        Cmd::Info(args) => commands::info::run(&args.port, args.baud, args.version),
         Cmd::Health(args) => commands::health::run(&args.port, args.baud),
         Cmd::Seed(args) => commands::seed::run(args),
         Cmd::Plan(args) => commands::plan::run(&args.port, args.baud, &args.draft),

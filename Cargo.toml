@@ -77,7 +77,7 @@ nockchain-libp2p-io = { path = "../tx-types/nockchain-minimal/crates/nockchain-l
 # kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
 noun-serde-derive = { path = "../tx-types/nockchain-minimal/crates/noun-serde-derive" }
 noun-serde = { path = "../tx-types/nockchain-minimal/crates/noun-serde" }
-tx-types = { git = "https://github.com/swpsco/tx-types", rev = "1da92931859951df21cf1d2d698bff3832932259", default-features = false }
+tx-types = { git = "https://github.com/swpsco/tx-types", rev = "b2777159c4eb6dbb585567ae91fba6e540284082", default-features = false }
 ibig = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/ibig", default-features = false }
 
 # Redirect all SWPSCO/nockchain.git dependencies to local nockchain-minimal

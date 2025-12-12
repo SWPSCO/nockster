@@ -180,3 +180,27 @@ pub fn master_from_mnemonic(mnemonic: &str, passphrase: &str) -> ([u8; 32], [u8;
         .expect("derived key has private component");
     (sk, ext.chain_code)
 }
+
+// Re-export utils module for tests
+#[cfg(feature = "std")]
+pub mod utils {
+    pub use tx_types::crypto::utils::*;
+}
+
+// test_tip5_hash_words for testing TIP5 hashing
+#[cfg(feature = "std")]
+pub fn test_tip5_hash_words(words: &[u64]) -> [u64; 5] {
+    use tx_types::hashing::tip5::Tip5Hasher;
+    use nockapp::noun::slab::NounSlab;
+    use nockvm::noun::{Atom, Cell};
+
+    let mut slab: NounSlab = NounSlab::new();
+    let mut list = Atom::new(&mut slab, 0u64).as_noun();
+    for &w in words.iter().rev() {
+        let atom = Atom::new(&mut slab, w).as_noun();
+        list = Cell::new(&mut slab, atom, list).as_noun();
+    }
+
+    let hash = Tip5Hasher::hash_varlen(list).expect("hash");
+    hash.values
+}

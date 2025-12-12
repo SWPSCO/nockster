@@ -5396,6 +5396,8 @@ dependencies = [
  "hex-literal 0.4.1",
  "hmac",
  "k256",
+ "nockapp",
+ "nockvm",
  "postcard",
  "serde",
  "serde-big-array",

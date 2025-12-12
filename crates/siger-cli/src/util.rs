@@ -21,10 +21,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use tx_types::collections::{ZMap, ZSet};
-use tx_types::hashing::hasher::hash_hashable;
-use tx_types::transaction_types::*;
-use tx_types::Hash;
-use tx_types::Hashable;
+use tx_types::transaction_types::{
+    Coins, Hash, NName, PageNumber, Spend, SpendBody, TimelockRange, Transaction, T8,
+    SchnorrPubkey, SchnorrSignature, Chal, Sig, Signature, F6LT,
+};
+use tx_types::transaction_types_v0::*;
 use tx_types::RawTransaction;
 
 fn signer_slot() -> u8 {
@@ -47,24 +48,33 @@ fn is_printable_ascii(bytes: &[u8]) -> bool {
         .all(|&b| (b == 0x09) || (b == 0x0A) || (b == 0x0D) || (0x20..=0x7E).contains(&b))
 }
 
+/// Extract transaction ID from various noun formats
 pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
-    if let Ok(tx) = Transaction::from_noun(noun) {
-        return Ok(tx.name);
-    }
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
-    if let Ok(raw) = RawTransaction::from_noun(noun) {
-        return Ok(raw.id.to_b58());
+    // Try RawTransaction first (works for both V0 and V1) - wrap in catch_unwind
+    if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(noun))) {
+        let id = match &raw {
+            RawTransaction::V0(v0) => &v0.id,
+            RawTransaction::V1(v1) => &v1.id,
+        };
+        return Ok(id.to_b58());
     }
 
     if let Ok(cell) = noun.as_cell() {
         let head = cell.head();
 
-        if let Ok(raw_head) = RawTransaction::from_noun(&head) {
-            return Ok(raw_head.id.to_b58());
+        if let Ok(Ok(raw_head)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&head))) {
+            let id = match &raw_head {
+                RawTransaction::V0(v0) => &v0.id,
+                RawTransaction::V1(v1) => &v1.id,
+            };
+            return Ok(id.to_b58());
         }
 
-        if let Ok(tx_head) = Transaction::from_noun(&head) {
-            return Ok(tx_head.name);
+        // Try wallet Transaction (V0 format) - may panic on invalid data
+        if let Ok(Ok(tx)) = catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(&head))) {
+            return Ok(tx.name);
         }
 
         if let Ok(atom) = head.as_atom() {
@@ -74,6 +84,11 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
                 }
             }
         }
+    }
+
+    // Try wallet Transaction at top level (may panic on invalid data)
+    if let Ok(Ok(tx)) = catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(noun))) {
+        return Ok(tx.name);
     }
 
     Err(anyhow!("unable to extract transaction identifier"))
@@ -87,7 +102,8 @@ pub fn transaction_name_from_bytes(bytes: &[u8]) -> Result<String> {
     transaction_name_from_noun(&noun)
 }
 
-pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Hash {
+/// Compute signature hash for a V0 transaction input
+pub fn sig_hash_for_input_v0(raw: &RawTransactionV0, name: &NName) -> Hash {
     // clone + strip sigs from the target spend
     let mut spend = raw.inputs.p.get(name).expect("input missing").spend.clone();
     spend.signature = None;
@@ -98,13 +114,42 @@ pub fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Hash {
 }
 
 pub fn print_raw_details(raw: &RawTransaction) {
+    match raw {
+        RawTransaction::V0(v0) => print_raw_details_v0(v0),
+        RawTransaction::V1(v1) => {
+            println!("raw-tx (V1):");
+            println!("  version      = {}", v1.version);
+            println!("  id           = {}", v1.id.to_b58());
+            println!("  spends       = {}", v1.spends.map.wyt());
+            for (idx, (name, spend)) in v1.spends.map.tap().into_iter().enumerate() {
+                println!("  - spend[{}]:", idx);
+                if name.p.len() >= 2 {
+                    println!(
+                        "      name        = [{:?} {:?}]",
+                        name.p[0].to_b58(),
+                        name.p[1].to_b58()
+                    );
+                }
+                // Get fee from the SpendBody
+                let fee = match &spend.body {
+                    SpendBody::V0(v0) => v0.fee.value,
+                    SpendBody::V0ToV1(v0tov1) => v0tov1.fee.value,
+                    SpendBody::V1(v1) => v1.fee.value,
+                };
+                println!("      fee         = {}", fee);
+            }
+        }
+    }
+}
+
+fn print_raw_details_v0(raw: &RawTransactionV0) {
     let id_str = fmt_u64x5(&raw.id.values);
     let inputs_count = raw.inputs.p.wyt();
     let tl_min = raw.timelock_range.min.as_ref().map(|p| p.value);
     let tl_max = raw.timelock_range.max.as_ref().map(|p| p.value);
     let fee = raw.total_fees.value;
 
-    println!("raw-tx:");
+    println!("raw-tx (V0):");
     println!("  id           = {}", raw.id.to_b58());
     println!("  inputs       = {}", inputs_count);
     println!("  timelock     = [{:?}, {:?}]", tl_min, tl_max);
@@ -168,12 +213,19 @@ pub fn print_raw_details(raw: &RawTransaction) {
                 );
             }
         }
-        print_input_seeds(&input);
+        print_input_seeds_v0(&input);
     }
-    summarize_outputs(raw);
+    summarize_outputs_v0(raw);
 }
 
 pub fn summarize_outputs(tx: &RawTransaction) -> BTreeMap<LockKey, u128> {
+    match tx {
+        RawTransaction::V0(v0) => summarize_outputs_v0(v0),
+        RawTransaction::V1(_v1) => BTreeMap::new(), // V1 doesn't have this structure
+    }
+}
+
+fn summarize_outputs_v0(tx: &RawTransactionV0) -> BTreeMap<LockKey, u128> {
     let mut by_lock: BTreeMap<LockKey, u128> = BTreeMap::new();
 
     for (_name, input) in tx.inputs.p.tap().into_iter() {
@@ -184,7 +236,7 @@ pub fn summarize_outputs(tx: &RawTransaction) -> BTreeMap<LockKey, u128> {
     by_lock
 }
 
-pub fn print_input_seeds(input: &Input) {
+fn print_input_seeds_v0(input: &InputV0) {
     for (k, seed) in input.spend.seeds.set.iter().enumerate() {
         let (m, pks_b58) = seed.recipient.to_b58();
         println!(
@@ -325,6 +377,8 @@ pub fn pretty_noun(n: &Noun, max_depth: usize, max_items: usize) -> String {
 }
 
 pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
     let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
 
     // Keep allocator alive during decode
@@ -333,28 +387,28 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
         .cue_into(Bytes::from(data))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
-    // raw-tx
-    if let Ok(raw) = RawTransaction::from_noun(&noun) {
+    // raw-tx (either V0 or V1) - wrap in catch_unwind
+    if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&noun))) {
         return Ok(raw);
     }
 
     // tx:transact — head is raw-tx
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(raw) = RawTransaction::from_noun(&cell.head()) {
+        if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head()))) {
             return Ok(raw);
         }
     }
 
-    // wallet transaction:wt (`p` (inputs) and `name`)
-    if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
-        return Ok(transaction_to_raw(&tx_wallet));
+    // wallet transaction:wt (`p` (inputs) and `name`) - V0 only
+    if let Ok(Ok(tx_wallet)) = catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(&noun))) {
+        return Ok(RawTransaction::V0(transaction_to_raw(&tx_wallet)));
     }
 
-    // 4) Naked pair: [name inputs]
+    // 4) Naked pair: [name inputs] - V0 only
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(inputs) = Inputs::from_noun(&cell.tail()) {
-            let raw = raw_from_inputs(inputs);
-            return Ok(raw);
+        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV0::from_noun(&cell.tail()))) {
+            let raw = raw_from_inputs_v0(inputs);
+            return Ok(RawTransaction::V0(raw));
         }
     }
 
@@ -363,27 +417,26 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
     ))
 }
 
-pub fn raw_from_inputs(inputs: Inputs) -> RawTransaction {
-    let total_fees = sum_inputs_fees(&inputs);
+pub fn raw_from_inputs_v0(inputs: InputsV0) -> RawTransactionV0 {
+    use tx_types::hashing::tx_id::compute_tx_id;
+    use tx_types::transaction_types::Inputs;
+
+    let total_fees = sum_inputs_fees_v0(&inputs);
     let tl = TimelockRange {
         min: None,
         max: None,
     };
 
-    let mut raw = RawTransaction {
-        id: Hash { values: [0u64; 5] },
+    // Compute tx_id using the public function
+    let inputs_enum = Inputs::V0(inputs.clone());
+    let tx_id = compute_tx_id(&inputs_enum, &tl, Coins { value: total_fees });
+
+    RawTransactionV0 {
+        id: tx_id,
         inputs,
         timelock_range: tl,
         total_fees: Coins { value: total_fees },
-    };
-
-    let tail_hashable = Hashable::triple(
-        raw.inputs.to_hashable(),
-        raw.timelock_range.to_hashable(),
-        Hashable::leaf_u64(raw.total_fees.value),
-    );
-    raw.id = tx_types::hashing::hasher::hash_hashable(&tail_hashable);
-    raw
+    }
 }
 
 pub fn decode_cord_like(n: Noun) -> Option<String> {
@@ -394,28 +447,32 @@ pub fn decode_cord_like(n: Noun) -> Option<String> {
         .map(|b| String::from_utf8_lossy(&b).to_string())
 }
 
-pub fn transaction_to_raw(tx: &Transaction) -> RawTransaction {
-    let inputs = tx.p.clone();
-    let total_fees = sum_inputs_fees(&inputs);
-    let tl = union_inputs_timelock_range(&inputs);
+/// Convert wallet Transaction (V0) to RawTransactionV0
+pub fn transaction_to_raw(tx: &Transaction) -> RawTransactionV0 {
+    use tx_types::hashing::tx_id::compute_tx_id;
+    use tx_types::transaction_types::Inputs;
 
-    let mut raw = RawTransaction {
-        id: Hash { values: [0u64; 5] },
+    // Transaction.p is Inputs (enum), extract V0 version
+    let inputs = match &tx.p {
+        Inputs::V0(v0) => v0.clone(),
+        Inputs::V1(_) => panic!("transaction_to_raw only works with V0 transactions"),
+    };
+    let total_fees = sum_inputs_fees_v0(&inputs);
+    let tl = union_inputs_timelock_range_v0(&inputs);
+
+    // Compute tx_id using the public function
+    let inputs_enum = Inputs::V0(inputs.clone());
+    let tx_id = compute_tx_id(&inputs_enum, &tl, Coins { value: total_fees });
+
+    RawTransactionV0 {
+        id: tx_id,
         inputs,
         timelock_range: tl,
         total_fees: Coins { value: total_fees },
-    };
-
-    let tail_hashable = Hashable::triple(
-        raw.inputs.to_hashable(),
-        raw.timelock_range.to_hashable(),
-        Hashable::leaf_u64(raw.total_fees.value),
-    );
-    raw.id = tx_types::hashing::hasher::hash_hashable(&tail_hashable);
-    raw
+    }
 }
 
-pub fn sum_inputs_fees(inputs: &Inputs) -> u64 {
+fn sum_inputs_fees_v0(inputs: &InputsV0) -> u64 {
     inputs
         .p
         .tap()
@@ -423,7 +480,7 @@ pub fn sum_inputs_fees(inputs: &Inputs) -> u64 {
         .fold(0u64, |acc, (_n, i)| acc.saturating_add(i.spend.fee.value))
 }
 
-pub fn union_inputs_timelock_range(inputs: &Inputs) -> TimelockRange {
+fn union_inputs_timelock_range_v0(inputs: &InputsV0) -> TimelockRange {
     let mut min_page: Option<u64> = None;
     let mut max_page: Option<u64> = None;
     for (_name, input) in inputs.p.tap().into_iter() {
@@ -440,8 +497,9 @@ pub fn union_inputs_timelock_range(inputs: &Inputs) -> TimelockRange {
         max: max_page.map(|v| PageNumber { value: v }),
     }
 }
-pub fn enumerate_signing_plans(inputs: &Inputs) -> alloc::vec::Vec<InputSigningPlan> {
-    let pairs: alloc::vec::Vec<(NName, Input)> = inputs.p.tap();
+
+pub fn enumerate_signing_plans(inputs: &InputsV0) -> alloc::vec::Vec<InputSigningPlan> {
+    let pairs: alloc::vec::Vec<(NName, InputV0)> = inputs.p.tap();
     pairs
         .into_iter()
         .map(|(name, input)| {
@@ -481,24 +539,19 @@ pub fn enumerate_signing_plans(inputs: &Inputs) -> alloc::vec::Vec<InputSigningP
         .collect()
 }
 
+/// Sign a draft transaction with the specified paths (V0 only for now)
 pub fn sign_draft_with_paths(
     sp: &mut dyn RW,
     draft_path: &str,
     signer_paths: Vec<Vec<u32>>,
 ) -> Result<RawTransaction> {
-    let mut raw = load_draft_as_raw(Path::new(draft_path))?;
-    let bytes = std::fs::read(draft_path).with_context(|| format!("read {}", draft_path))?;
-    let mut stack = NockStack::new(8 << 20, 0);
+    let raw = load_draft_as_raw(Path::new(draft_path))?;
 
-    let (mut atom, mut buf) = unsafe { IndirectAtom::new_raw_mut_bytes(&mut stack, bytes.len()) };
-    unsafe {
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr(), bytes.len());
-    }
-    let atom = unsafe { atom.normalize_as_atom() };
-
-    let noun: Noun = cue(&mut stack, atom).map_err(|e| anyhow::anyhow!("cue failed: {e:?}"))?;
-    let mut raw: RawTransaction = RawTransaction::from_noun(&noun)
-        .map_err(|e| anyhow::anyhow!("RawTransaction::from_noun failed: {e:?}"))?;
+    // Only V0 signing supported in this function for now
+    let mut v0 = match raw {
+        RawTransaction::V0(v) => v,
+        RawTransaction::V1(_) => return Err(anyhow!("sign_draft_with_paths only supports V0 transactions")),
+    };
 
     let slot = signer_slot();
     let select_msg = Msg {
@@ -540,7 +593,7 @@ pub fn sign_draft_with_paths(
 
     // sign inputs
     let mut new_inputs = ZMap::new();
-    for (name, mut input) in raw.inputs.p.tap() {
+    for (name, mut input) in v0.inputs.p.tap() {
         let lock_pks = &input.note.lock.pubkeys; // ZSet<SchnorrPubkey>
 
         // reuse or create signature map
@@ -556,7 +609,7 @@ pub fn sign_draft_with_paths(
                 continue;
             }
 
-            let msg5: [u64; 5] = sig_hash_for_input(&raw, &name).values;
+            let msg5: [u64; 5] = sig_hash_for_input_v0(&v0, &name).values;
             let req = Msg {
                 v: PROTO_V1,
                 id: 0x4200,
@@ -592,8 +645,8 @@ pub fn sign_draft_with_paths(
         new_inputs.put(name, input);
     }
 
-    raw.inputs = Inputs { p: new_inputs };
-    Ok(raw)
+    v0.inputs = InputsV0 { p: new_inputs };
+    Ok(RawTransaction::V0(v0))
 }
 
 // minimal "round_trip" for Msg<Frame> (used above)
@@ -703,11 +756,12 @@ mod tests {
     use super::*;
     use tx_types::collections::zset::ZSet;
     use tx_types::transaction_types::*;
+    use tx_types::transaction_types_v0::*;
 
     #[test]
     fn test_sig_hash_for_input_matches_spend_sig_hash() {
         // Create a test spend with some seeds
-        let seed = Seed {
+        let seed = SeedV0 {
             output_source: Some(Source {
                 p: Hash {
                     values: [1, 2, 3, 4, 5],
@@ -728,15 +782,15 @@ mod tests {
         let mut seeds_set = ZSet::new();
         seeds_set.put(seed);
 
-        let spend = Spend {
+        let spend = SpendV0 {
             signature: None,
-            seeds: Seeds { set: seeds_set },
+            seeds: SeedsV0 { set: seeds_set },
             fee: Coins { value: 10 },
         };
 
-        // Create a minimal RawTransaction with this spend
-        let input = Input {
-            note: NNote {
+        // Create a minimal RawTransactionV0 with this spend
+        let input = InputV0 {
+            note: NNoteV0 {
                 meta: NNoteHead {
                     version: 1,
                     origin_page: PageNumber { value: 1 },
@@ -769,9 +823,9 @@ mod tests {
         let mut inputs_map = ZMap::new();
         inputs_map.put(name.clone(), input);
 
-        let raw = RawTransaction {
+        let raw = RawTransactionV0 {
             id: Hash { values: [0; 5] },
-            inputs: Inputs { p: inputs_map },
+            inputs: InputsV0 { p: inputs_map },
             timelock_range: TimelockRange {
                 min: None,
                 max: None,
@@ -779,16 +833,16 @@ mod tests {
             total_fees: Coins { value: 10 },
         };
 
-        // Test that sig_hash_for_input returns the same as spend.sig_hash()
-        let hash_from_util = sig_hash_for_input(&raw, &name);
+        // Test that sig_hash_for_input_v0 returns the same as spend.sig_hash()
+        let hash_from_util = sig_hash_for_input_v0(&raw, &name);
         let hash_from_spend = spend.sig_hash();
 
         assert_eq!(
             hash_from_util.values, hash_from_spend.values,
-            "sig_hash_for_input should return the same hash as spend.sig_hash()"
+            "sig_hash_for_input_v0 should return the same hash as spend.sig_hash()"
         );
 
-        println!("sig_hash_for_input correctly matches spend.sig_hash()");
+        println!("sig_hash_for_input_v0 correctly matches spend.sig_hash()");
         println!("  Hash: {:016x?}", hash_from_util.values);
     }
 }

@@ -72,9 +72,11 @@ pub fn bip39_seed_from_mnemonic(mnemonic: &str, passphrase: &str) -> [u8; 64] {
 pub fn xkey_from_seed(seed64: &[u8; 64]) -> XKey {
     let (sk, cc) = master_from_seed(seed64);
     let pk_xy = cheetah_pub_from_sk(sk);
+    // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
+    let pk_tuple = (pk_xy[0], pk_xy[1]);
     XKey {
         sk: Some(sk),
-        pk: Some(pk_xy),
+        pk: Some(pk_tuple),
         chain_code: cc,
         depth: 0,
         index: 0,
@@ -121,8 +123,10 @@ pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_
     let sk = sk_from_b58(b58)?;
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);
+    // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
+    let pk_tuple = (pk_xy[0], pk_xy[1]);
 
-    let pk_b58 = pubkey_to_b58(&pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_tuple);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -130,7 +134,7 @@ pub fn import_from_b58_priv(b58: &str) -> Result<(ImportedKey, [u8; DEVICE_BLOB_
         path: None,
         origin: KeyOrigin::PrivateKeyB58,
     };
-    let blob = device_blob_v1(sk, cc, pk_xy);
+    let blob = device_blob_v1(sk, cc, pk_tuple);
     Ok((key, blob))
 }
 
@@ -146,8 +150,10 @@ pub fn import_from_hex_priv(
     sk.copy_from_slice(&v);
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);
+    // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
+    let pk_tuple = (pk_xy[0], pk_xy[1]);
 
-    let pk_b58 = pubkey_to_b58(&pk_xy);
+    let pk_b58 = pubkey_to_b58(&pk_tuple);
     let key = ImportedKey {
         sk_be32_hex: hex::encode(sk),
         cc_hex: hex::encode(cc),
@@ -155,7 +161,7 @@ pub fn import_from_hex_priv(
         path: None,
         origin: KeyOrigin::PrivateKeyHex,
     };
-    let blob = device_blob_v1(sk, cc, pk_xy);
+    let blob = device_blob_v1(sk, cc, pk_tuple);
     Ok((key, blob))
 }
 

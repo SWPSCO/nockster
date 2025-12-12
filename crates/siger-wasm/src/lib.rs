@@ -7,11 +7,13 @@ use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
 use tx_types::hashing::hashable::Hashable;
 use tx_types::hashing::tx_id::compute_tx_id;
-use tx_types::transaction_types::{PageNumber, TimelockRange, Transaction};
-use tx_types::{
-    Chal, Coins, Hash, Input, Inputs, NName, RawTransaction, SchnorrPubkey, SchnorrSignature, Sig,
-    Signature, F6LT,
+use tx_types::transaction_types::{
+    Chal, Coins, Hash, Inputs, Lock, NName, PageNumber, SchnorrPubkey, SchnorrSignature, Sig,
+    Signature, TimelockRange, Transaction, F6LT,
 };
+use tx_types::transaction_types_v0::{InputV0, InputsV0, RawTransactionV0, SeedV0, SeedsV0};
+#[allow(unused_imports)]
+use tx_types::RawTransaction;
 
 mod tip5;
 
@@ -81,7 +83,21 @@ fn nname_b58(name: &NName) -> String {
     }
 }
 
-fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Result<Hash, JsValue> {
+/// Create a leaf hashable from a u64 value
+fn hashable_leaf_u64(value: u64) -> tx_types::hashing::hashable::Hashable {
+    use nockapp::noun::slab::NounSlab;
+    use nockvm::noun::D;
+    use tx_types::hashing::hashable::Hashable;
+
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = D(value);
+    slab.set_root(noun);
+    Hashable::Leaf(slab.jam().to_vec())
+}
+
+fn sig_hash_for_input_v0(raw: &RawTransactionV0, name: &NName) -> Result<Hash, JsValue> {
+    use tx_types::hashing::hashable::Hashable;
+
     let all_inputs = raw.inputs.p.tap();
     let input = all_inputs
         .iter()
@@ -102,7 +118,7 @@ fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Result<Hash, JsValu
     );
 
     let seeds_hashable = build_zset_sig_hashable(&spend.seeds.set)?;
-    let sig_hashable = Hashable::cell(seeds_hashable, Hashable::leaf_u64(spend.fee.value));
+    let sig_hashable = Hashable::cell(seeds_hashable, hashable_leaf_u64(spend.fee.value));
 
     // Use reference hash_hashable which uses NounSlab
     let sig_hash = tx_types::hashing::hasher::hash_hashable(&sig_hashable);
@@ -123,43 +139,28 @@ fn sig_hash_for_input(raw: &RawTransaction, name: &NName) -> Result<Hash, JsValu
 }
 
 fn build_zset_sig_hashable(
-    zset: &tx_types::collections::ZSet<tx_types::Seed>,
+    zset: &tx_types::collections::ZSet<SeedV0>,
 ) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
-    use tx_types::collections::zset::Node;
     use tx_types::hashing::hashable::Hashable;
 
-    // traverse zset
-    fn traverse_node(node: Option<&Node<tx_types::Seed>>) -> Result<Hashable, JsValue> {
-        match node {
-            None => Ok(Hashable::null()),
-            Some(n) => {
-                let node_hashable = build_seed_sig_hashable_with_nounslab(&n.value)?;
-                let left = traverse_node(n.left.as_deref())?;
-                let right = traverse_node(n.right.as_deref())?;
-                Ok(Hashable::triple(node_hashable, left, right))
-            }
-        }
+    // Use tap() to extract all seeds and build hashable list
+    let all_seeds: Vec<SeedV0> = zset.tap();
+    if all_seeds.is_empty() {
+        return Ok(Hashable::null());
     }
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        traverse_node(zset.root_ref())
+    // Build as a list of seed hashables
+    let mut result = Hashable::null();
+    for seed in all_seeds.iter().rev() {
+        let seed_hashable = build_seed_sig_hashable_with_nounslab(seed)?;
+        result = Hashable::cell(seed_hashable, result);
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        // Fallback for non-WASM
-        let all_seeds: Vec<tx_types::Seed> = zset.tap();
-        if all_seeds.is_empty() {
-            return Ok(Hashable::null());
-        }
-        build_seed_sig_hashable_with_nounslab(&all_seeds[0])
-    }
+    Ok(result)
 }
 
 /// Build a Seed's sig_hashable using NounSlab for pubkey hashing
 fn build_seed_sig_hashable_with_nounslab(
-    seed: &tx_types::Seed,
+    seed: &SeedV0,
 ) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
     use tx_types::hashing::hashable::Hashable;
 
@@ -182,7 +183,7 @@ fn build_seed_sig_hashable_with_nounslab(
     let timelock_hashable = build_timelock_intent_hashable(&seed.timelock_intent)?;
 
     // gift
-    let gift_hashable = Hashable::leaf_u64(seed.gift.value);
+    let gift_hashable = hashable_leaf_u64(seed.gift.value);
 
     // parent_hash
     let parent_hashable = Hashable::Hash(seed.parent_hash.clone());
@@ -202,14 +203,14 @@ fn build_seed_sig_hashable_with_nounslab(
 
 /// Build Lock's hashable using NounSlab for pubkey hashing
 fn build_lock_hashable_with_nounslab(
-    lock: &tx_types::Lock,
+    lock: &Lock,
 ) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
     use nockapp::noun::slab::NounSlab;
     use noun_serde::NounEncode;
     use tx_types::hashing::hashable::Hashable;
 
     // Lock is [m, pubkeys_zset]
-    let m_hashable = Hashable::leaf_u64(lock.m as u64);
+    let m_hashable = hashable_leaf_u64(lock.m as u64);
 
     // Build pubkeys ZSet hashable - each pubkey needs to be hashed using NounSlab
     let pubkeys_hashable = build_pubkey_zset_hashable_with_nounslab(&lock.pubkeys)?;
@@ -219,36 +220,23 @@ fn build_lock_hashable_with_nounslab(
 
 /// Build a ZSet of pubkeys hashable using NounSlab for each pubkey hash
 fn build_pubkey_zset_hashable_with_nounslab(
-    zset: &tx_types::collections::ZSet<tx_types::SchnorrPubkey>,
+    zset: &tx_types::collections::ZSet<SchnorrPubkey>,
 ) -> Result<tx_types::hashing::hashable::Hashable, JsValue> {
-    use tx_types::collections::zset::Node;
     use tx_types::hashing::hashable::Hashable;
 
-    fn traverse_pk_node(node: Option<&Node<tx_types::SchnorrPubkey>>) -> Result<Hashable, JsValue> {
-        match node {
-            None => Ok(Hashable::null()),
-            Some(n) => {
-                let node_hashable = hash_schnorr_pubkey(&n.value)?;
-                let left = traverse_pk_node(n.left.as_deref())?;
-                let right = traverse_pk_node(n.right.as_deref())?;
-                Ok(Hashable::triple(node_hashable, left, right))
-            }
-        }
+    // Use tap() to extract all pubkeys and build hashable list
+    let pks: Vec<SchnorrPubkey> = zset.tap();
+    if pks.is_empty() {
+        return Ok(Hashable::null());
     }
 
-    #[cfg(target_arch = "wasm32")]
-    {
-        traverse_pk_node(zset.root_ref())
+    // Build as a list of pubkey hashables
+    let mut result = Hashable::null();
+    for pk in pks.iter().rev() {
+        let pk_hashable = hash_schnorr_pubkey(pk)?;
+        result = Hashable::cell(pk_hashable, result);
     }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let pks: Vec<_> = zset.tap();
-        if pks.is_empty() {
-            return Ok(Hashable::null());
-        }
-        Ok(hash_schnorr_pubkey(&pks[0])?)
-    }
+    Ok(result)
 }
 
 /// Hash a SchnorrPubkey using NounSlab (not NockStack!)
@@ -352,7 +340,7 @@ pub fn hash_hashable_wasm(h: &tx_types::hashing::hashable::Hashable) -> Result<H
 }
 
 /// hash seeds for signature verification
-fn hash_seeds_sig_hashable(seeds: &tx_types::Seeds) -> Result<Hash, JsValue> {
+fn hash_seeds_sig_hashable(seeds: &SeedsV0) -> Result<Hash, JsValue> {
     web_sys::console::log_1(&"hash_seeds_sig_hashable: start".into());
     // Each seed is converted to a hashable and then we hash the list of them
     let mut seed_hashes = Vec::new();
@@ -370,7 +358,7 @@ fn hash_seeds_sig_hashable(seeds: &tx_types::Seeds) -> Result<Hash, JsValue> {
 }
 
 /// hash a single seed for signature verification
-fn hash_seed_sig_hashable(seed: &tx_types::Seed) -> Result<Hash, JsValue> {
+fn hash_seed_sig_hashable(seed: &SeedV0) -> Result<Hash, JsValue> {
     // a seed's sig_hashable structure is a list of:
     // [output_source, recipient, timelock_intent, gift, parent_hash]
 
@@ -435,7 +423,7 @@ fn hash_seed_sig_hashable(seed: &tx_types::Seed) -> Result<Hash, JsValue> {
     Ok(tip5::hash_varlen_u64s(&components))
 }
 
-fn sum_inputs_fees(inputs: &Inputs) -> u64 {
+fn sum_inputs_fees_v0(inputs: &InputsV0) -> u64 {
     inputs
         .p
         .tap()
@@ -443,7 +431,7 @@ fn sum_inputs_fees(inputs: &Inputs) -> u64 {
         .fold(0u64, |acc, (_n, i)| acc.saturating_add(i.spend.fee.value))
 }
 
-fn union_inputs_timelock_range(inputs: &Inputs) -> TimelockRange {
+fn union_inputs_timelock_range_v0(inputs: &InputsV0) -> TimelockRange {
     let mut min_page: Option<u64> = None;
     let mut max_page: Option<u64> = None;
     for (_name, input) in inputs.p.tap().into_iter() {
@@ -588,6 +576,7 @@ impl SignatureDataJs {
 }
 
 /// ---- ParsedTransaction ---------------------------------------------------
+/// Note: WASM currently only supports V0 transactions
 
 #[wasm_bindgen]
 pub struct ParsedTransaction {
@@ -596,7 +585,7 @@ pub struct ParsedTransaction {
 
 struct ParsedTxInner {
     outer: OuterType,
-    raw: RawTransaction,
+    raw: RawTransactionV0,
     tail_jam: Option<Vec<u8>>,
 }
 
@@ -609,6 +598,7 @@ enum OuterType {
 #[wasm_bindgen]
 impl ParsedTransaction {
     /// Parse a jam file (transaction draft) from bytes
+    /// Note: Currently only supports V0 transactions
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: &[u8]) -> Result<ParsedTransaction, JsValue> {
         let mut slab: NounSlab = NounSlab::new();
@@ -617,17 +607,21 @@ impl ParsedTransaction {
             JsValue::from_str(&format!("Failed to cue jam: {:?}", e))
         })?;
 
-        // try wallet transaction output first
+        // try wallet transaction output first (V0 only)
         match Transaction::from_noun(&noun) {
             Ok(tx) => {
-                let inputs = tx.p.clone();
-                let total_fees = sum_inputs_fees(&inputs);
-                let tl = union_inputs_timelock_range(&inputs);
+                // Extract V0 inputs from Transaction
+                let inputs = match &tx.p {
+                    Inputs::V0(v0) => v0.clone(),
+                    Inputs::V1(_) => return Err(JsValue::from_str("V1 transactions not yet supported in WASM")),
+                };
+                let total_fees = sum_inputs_fees_v0(&inputs);
+                let tl = union_inputs_timelock_range_v0(&inputs);
                 let id = Hash::from_b58(&tx.name).map_err(|e| {
                     JsValue::from_str(&format!("Invalid transaction name/ID: {:?}", e))
                 })?;
 
-                let raw = RawTransaction {
+                let raw = RawTransactionV0 {
                     id,
                     inputs,
                     timelock_range: tl,
@@ -647,9 +641,9 @@ impl ParsedTransaction {
             }
         }
 
-        // [raw-tx tail]
+        // [raw-tx tail] - try V0 first
         if let Ok(cell) = noun.as_cell() {
-            if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
+            if let Ok(r) = RawTransactionV0::from_noun(&cell.head()) {
                 let mut s2: NounSlab = NounSlab::new();
                 let copied_tail = s2.copy_into(cell.tail());
                 s2.copy_into(copied_tail);
@@ -664,8 +658,8 @@ impl ParsedTransaction {
             }
         }
 
-        // bare raw-tx
-        if let Ok(r) = RawTransaction::from_noun(&noun) {
+        // bare raw-tx (V0)
+        if let Ok(r) = RawTransactionV0::from_noun(&noun) {
             return Ok(ParsedTransaction {
                 inner: ParsedTxInner {
                     outer: OuterType::RawTx,
@@ -675,7 +669,7 @@ impl ParsedTransaction {
             });
         }
 
-        Err(JsValue::from_str("Unrecognized transaction format"))
+        Err(JsValue::from_str("Unrecognized transaction format (V1 not yet supported in WASM)"))
     }
 
     /// get transaction info
@@ -821,7 +815,7 @@ impl ParsedTransaction {
                 };
 
                 // compute the sig_hash for input using the static 64 MiB NockStack arena
-                let sig_hash = sig_hash_for_input(raw, &name)?;
+                let sig_hash = sig_hash_for_input_v0(raw, &name)?;
                 let msg5 = sig_hash.values.to_vec();
 
                 use serde_json::json;
@@ -885,7 +879,7 @@ impl ParsedTransaction {
         web_sys::console::log_1(&format!("apply_signatures: got {} signatures", sigs.len()).into());
 
         let raw = &mut self.inner.raw;
-        let mut new_inputs: ZMap<NName, Input> = ZMap::new();
+        let mut new_inputs: ZMap<NName, InputV0> = ZMap::new();
 
         for (name, mut input) in raw.inputs.p.tap() {
             let mut sig_map: ZMap<SchnorrPubkey, SchnorrSignature> = input
@@ -929,10 +923,11 @@ impl ParsedTransaction {
             new_inputs.put(name, input);
         }
 
-        raw.inputs = Inputs { p: new_inputs };
+        raw.inputs = InputsV0 { p: new_inputs };
 
         // recompute tx_id
-        let new_id = compute_tx_id(&raw.inputs, &raw.timelock_range, raw.total_fees);
+        let inputs_enum = Inputs::V0(raw.inputs.clone());
+        let new_id = compute_tx_id(&inputs_enum, &raw.timelock_range, raw.total_fees);
         web_sys::console::log_1(
             &format!(
                 "recomputed tx_id {} -> {}",
@@ -959,7 +954,6 @@ impl ParsedTransaction {
             let _ = &mut _stack; // keep the allocation alive for the duration of this scope
         }
 
-        #[cfg(target_arch = "wasm32")]
         let raw = &self.inner.raw;
 
         let out_bytes = match &self.inner.outer {
@@ -987,7 +981,7 @@ impl ParsedTransaction {
             OuterType::WalletTx(orig_tx) => {
                 // wallet transaction wrapper [name=@t p=inputs]
                 let mut tx = orig_tx.clone();
-                tx.p = raw.inputs.clone();
+                tx.p = Inputs::V0(raw.inputs.clone());
                 let mut out_slab: NounSlab = NounSlab::new();
                 let n = tx.to_noun(&mut out_slab);
                 out_slab.copy_into(n);

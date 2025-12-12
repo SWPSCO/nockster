@@ -506,6 +506,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
 
 [[package]]
+name = "bytecheck"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0caa33a2c0edca0419d15ac723dff03f1956f7978329b1e3b5fdaaaed9d3ca8b"
+dependencies = [
+ "bytecheck_derive",
+ "ptr_meta",
+ "rancor",
+ "simdutf8",
+]
+
+[[package]]
+name = "bytecheck_derive"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89385e82b5d1821d2219e0b095efa2cc1f246cbf99080f3be46a1a85c0d392d9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2677,22 +2700,21 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1fcc7f316b2c079dde77564a1360639c1a956a23fa96122732e416cb10717bb"
 dependencies = [
  "cfg-if",
  "num-traits",
- "rand 0.8.5",
  "static_assertions",
 ]
 
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1fcc7f316b2c079dde77564a1360639c1a956a23fa96122732e416cb10717bb"
 dependencies = [
  "cfg-if",
  "num-traits",
+ "rand 0.8.5",
  "static_assertions",
 ]
 
@@ -3395,9 +3417,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "munge"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e17401f259eba956ca16491461b6e8f72913a0a114e39736ce404410f915a0c"
+dependencies = [
+ "munge_macro",
+]
+
+[[package]]
+name = "munge_macro"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4568f25ccbd45ab5d5603dc34318c1ec56b117531781260002151b8530a9f931"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "murmur3"
 version = "0.5.2"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 
 [[package]]
 name = "nb"
@@ -3477,7 +3518,6 @@ dependencies = [
 [[package]]
 name = "nockapp"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "bincode",
  "bitvec",
@@ -3485,7 +3525,6 @@ dependencies = [
  "either",
  "intmap",
  "nockvm",
- "nockvm_macros",
  "thiserror 2.0.16",
  "tracing",
 ]
@@ -3493,13 +3532,34 @@ dependencies = [
 [[package]]
 name = "nockchain-libp2p-io"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "bs58",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
+ "ibig 0.3.6",
  "nockapp",
  "nockvm",
  "noun-serde",
+]
+
+[[package]]
+name = "nockchain-math"
+version = "0.1.0"
+dependencies = [
+ "arrayref",
+ "bs58",
+ "bytes",
+ "either",
+ "hex-literal 1.0.0",
+ "ibig 0.3.6",
+ "nockapp",
+ "nockvm",
+ "nockvm_macros",
+ "noun-serde",
+ "num-traits",
+ "once_cell",
+ "rkyv",
+ "serde",
+ "thiserror 2.0.16",
+ "tracing",
 ]
 
 [[package]]
@@ -3520,13 +3580,12 @@ dependencies = [
 [[package]]
 name = "nockvm"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "autotools",
  "bitvec",
  "cc",
  "either",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
+ "ibig 0.3.6",
  "intmap",
  "json",
  "lazy_static",
@@ -3546,7 +3605,6 @@ dependencies = [
 [[package]]
 name = "nockvm_macros"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "quote",
  "syn 2.0.106",
@@ -3561,7 +3619,6 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "nockapp",
  "nockvm",
@@ -3573,7 +3630,6 @@ dependencies = [
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "nockvm",
  "proc-macro2",
@@ -4399,6 +4455,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptr_meta"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b9a0cf95a1196af61d4f1cbdab967179516d9a4a4312af1f31948f8f6224a79"
+dependencies = [
+ "ptr_meta_derive",
+]
+
+[[package]]
+name = "ptr_meta_derive"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7347867d0a7e1208d93b46767be83e2b8f978c3dad35f775ac8d8847551d6fe1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "qoi"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4457,6 +4533,15 @@ name = "ral-registers"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46b71a9d9206e8b46714c74255adcaea8b11e0350c1d8456165073c3f75fc81a"
+
+[[package]]
+name = "rancor"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a063ea72381527c2a0561da9c80000ef822bdd7c3241b1cc1b12100e3df081ee"
+dependencies = [
+ "ptr_meta",
+]
 
 [[package]]
 name = "rand"
@@ -4664,6 +4749,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "rend"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cadadef317c2f20755a64d7fdc48f9e7178ee6b0e1f7fce33fa60f1d68a276e6"
+dependencies = [
+ "bytecheck",
+]
+
+[[package]]
 name = "reqwest"
 version = "0.12.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4777,6 +4871,36 @@ name = "riscv-rt-macros"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc71814687c45ba4cd1e47a54e03a2dbc62ca3667098fbae9cc6b423956758fa"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "rkyv"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35a640b26f007713818e9a9b65d34da1cf58538207b052916a83d80e43f3ffa4"
+dependencies = [
+ "bytecheck",
+ "bytes",
+ "hashbrown 0.15.5",
+ "indexmap 2.11.4",
+ "munge",
+ "ptr_meta",
+ "rancor",
+ "rend",
+ "rkyv_derive",
+ "tinyvec",
+ "uuid",
+]
+
+[[package]]
+name = "rkyv_derive"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd83f5f173ff41e00337d97f6572e416d022ef8a19f371817259ae960324c482"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5371,6 +5495,12 @@ name = "simd-adler32"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
+
+[[package]]
+name = "simdutf8"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "siphasher"
@@ -6354,21 +6484,24 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tx-types"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
  "anyhow",
  "bip39",
  "bs58",
+ "bytes",
  "chrono",
  "either",
  "hmac",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
+ "ibig 0.3.6",
  "nockapp",
  "nockchain-libp2p-io",
+ "nockchain-math",
  "nockvm",
  "noun-serde",
  "num-bigint",
  "num-traits",
+ "once_cell",
+ "pbkdf2",
  "serde",
  "serde_json",
  "sha2",
@@ -7601,16 +7734,15 @@ dependencies = [
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b#8e2e81249f7b876998604f2a5f4f81934e1be10b"
 dependencies = [
- "arrayref",
  "bitvec",
  "bs58",
  "bytes",
  "either",
  "hex-literal 1.0.0",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types.git?rev=8e2e81249f7b876998604f2a5f4f81934e1be10b)",
+ "ibig 0.3.6",
  "nockapp",
+ "nockchain-math",
  "nockvm",
  "nockvm_macros",
  "noun-serde",
@@ -7670,3 +7802,7 @@ dependencies = [
  "syn 2.0.106",
  "winnow 0.7.13",
 ]
+
+[[patch.unused]]
+name = "nockvm_crypto"
+version = "0.1.0"

@@ -15,9 +15,11 @@ version = "0.1.0"
 
 [profile.release]
 codegen-units = 1
-lto = true
+lto = false
 opt-level = "s"
-panic = "abort"
+# Use unwind for better error recovery in CLI
+# For firmware, consider adding a separate profile if size matters
+panic = "unwind"
 
 [workspace.dependencies]
 cobs = { version = "0.4", default-features = false }
@@ -65,17 +67,31 @@ postgrest = "1.0.1"
 proc-macro2 = "1.0.95"
 either = "1.13"
 
-# nockchain
-nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
-nockvm = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "nockvm", default-features = false }
-nockapp = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "nockapp", default-features = false }
-zkvm-jetpack = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "zkvm-jetpack" }
-nockvm_macros = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "nockvm_macros" }
-nockchain-libp2p-io = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "nockchain-libp2p-io", default-features = false }
-kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
-noun-serde-derive = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "noun-serde-derive" }
-noun-serde = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "noun-serde" }
-tx-types = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "tx-types", default-features = false }
-ibig = { git = "https://github.com/swpsco/tx-types.git", rev = "8e2e81249f7b876998604f2a5f4f81934e1be10b", package = "ibig", default-features = false }
+# nockchain - using local tx-types with nockchain-minimal
+# nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
+nockvm = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/nockvm", default-features = false }
+nockapp = { path = "../tx-types/nockchain-minimal/crates/nockapp", default-features = false }
+zkvm-jetpack = { path = "../tx-types/nockchain-minimal/crates/zkvm-jetpack" }
+nockvm_macros = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/nockvm_macros" }
+nockchain-libp2p-io = { path = "../tx-types/nockchain-minimal/crates/nockchain-libp2p-io", default-features = false }
+# kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
+noun-serde-derive = { path = "../tx-types/nockchain-minimal/crates/noun-serde-derive" }
+noun-serde = { path = "../tx-types/nockchain-minimal/crates/noun-serde" }
+tx-types = { path = "../tx-types/tx-types", default-features = false }
+ibig = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/ibig", default-features = false }
+
+# Redirect all SWPSCO/nockchain.git dependencies to local nockchain-minimal
+[patch."https://github.com/SWPSCO/nockchain.git"]
+noun-serde = { path = "../tx-types/nockchain-minimal/crates/noun-serde" }
+noun-serde-derive = { path = "../tx-types/nockchain-minimal/crates/noun-serde-derive" }
+nockapp = { path = "../tx-types/nockchain-minimal/crates/nockapp" }
+nockvm = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/nockvm" }
+nockchain-libp2p-io = { path = "../tx-types/nockchain-minimal/crates/nockchain-libp2p-io" }
+nockchain-math = { path = "../tx-types/nockchain-minimal/crates/nockchain-math" }
+zkvm-jetpack = { path = "../tx-types/nockchain-minimal/crates/zkvm-jetpack" }
+ibig = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/ibig" }
+murmur3 = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/murmur3" }
+nockvm_macros = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/nockvm_macros" }
+nockvm_crypto = { path = "../tx-types/nockchain-minimal/crates/nockvm/rust/nockvm_crypto" }
 
 [workspace.lints.rust]

@@ -4,8 +4,16 @@ extern crate alloc;
 pub mod cheetah;
 pub mod math;
 pub mod noun;
+// Re-export crypto types - use conditional compilation for std vs no_std differences
+#[cfg(not(feature = "std"))]
 pub use cheetah::{
     cheetah_pub_from_sk, master_from_seed, schnorr_sign_tx, xprv_derive_child, xpub_derive_child,
+    Hash, XKey, T8,
+};
+
+#[cfg(feature = "std")]
+pub use cheetah::{
+    cheetah_pub_from_sk, master_from_seed, schnorr_sign_tx, xprv_derive_child,
     Hash, XKey, T8,
 };
 

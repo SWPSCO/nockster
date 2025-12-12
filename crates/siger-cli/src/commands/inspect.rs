@@ -1,11 +1,13 @@
-use crate::util::{pretty_noun, raw_from_inputs, transaction_name_from_noun, transaction_to_raw};
+use crate::util::{pretty_noun, raw_from_inputs_v0, transaction_name_from_noun, transaction_to_raw};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::Noun;
 use noun_serde::NounDecode;
 use std::fs;
-use tx_types::transaction_types::*;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use tx_types::transaction_types::{Transaction, Inputs};
+use tx_types::transaction_types_v0::InputsV0;
 use tx_types::RawTransaction;
 
 fn print_raw_details(raw: &RawTransaction) {
@@ -14,9 +16,9 @@ fn print_raw_details(raw: &RawTransaction) {
 
 pub fn run(
     draft_path: &str,
-    dump_noun: bool,
-    max_depth: usize,
-    max_items: usize,
+    _dump_noun: bool,
+    _max_depth: usize,
+    _max_items: usize,
 ) -> anyhow::Result<()> {
     let data = fs::read(draft_path).with_context(|| format!("read {draft_path}"))?;
     let mut slab: NounSlab = NounSlab::new();
@@ -31,25 +33,34 @@ pub fn run(
     }
 
     // Try all known shapes → RawTransaction
-    let raw = match RawTransaction::from_noun(&noun) {
-        Ok(r) => {
+    // Helper to safely try Transaction::from_noun (can panic on invalid data)
+    let try_wallet_tx = |n: &Noun| -> Option<Transaction> {
+        catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(n)))
+            .ok()
+            .and_then(|r| r.ok())
+    };
+
+    let raw = match catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&noun))) {
+        Ok(Ok(r)) => {
             println!("detected: raw-tx:transact");
             r
         }
-        Err(_) => {
+        _ => {
             // tx:transact — head is raw
             if let Ok(cell) = noun.as_cell() {
-                if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
+                let head_raw = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head())));
+                if let Ok(Ok(r)) = head_raw {
                     r
                 } else {
                     // wallet transaction:wt
-                    if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
-                        transaction_to_raw(&tx_wallet)
+                    if let Some(tx_wallet) = try_wallet_tx(&noun) {
+                        RawTransaction::V0(transaction_to_raw(&tx_wallet))
                     } else {
-                        // bare [name inputs]
+                        // bare [name inputs] - V0 only
                         if let Ok(cell2) = noun.as_cell() {
-                            if let Ok(inputs) = Inputs::from_noun(&cell2.tail()) {
-                                raw_from_inputs(inputs)
+                            let inputs_result = catch_unwind(AssertUnwindSafe(|| InputsV0::from_noun(&cell2.tail())));
+                            if let Ok(Ok(inputs)) = inputs_result {
+                                RawTransaction::V0(raw_from_inputs_v0(inputs))
                             } else {
                                 return Err(anyhow!("unrecognized noun shape; cannot decode as any transaction form"));
                             }
@@ -62,8 +73,8 @@ pub fn run(
                 }
             } else {
                 // not a cell; try wallet or give up
-                if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
-                    transaction_to_raw(&tx_wallet)
+                if let Some(tx_wallet) = try_wallet_tx(&noun) {
+                    RawTransaction::V0(transaction_to_raw(&tx_wallet))
                 } else {
                     return Err(anyhow!(
                         "unrecognized noun shape; cannot decode as any transaction form"

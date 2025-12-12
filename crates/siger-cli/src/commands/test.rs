@@ -196,11 +196,24 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str) -> a
 
     let raw = load_draft_as_raw(Path::new(signed_path))?;
     let mut signed_inputs = 0usize;
-    for (_, input) in raw.inputs.p.tap() {
-        if let Some(sigmap) = &input.spend.signature {
-            signed_inputs += sigmap.map.wyt();
+
+    match &raw {
+        tx_types::RawTransaction::V0(v0) => {
+            for (_, input) in v0.inputs.p.tap() {
+                if let Some(sigmap) = &input.spend.signature {
+                    signed_inputs += sigmap.map.wyt();
+                }
+            }
+        }
+        tx_types::RawTransaction::V1(v1) => {
+            for (_, spend) in v1.spends.map.tap() {
+                if let tx_types::transaction_types::SpendBody::V1(spend_v1) = &spend.body {
+                    signed_inputs += spend_v1.witness.pkh.map.wyt();
+                }
+            }
         }
     }
+
     anyhow::ensure!(signed_inputs > 0, "device produced zero signatures");
     println!("sign-draft: signatures attached = {signed_inputs}");
 

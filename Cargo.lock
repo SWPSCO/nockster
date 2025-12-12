@@ -6486,6 +6486,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tx-types"
 version = "0.1.0"
+source = "git+https://github.com/swpsco/tx-types?rev=1da92931859951df21cf1d2d698bff3832932259#1da92931859951df21cf1d2d698bff3832932259"
 dependencies = [
  "anyhow",
  "bip39",

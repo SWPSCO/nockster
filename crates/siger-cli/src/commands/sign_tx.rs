@@ -123,6 +123,16 @@ fn decode_no_panic<T: NounDecode>(noun: &Noun) -> Option<T> {
     decoded.ok().and_then(|r| r.ok())
 }
 
+fn decode_raw_tx_prefer_v1(noun: &Noun) -> Option<RawTransaction> {
+    if let Some(v1) = decode_no_panic::<RawTransactionV1>(noun) {
+        if v1.version == 1 {
+            return Some(RawTransaction::V1(v1));
+        }
+    }
+
+    decode_no_panic::<RawTransactionV0>(noun).map(RawTransaction::V0)
+}
+
 fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     let mut slab: NounSlab = NounSlab::new();
     let noun: Noun = slab
@@ -151,7 +161,7 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
 
     // try [raw-tx tail]
     if let Ok(cell) = noun.as_cell() {
-        if let Some(r) = decode_no_panic::<RawTransaction>(&cell.head()) {
+        if let Some(r) = decode_raw_tx_prefer_v1(&cell.head()) {
             // capture tail as jam for perfect round-trip later
             let mut s2: NounSlab = NounSlab::new();
             let copied_tail = s2.copy_into(cell.tail());
@@ -159,11 +169,6 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
             let tail_jam = s2.jam().to_vec();
             return Ok((Outer::TxTransact { tail_jam }, r, noun));
         }
-    }
-
-    // try bare raw-tx
-    if let Some(r) = decode_no_panic::<RawTransaction>(&noun) {
-        return Ok((Outer::RawTx, r, noun));
     }
 
     // try tx-engine Tx wrapper (extract raw_tx)
@@ -180,6 +185,11 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
                 noun,
             )),
         };
+    }
+
+    // try bare raw-tx
+    if let Some(r) = decode_raw_tx_prefer_v1(&noun) {
+        return Ok((Outer::RawTx, r, noun));
     }
 
     Err(anyhow!(

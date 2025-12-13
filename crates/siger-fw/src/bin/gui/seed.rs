@@ -140,7 +140,7 @@ impl SeedEntryState {
     }
 
     pub fn finish(&self) -> Option<SeedPhrase> {
-        if self.words.is_empty() || !self.digits.is_empty() {
+        if self.words.len() != MAX_SEED_WORDS || !self.digits.is_empty() {
             None
         } else {
             Some(self.words.clone())
@@ -256,6 +256,8 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
         }
     } else if state.words.is_empty() {
         let _ = write!(header_text, "Word 1/{}", MAX_SEED_WORDS);
+    } else if state.words.len() >= MAX_SEED_WORDS {
+        let _ = write!(header_text, "Seed {}/{}", MAX_SEED_WORDS, MAX_SEED_WORDS);
     } else {
         let _ = write!(header_text, "Word {}/{}", state.words.len() + 1, MAX_SEED_WORDS);
     }

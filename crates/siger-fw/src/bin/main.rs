@@ -15,11 +15,13 @@ use esp_hal::system::{CpuControl, Stack};
 use esp_hal::time::{Duration, Instant};
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
-use gui::{Gui, GuiInteraction};
+use gui::{Gui, GuiInteraction, SeedInteraction};
 use heapless::{String as HString, Vec as HVec};
+use hmac::Hmac;
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use ripemd::Ripemd160;
-use sha2::{Digest, Sha256};
+use pbkdf2::pbkdf2;
+use sha2::{Digest, Sha256, Sha512};
 use siger_core::alloc_path as pathmod;
 use siger_core::{CheetahPub, *};
 use zeroize::Zeroize;
@@ -37,6 +39,7 @@ const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
 // TX queue size: large enough to buffer multiple responses during concurrent requests
 // (e.g., polling GetInfo while seeding with fragments). 3x ENC_BUF_LEN allows ~3 full messages.
 const TX_QUEUE_LEN: usize = ENC_BUF_LEN * 3;
+const BIP39_PBKDF2_ROUNDS: u32 = 2048;
 // lock state (locked by default)
 static mut DEVICE_LOCKED: bool = true;
 static mut DEVICE_BUSY: bool = false;
@@ -105,18 +108,15 @@ fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
     usb_service_tx(usb);
 }
 
-/// Check if USB serial is connected by attempting a non-blocking read
-#[inline]
-fn usb_connected(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) -> bool {
-    usb.read_byte().is_ok()
-}
-
-/// Safe debug logging that only writes if USB is connected to avoid blocking
 #[inline]
 fn usb_debug(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, msg: &[u8]) {
-    if usb_connected(usb) {
+    // NOTE: Avoid writing plaintext logs on the protocol USB serial channel in
+    // release builds; it can corrupt framing for host tooling.
+    #[cfg(debug_assertions)]
+    {
         usb_write(usb, msg);
     }
+    let _ = (usb, msg);
 }
 
 struct SeedStore {
@@ -422,6 +422,7 @@ fn main() -> ! {
         .expect("failed to start app core");
 
     let mut unlock_controller = UnlockController::new();
+    let mut pending_seed_setup: Option<[u8; 64]> = None;
 
     let mut usb = UsbSerialJtag::new(p.USB_DEVICE);
     // Bigger working buffers to accommodate TX_CHUNK
@@ -474,13 +475,45 @@ fn main() -> ! {
                             let ch = char::from(b'0' + *digit);
                             let _ = pin.push(ch);
                         }
-                        match unlock_controller.submit(&pin) {
-                            Ok(()) => {
-                                ui.show_unlocking();
+                        if let Some(mut seed64) = pending_seed_setup.take() {
+                            ui.show_unlocking();
+
+                            unsafe { DEVICE_BUSY = true; }
+                            let mut nvs = NvsStore::new();
+                            let pub_xy = root_pub_from_seed(&seed64);
+                            let outcome = nvs.initialize_pin(pin.as_str(), &seed64, pub_xy);
+                            unsafe { DEVICE_BUSY = false; }
+
+                            match outcome {
+                                Ok((master_key, _slot)) => {
+                                    store_master_key(&master_key);
+                                    set_seed(&seed64);
+                                    unsafe {
+                                        DEVICE_LOCKED = false;
+                                    }
+                                    ui.show_unlock_success();
+                                    usb_debug(&mut usb, b"seed+pin initialized\r\n");
+                                }
+                                Err(NvsError::AlreadyInitialized) => {
+                                    ui.show_pin_failure(None);
+                                    usb_debug(&mut usb, b"already initialized\r\n");
+                                }
+                                Err(_) => {
+                                    ui.show_pin_failure(None);
+                                    usb_debug(&mut usb, b"pin init failed\r\n");
+                                }
                             }
-                            Err(()) => {
-                                ui.show_pin_failure(None);
-                                usb_debug(&mut usb, b"unlock queue busy\r\n");
+
+                            seed64.zeroize();
+                        } else {
+                            match unlock_controller.submit(&pin) {
+                                Ok(()) => {
+                                    ui.show_unlocking();
+                                }
+                                Err(()) => {
+                                    ui.show_pin_failure(None);
+                                    usb_debug(&mut usb, b"unlock queue busy\r\n");
+                                }
                             }
                         }
                     }
@@ -495,9 +528,24 @@ fn main() -> ! {
                         ui.begin_unlock(None);
                         usb_debug(&mut usb, b"locked\r\n");
                     }
-                    GuiInteraction::Seed(_seed_interaction) => {
-                        // TODO: Handle seed interactions (store seed, create PIN, etc.)
-                        usb_debug(&mut usb, b"seed interaction\r\n");
+                    GuiInteraction::Seed(seed_interaction) => match seed_interaction {
+                        SeedInteraction::EntryCompleted(phrase) => {
+                            match bip39_seed_from_phrase(&phrase) {
+                                Ok(seed64) => {
+                                    pending_seed_setup = Some(seed64);
+                                    ui.clear_seed_entry_state();
+                                    ui.begin_unlock(Some(4));
+                                }
+                                Err(()) => {
+                                    ui.show_seed_setup();
+                                    usb_debug(&mut usb, b"seed derive failed\r\n");
+                                }
+                            }
+                        }
+                        SeedInteraction::EntryCancelled => {
+                            pending_seed_setup = None;
+                        }
+                        _ => {}
                     }
                     GuiInteraction::RawTouch(_coord) => {}
                 }
@@ -550,10 +598,7 @@ fn main() -> ! {
                     }
                     if rx.push(b).is_err() {
                         rx.clear();
-                        // Only send error if connected - avoid blocking
-                        if usb_connected(&mut usb) {
-                            send_err(&mut usb, ERR_OVERFLOW, &mut enc);
-                        }
+                        send_err(&mut usb, ERR_OVERFLOW, &mut enc);
                         continue 'main;
                     }
                     if b == 0 {
@@ -1210,6 +1255,26 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
         let _ = usb_write(usb, &enc[..n]);
         let _ = usb_write(usb, &[0]);
     }
+}
+
+fn bip39_seed_from_phrase(phrase: &gui::SeedPhrase) -> Result<[u8; 64], ()> {
+    if phrase.len() != 24 {
+        return Err(());
+    }
+
+    // Join to BIP-39 sentence and derive the 64-byte seed via PBKDF2-HMAC-SHA512.
+    let mut sentence = HString::<320>::new();
+    for (idx, word) in phrase.iter().enumerate() {
+        if idx > 0 {
+            sentence.push(' ').map_err(|_| ())?;
+        }
+        sentence.push_str(word.as_str()).map_err(|_| ())?;
+    }
+
+    let mut out = [0u8; 64];
+    pbkdf2::<Hmac<Sha512>>(sentence.as_str().as_bytes(), b"mnemonic", BIP39_PBKDF2_ROUNDS, &mut out)
+        .map_err(|_| ())?;
+    Ok(out)
 }
 
 fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {

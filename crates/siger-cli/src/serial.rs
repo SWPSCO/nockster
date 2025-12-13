@@ -1,6 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use cobs;
-use postcard::{from_bytes_cobs, to_allocvec};
+use postcard::from_bytes_cobs;
 use serialport::SerialPort;
 use siger_core::{Frame, Msg, Request, Response, PROTO_V1};
 use std::io::ErrorKind;
@@ -12,7 +11,8 @@ impl<T: Read + Write> RW for T {}
 
 pub fn open(port: &str, baud: u32) -> anyhow::Result<Box<dyn serialport::SerialPort>> {
     Ok(serialport::new(port, baud)
-        .timeout(Duration::from_millis(30000))
+        // Keep per-read timeouts short; higher-level calls implement overall deadlines.
+        .timeout(Duration::from_millis(250))
         .open()?)
 }
 
@@ -21,7 +21,12 @@ pub fn send_call(
     id: u32,
     req: Request,
 ) -> anyhow::Result<Response> {
-    send_recv(sp, id, Frame::One(req))
+    let req = Msg {
+        v: PROTO_V1,
+        id,
+        msg: Frame::One(req),
+    };
+    Ok(round_trip_frame(sp, &req)?.msg)
 }
 
 pub fn send_blob(
@@ -31,31 +36,33 @@ pub fn send_blob(
     bytes: &[u8],
 ) -> anyhow::Result<()> {
     let total = bytes.len() as u32;
-    let _: Response = send_recv(
-        sp,
-        0xF000_0000 | xid as u32,
-        Frame::FragBegin {
+    let req = Msg {
+        v: PROTO_V1,
+        id: 0xF000_0000 | xid as u32,
+        msg: Frame::FragBegin {
             id: xid,
             total_len: total,
             kind,
         },
-    )?;
+    };
+    let _: Response = round_trip_frame(sp, &req)?.msg;
     const CHUNK: usize = 200; // fits in 256B postcard frame
     let mut off = 0u32;
     while (off as usize) < bytes.len() {
         let end = core::cmp::min(bytes.len(), off as usize + CHUNK);
         let last = end == bytes.len();
         let chunk = bytes[off as usize..end].to_vec();
-        let _: Response = send_recv(
-            sp,
-            0xF100_0000 | (xid as u32),
-            Frame::FragPart {
+        let req = Msg {
+            v: PROTO_V1,
+            id: 0xF100_0000 | (xid as u32),
+            msg: Frame::FragPart {
                 id: xid,
                 offset: off,
                 chunk,
                 last,
             },
-        )?;
+        };
+        let _: Response = round_trip_frame(sp, &req)?.msg;
         off = end as u32;
     }
     Ok(())
@@ -120,40 +127,6 @@ pub fn send_blob_and_recv_outbound(
     Ok(out)
 }
 
-pub fn send_recv<T: serde::Serialize, R: for<'de> serde::Deserialize<'de>>(
-    sp: &mut dyn serialport::SerialPort,
-    id: u32,
-    msg: T,
-) -> anyhow::Result<R> {
-    let m = Msg {
-        v: PROTO_V1,
-        id,
-        msg,
-    };
-    let buf = to_allocvec(&m)?;
-    let mut framed = vec![0u8; cobs::max_encoding_length(buf.len()) + 1];
-    let n = cobs::encode(&buf, &mut framed);
-    framed.truncate(n);
-    framed.push(0);
-    sp.write_all(&framed)?;
-    sp.flush()?;  // Force USB serial buffer to flush
-
-    let mut rx: Vec<u8> = Vec::with_capacity(512);
-    loop {
-        let mut b = [0u8; 1];
-        if sp.read_exact(&mut b).is_err() {
-            continue;
-        }
-        if b[0] == 0 {
-            break;
-        }
-        rx.push(b[0]);
-    }
-    let resp: Msg<R> = from_bytes_cobs(&mut rx)?;
-    anyhow::ensure!(resp.v == PROTO_V1, "bad protocol version");
-    Ok(resp.msg)
-}
-
 // Read a single Msg<Response> from the wire (COBS-delimited)
 pub fn recv_msg(sp: &mut dyn serialport::SerialPort, max_len: usize) -> Result<Msg<Response>> {
     let mut rx: Vec<u8> = Vec::with_capacity(256);
@@ -182,7 +155,8 @@ pub fn recv_msg(sp: &mut dyn serialport::SerialPort, max_len: usize) -> Result<M
 /// - writes the request (already COBS-framed by postcard, includes trailing 0x00)
 /// - reads until a full COBS frame (ends with 0x00) or overall deadline expires
 pub fn round_trip_frame(sp: &mut dyn SerialPort, req: &Msg<Frame>) -> Result<Msg<Response>> {
-    round_trip_frame_with_deadline(sp, req, Duration::from_secs(30))
+    // Long enough for user confirmation and PBKDF2 on-device.
+    round_trip_frame_with_deadline(sp, req, Duration::from_secs(120))
 }
 
 /// Same as above, but with a caller-specified overall timeout.
@@ -194,7 +168,7 @@ pub fn round_trip_frame_with_deadline(
     // (A) Clear any stale bytes that might be sitting in the RX buffer.
     // We do this by doing non-fatal reads with a tiny timeout for ~50ms.
     let old_to = sp.timeout();
-    sp.set_timeout(Duration::from_millis(50)).ok();
+    sp.set_timeout(Duration::from_millis(20)).ok();
     let mut drain = [0u8; 256];
     for _ in 0..4 {
         match sp.read(&mut drain) {
@@ -204,58 +178,58 @@ pub fn round_trip_frame_with_deadline(
             Err(_) => break,
         }
     }
-    // restore caller’s timeout (if any). If you manage the timeout elsewhere, you can skip this.
-    if let t = old_to {
-        sp.set_timeout(t).ok();
-    } else {
-        // give a short per-read timeout so TimedOut is frequent and cheap
-        sp.set_timeout(Duration::from_millis(150)).ok();
-    }
+    // Give a short per-read timeout so TimedOut is frequent and cheap, and we
+    // can enforce the overall deadline precisely.
+    sp.set_timeout(Duration::from_millis(200)).ok();
 
     // (B) Encode + send request
     let buf = postcard::to_allocvec_cobs(req).context("encode COBS request")?;
     sp.write_all(&buf).context("write request")?;
-    sp.flush().ok();
 
     // (C) Read until a complete COBS frame (ends with 0x00) or deadline.
     let start = Instant::now();
-    let mut rx = Vec::<u8>::with_capacity(256);
-    let mut tmp = [0u8; 256];
+    let resp = loop {
+        let mut rx = Vec::<u8>::with_capacity(256);
 
-    loop {
-        // overall deadline?
-        if start.elapsed() > max_wait {
-            bail!(
-                "serial read: timed out waiting for COBS frame ({} ms)",
-                max_wait.as_millis()
-            );
-        }
+        // Read exactly one COBS-delimited frame (ends with 0x00).
+        loop {
+            if start.elapsed() > max_wait {
+                bail!(
+                    "serial read: timed out waiting for response ({} ms)",
+                    max_wait.as_millis()
+                );
+            }
 
-        match sp.read(&mut tmp) {
-            Ok(n) if n > 0 => {
-                rx.extend_from_slice(&tmp[..n]);
-                // postcard COBS frames end with 0x00
-                if rx.iter().any(|&b| b == 0) {
-                    // keep everything up to and including the first 0x00 in case esp pipelined multiple frames
-                    if let Some(pos) = rx.iter().position(|&b| b == 0) {
-                        let mut frame = rx[..=pos].to_vec();
-                        let resp: Msg<Response> = postcard::from_bytes_cobs(&mut frame)
-                            .context("decode COBS response")?;
-                        return Ok(resp);
+            let mut b = [0u8; 1];
+            match sp.read_exact(&mut b) {
+                Ok(()) => {
+                    rx.push(b[0]);
+                    if rx.len() > (1 << 20) {
+                        bail!("response too large");
+                    }
+                    if b[0] == 0 {
+                        break;
                     }
                 }
-                if rx.len() > (1 << 20) {
-                    bail!("response too large");
-                }
+                Err(e) if e.kind() == ErrorKind::TimedOut => continue,
+                Err(e) => return Err(anyhow!("serial read: {e}")),
             }
-            Ok(_) => {
-                // n == 0: nothing this tick; loop
-            }
-            Err(e) if e.kind() == ErrorKind::TimedOut => {
-                // per-read timeout: harmless; keep waiting until overall deadline
-                continue;
-            }
-            Err(e) => return Err(anyhow!("serial read: {e}")),
         }
-    }
+
+        let mut frame = rx;
+        let resp: Msg<Response> =
+            postcard::from_bytes_cobs(&mut frame).context("decode COBS response")?;
+        if resp.v != PROTO_V1 {
+            return Err(anyhow!("bad protocol version {}", resp.v));
+        }
+        if resp.id != req.id {
+            // Stray response from a previous request; keep waiting for ours.
+            continue;
+        }
+        break resp;
+    };
+
+    // best-effort restore
+    sp.set_timeout(old_to).ok();
+    Ok(resp)
 }

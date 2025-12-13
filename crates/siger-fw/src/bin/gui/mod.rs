@@ -546,6 +546,10 @@ impl<'d> Gui<'d> {
         seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
     }
 
+    pub fn clear_seed_entry_state(&mut self) {
+        self.seed_entry_state.reset();
+    }
+
     pub fn poll_confirmation_result(&mut self) -> Option<bool> {
         self.confirm_result.take()
     }
@@ -866,7 +870,11 @@ impl<'d> Gui<'d> {
             SeedButton::CommitWord => {
                 if let Some(word) = self.seed_entry_state.commit_current() {
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
-                    SeedInteraction::WordCommitted(word)
+                    if let Some(phrase) = self.seed_entry_state.finish() {
+                        SeedInteraction::EntryCompleted(phrase)
+                    } else {
+                        SeedInteraction::WordCommitted(word)
+                    }
                 } else {
                     return None;
                 }

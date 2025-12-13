@@ -1,0 +1,228 @@
+/// Compare signed transactions to identify differences
+/// This test loads both the working reference transaction (jack-test.tx)
+/// and the ESP-signed transaction (demo-tx.tx) and compares them in detail
+use bytes::Bytes;
+use nockapp::noun::slab::NounSlab;
+use nockvm::noun::Noun;
+use noun_serde::NounDecode;
+use std::fs;
+use tx_types::transaction_types::*;
+use tx_types::transaction_types_v0::*;
+use tx_types::RawTransaction;
+
+fn load_tx(path: &str) -> RawTransactionV0 {
+    let data = fs::read(path).expect(&format!("read {}", path));
+    let mut slab: NounSlab = NounSlab::new();
+    let noun: Noun = slab.cue_into(Bytes::from(data)).expect("cue");
+
+    // Try different forms
+    if let Ok(raw) = RawTransaction::from_noun(&noun) {
+        eprintln!("  {} decoded as bare RawTransaction", path);
+        return match raw {
+            RawTransaction::V0(v0) => v0,
+            RawTransaction::V1(_) => panic!("V1 transactions not supported in this test"),
+        };
+    }
+
+    // Try [raw-tx tail] form (tx:transact)
+    if let Ok(cell) = noun.as_cell() {
+        if let Ok(raw) = RawTransaction::from_noun(&cell.head()) {
+            eprintln!("  {} decoded as [raw-tx tail]", path);
+            return match raw {
+                RawTransaction::V0(v0) => v0,
+                RawTransaction::V1(_) => panic!("V1 transactions not supported in this test"),
+            };
+        }
+
+        // Try wallet transaction form [name inputs]
+        if let Ok(tx_wallet) = Transaction::from_noun(&noun) {
+            eprintln!("  {} decoded as Transaction (wallet form)", path);
+            let inputs_v0 = match &tx_wallet.p {
+                Inputs::V0(v0) => v0.clone(),
+                Inputs::V1(_) => panic!("V1 inputs not supported in this test"),
+            };
+            let total_fees: u64 = inputs_v0
+                .p
+                .tap()
+                .iter()
+                .map(|(_, input)| input.spend.fee.value)
+                .sum();
+            return RawTransactionV0 {
+                id: Hash { values: [0; 5] },
+                inputs: inputs_v0,
+                timelock_range: TimelockRange {
+                    min: None,
+                    max: None,
+                },
+                total_fees: Coins { value: total_fees },
+            };
+        }
+    }
+
+    panic!("Could not decode transaction from {}", path);
+}
+
+fn fmt_sig(sig: &SchnorrSignature) -> String {
+    format!(
+        "chal=[{:08x},{:08x},{:08x},{:08x},{:08x},{:08x},{:08x},{:08x}] sig=[{:08x},{:08x},{:08x},{:08x},{:08x},{:08x},{:08x},{:08x}]",
+        sig.chal.values.values[0], sig.chal.values.values[1], sig.chal.values.values[2], sig.chal.values.values[3],
+        sig.chal.values.values[4], sig.chal.values.values[5], sig.chal.values.values[6], sig.chal.values.values[7],
+        sig.sig.values.values[0], sig.sig.values.values[1], sig.sig.values.values[2], sig.sig.values.values[3],
+        sig.sig.values.values[4], sig.sig.values.values[5], sig.sig.values.values[6], sig.sig.values.values[7],
+    )
+}
+
+#[test]
+fn test_compare_jack_vs_demo() {
+    println!("\n{}", "=".repeat(80));
+    println!("COMPARING TRANSACTIONS");
+    println!("{}\n", "=".repeat(80));
+
+    // Files are in the workspace root
+    // Compare ESP-signed demo-tx.tx with reference nw.demo-tx.tx (from nw wallet)
+    let reference = load_tx("../../nw.demo-tx.tx");
+    let esp_signed = load_tx("../../demo-tx.tx");
+
+    println!("Reference nw.demo-tx.tx (wallet-signed):");
+    println!("  Transaction ID: {}", reference.id.to_b58());
+    println!("  Inputs: {}", reference.inputs.p.wyt());
+    println!("  Total fees: {}", reference.total_fees.value);
+
+    println!("\nESP-signed demo-tx.tx:");
+    println!("  Transaction ID: {}", esp_signed.id.to_b58());
+    println!("  Inputs: {}", esp_signed.inputs.p.wyt());
+    println!("  Total fees: {}", esp_signed.total_fees.value);
+
+    if reference.id.to_b58() != esp_signed.id.to_b58() {
+        println!("\n❌ TRANSACTION IDs DIFFER!");
+    } else {
+        println!("\n✓ Transaction IDs match");
+    }
+
+    // Compare each input
+    println!("\n{}", "-".repeat(80));
+    println!("COMPARING INPUTS");
+    println!("{}", "-".repeat(80));
+
+    let ref_inputs: Vec<_> = reference.inputs.p.tap();
+    let esp_inputs: Vec<_> = esp_signed.inputs.p.tap();
+
+    if ref_inputs.len() != esp_inputs.len() {
+        println!(
+            "❌ Different number of inputs: {} vs {}",
+            ref_inputs.len(),
+            esp_inputs.len()
+        );
+        return;
+    }
+
+    for (i, ((ref_name, ref_input), (esp_name, esp_input))) in
+        ref_inputs.iter().zip(esp_inputs.iter()).enumerate()
+    {
+        println!("\nInput {}:", i);
+
+        // Compare names
+        if ref_name != esp_name {
+            println!("  ❌ Names differ");
+        } else {
+            println!("  ✓ Names match");
+        }
+
+        // Compare notes
+        if ref_input.note.assets.value != esp_input.note.assets.value {
+            println!(
+                "  ❌ Assets differ: {} vs {}",
+                ref_input.note.assets.value, esp_input.note.assets.value
+            );
+        }
+
+        // Compare spends
+        if ref_input.spend.fee.value != esp_input.spend.fee.value {
+            println!(
+                "  ❌ Fees differ: {} vs {}",
+                ref_input.spend.fee.value, esp_input.spend.fee.value
+            );
+        }
+
+        // Compare signatures
+        let ref_sig_count = ref_input
+            .spend
+            .signature
+            .as_ref()
+            .map(|s| s.map.wyt())
+            .unwrap_or(0);
+        let esp_sig_count = esp_input
+            .spend
+            .signature
+            .as_ref()
+            .map(|s| s.map.wyt())
+            .unwrap_or(0);
+
+        println!(
+            "  Signatures: reference={}, esp={}",
+            ref_sig_count, esp_sig_count
+        );
+
+        if ref_sig_count != esp_sig_count {
+            println!("  ❌ Different number of signatures");
+        } else if ref_sig_count > 0 {
+            let ref_sigs = ref_input.spend.signature.as_ref().unwrap().map.tap();
+            let esp_sigs = esp_input.spend.signature.as_ref().unwrap().map.tap();
+
+            for (j, ((ref_pk, ref_sig), (esp_pk, esp_sig))) in
+                ref_sigs.iter().zip(esp_sigs.iter()).enumerate()
+            {
+                println!("\n  Signature {}:", j);
+
+                // Compare pubkeys
+                if ref_pk != esp_pk {
+                    println!("    ❌ Pubkeys differ");
+                    println!("      Ref PK.x: {:016x?}", &ref_pk.x.values[..3]);
+                    println!("      ESP PK.x: {:016x?}", &esp_pk.x.values[..3]);
+                } else {
+                    println!("    ✓ Pubkeys match: {}", ref_pk.to_b58());
+                }
+
+                // Compare challenge
+                if ref_sig.chal.values.values != esp_sig.chal.values.values {
+                    println!("    ❌ CHALLENGES DIFFER");
+                    println!("      Ref: {:08x?}", ref_sig.chal.values.values);
+                    println!("      ESP: {:08x?}", esp_sig.chal.values.values);
+
+                    // Show which limbs differ
+                    for k in 0..8 {
+                        if ref_sig.chal.values.values[k] != esp_sig.chal.values.values[k] {
+                            println!(
+                                "        Limb {}: {:08x} vs {:08x}",
+                                k, ref_sig.chal.values.values[k], esp_sig.chal.values.values[k]
+                            );
+                        }
+                    }
+                } else {
+                    println!("    ✓ Challenges match");
+                }
+
+                // Compare signature
+                if ref_sig.sig.values.values != esp_sig.sig.values.values {
+                    println!("    ❌ SIGNATURES DIFFER");
+                    println!("      Ref: {:08x?}", ref_sig.sig.values.values);
+                    println!("      ESP: {:08x?}", esp_sig.sig.values.values);
+
+                    // Show which limbs differ
+                    for k in 0..8 {
+                        if ref_sig.sig.values.values[k] != esp_sig.sig.values.values[k] {
+                            println!(
+                                "        Limb {}: {:08x} vs {:08x}",
+                                k, ref_sig.sig.values.values[k], esp_sig.sig.values.values[k]
+                            );
+                        }
+                    }
+                } else {
+                    println!("    ✓ Signatures match");
+                }
+            }
+        }
+    }
+
+    println!("\n{}", "=".repeat(80));
+}

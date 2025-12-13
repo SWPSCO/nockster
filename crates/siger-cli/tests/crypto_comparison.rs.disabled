@@ -1,0 +1,176 @@
+use siger_core::cheetah::T8;
+/// Comparison tests for crypto implementations
+///
+/// This test file compares the current (no-std) cheetah.rs implementation with the reference
+/// (std) implementation to identify any differences in TIP5 hashing or Schnorr signing.
+use tx_types::transaction_types::Hash;
+
+// Current implementation (no-std, used by ESP)
+mod current {
+    use super::*;
+
+    pub fn tip5_hash_words(words: &[u64]) -> [u64; 5] {
+        // Re-export from the current tx-types implementation
+        siger_core::cheetah::test_tip5_hash_words(words)
+    }
+
+    pub fn schnorr_sign_digest(
+        sk_be: [u8; 32],
+        pk: ([u64; 6], [u64; 6]),
+        message: [u64; 5],
+    ) -> (T8, T8) {
+        siger_core::cheetah::schnorr_sign_digest(sk_be, pk, message)
+    }
+}
+
+// Reference implementation (std, known-good from reference/)
+mod reference {
+    use super::*;
+    use nockapp::noun::slab::NounSlab;
+    use nockvm::noun::{Atom, Cell, Noun};
+
+    // Import reference TIP5
+    pub fn tip5_hash_words_via_list(words: &[u64]) -> Hash {
+        let mut slab: NounSlab<nockvm::noun::IndirectAtom> = NounSlab::new();
+
+        // Build Hoon list structure: [a [b [c [d ... 0]]]]
+        let mut list = Atom::new(&mut slab, 0).as_noun(); // Start with nil (0)
+
+        // Build list in reverse order (right-associative)
+        for &element in words.iter().rev() {
+            let atom = Atom::new(&mut slab, element).as_noun();
+            list = Cell::new(&mut slab, atom, list).as_noun();
+        }
+
+        // Hash the list using TIP5
+        tx_types::hashing::tip5::Tip5Hasher::hash_varlen(list).unwrap()
+    }
+}
+
+#[test]
+fn test_tip5_simple_values() {
+    // Test simple values
+    let inputs = vec![
+        vec![1u64],
+        vec![1, 2, 3],
+        vec![1, 2, 3, 4, 5],
+        vec![0; 8],  // Full rate
+        vec![0; 16], // Two rates
+    ];
+
+    for input in inputs {
+        println!("\nTesting TIP5 with input: {:?}", input);
+
+        let current_result = current::tip5_hash_words(&input);
+        let reference_result = reference::tip5_hash_words_via_list(&input);
+
+        println!("Current:   {:016x?}", current_result);
+        println!("Reference: {:016x?}", reference_result.values);
+
+        assert_eq!(
+            current_result, reference_result.values,
+            "TIP5 hash mismatch for input {:?}",
+            input
+        );
+    }
+}
+
+#[test]
+fn test_schnorr_with_known_values() {
+    // Use the test vectors from the schnorr test in cheetah.rs
+    let sk_be: [u8; 32] = [
+        0x12, 0x34, 0x56, 0x78, // MSB
+        0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44, 0x44, 0x55, 0x55, 0x66,
+        0x66, 0x77, 0x77, 0x88, 0x88, 0x99, 0x99, 0xaa, 0xaa, 0xbb, 0xbb, 0xcc, 0xcc, // LSB
+    ];
+
+    let pk = siger_core::cheetah::cheetah_pub_from_sk(sk_be);
+    let message = [1u64, 2, 3, 4, 5];
+
+    println!("\nTesting Schnorr with sk={:02x?}", sk_be);
+    println!("pk.x = {:016x?}", pk[0]);
+    println!("pk.y = {:016x?}", pk[1]);
+    println!("message = {:016x?}", message);
+
+    let (challenge, signature) = current::schnorr_sign_digest(sk_be, pk, message);
+
+    println!("\nCurrent challenge: {:016x?}", challenge.values);
+    println!("Current signature: {:016x?}", signature.values);
+
+    // Expected values from the test
+    let expected_challenge: [u64; 8] = [
+        0x364619a6, // LSW
+        0x6af9178c, 0x46e47b17, 0xf8609591, 0xf4c6b69a, 0x1a511b32, 0xd7e56411,
+        0x2f519cb9, // MSW
+    ];
+
+    println!("Expected challenge: {:016x?}", expected_challenge);
+
+    assert_eq!(challenge.values, expected_challenge, "Challenge mismatch");
+}
+
+#[test]
+fn test_tip5_nonce_generation() {
+    // Test the nonce generation part of Schnorr (TIP5 of pubkey || message)
+    let sk_be: [u8; 32] = [
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x11, 0x22, 0x22, 0x33, 0x33, 0x44,
+        0x44, 0x55, 0x55, 0x66, 0x66, 0x77, 0x77, 0x88, 0x88, 0x99, 0x99, 0xaa, 0xaa, 0xbb, 0xbb,
+        0xcc, 0xcc,
+    ];
+
+    let pk = siger_core::cheetah::cheetah_pub_from_sk(sk_be);
+    let message = [1u64, 2, 3, 4, 5];
+
+    // Build nonce transcript: [pubkey.x, pubkey.y, message]
+    let mut nonce_transcript = [0u64; 6 + 6 + 5];
+    nonce_transcript[..6].copy_from_slice(&pk[0]);
+    nonce_transcript[6..12].copy_from_slice(&pk[1]);
+    nonce_transcript[12..].copy_from_slice(&message);
+
+    println!("\nNonce transcript: {:016x?}", nonce_transcript);
+
+    let current_nonce_digest = current::tip5_hash_words(&nonce_transcript);
+    let reference_nonce_digest = reference::tip5_hash_words_via_list(&nonce_transcript);
+
+    println!("Current nonce digest:   {:016x?}", current_nonce_digest);
+    println!(
+        "Reference nonce digest: {:016x?}",
+        reference_nonce_digest.values
+    );
+
+    assert_eq!(
+        current_nonce_digest, reference_nonce_digest.values,
+        "Nonce digest mismatch"
+    );
+}
+
+#[test]
+fn test_tip5_challenge_generation() {
+    // Test the challenge generation (TIP5 of R || pubkey || message)
+    let test_r = ([1u64; 6], [2u64; 6]);
+    let test_pk = ([3u64; 6], [4u64; 6]);
+    let test_message = [5u64, 6, 7, 8, 9];
+
+    let mut chal_transcript = [0u64; 6 + 6 + 6 + 6 + 5];
+    chal_transcript[..6].copy_from_slice(&test_r.0);
+    chal_transcript[6..12].copy_from_slice(&test_r.1);
+    chal_transcript[12..18].copy_from_slice(&test_pk[0]);
+    chal_transcript[18..24].copy_from_slice(&test_pk[1]);
+    chal_transcript[24..].copy_from_slice(&test_message);
+
+    println!("\nChallenge transcript: {:016x?}", chal_transcript);
+
+    let current_chal_digest = current::tip5_hash_words(&chal_transcript);
+    let reference_chal_digest = reference::tip5_hash_words_via_list(&chal_transcript);
+
+    println!("Current challenge digest:   {:016x?}", current_chal_digest);
+    println!(
+        "Reference challenge digest: {:016x?}",
+        reference_chal_digest.values
+    );
+
+    assert_eq!(
+        current_chal_digest, reference_chal_digest.values,
+        "Challenge digest mismatch"
+    );
+}

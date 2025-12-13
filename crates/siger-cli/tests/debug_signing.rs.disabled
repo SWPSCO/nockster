@@ -1,0 +1,129 @@
+/// Debug test to trace through signing step-by-step
+/// This will help identify exactly where ESP and reference implementations diverge
+use siger_core::cheetah::{cheetah_pub_from_sk, schnorr_sign_digest, test_tip5_hash_words};
+use siger_core::cheetah::utils::{add_mod_n, be32_atom_to_t8_le, mul_mod_n, trunc_g_order_to_be32};
+
+#[test]
+fn test_debug_demo_tx_signing() {
+    println!("\n{}", "=".repeat(80));
+    println!("DEBUG: Step-by-step signing for demo-tx");
+    println!("{}\n", "=".repeat(80));
+
+    // Use the known mnemonic to derive the master key
+    let mnemonic = "around squeeze nerve chronic trophy kiwi enroll identify depth bicycle radio gate critic child claim outer detect plug market visual stuff finish crime abuse";
+
+    let seed = siger_core::cheetah::bip39_to_seed(mnemonic, "").expect("bip39");
+    let (sk_be, _cc) = siger_core::cheetah::master_from_seed(&seed);
+
+    println!("Secret key (BE): {:02x?}", sk_be);
+
+    let pk = cheetah_pub_from_sk(sk_be);
+    println!("Public key:");
+    println!("  x: {:016x?}", pk[0]);
+    println!("  y: {:016x?}", pk[1]);
+
+    // This is the message hash from demo-tx.draft
+    // You can get this by running: siger-cli sign-draft and looking at the output
+    // For now, let's use a test message
+    let message = [
+        0xb5a460c35639f670,
+        0x5669f17d0d1c673b,
+        0x7117e0793673d153,
+        0x08351a9913062377,
+        0xcf9bbbba73a69824,
+    ];
+
+    println!("\nMessage hash: {:016x?}", message);
+
+    // Step through signing manually
+    println!("\n--- NONCE GENERATION (FLAT ARRAY) ---");
+    let mut nonce_transcript = [0u64; 17];
+    nonce_transcript[..6].copy_from_slice(&pk[0]);
+    nonce_transcript[6..12].copy_from_slice(&pk[1]);
+    nonce_transcript[12..].copy_from_slice(&message);
+
+    let nonce_digest_flat = test_tip5_hash_words(&nonce_transcript);
+    println!("Nonce digest (flat): {:016x?}", nonce_digest_flat);
+
+    println!("\n--- NONCE GENERATION (NOUN LIST) ---");
+    use nockapp::noun::slab::NounSlab;
+    use nockvm::noun::{Atom, Cell};
+    let mut slab: NounSlab = NounSlab::new();
+    let mut list = Atom::new(&mut slab, 0).as_noun();
+    for &element in nonce_transcript.iter().rev() {
+        let atom = Atom::new(&mut slab, element).as_noun();
+        list = Cell::new(&mut slab, atom, list).as_noun();
+    }
+    let nonce_digest_noun = tx_types::hashing::tip5::Tip5Hasher::hash_varlen(list).unwrap();
+    println!("Nonce digest (noun): {:016x?}", nonce_digest_noun.values);
+
+    let nonce_digest = nonce_digest_noun.values;
+
+    let nonce_be = trunc_g_order_to_be32(nonce_digest);
+    println!("Nonce (truncated): {:02x?}", nonce_be);
+
+    println!("\n--- R POINT CALCULATION ---");
+    let r_pt = cheetah_pub_from_sk(nonce_be);
+    println!("R.x: {:016x?}", r_pt[0]);
+    println!("R.y: {:016x?}", r_pt[1]);
+
+    println!("\n--- CHALLENGE GENERATION (NOUN LIST) ---");
+    let mut chal_transcript = [0u64; 29];
+    chal_transcript[..6].copy_from_slice(&r_pt[0]);
+    chal_transcript[6..12].copy_from_slice(&r_pt[1]);
+    chal_transcript[12..18].copy_from_slice(&pk[0]);
+    chal_transcript[18..24].copy_from_slice(&pk[1]);
+    chal_transcript[24..].copy_from_slice(&message);
+
+    let mut slab2: NounSlab = NounSlab::new();
+    let mut list2 = Atom::new(&mut slab2, 0).as_noun();
+    for &element in chal_transcript.iter().rev() {
+        let atom = Atom::new(&mut slab2, element).as_noun();
+        list2 = Cell::new(&mut slab2, atom, list2).as_noun();
+    }
+    let chal_digest_noun = tx_types::hashing::tip5::Tip5Hasher::hash_varlen(list2).unwrap();
+    println!("Challenge digest (noun): {:016x?}", chal_digest_noun.values);
+
+    let chal_digest = chal_digest_noun.values;
+
+    let chal_be = trunc_g_order_to_be32(chal_digest);
+    println!("Challenge (truncated BE): {:02x?}", chal_be);
+
+    let chal_t8 = be32_atom_to_t8_le(&chal_be);
+    println!("Challenge (T8 LE): {:08x?}", chal_t8.values);
+
+    println!("\n--- SIGNATURE CALCULATION ---");
+    let chal_times_sk = mul_mod_n(&chal_be, &sk_be);
+    println!("challenge × sk (BE): {:02x?}", chal_times_sk);
+
+    let s_be = add_mod_n(&nonce_be, &chal_times_sk);
+    println!("s = nonce + (challenge × sk) (BE): {:02x?}", s_be);
+
+    let sig_t8 = be32_atom_to_t8_le(&s_be);
+    println!("Signature (T8 LE): {:08x?}", sig_t8.values);
+
+    println!("\n--- FULL SIGNING FUNCTION ---");
+    let (chal_full, sig_full) = schnorr_sign_digest(sk_be, pk, message);
+    println!("Full function challenge: {:08x?}", chal_full.values);
+    println!("Full function signature: {:08x?}", sig_full.values);
+
+    println!("\n--- COMPARISON ---");
+    if chal_t8.values == chal_full.values {
+        println!("✓ Manual challenge matches full function");
+    } else {
+        println!("❌ Manual challenge differs from full function!");
+    }
+
+    if sig_t8.values == sig_full.values {
+        println!("✓ Manual signature matches full function");
+    } else {
+        println!("❌ Manual signature differs from full function!");
+    }
+
+    println!("\n{}", "=".repeat(80));
+    println!("EXPECTED VALUES FROM DEMO-TX:");
+    println!("Challenge: 86273cc1 262e9c6c e2872ab3 eb48df30 f221c3ec ef4d3bae d29a7a62 068a4332");
+    println!("ESP Sig:   e544dc73 c529dd83 77c2beec 7d3c94db 7896fabf 23c20d16 4c1e4b34 432a1aae");
+    println!("Wallet Sig: 6b22da17 e4358f42 87a42c6a 61f1f319 3b75c1c0 782a1013 3d3a8d95 4c9b5333");
+    println!("{}", "=".repeat(80));
+}

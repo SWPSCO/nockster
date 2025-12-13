@@ -32,7 +32,9 @@ const FW_MINOR: u16 = 1;
 const FEAT_CHEETAH: u32 = 1 << 0;
 const FEAT_FRAG: u32 = 1 << 1;
 const FEAT_XPUB: u32 = 1 << 2;
-const MAX_FRAG: usize = 4096; // arbitrary
+// Maximum total size for fragment-assembled payloads (e.g. SignDraft).
+// Keep this bounded to avoid unbounded heap growth on malformed hosts.
+const MAX_FRAG_TOTAL: usize = 64 * 1024;
 const TX_CHUNK: usize = 200;
 const PLAIN_BUF_LEN: usize = 4096;
 const ENC_BUF_LEN: usize = cobs::max_encoding_length(PLAIN_BUF_LEN) + 1;
@@ -132,7 +134,7 @@ struct FragState {
     kind: FragKind,
     total_len: u32,
     next_off: u32,
-    buf: HVec<u8, MAX_FRAG>,
+    buf: Vec<u8>,
 }
 static mut FRAG: Option<FragState> = None;
 // outbound fragment queue
@@ -141,7 +143,7 @@ struct OutFrag {
     id: u16,
     kind: FragKind,
     off: u32,
-    data: HVec<u8, MAX_FRAG>,
+    data: Vec<u8>,
 }
 static mut OUT_FRAG: Option<OutFrag> = None;
 enum UnlockAttempt {
@@ -735,12 +737,15 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
             kind,
         } => {
             unsafe {
+                if (*total_len as usize) > MAX_FRAG_TOTAL {
+                    return Response::Err { code: ERR_OVERFLOW };
+                }
                 FRAG = Some(FragState {
                     id: *id,
                     kind: *kind,
                     total_len: *total_len,
                     next_off: 0,
-                    buf: HVec::new(),
+                    buf: Vec::with_capacity(*total_len as usize),
                 });
             }
             Response::Ok
@@ -762,9 +767,10 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                         code: ERR_BAD_COBS_OR_POSTCARD,
                     };
                 }
-                if st.buf.extend_from_slice(&chunk).is_err() {
+                if st.buf.len() + chunk.len() > (st.total_len as usize) {
                     return Response::Err { code: ERR_OVERFLOW };
                 }
+                st.buf.extend_from_slice(&chunk);
                 st.next_off += chunk.len() as u32;
                 if *last {
                     if st.next_off != st.total_len {
@@ -789,9 +795,45 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                             Response::Ok
                         }
                         FragKind::SignDraft => {
-                            // For now: echo the draft back (wire-up). Replace with actual signing.
-                            let mut out = HVec::<u8, MAX_FRAG>::new();
-                            let _ = out.extend_from_slice(st.buf.as_slice());
+                            if is_device_locked() {
+                                FRAG = None;
+                                return Response::Err {
+                                    code: ERR_DEVICE_LOCKED,
+                                };
+                            }
+                            let slot = match active_slot_index() {
+                                Ok(idx) => idx,
+                                Err(_) => {
+                                    FRAG = None;
+                                    return Response::Err { code: ERR_NO_SEED };
+                                }
+                            };
+                            let path = pathmod::Path::new();
+                            let sk = match derive_child_sk_for_slot(&path, slot) {
+                                Ok(sk) => sk,
+                                Err(_) => {
+                                    FRAG = None;
+                                    return Response::Err { code: ERR_NO_SEED };
+                                }
+                            };
+                            let cfg = siger_core::draft_sign::SignerConfig { sk_be: sk };
+                            let out = match siger_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg)
+                            {
+                                Ok(v) => v,
+                                Err(siger_core::draft_sign::SignDraftError::Unsupported) => {
+                                    FRAG = None;
+                                    return Response::Err {
+                                        code: ERR_UNSUPPORTED_VERSION,
+                                    };
+                                }
+                                Err(_) => {
+                                    FRAG = None;
+                                    return Response::Err {
+                                        code: ERR_BAD_COBS_OR_POSTCARD,
+                                    };
+                                }
+                            };
+
                             let total = out.len() as u32;
                             OUT_FRAG = Some(OutFrag {
                                 msg_id: req_id,
@@ -801,7 +843,6 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                                 data: out,
                             });
                             FRAG = None;
-                            // Kick off outbound stream with FragBegin
                             Response::FragBegin {
                                 id: *id,
                                 total_len: total,

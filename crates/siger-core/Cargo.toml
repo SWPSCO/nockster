@@ -44,3 +44,7 @@ nockvm = { workspace = true, optional = true }
 
 [dev-dependencies]
 hex-literal = "0.4"
+bytes = { workspace = true }
+nockapp = { workspace = true }
+nockvm = { workspace = true }
+noun-serde = { workspace = true }

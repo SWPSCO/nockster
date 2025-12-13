@@ -5356,12 +5356,14 @@ dependencies = [
  "bip32",
  "bip39",
  "bs58",
+ "bytes",
  "heapless",
  "hex-literal 0.4.1",
  "hmac",
  "k256",
  "nockapp",
  "nockvm",
+ "noun-serde",
  "postcard",
  "serde",
  "serde-big-array",
@@ -6448,7 +6450,6 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tx-types"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=b2777159c4eb6dbb585567ae91fba6e540284082#b2777159c4eb6dbb585567ae91fba6e540284082"
 dependencies = [
  "anyhow",
  "bip39",

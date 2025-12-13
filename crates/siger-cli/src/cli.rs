@@ -31,6 +31,9 @@ pub enum Cmd {
     /// send a .draft jam as FragKind::SignTx and receive a blob back
     SignTx(SignTxArgs),
 
+    /// send a jammed transaction noun and have the device parse + sign it (FragKind::SignDraft)
+    SignDraft(SignDraftArgs),
+
     /// inspect a .draft/.tx file
     Inspect(InspectArgs),
 
@@ -96,6 +99,22 @@ pub struct SignTxArgs {
     /// path to signatures json file (apply these signatures instead of signing with device)
     #[arg(long)]
     pub signatures: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct SignDraftArgs {
+    #[arg(long, required = true)]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    #[arg(long, required = true)]
+    pub draft: String,
+    /// Where to write returned blob (defaults to <draft>.tx)
+    #[arg(long)]
+    pub out: Option<String>,
+    /// Seed slot to sign with (default: 0)
+    #[arg(long, default_value_t = 0)]
+    pub slot: u8,
 }
 
 #[derive(Args, Clone)]
@@ -179,6 +198,13 @@ pub fn run() -> anyhow::Result<()> {
             &args.draft,
             args.out.as_deref(),
             args.signatures.as_deref(),
+        ),
+        Cmd::SignDraft(args) => commands::sign_draft::run(
+            &args.port,
+            args.baud,
+            &args.draft,
+            args.out.as_deref(),
+            args.slot,
         ),
         Cmd::Inspect(args) => {
             commands::inspect::run(&args.file, args.dump_noun, args.max_depth, args.max_items)

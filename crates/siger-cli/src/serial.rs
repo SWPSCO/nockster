@@ -45,7 +45,10 @@ pub fn send_blob(
             kind,
         },
     };
-    let _: Response = round_trip_frame(sp, &req)?.msg;
+    let begin_resp: Msg<Response> = round_trip_frame(sp, &req)?;
+    if let Response::Err { code } = begin_resp.msg {
+        return Err(anyhow!("device returned error code {code}"));
+    }
     const CHUNK: usize = 200; // fits in 256B postcard frame
     let mut off = 0u32;
     while (off as usize) < bytes.len() {
@@ -75,17 +78,69 @@ pub fn send_blob_and_recv_outbound(
     bytes: &[u8],
 ) -> Result<Vec<u8>> {
     // Inbound frag (host -> device)
-    send_blob(sp, xid, kind, bytes)?;
-
-    // Expect outbound FragBegin
-    let rb: Msg<Response> = recv_msg(sp, 8 * 1024)?;
-    let (msg_id, total, kind2, frag_id) = match rb.msg {
-        Response::FragBegin {
-            id,
-            total_len,
+    //
+    // Note: the firmware may reply with `Response::FragBegin` directly to the
+    // final `FragPart` (kicking off the outbound stream immediately). We
+    // capture that and treat it as the outbound begin.
+    let total = bytes.len() as u32;
+    let req = Msg {
+        v: PROTO_V1,
+        id: 0xF000_0000 | xid as u32,
+        msg: Frame::FragBegin {
+            id: xid,
+            total_len: total,
             kind,
-        } => (rb.id, total_len, kind, id),
-        other => return Err(anyhow!("expected outbound FragBegin, got {:?}", other)),
+        },
+    };
+    let _: Response = round_trip_frame(sp, &req)?.msg;
+
+    const CHUNK: usize = 200; // fits in 256B postcard frame
+    let mut off = 0u32;
+    let mut outbound_begin: Option<(u32, u32, siger_core::FragKind, u16)> = None;
+    while (off as usize) < bytes.len() {
+        let end = core::cmp::min(bytes.len(), off as usize + CHUNK);
+        let last = end == bytes.len();
+        let chunk = bytes[off as usize..end].to_vec();
+        let req = Msg {
+            v: PROTO_V1,
+            id: 0xF100_0000 | (xid as u32),
+            msg: Frame::FragPart {
+                id: xid,
+                offset: off,
+                chunk,
+                last,
+            },
+        };
+        let resp: Msg<Response> = round_trip_frame(sp, &req)?;
+        if let Response::Err { code } = resp.msg {
+            return Err(anyhow!("device returned error code {code}"));
+        }
+        if last {
+            if let Response::FragBegin {
+                id,
+                total_len,
+                kind: k,
+            } = resp.msg
+            {
+                outbound_begin = Some((resp.id, total_len, k, id));
+            }
+        }
+        off = end as u32;
+    }
+
+    let (msg_id, total, kind2, frag_id) = if let Some(v) = outbound_begin {
+        v
+    } else {
+        // Expect outbound FragBegin as a separate message.
+        let rb: Msg<Response> = recv_msg(sp, 8 * 1024)?;
+        match rb.msg {
+            Response::FragBegin {
+                id,
+                total_len,
+                kind,
+            } => (rb.id, total_len, kind, id),
+            other => return Err(anyhow!("expected outbound FragBegin, got {:?}", other)),
+        }
     };
     if kind2 != kind {
         return Err(anyhow!("outbound kind mismatch"));

@@ -1,0 +1,772 @@
+extern crate alloc;
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::draft_sign::noun_codec::{cue, jam, Arena, CodecError, Noun};
+use crate::draft_sign::tip5;
+use crate::draft_sign::zmap::{self, ZMapError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignDraftError {
+    Codec(CodecError),
+    Tip5(tip5::Tip5Error),
+    ZMap(ZMapError),
+    Malformed,
+    Unsupported,
+}
+
+impl From<CodecError> for SignDraftError {
+    fn from(e: CodecError) -> Self {
+        Self::Codec(e)
+    }
+}
+
+impl From<tip5::Tip5Error> for SignDraftError {
+    fn from(e: tip5::Tip5Error) -> Self {
+        Self::Tip5(e)
+    }
+}
+
+impl From<ZMapError> for SignDraftError {
+    fn from(e: ZMapError) -> Self {
+        Self::ZMap(e)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SignerConfig {
+    /// Cheetah secret key (32-byte big-endian).
+    pub sk_be: [u8; 32],
+}
+
+// tx-types constant:
+// Hash::from_b58("6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ayaV4A")
+const LOCK_MERKLE_AXIS_HASH: [u64; 5] = [
+    1988594973584463658,
+    8158631336633700141,
+    2161567007650232260,
+    460329990575991155,
+    8368574252173164961,
+];
+
+fn cheetah_pub_from_sk_tuple(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
+    #[cfg(feature = "std")]
+    {
+        let pk = crate::cheetah_pub_from_sk(sk_be);
+        (pk[0], pk[1])
+    }
+
+    #[cfg(not(feature = "std"))]
+    {
+        crate::cheetah_pub_from_sk(sk_be)
+    }
+}
+
+fn uncons(noun: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+    match noun {
+        Noun::Cell(id) => {
+            let cell = arena.cell(id);
+            Some((cell.head, cell.tail))
+        }
+        _ => None,
+    }
+}
+
+fn tuple2(noun: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+    uncons(noun, arena)
+}
+
+fn tuple3(noun: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun)> {
+    let (a, bc) = uncons(noun, arena)?;
+    let (b, c) = uncons(bc, arena)?;
+    Some((a, b, c))
+}
+
+fn tuple4(noun: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun, Noun)> {
+    let (a, bcd) = uncons(noun, arena)?;
+    let (b, cd) = uncons(bcd, arena)?;
+    let (c, d) = uncons(cd, arena)?;
+    Some((a, b, c, d))
+}
+
+fn tuple5(noun: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun, Noun, Noun)> {
+    let (a, bcde) = uncons(noun, arena)?;
+    let (b, cde) = uncons(bcde, arena)?;
+    let (c, de) = uncons(cde, arena)?;
+    let (d, e) = uncons(de, arena)?;
+    Some((a, b, c, d, e))
+}
+
+fn noun_atom_u64(noun: Noun, arena: &Arena) -> Option<u64> {
+    match noun {
+        Noun::Atom(id) => arena.atom_u64(id),
+        _ => None,
+    }
+}
+
+fn build_tuple(arena: &mut Arena, elems: &[Noun]) -> Noun {
+    if elems.is_empty() {
+        return arena.atom0();
+    }
+    let mut res = *elems.last().unwrap();
+    for &n in elems[..elems.len() - 1].iter().rev() {
+        res = arena.alloc_cell(n, res);
+    }
+    res
+}
+
+fn build_hash_noun(arena: &mut Arena, digest: [u64; 5]) -> Noun {
+    let elems = [
+        arena.alloc_atom_u64(digest[0]),
+        arena.alloc_atom_u64(digest[1]),
+        arena.alloc_atom_u64(digest[2]),
+        arena.alloc_atom_u64(digest[3]),
+        arena.alloc_atom_u64(digest[4]),
+    ];
+    build_tuple(arena, &elems)
+}
+
+fn parse_hash(noun: Noun, arena: &Arena) -> Option<[u64; 5]> {
+    let (a0, rest) = uncons(noun, arena)?;
+    let (a1, rest) = uncons(rest, arena)?;
+    let (a2, rest) = uncons(rest, arena)?;
+    let (a3, a4) = uncons(rest, arena)?;
+    Some([
+        noun_atom_u64(a0, arena)?,
+        noun_atom_u64(a1, arena)?,
+        noun_atom_u64(a2, arena)?,
+        noun_atom_u64(a3, arena)?,
+        noun_atom_u64(a4, arena)?,
+    ])
+}
+
+fn hashable_noun_digest(noun: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    match noun {
+        Noun::Atom(_) => Ok(tip5::hash_noun_varlen(noun, arena)?),
+        Noun::Cell(id) => {
+            let cell = arena.cell(id);
+            let lh = hashable_noun_digest(cell.head, arena)?;
+            let rh = hashable_noun_digest(cell.tail, arena)?;
+            Ok(tip5::hash_ten_cell(lh, rh)?)
+        }
+    }
+}
+
+fn decompose_map(map: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun)> {
+    let (node, tail) = uncons(map, arena)?;
+    if let Some((left, right)) = uncons(tail, arena) {
+        Some((node, left, right))
+    } else {
+        Some((node, tail, arena.atom0()))
+    }
+}
+
+fn decompose_pair(pair: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+    uncons(pair, arena)
+}
+
+fn hash_note_data(map: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    // note-data hashable: empty map hashes as leaf+0
+    if map == arena.atom0() {
+        return Ok(tip5::hash_noun_varlen(arena.atom0(), arena)?);
+    }
+
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+
+    let key_digest = tip5::hash_noun_varlen(key, arena)?;
+    let value_digest = hashable_noun_digest(value, arena)?;
+    let node_digest = tip5::hash_ten_cell(key_digest, value_digest)?;
+
+    let left_digest = hash_note_data(left, arena)?;
+    let right_digest = hash_note_data(right, arena)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(node_digest, children_digest)?)
+}
+
+fn hash_source_hashable(source: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    // Source noun: [p=is_hash is_coinbase=bool]
+    let (p_noun, is_coinbase_noun) = tuple2(source, arena).ok_or(SignDraftError::Malformed)?;
+    let p = parse_hash(p_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let is_coinbase = noun_atom_u64(is_coinbase_noun, arena).ok_or(SignDraftError::Malformed)?;
+    if is_coinbase > 1 {
+        return Err(SignDraftError::Malformed);
+    }
+
+    // Hashable(source) = [hash+p leaf+bool]
+    let bool_digest = tip5::hash_noun_varlen(is_coinbase_noun, arena)?;
+    Ok(tip5::hash_ten_cell(p, bool_digest)?)
+}
+
+fn hash_output_source_unit(output_source: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    // Option<Source> noun:
+    // - None: 0
+    // - Some: [0 source]
+    if output_source == arena.atom0() {
+        return Ok(tip5::hash_noun_varlen(arena.atom0(), arena)?);
+    }
+    let (tag, src) = tuple2(output_source, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(tag, arena) != Some(0) {
+        return Err(SignDraftError::Malformed);
+    }
+
+    let null_digest = tip5::hash_noun_varlen(arena.atom0(), arena)?;
+    let src_digest = hash_source_hashable(src, arena)?;
+    Ok(tip5::hash_ten_cell(null_digest, src_digest)?)
+}
+
+fn hash_seed_sig_hashable(seed: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    let (output_source, lock_root_noun, note_data_noun, gift_noun, parent_hash_noun) =
+        tuple5(seed, arena).ok_or(SignDraftError::Malformed)?;
+
+    let d1 = hash_output_source_unit(output_source, arena)?;
+    let d2 = parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let note_data_hash = hash_note_data(note_data_noun, arena)?;
+    let d3 = note_data_hash;
+    let d4 = tip5::hash_noun_varlen(gift_noun, arena)?;
+    let d5 = parse_hash(parent_hash_noun, arena).ok_or(SignDraftError::Malformed)?;
+
+    // cell-chain fold from the right: [d1 [d2 [d3 [d4 d5]]]]
+    let mut acc = d5;
+    acc = tip5::hash_ten_cell(d4, acc)?;
+    acc = tip5::hash_ten_cell(d3, acc)?;
+    acc = tip5::hash_ten_cell(d2, acc)?;
+    acc = tip5::hash_ten_cell(d1, acc)?;
+    Ok(acc)
+}
+
+fn hash_seeds_sig(seeds_zset: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    if seeds_zset == arena.atom0() {
+        return Ok(tip5::hash_noun_varlen(arena.atom0(), arena)?);
+    }
+
+    let (seed, lr) = uncons(seeds_zset, arena).ok_or(SignDraftError::Malformed)?;
+    let (left, right) = uncons(lr, arena).ok_or(SignDraftError::Malformed)?;
+
+    let node_digest = hash_seed_sig_hashable(seed, arena)?;
+    let left_digest = hash_seeds_sig(left, arena)?;
+    let right_digest = hash_seeds_sig(right, arena)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(node_digest, children_digest)?)
+}
+
+fn spend_v1_sig_hash(spend_body: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    let (_witness, seeds, fee) = tuple3(spend_body, arena).ok_or(SignDraftError::Malformed)?;
+    let seeds_digest = hash_seeds_sig(seeds, arena)?;
+    let fee_digest = tip5::hash_noun_varlen(fee, arena)?;
+    Ok(tip5::hash_ten_cell(seeds_digest, fee_digest)?)
+}
+
+fn sign_spend_v1(
+    arena: &mut Arena,
+    spend: Noun,
+    pk_noun: Noun,
+    pkh_key_noun: Noun,
+    cfg: &SignerConfig,
+    pk_coords: ([u64; 6], [u64; 6]),
+) -> Result<Noun, SignDraftError> {
+    let (ver_noun, body_noun) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(ver_noun, arena) != Some(1) {
+        return Ok(spend);
+    }
+
+    // SpendV1 body: [witness seeds fee]
+    let (witness, seeds, fee) = tuple3(body_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let (lmp, pkh_map, hax, tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+
+    let msg5 = spend_v1_sig_hash(body_noun, arena)?;
+    let hash = crate::Hash { values: msg5 };
+    let (chal, sig) = crate::schnorr_sign_tx(cfg.sk_be, pk_coords, hash.values);
+
+    let chal_elems = [
+        arena.alloc_atom_u64(chal.values[0]),
+        arena.alloc_atom_u64(chal.values[1]),
+        arena.alloc_atom_u64(chal.values[2]),
+        arena.alloc_atom_u64(chal.values[3]),
+        arena.alloc_atom_u64(chal.values[4]),
+        arena.alloc_atom_u64(chal.values[5]),
+        arena.alloc_atom_u64(chal.values[6]),
+        arena.alloc_atom_u64(chal.values[7]),
+    ];
+    let chal_noun = build_tuple(arena, &chal_elems);
+
+    let sig_elems = [
+        arena.alloc_atom_u64(sig.values[0]),
+        arena.alloc_atom_u64(sig.values[1]),
+        arena.alloc_atom_u64(sig.values[2]),
+        arena.alloc_atom_u64(sig.values[3]),
+        arena.alloc_atom_u64(sig.values[4]),
+        arena.alloc_atom_u64(sig.values[5]),
+        arena.alloc_atom_u64(sig.values[6]),
+        arena.alloc_atom_u64(sig.values[7]),
+    ];
+    let sig_noun = build_tuple(arena, &sig_elems);
+
+    // SchnorrSignature = [chal sig]
+    let schnorr_sig = build_tuple(arena, &[chal_noun, sig_noun]);
+    // PkhSignatureValue = [pk sig]
+    let value_noun = build_tuple(arena, &[pk_noun, schnorr_sig]);
+
+    let new_pkh_map = zmap::canonical_zmap_put(arena, pkh_map, pkh_key_noun, value_noun)?;
+    let new_witness = build_tuple(arena, &[lmp, new_pkh_map, hax, tim]);
+    let new_body = build_tuple(arena, &[new_witness, seeds, fee]);
+    Ok(build_tuple(arena, &[ver_noun, new_body]))
+}
+
+fn sign_spends_map(
+    arena: &mut Arena,
+    spends: Noun,
+    pk_noun: Noun,
+    pkh_key_noun: Noun,
+    cfg: &SignerConfig,
+    pk_coords: ([u64; 6], [u64; 6]),
+) -> Result<Noun, SignDraftError> {
+    if spends == arena.atom0() {
+        return Ok(spends);
+    }
+
+    let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, spend) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+
+    let new_left = sign_spends_map(arena, left, pk_noun, pkh_key_noun, cfg, pk_coords)?;
+    let new_right = sign_spends_map(arena, right, pk_noun, pkh_key_noun, cfg, pk_coords)?;
+    let new_spend = sign_spend_v1(arena, spend, pk_noun, pkh_key_noun, cfg, pk_coords)?;
+
+    let new_node = build_tuple(arena, &[key, new_spend]);
+    Ok(build_tuple(arena, &[new_node, new_left, new_right]))
+}
+
+struct TxIdCtx {
+    null_digest: [u64; 5],
+    fake_digest: [u64; 5],
+    version_digest: [u64; 5],
+}
+
+fn mul_add_limbs_le(acc: &mut Vec<u64>, mul: u64, add: u64) {
+    let mut carry = add as u128;
+    for limb in acc.iter_mut() {
+        let prod = (*limb as u128) * (mul as u128) + carry;
+        *limb = prod as u64;
+        carry = prod >> 64;
+    }
+    if carry != 0 {
+        acc.push(carry as u64);
+    }
+}
+
+fn digest_to_b58(digest: [u64; 5]) -> String {
+    let digits = [digest[4], digest[3], digest[2], digest[1], digest[0]];
+    let mut acc: Vec<u64> = Vec::new();
+    acc.push(0);
+    for digit in digits {
+        mul_add_limbs_le(&mut acc, tip5::GOLDILOCKS_P, digit);
+    }
+
+    while acc.len() > 1 && acc.last() == Some(&0) {
+        acc.pop();
+    }
+
+    let mut bytes_be: Vec<u8> = Vec::new();
+    let mut it = acc.iter().rev();
+    if let Some(&ms) = it.next() {
+        let ms_be = ms.to_be_bytes();
+        let first_non_zero = ms_be.iter().position(|&b| b != 0).unwrap_or(ms_be.len());
+        bytes_be.extend_from_slice(&ms_be[first_non_zero..]);
+        for &limb in it {
+            bytes_be.extend_from_slice(&limb.to_be_bytes());
+        }
+    }
+
+    bs58::encode(bytes_be).into_string()
+}
+
+fn hash_nname_hashable(noun: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    let (first_noun, rest) = uncons(noun, arena).ok_or(SignDraftError::Malformed)?;
+    let (second_noun, end) = uncons(rest, arena).ok_or(SignDraftError::Malformed)?;
+    let first = parse_hash(first_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let second = parse_hash(second_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let end_digest = tip5::hash_noun_varlen(end, arena)?;
+    let tail = tip5::hash_ten_cell(second, end_digest)?;
+    Ok(tip5::hash_ten_cell(first, tail)?)
+}
+
+fn hash_zset_hashes(set: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if set == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+    let (value, left, right) = tuple3(set, arena).ok_or(SignDraftError::Malformed)?;
+    let value_digest = parse_hash(value, arena).ok_or(SignDraftError::Malformed)?;
+    let left_digest = hash_zset_hashes(left, arena, ctx)?;
+    let right_digest = hash_zset_hashes(right, arena, ctx)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(value_digest, children_digest)?)
+}
+
+fn hash_optional_leaf(opt: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if opt == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+    let (tag, value) = tuple2(opt, arena).ok_or(SignDraftError::Malformed)?;
+    if tag != arena.atom0() {
+        return Err(SignDraftError::Malformed);
+    }
+    let value_digest = tip5::hash_noun_varlen(value, arena)?;
+    Ok(tip5::hash_ten_cell(ctx.null_digest, value_digest)?)
+}
+
+fn hash_timelock_range(range: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let (min, max) = tuple2(range, arena).ok_or(SignDraftError::Malformed)?;
+    let min_digest = hash_optional_leaf(min, arena, ctx)?;
+    let max_digest = hash_optional_leaf(max, arena, ctx)?;
+    Ok(tip5::hash_ten_cell(min_digest, max_digest)?)
+}
+
+fn hash_lock_primitive_hashable(lp: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let (header, body) = tuple2(lp, arena).ok_or(SignDraftError::Malformed)?;
+    let Noun::Atom(header_id) = header else {
+        return Err(SignDraftError::Malformed);
+    };
+
+    if arena.atom_eq_bytes(header_id, b"pkh") {
+        let (m, h) = tuple2(body, arena).ok_or(SignDraftError::Malformed)?;
+        let tag_digest = tip5::hash_noun_varlen(header, arena)?;
+        let m_digest = tip5::hash_noun_varlen(m, arena)?;
+        let h_digest = hash_zset_hashes(h, arena, ctx)?;
+        let inner = tip5::hash_ten_cell(m_digest, h_digest)?;
+        return Ok(tip5::hash_ten_cell(tag_digest, inner)?);
+    }
+
+    if arena.atom_eq_bytes(header_id, b"tim") {
+        let (rel, abs) = tuple2(body, arena).ok_or(SignDraftError::Malformed)?;
+        let tag_digest = tip5::hash_noun_varlen(header, arena)?;
+        let rel_digest = hash_timelock_range(rel, arena, ctx)?;
+        let abs_digest = hash_timelock_range(abs, arena, ctx)?;
+        let inner = tip5::hash_ten_cell(rel_digest, abs_digest)?;
+        return Ok(tip5::hash_ten_cell(tag_digest, inner)?);
+    }
+
+    if arena.atom_eq_bytes(header_id, b"hax") {
+        let tag_digest = tip5::hash_noun_varlen(header, arena)?;
+        return Ok(tip5::hash_ten_cell(tag_digest, ctx.fake_digest)?);
+    }
+
+    if arena.atom_eq_bytes(header_id, b"brn") {
+        let tag_digest = tip5::hash_noun_varlen(header, arena)?;
+        return Ok(tip5::hash_ten_cell(tag_digest, ctx.null_digest)?);
+    }
+
+    Err(SignDraftError::Unsupported)
+}
+
+fn hash_lock_primitives_list(prims: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if prims == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+    let (head, tail) = uncons(prims, arena).ok_or(SignDraftError::Malformed)?;
+    let head_digest = hash_lock_primitive_hashable(head, arena, ctx)?;
+    let tail_digest = hash_lock_primitives_list(tail, arena, ctx)?;
+    Ok(tip5::hash_ten_cell(head_digest, tail_digest)?)
+}
+
+fn hash_merkle_proof_hashable(merk: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let (root_noun, path) = tuple2(merk, arena).ok_or(SignDraftError::Malformed)?;
+    let root = parse_hash(root_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let path_digest = hash_hash_list_hashes(path, arena, ctx)?;
+    Ok(tip5::hash_ten_cell(root, path_digest)?)
+}
+
+fn hash_hash_list_hashes(list: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if list == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+    let (head, tail) = uncons(list, arena).ok_or(SignDraftError::Malformed)?;
+    let head_digest = parse_hash(head, arena).ok_or(SignDraftError::Malformed)?;
+    let tail_digest = hash_hash_list_hashes(tail, arena, ctx)?;
+    Ok(tip5::hash_ten_cell(head_digest, tail_digest)?)
+}
+
+fn hash_lock_merkle_proof_hashable(lmp: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let (spend_condition, _axis, merk_proof) = tuple3(lmp, arena).ok_or(SignDraftError::Malformed)?;
+    let spend_condition_hash = hash_lock_primitives_list(spend_condition, arena, ctx)?;
+    let merk_digest = hash_merkle_proof_hashable(merk_proof, arena, ctx)?;
+    let axis_digest = LOCK_MERKLE_AXIS_HASH;
+    let inner = tip5::hash_ten_cell(axis_digest, merk_digest)?;
+    Ok(tip5::hash_ten_cell(spend_condition_hash, inner)?)
+}
+
+fn hash_hax_map_hashable(map: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+
+    let key_digest = parse_hash(key, arena).ok_or(SignDraftError::Malformed)?;
+    let value_digest = hashable_noun_digest(value, arena)?;
+    let node_digest = tip5::hash_ten_cell(key_digest, value_digest)?;
+
+    let left_digest = hash_hax_map_hashable(left, arena, ctx)?;
+    let right_digest = hash_hax_map_hashable(right, arena, ctx)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(node_digest, children_digest)?)
+}
+
+fn hash_pkh_signature_value_hashable(value: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    let (pk, sig) = tuple2(value, arena).ok_or(SignDraftError::Malformed)?;
+    let pk_digest = tip5::hash_noun_varlen(pk, arena)?;
+    let sig_digest = tip5::hash_noun_varlen(sig, arena)?;
+    Ok(tip5::hash_ten_cell(pk_digest, sig_digest)?)
+}
+
+fn hash_pkh_signature_map_hashable(map: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+
+    let key_digest = parse_hash(key, arena).ok_or(SignDraftError::Malformed)?;
+    let value_digest = hash_pkh_signature_value_hashable(value, arena)?;
+    let node_digest = tip5::hash_ten_cell(key_digest, value_digest)?;
+
+    let left_digest = hash_pkh_signature_map_hashable(left, arena, ctx)?;
+    let right_digest = hash_pkh_signature_map_hashable(right, arena, ctx)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(node_digest, children_digest)?)
+}
+
+fn hash_seed_regular_hashable(seed: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    let (_output_source, lock_root_noun, note_data_noun, gift_noun, parent_hash_noun) =
+        tuple5(seed, arena).ok_or(SignDraftError::Malformed)?;
+
+    let lock_root = parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let note_data_hash = hash_note_data(note_data_noun, arena)?;
+    let gift_digest = tip5::hash_noun_varlen(gift_noun, arena)?;
+    let parent_hash = parse_hash(parent_hash_noun, arena).ok_or(SignDraftError::Malformed)?;
+
+    let mut acc = parent_hash;
+    acc = tip5::hash_ten_cell(gift_digest, acc)?;
+    acc = tip5::hash_ten_cell(note_data_hash, acc)?;
+    acc = tip5::hash_ten_cell(lock_root, acc)?;
+    Ok(acc)
+}
+
+fn hash_seeds_regular(seeds_zset: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if seeds_zset == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+
+    let (seed, lr) = uncons(seeds_zset, arena).ok_or(SignDraftError::Malformed)?;
+    let (left, right) = uncons(lr, arena).ok_or(SignDraftError::Malformed)?;
+
+    let node_digest = hash_seed_regular_hashable(seed, arena)?;
+    let left_digest = hash_seeds_regular(left, arena, ctx)?;
+    let right_digest = hash_seeds_regular(right, arena, ctx)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(node_digest, children_digest)?)
+}
+
+fn hash_witness_hashable(witness: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let (lmp, pkh_map, hax, tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+
+    let lmp_hash = hash_lock_merkle_proof_hashable(lmp, arena, ctx)?;
+    let pkh_hash = hash_pkh_signature_map_hashable(pkh_map, arena, ctx)?;
+    let hax_hash = hash_hax_map_hashable(hax, arena, ctx)?;
+    let tim_digest = tip5::hash_noun_varlen(tim, arena)?;
+
+    let mut acc = tim_digest;
+    acc = tip5::hash_ten_cell(hax_hash, acc)?;
+    acc = tip5::hash_ten_cell(pkh_hash, acc)?;
+    acc = tip5::hash_ten_cell(lmp_hash, acc)?;
+    Ok(acc)
+}
+
+fn hash_spend_v1_hashable(spend: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let (ver_noun, body_noun) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(ver_noun, arena) != Some(1) {
+        return Err(SignDraftError::Unsupported);
+    }
+
+    let (witness, seeds, fee) = tuple3(body_noun, arena).ok_or(SignDraftError::Malformed)?;
+    let witness_digest = hash_witness_hashable(witness, arena, ctx)?;
+    let seeds_digest = hash_seeds_regular(seeds, arena, ctx)?;
+    let fee_digest = tip5::hash_noun_varlen(fee, arena)?;
+
+    let inner = tip5::hash_ten_cell(seeds_digest, fee_digest)?;
+    let body_digest = tip5::hash_ten_cell(witness_digest, inner)?;
+    let ver_digest = tip5::hash_noun_varlen(ver_noun, arena)?;
+    Ok(tip5::hash_ten_cell(ver_digest, body_digest)?)
+}
+
+fn hash_spends_hashable(spends: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    if spends == arena.atom0() {
+        return Ok(ctx.null_digest);
+    }
+
+    let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
+    let (name_noun, spend_noun) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+
+    let name_digest = hash_nname_hashable(name_noun, arena)?;
+    let spend_digest = hash_spend_v1_hashable(spend_noun, arena, ctx)?;
+    let node_digest = tip5::hash_ten_cell(name_digest, spend_digest)?;
+
+    let left_digest = hash_spends_hashable(left, arena, ctx)?;
+    let right_digest = hash_spends_hashable(right, arena, ctx)?;
+    let children_digest = tip5::hash_ten_cell(left_digest, right_digest)?;
+    Ok(tip5::hash_ten_cell(node_digest, children_digest)?)
+}
+
+fn compute_tx_id_v1(spends: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
+    let spends_digest = hash_spends_hashable(spends, arena, ctx)?;
+    Ok(tip5::hash_ten_cell(ctx.version_digest, spends_digest)?)
+}
+
+pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, SignDraftError> {
+    let pk_coords = cheetah_pub_from_sk_tuple(cfg.sk_be);
+
+    let mut arena = Arena::new();
+    let root = cue(draft_jam, &mut arena)?;
+
+    // Build pubkey noun: [x y inf]
+    let x_elems = [
+        arena.alloc_atom_u64(pk_coords.0[0]),
+        arena.alloc_atom_u64(pk_coords.0[1]),
+        arena.alloc_atom_u64(pk_coords.0[2]),
+        arena.alloc_atom_u64(pk_coords.0[3]),
+        arena.alloc_atom_u64(pk_coords.0[4]),
+        arena.alloc_atom_u64(pk_coords.0[5]),
+    ];
+    let x_noun = build_tuple(&mut arena, &x_elems);
+
+    let y_elems = [
+        arena.alloc_atom_u64(pk_coords.1[0]),
+        arena.alloc_atom_u64(pk_coords.1[1]),
+        arena.alloc_atom_u64(pk_coords.1[2]),
+        arena.alloc_atom_u64(pk_coords.1[3]),
+        arena.alloc_atom_u64(pk_coords.1[4]),
+        arena.alloc_atom_u64(pk_coords.1[5]),
+    ];
+    let y_noun = build_tuple(&mut arena, &y_elems);
+
+    let inf_noun = arena.alloc_atom_u64(1);
+    let pk_tuple = [x_noun, y_noun, inf_noun];
+    let pk_noun = build_tuple(&mut arena, &pk_tuple);
+
+    let null_digest = tip5::hash_noun_varlen(arena.atom0(), &arena)?;
+    let fake_atom = arena.alloc_atom_bytes(b"fake");
+    let fake_digest = tip5::hash_noun_varlen(fake_atom, &arena)?;
+    let version_digest = tip5::hash_noun_varlen(inf_noun, &arena)?;
+    let txid_ctx = TxIdCtx {
+        null_digest,
+        fake_digest,
+        version_digest,
+    };
+
+    // pkh = hash-noun-varlen(pubkey noun)
+    let pkh_digest = tip5::hash_noun_varlen(pk_noun, &arena)?;
+    let pkh_key_noun = build_hash_noun(&mut arena, pkh_digest);
+
+    // Detect outer wrapper.
+    enum Outer {
+        RawTx { raw: Noun },
+        TxTransact { raw: Noun, tail: Noun },
+        WalletV1 { spends: Noun },
+    }
+
+    let outer = if let Some((ver, id, _spends)) = tuple3(root, &arena) {
+        if noun_atom_u64(ver, &arena) == Some(1) && parse_hash(id, &arena).is_some() {
+            Some(Outer::RawTx { raw: root })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let outer = if let Some(outer) = outer {
+        outer
+    } else if let Some((head, tail)) = uncons(root, &arena) {
+        if let Some((ver, id, _spends)) = tuple3(head, &arena) {
+            if noun_atom_u64(ver, &arena) == Some(1) && parse_hash(id, &arena).is_some() {
+                Outer::TxTransact { raw: head, tail }
+            } else {
+                return Err(SignDraftError::Unsupported);
+            }
+        } else if let Noun::Atom(_) = head {
+            let spends_ok = if tail == arena.atom0() {
+                true
+            } else if let Some((node, _left, _right)) = decompose_map(tail, &arena) {
+                if let Some((_key, spend)) = decompose_pair(node, &arena) {
+                    if let Some((spend_ver, _body)) = tuple2(spend, &arena) {
+                        noun_atom_u64(spend_ver, &arena) == Some(1)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if spends_ok {
+                Outer::WalletV1 { spends: tail }
+            } else {
+                return Err(SignDraftError::Malformed);
+            }
+        } else {
+            return Err(SignDraftError::Malformed);
+        }
+    } else {
+        return Err(SignDraftError::Malformed);
+    };
+
+    let new_root = match outer {
+        Outer::WalletV1 { spends } => {
+            let new_spends = sign_spends_map(
+                &mut arena,
+                spends,
+                pk_noun,
+                pkh_key_noun,
+                cfg,
+                pk_coords,
+            )?;
+            let tx_id = compute_tx_id_v1(new_spends, &arena, &txid_ctx)?;
+            let name_b58 = digest_to_b58(tx_id);
+            let name_noun = arena.alloc_atom_bytes(name_b58.as_bytes());
+            build_tuple(&mut arena, &[name_noun, new_spends])
+        }
+        Outer::RawTx { raw } => {
+            let (ver, _id, spends) = tuple3(raw, &arena).ok_or(SignDraftError::Malformed)?;
+            let new_spends = sign_spends_map(
+                &mut arena,
+                spends,
+                pk_noun,
+                pkh_key_noun,
+                cfg,
+                pk_coords,
+            )?;
+            let tx_id = compute_tx_id_v1(new_spends, &arena, &txid_ctx)?;
+            let id_noun = build_hash_noun(&mut arena, tx_id);
+            build_tuple(&mut arena, &[ver, id_noun, new_spends])
+        }
+        Outer::TxTransact { raw, tail } => {
+            let (ver, _id, spends) = tuple3(raw, &arena).ok_or(SignDraftError::Malformed)?;
+            let new_spends = sign_spends_map(
+                &mut arena,
+                spends,
+                pk_noun,
+                pkh_key_noun,
+                cfg,
+                pk_coords,
+            )?;
+            let tx_id = compute_tx_id_v1(new_spends, &arena, &txid_ctx)?;
+            let id_noun = build_hash_noun(&mut arena, tx_id);
+            let new_raw = build_tuple(&mut arena, &[ver, id_noun, new_spends]);
+            arena.alloc_cell(new_raw, tail)
+        }
+    };
+
+    Ok(jam(new_root, &arena))
+}

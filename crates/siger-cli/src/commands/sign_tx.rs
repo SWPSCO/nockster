@@ -237,13 +237,14 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
 
     let tx_id = get_tx_id(&raw);
     let tx_name_before = tx_id.to_b58();
+    let tx_id_after = tx_id.clone().to_b58();
 
     println!("file:  {draft_path}");
-    println!("txid:  {tx_name_before}");
+    println!("tx-id:  {tx_id_after}");
 
     // Check transaction version
     let is_v1 = matches!(raw, RawTransaction::V1(_));
-    println!("version: {}", if is_v1 { "V1" } else { "V0" });
+    println!("tx version: {}", if is_v1 { "V1" } else { "V0" });
 
     // collect desired signer derivation paths (optional override via env)
     let env_paths: Option<Vec<String>> = std::env::var("SIGER_PATHS")
@@ -340,7 +341,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
     let tx_name_after = transaction_name_from_bytes(&out_bytes).unwrap_or_else(|_| tx_name_before.clone());
     if tx_name_after != tx_name_before {
         eprintln!(
-            "warning: tx identifier changed after attaching signatures ({} -> {})",
+            "note: tx-id changes after attaching valid signatures ({} -> {})",
             tx_name_before, tx_name_after
         );
     }

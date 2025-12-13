@@ -15,11 +15,11 @@ use siger_core::{Frame, Msg, Request, Response, MAX_INFO_CHEETAH_PUBS, PROTO_V1}
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::{
     Hash, NName, Spend, SpendBody, Chal, Sig, SchnorrPubkey, SchnorrSignature,
-    Signature, F6LT, Transaction,
+    Signature, F6LT, Transaction, Tx,
 };
 use tx_types::transaction_types_v0::*;
 use tx_types::transaction_types_v1::{
-    compute_tx_id_v1, PkhSignature, PkhSignatureValue, RawTransactionV1, SpendsV1
+    compute_tx_id_v1, PkhSignature, PkhSignatureValue, RawTransactionV1, SpendsV1, TxV1,
 };
 use tx_types::RawTransaction;
 
@@ -98,10 +98,29 @@ fn fetch_device_pks(
     Ok(out)
 }
 
+#[derive(Debug, Clone, NounDecode, NounEncode)]
+struct WalletTransactionV1 {
+    pub name: String,
+    pub spends: SpendsV1,
+}
+
 enum Outer {
     RawTx,
     TxTransact { tail_jam: Vec<u8> },
     WalletTxV0(Transaction),
+    WalletTxV1,
+    TxV0(TxV0),
+    TxV1(TxV1),
+}
+
+fn decode_no_panic<T: NounDecode>(noun: &Noun) -> Option<T> {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let decoded = catch_unwind(AssertUnwindSafe(|| T::from_noun(noun)));
+    std::panic::set_hook(default_hook);
+    decoded.ok().and_then(|r| r.ok())
 }
 
 fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
@@ -110,15 +129,29 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
         .cue_into(Bytes::from(bytes.to_vec()))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
-    // try wallet transaction (v0 only for now)
-    if let Ok(tx) = Transaction::from_noun(&noun) {
+    // try wallet transaction wrapper (v1): [name spends]
+    if let Some(wallet_tx) = decode_no_panic::<WalletTransactionV1>(&noun) {
+        let computed_id = compute_tx_id_v1(&wallet_tx.spends);
+        return Ok((
+            Outer::WalletTxV1,
+            RawTransaction::V1(RawTransactionV1 {
+                version: 1,
+                id: computed_id,
+                spends: wallet_tx.spends,
+            }),
+            noun,
+        ));
+    }
+
+    // try wallet transaction (v0)
+    if let Some(tx) = decode_no_panic::<Transaction>(&noun) {
         let raw = transaction_to_raw_v0(&tx);
         return Ok((Outer::WalletTxV0(tx), RawTransaction::V0(raw), noun));
     }
 
     // try [raw-tx tail]
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(r) = RawTransaction::from_noun(&cell.head()) {
+        if let Some(r) = decode_no_panic::<RawTransaction>(&cell.head()) {
             // capture tail as jam for perfect round-trip later
             let mut s2: NounSlab = NounSlab::new();
             let copied_tail = s2.copy_into(cell.tail());
@@ -129,12 +162,28 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
     }
 
     // try bare raw-tx
-    if let Ok(r) = RawTransaction::from_noun(&noun) {
+    if let Some(r) = decode_no_panic::<RawTransaction>(&noun) {
         return Ok((Outer::RawTx, r, noun));
     }
 
+    // try tx-engine Tx wrapper (extract raw_tx)
+    if let Some(tx) = decode_no_panic::<Tx>(&noun) {
+        return match tx {
+            Tx::V0(tx_v0) => Ok((
+                Outer::TxV0(tx_v0.clone()),
+                RawTransaction::V0(tx_v0.raw_tx),
+                noun,
+            )),
+            Tx::V1(tx_v1) => Ok((
+                Outer::TxV1(tx_v1.clone()),
+                RawTransaction::V1(tx_v1.raw_tx),
+                noun,
+            )),
+        };
+    }
+
     Err(anyhow!(
-        "unrecognized noun shape; cannot decode as wallet transaction, [raw-tx tail], or raw-tx"
+        "unrecognized noun shape; cannot decode as wallet tx (v0/v1), [raw-tx tail], raw-tx, or tx"
     ))
 }
 
@@ -405,6 +454,17 @@ fn sign_v0_transaction(
             out_slab.copy_into(n);
             out_slab.jam()
         }
+        Outer::TxV0(ref tx) => {
+            let mut tx_clone = tx.clone();
+            tx_clone.raw_tx = updated;
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = tx_clone.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+        Outer::WalletTxV1 | Outer::TxV1(_) => {
+            return Err(anyhow!("V0 transaction cannot be stored in a V1 wrapper"));
+        }
     };
 
     Ok((out_bytes, signed_count))
@@ -519,6 +579,27 @@ fn sign_v1_transaction(
         Outer::WalletTxV0(_) => {
             // V1 transactions shouldn't be in V0 wallet format
             return Err(anyhow!("V1 transaction cannot be stored in V0 wallet format"));
+        }
+        Outer::WalletTxV1 => {
+            let wallet = WalletTransactionV1 {
+                name: updated.id.to_b58(),
+                spends: updated.spends.clone(),
+            };
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = wallet.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+        Outer::TxV1(ref tx) => {
+            let mut tx_clone = tx.clone();
+            tx_clone.raw_tx = updated;
+            let mut out_slab: NounSlab = NounSlab::new();
+            let n = tx_clone.to_noun(&mut out_slab);
+            out_slab.copy_into(n);
+            out_slab.jam()
+        }
+        Outer::TxV0(_) => {
+            return Err(anyhow!("V1 transaction cannot be stored in a V0 Tx wrapper"));
         }
     };
 
@@ -687,6 +768,17 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
                     out_slab.copy_into(n);
                     out_slab.jam()
                 }
+                Outer::TxV0(ref tx) => {
+                    let mut tx_clone = tx.clone();
+                    tx_clone.raw_tx = v0;
+                    let mut out_slab: NounSlab = NounSlab::new();
+                    let n = tx_clone.to_noun(&mut out_slab);
+                    out_slab.copy_into(n);
+                    out_slab.jam()
+                }
+                Outer::WalletTxV1 | Outer::TxV1(_) => {
+                    return Err(anyhow!("V0 transaction cannot be stored in a V1 wrapper"));
+                }
             }
         }
         RawTransaction::V1(mut v1) => {
@@ -754,6 +846,27 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
                 }
                 Outer::WalletTxV0(_) => {
                     return Err(anyhow!("V1 transaction cannot be stored in V0 wallet format"));
+                }
+                Outer::WalletTxV1 => {
+                    let wallet = WalletTransactionV1 {
+                        name: v1.id.to_b58(),
+                        spends: v1.spends,
+                    };
+                    let mut out_slab: NounSlab = NounSlab::new();
+                    let n = wallet.to_noun(&mut out_slab);
+                    out_slab.copy_into(n);
+                    out_slab.jam()
+                }
+                Outer::TxV1(ref tx) => {
+                    let mut tx_clone = tx.clone();
+                    tx_clone.raw_tx = v1;
+                    let mut out_slab: NounSlab = NounSlab::new();
+                    let n = tx_clone.to_noun(&mut out_slab);
+                    out_slab.copy_into(n);
+                    out_slab.jam()
+                }
+                Outer::TxV0(_) => {
+                    return Err(anyhow!("V1 transaction cannot be stored in a V0 Tx wrapper"));
                 }
             }
         }

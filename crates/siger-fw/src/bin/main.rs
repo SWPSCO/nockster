@@ -625,6 +625,13 @@ fn main() -> ! {
                                         }
                                     }
 
+                                    // Show GUI busy animation while initializing the seed/PIN over serial
+                                    if let Frame::One(Request::InitializePIN { .. }) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            ui.show_unlocking();
+                                        }
+                                    }
+
                                     // Show GUI lock screen if lock request comes over serial
                                     if let Frame::One(Request::Lock) = &m.msg {
                                         if let Some(ui) = ui.as_mut() {
@@ -664,6 +671,15 @@ fn main() -> ! {
                                                     ui.show_pin_locked_out();
                                                 }
                                                 _ => {}
+                                            }
+                                        }
+                                    }
+
+                                    // Show result on GUI after seeding completes
+                                    if let Frame::One(Request::InitializePIN { .. }) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            if matches!(&body, Response::Ok) {
+                                                ui.show_unlock_success();
                                             }
                                         }
                                     }

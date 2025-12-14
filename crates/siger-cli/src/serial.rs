@@ -243,12 +243,29 @@ pub fn round_trip_frame_with_deadline(
 
     // (C) Read until a complete COBS frame (ends with 0x00) or deadline.
     let start = Instant::now();
+    let mut bad_cobs_frames: usize = 0;
+    let mut last_cobs_err: Option<String> = None;
     let resp = loop {
         let mut rx = Vec::<u8>::with_capacity(256);
 
         // Read exactly one COBS-delimited frame (ends with 0x00).
         loop {
             if start.elapsed() > max_wait {
+                if bad_cobs_frames > 0 {
+                    if let Some(err) = last_cobs_err.as_deref() {
+                        bail!(
+                            "serial read: timed out waiting for response ({} ms); ignored {} malformed COBS frame(s) (last decode error: {})",
+                            max_wait.as_millis(),
+                            bad_cobs_frames,
+                            err
+                        );
+                    }
+                    bail!(
+                        "serial read: timed out waiting for response ({} ms); ignored {} malformed COBS frame(s)",
+                        max_wait.as_millis(),
+                        bad_cobs_frames
+                    );
+                }
                 bail!(
                     "serial read: timed out waiting for response ({} ms)",
                     max_wait.as_millis()
@@ -272,14 +289,22 @@ pub fn round_trip_frame_with_deadline(
         }
 
         let mut frame = rx;
-        let resp: Msg<Response> =
-            postcard::from_bytes_cobs(&mut frame).context("decode COBS response")?;
-        if resp.v != PROTO_V1 {
-            return Err(anyhow!("bad protocol version {}", resp.v));
-        }
+        let resp: Msg<Response> = match postcard::from_bytes_cobs(&mut frame) {
+            Ok(v) => v,
+            Err(e) => {
+                bad_cobs_frames = bad_cobs_frames.saturating_add(1);
+                last_cobs_err = Some(e.to_string());
+                // Keep waiting; a stray empty/garbled frame can happen during
+                // resets or when multiple host tools are racing the port.
+                continue;
+            }
+        };
         if resp.id != req.id {
             // Stray response from a previous request; keep waiting for ours.
             continue;
+        }
+        if resp.v != PROTO_V1 {
+            return Err(anyhow!("bad protocol version {}", resp.v));
         }
         break resp;
     };

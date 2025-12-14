@@ -87,23 +87,63 @@ fn usb_service_tx(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>) {
 }
 
 #[inline]
+fn usb_tx_queue_compact(queue: &mut UsbTxQueue) {
+    if queue.pos == 0 {
+        return;
+    }
+    if queue.pos >= queue.buf.len() {
+        queue.buf.clear();
+        queue.pos = 0;
+        return;
+    }
+
+    let remaining = queue.buf.len() - queue.pos;
+    for i in 0..remaining {
+        queue.buf[i] = queue.buf[queue.pos + i];
+    }
+    queue.buf.truncate(remaining);
+    queue.pos = 0;
+}
+
+#[inline]
 fn usb_write(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, buf: &[u8]) {
+    if buf.len() > TX_QUEUE_LEN {
+        return;
+    }
+
+    // Drain any already-queued bytes first. This keeps the queue small while a
+    // host is connected, and avoids spuriously dropping messages due to stale
+    // bytes that have already been sent.
+    usb_service_tx(usb);
+
+    // First try: compact sent bytes (if any) and enqueue.
+    let mut enqueued = false;
     unsafe {
         let queue = USB_TX_QUEUE.get_or_insert_with(|| UsbTxQueue {
             buf: HVec::new(),
             pos: 0,
         });
-        if queue.buf.is_empty() {
-            queue.pos = 0;
+        usb_tx_queue_compact(queue);
+
+        if queue.buf.len().saturating_add(buf.len()) <= TX_QUEUE_LEN {
+            let _ = queue.buf.extend_from_slice(buf);
+            enqueued = true;
         }
+    }
+    if enqueued {
+        usb_service_tx(usb);
+        return;
+    }
 
-        // Try to extend the queue. If it fails, try to drain and retry once.
-        if queue.buf.extend_from_slice(buf).is_err() {
-            // Queue is full - try to drain some data first
-            usb_service_tx(usb);
-
-            // If still can't fit after draining, we have to drop this message
-            // (better to drop than to lock up the device)
+    // Second try: give the USB peripheral another chance to flush, then retry.
+    usb_service_tx(usb);
+    unsafe {
+        let queue = USB_TX_QUEUE.get_or_insert_with(|| UsbTxQueue {
+            buf: HVec::new(),
+            pos: 0,
+        });
+        usb_tx_queue_compact(queue);
+        if queue.buf.len().saturating_add(buf.len()) <= TX_QUEUE_LEN {
             let _ = queue.buf.extend_from_slice(buf);
         }
     }
@@ -499,7 +539,13 @@ fn main() -> ! {
         if let Some(decision) = ui.poll_confirmation_result() {
             if let Some(pending) = take_pending_confirmation() {
                 let resp_msg = if decision {
-                    ui.show_idle_message_timed("Approved", Duration::from_millis(3_000));
+                    let approved_label = match &pending.frame {
+                        Frame::One(Request::SignDigest { .. })
+                        | Frame::One(Request::SignSpendHash { .. })
+                        | Frame::One(Request::SignSpendHashFor { .. }) => "Signing...",
+                        _ => "Approved",
+                    };
+                    ui.show_idle_message_timed(approved_label, Duration::from_millis(3_000));
                         let body = handle_frame_v1(pending.msg_id, &pending.frame, None);
                         Msg {
                             v: PROTO_V1,
@@ -518,8 +564,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb_write(&mut usb, &enc[..n]);
-                    let _ = usb_write(&mut usb, &[0]);
+                    enc[n] = 0;
+                    let _ = usb_write(&mut usb, &enc[..n + 1]);
                 } else {
                     send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                 }
@@ -582,8 +628,8 @@ fn main() -> ! {
                 pending.sk_be.zeroize();
                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb_write(&mut usb, &enc[..n]);
-                    let _ = usb_write(&mut usb, &[0]);
+                    enc[n] = 0;
+                    let _ = usb_write(&mut usb, &enc[..n + 1]);
                 } else {
                     send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                 }
@@ -700,8 +746,8 @@ fn main() -> ! {
                 };
                 if let Ok(used) = postcard::to_slice(&resp, &mut plain) {
                     let n = encode(used, &mut enc);
-                    let _ = usb_write(&mut usb, &enc[..n]);
-                    let _ = usb_write(&mut usb, &[0]);
+                    enc[n] = 0;
+                    let _ = usb_write(&mut usb, &enc[..n + 1]);
                 }
                 of.off = end as u32;
                 if last {
@@ -844,8 +890,8 @@ fn main() -> ! {
                         if let Some(resp_msg) = resp_msg {
                             if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                                 let n = encode(used, &mut enc);
-                                let _ = usb_write(&mut usb, &enc[..n]);
-                                let _ = usb_write(&mut usb, &[0]);
+                                enc[n] = 0;
+                                let _ = usb_write(&mut usb, &enc[..n + 1]);
                             } else {
                                 send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                             }
@@ -1524,8 +1570,8 @@ fn send_err(usb: &mut UsbSerialJtag<'_, esp_hal::Blocking>, code: u16, enc: &mut
     let mut tmp = [0u8; 64];
     if let Ok(used) = postcard::to_slice(&msg, &mut tmp) {
         let n = cobs::encode(used, enc);
-        let _ = usb_write(usb, &enc[..n]);
-        let _ = usb_write(usb, &[0]);
+        enc[n] = 0;
+        let _ = usb_write(usb, &enc[..n + 1]);
     }
 }
 

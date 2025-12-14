@@ -1,12 +1,17 @@
-use embedded_graphics::mono_font::{ascii::FONT_10X20, MonoTextStyle};
+use core::fmt::Write as _;
+
+use embedded_graphics::mono_font::{ascii::{FONT_10X20, FONT_6X10}, MonoTextStyle};
 use embedded_graphics::pixelcolor::{raw::RawU16, Rgb565};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Alignment, Text};
 
 use super::constants::*;
-use super::layout::{confirm_buttons, header_height, keypad_button_hit, keypad_grid, row_height};
-use super::state::{Button, ButtonHit, GuiMode};
+use super::layout::{
+    confirm_buttons, header_height, keypad_button_hit, keypad_grid, row_height, tx_review_buttons,
+    tx_review_list_rect,
+};
+use super::state::{Button, ButtonHit, GuiMode, TxReviewOutput};
 use super::GuiDisplay;
 
 include!(concat!(env!("OUT_DIR"), "/boot_logo.rs"));
@@ -354,6 +359,115 @@ pub fn render_confirm_overlay(
         draw_button_skeuo(display, hit, base, light, dark, is_active);
 
         let label = confirm_button_label(hit.button);
+        if !label.is_empty() {
+            let label_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+            let center = Point::new(
+                hit.top_left.x + hit.size.width as i32 / 2,
+                hit.top_left.y + hit.size.height as i32 / 2,
+            );
+            let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
+            let _ = Text::with_alignment(
+                label,
+                Point::new(center.x, baseline),
+                label_style,
+                Alignment::Center,
+            )
+            .draw(display);
+        }
+    }
+}
+
+pub fn render_tx_review_overlay(
+    display: &mut GuiDisplay<'_>,
+    outputs: &[TxReviewOutput],
+    scroll_y: i32,
+    active_button: Option<Button>,
+) {
+    let header_h = header_height();
+    if header_h < SCREEN_HEIGHT as i32 {
+        let body = Rectangle::new(
+            Point::new(0, header_h),
+            Size::new(SCREEN_WIDTH.into(), (SCREEN_HEIGHT as i32 - header_h) as u32),
+        );
+        let _ = body
+            .into_styled(PrimitiveStyleBuilder::new().fill_color(COLOR_BACKGROUND).build())
+            .draw(display);
+    }
+
+    let list_rect = tx_review_list_rect();
+    draw_panel(display, list_rect.top_left, list_rect.size);
+
+    let padding: i32 = 6;
+    let inner_left = list_rect.top_left.x + padding;
+    let inner_top = list_rect.top_left.y + padding;
+    let inner_bottom = list_rect.top_left.y + list_rect.size.height as i32 - padding;
+
+    let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+
+    if outputs.is_empty() {
+        let center_x = (SCREEN_WIDTH / 2) as i32;
+        let baseline = list_rect.top_left.y + list_rect.size.height as i32 / 2;
+        let _ = Text::with_alignment(
+            "No external outputs",
+            Point::new(center_x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(display);
+    } else {
+        let line_gap: i32 = 2;
+        let line_h: i32 = FONT_6X10.character_size.height as i32 + line_gap;
+        let item_gap: i32 = 4;
+        let item_h: i32 = line_h * 2 + item_gap;
+
+        for (idx, out) in outputs.iter().enumerate() {
+            let base_y = inner_top - scroll_y + (idx as i32) * item_h;
+            let y1 = base_y + FONT_6X10.character_size.height as i32;
+            let y2 = y1 + line_h;
+
+            if y2 < inner_top {
+                continue;
+            }
+            if y1 > inner_bottom {
+                break;
+            }
+
+            let mut line1 = heapless::String::<32>::new();
+            let _ = write!(line1, "send {} n", out.gift);
+            let _ = Text::new(line1.as_str(), Point::new(inner_left, y1), style).draw(display);
+
+            let mut line2 = heapless::String::<32>::new();
+            let _ = write!(line2, "to {}", out.recipient_short.as_str());
+            let _ = Text::new(line2.as_str(), Point::new(inner_left, y2), subtle).draw(display);
+        }
+    }
+
+    for hit in tx_review_buttons() {
+        let (base, light, dark, label) = match hit.button {
+            Button::Ok => (
+                COLOR_BTN_PRIMARY_BASE,
+                COLOR_BTN_PRIMARY_LIGHT,
+                COLOR_BTN_PRIMARY_DARK,
+                "Confirm",
+            ),
+            Button::Clear => (
+                COLOR_BTN_SECONDARY_BASE,
+                COLOR_BTN_SECONDARY_LIGHT,
+                COLOR_BTN_SECONDARY_DARK,
+                "Deny",
+            ),
+            _ => (
+                COLOR_BTN_DISABLED_BASE,
+                COLOR_BTN_DISABLED_LIGHT,
+                COLOR_BTN_DISABLED_DARK,
+                "",
+            ),
+        };
+
+        let is_active = active_button == Some(hit.button);
+        draw_button_skeuo(display, hit, base, light, dark, is_active);
+
         if !label.is_empty() {
             let label_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
             let center = Point::new(

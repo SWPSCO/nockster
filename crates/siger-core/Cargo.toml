@@ -37,6 +37,7 @@ serde  = { workspace = true, default-features = false, features = ["derive"] }
 serde_bytes = { workspace = true }
 postcard= { workspace = true, default-features = false }
 tx-types = { workspace = true }
+pokenoun = { workspace = true }
 
 # For std builds only (test_tip5_hash_words)
 nockapp = { workspace = true, optional = true }

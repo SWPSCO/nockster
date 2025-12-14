@@ -10,12 +10,21 @@ pub enum GuiMode {
     Splash,
     Locked,
     Confirm,
+    TxReview,
     Unlocking,
     Unlocked,
     Error,
     SeedFirstBoot,
     SeedEntry,
     SeedConfirm,
+}
+
+pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
+
+#[derive(Clone, Debug)]
+pub struct TxReviewOutput {
+    pub gift: u64,
+    pub recipient_short: HString<24>,
 }
 
 use super::seed::SeedButton;

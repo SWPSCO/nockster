@@ -16,6 +16,7 @@ use tx_types::transaction_types_v0::{InputV0, InputsV0, RawTransactionV0, SeedV0
 use tx_types::RawTransaction;
 
 mod tip5;
+mod compose_v1;
 
 #[wasm_bindgen(start)]
 pub fn init() {

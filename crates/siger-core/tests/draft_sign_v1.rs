@@ -455,3 +455,63 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
         "wallet name should be canonical base58"
     );
 }
+
+fn poke_tuple(arena: &mut pokenoun::Arena, elems: &[pokenoun::Noun]) -> pokenoun::Noun {
+    if elems.is_empty() {
+        return arena.atom0();
+    }
+    let mut res = *elems.last().unwrap();
+    for &n in elems[..elems.len() - 1].iter().rev() {
+        res = arena.alloc_cell(n, res);
+    }
+    res
+}
+
+fn poke_hash_noun(arena: &mut pokenoun::Arena, digest: [u64; 5]) -> pokenoun::Noun {
+    let elems = [
+        arena.alloc_atom_u64(digest[0]),
+        arena.alloc_atom_u64(digest[1]),
+        arena.alloc_atom_u64(digest[2]),
+        arena.alloc_atom_u64(digest[3]),
+        arena.alloc_atom_u64(digest[4]),
+    ];
+    poke_tuple(arena, &elems)
+}
+
+#[test]
+fn pokenoun_canonical_zset_put_matches_tx_types() {
+    use pokenoun::{canonical_zset_put, jam as poke_jam, Arena as PokeArena};
+
+    let values = vec![
+        Hash {
+            values: [1, 2, 3, 4, 5],
+        },
+        Hash {
+            values: [6, 7, 8, 9, 10],
+        },
+        Hash {
+            values: [11, 12, 13, 14, 15],
+        },
+    ];
+
+    // tx-types reference encoding
+    let mut tx_set: ZSet<Hash> = ZSet::new();
+    for v in &values {
+        tx_set.put(v.clone());
+    }
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = tx_set.to_noun(&mut slab);
+    slab.set_root(noun);
+    let tx_jam = slab.jam().to_vec();
+
+    // pokenoun encoding
+    let mut arena = PokeArena::new();
+    let mut root = arena.atom0();
+    for v in &values {
+        let noun = poke_hash_noun(&mut arena, v.values);
+        root = canonical_zset_put(&mut arena, root, noun).expect("canonical_zset_put");
+    }
+    let poke_jam_bytes = poke_jam(root, &arena);
+
+    assert_eq!(poke_jam_bytes, tx_jam, "z-set noun jam mismatch");
+}

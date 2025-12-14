@@ -40,6 +40,16 @@ pub struct SignerConfig {
     pub sk_be: [u8; 32],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftOutputV1 {
+    /// Base58-encoded recipient PKH digest.
+    pub recipient_b58: String,
+    /// Gift amount in nicks.
+    pub gift: u64,
+    /// True if this output pays back to the signing key (refund/change).
+    pub is_refund: bool,
+}
+
 // tx-types constant:
 // Hash::from_b58("6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ayaV4A")
 const LOCK_MERKLE_AXIS_HASH: [u64; 5] = [
@@ -620,6 +630,212 @@ fn hash_spends_hashable(spends: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u
 fn compute_tx_id_v1(spends: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
     let spends_digest = hash_spends_hashable(spends, arena, ctx)?;
     Ok(tip5::hash_ten_cell(ctx.version_digest, spends_digest)?)
+}
+
+fn atom_eq_bytes(noun: Noun, bytes: &[u8], arena: &Arena) -> bool {
+    match noun {
+        Noun::Atom(id) => arena.atom_eq_bytes(id, bytes),
+        _ => false,
+    }
+}
+
+fn note_data_find(map: Noun, arena: &Arena, key: &[u8]) -> Option<Noun> {
+    if map == arena.atom0() {
+        return None;
+    }
+    let (node, left, right) = decompose_map(map, arena)?;
+    let (k, v) = decompose_pair(node, arena)?;
+    if atom_eq_bytes(k, key, arena) {
+        return Some(v);
+    }
+    note_data_find(left, arena, key).or_else(|| note_data_find(right, arena, key))
+}
+
+fn zset_any_value(set: Noun, arena: &Arena) -> Option<Noun> {
+    if set == arena.atom0() {
+        return None;
+    }
+    let (value, _lr) = uncons(set, arena)?;
+    Some(value)
+}
+
+fn seed_recipient_pkh(seed_note_data: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+    // note-data is a z-map of @tas -> *
+    // We expect key "lock" to be lock-data: [%0 spend-condition]
+    let lock_data = note_data_find(seed_note_data, arena, b"lock").ok_or(SignDraftError::Malformed)?;
+
+    let (ver, lock) = tuple2(lock_data, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(ver, arena) != Some(0) {
+        return Err(SignDraftError::Unsupported);
+    }
+
+    // spend-condition is a list of lock-primitives; we only support a single %pkh primitive.
+    let (prim, _rest) = uncons(lock, arena).ok_or(SignDraftError::Malformed)?;
+    let (header, body) = tuple2(prim, arena).ok_or(SignDraftError::Malformed)?;
+    if !atom_eq_bytes(header, b"pkh", arena) {
+        return Err(SignDraftError::Unsupported);
+    }
+
+    // body for pkh: [m h=(z-set hash)]
+    let (m, h_set) = tuple2(body, arena).ok_or(SignDraftError::Malformed)?;
+    let m_u64 = noun_atom_u64(m, arena).ok_or(SignDraftError::Malformed)?;
+    if m_u64 == 0 {
+        return Err(SignDraftError::Malformed);
+    }
+
+    let any = zset_any_value(h_set, arena).ok_or(SignDraftError::Malformed)?;
+    parse_hash(any, arena).ok_or(SignDraftError::Malformed)
+}
+
+fn collect_outputs_from_seeds(
+    seeds_zset: Noun,
+    arena: &Arena,
+    signer_pkh: [u64; 5],
+    acc: &mut Vec<([u64; 5], u64)>,
+    refund: &mut Option<u64>,
+) -> Result<(), SignDraftError> {
+    if seeds_zset == arena.atom0() {
+        return Ok(());
+    }
+
+    let (seed, lr) = uncons(seeds_zset, arena).ok_or(SignDraftError::Malformed)?;
+    let (left, right) = uncons(lr, arena).ok_or(SignDraftError::Malformed)?;
+
+    let (_output_source, _lock_root, note_data, gift_noun, _parent_hash) =
+        tuple5(seed, arena).ok_or(SignDraftError::Malformed)?;
+    let gift = match gift_noun {
+        Noun::Atom(id) => arena.atom_u64(id).ok_or(SignDraftError::Malformed)?,
+        _ => return Err(SignDraftError::Malformed),
+    };
+    if gift != 0 {
+        let recipient = seed_recipient_pkh(note_data, arena)?;
+        if recipient == signer_pkh {
+            let next = refund.unwrap_or(0).checked_add(gift).ok_or(SignDraftError::Malformed)?;
+            *refund = Some(next);
+        } else if let Some(existing) = acc.iter_mut().find(|(d, _)| *d == recipient) {
+            existing.1 = existing.1.checked_add(gift).ok_or(SignDraftError::Malformed)?;
+        } else {
+            acc.push((recipient, gift));
+        }
+    }
+
+    collect_outputs_from_seeds(left, arena, signer_pkh, acc, refund)?;
+    collect_outputs_from_seeds(right, arena, signer_pkh, acc, refund)?;
+    Ok(())
+}
+
+fn collect_outputs_from_spends(
+    spends: Noun,
+    arena: &Arena,
+    signer_pkh: [u64; 5],
+    acc: &mut Vec<([u64; 5], u64)>,
+    refund: &mut Option<u64>,
+) -> Result<(), SignDraftError> {
+    if spends == arena.atom0() {
+        return Ok(());
+    }
+
+    let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
+    let (_name, spend) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    let (ver, body) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(ver, arena) != Some(1) {
+        return Err(SignDraftError::Unsupported);
+    }
+    let (_witness, seeds, _fee) = tuple3(body, arena).ok_or(SignDraftError::Malformed)?;
+    collect_outputs_from_seeds(seeds, arena, signer_pkh, acc, refund)?;
+
+    collect_outputs_from_spends(left, arena, signer_pkh, acc, refund)?;
+    collect_outputs_from_spends(right, arena, signer_pkh, acc, refund)?;
+    Ok(())
+}
+
+pub fn draft_outputs_v1(
+    draft_jam: &[u8],
+    cfg: &SignerConfig,
+) -> Result<Vec<DraftOutputV1>, SignDraftError> {
+    let pk_coords = cheetah_pub_from_sk_tuple(cfg.sk_be);
+
+    let mut arena = Arena::new();
+    let root = cue(draft_jam, &mut arena)?;
+
+    // Build pubkey noun: [x y inf]
+    let x_elems = [
+        arena.alloc_atom_u64(pk_coords.0[0]),
+        arena.alloc_atom_u64(pk_coords.0[1]),
+        arena.alloc_atom_u64(pk_coords.0[2]),
+        arena.alloc_atom_u64(pk_coords.0[3]),
+        arena.alloc_atom_u64(pk_coords.0[4]),
+        arena.alloc_atom_u64(pk_coords.0[5]),
+    ];
+    let x_noun = build_tuple(&mut arena, &x_elems);
+
+    let y_elems = [
+        arena.alloc_atom_u64(pk_coords.1[0]),
+        arena.alloc_atom_u64(pk_coords.1[1]),
+        arena.alloc_atom_u64(pk_coords.1[2]),
+        arena.alloc_atom_u64(pk_coords.1[3]),
+        arena.alloc_atom_u64(pk_coords.1[4]),
+        arena.alloc_atom_u64(pk_coords.1[5]),
+    ];
+    let y_noun = build_tuple(&mut arena, &y_elems);
+
+    let inf_noun = arena.alloc_atom_u64(1);
+    let pk_noun = build_tuple(&mut arena, &[x_noun, y_noun, inf_noun]);
+    let signer_pkh = tip5::hash_noun_varlen(pk_noun, &arena)?;
+
+    // Detect outer wrapper (same shapes as `sign_draft_v1`).
+    enum Outer {
+        Spends { spends: Noun },
+    }
+
+    let outer = if let Some((ver, id, spends)) = tuple3(root, &arena) {
+        if noun_atom_u64(ver, &arena) == Some(1) && parse_hash(id, &arena).is_some() {
+            Some(Outer::Spends { spends })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let spends = if let Some(Outer::Spends { spends }) = outer {
+        spends
+    } else if let Some((head, tail)) = uncons(root, &arena) {
+        if let Some((ver, id, spends)) = tuple3(head, &arena) {
+            if noun_atom_u64(ver, &arena) == Some(1) && parse_hash(id, &arena).is_some() {
+                spends
+            } else {
+                return Err(SignDraftError::Unsupported);
+            }
+        } else if let Noun::Atom(_) = head {
+            tail
+        } else {
+            return Err(SignDraftError::Malformed);
+        }
+    } else {
+        return Err(SignDraftError::Malformed);
+    };
+
+    let mut acc: Vec<([u64; 5], u64)> = Vec::new();
+    let mut refund: Option<u64> = None;
+    collect_outputs_from_spends(spends, &arena, signer_pkh, &mut acc, &mut refund)?;
+
+    let mut out: Vec<DraftOutputV1> = Vec::with_capacity(acc.len() + 1);
+    for (digest, gift) in acc {
+        out.push(DraftOutputV1 {
+            recipient_b58: digest_to_b58(digest),
+            gift,
+            is_refund: false,
+        });
+    }
+    if let Some(gift) = refund {
+        out.push(DraftOutputV1 {
+            recipient_b58: digest_to_b58(signer_pkh),
+            gift,
+            is_refund: true,
+        });
+    }
+    Ok(out)
 }
 
 pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, SignDraftError> {

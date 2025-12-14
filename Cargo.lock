@@ -4287,6 +4287,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pokenoun"
+version = "0.1.0"
+
+[[package]]
 name = "polyval"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5364,6 +5368,7 @@ dependencies = [
  "nockapp",
  "nockvm",
  "noun-serde",
+ "pokenoun",
  "postcard",
  "serde",
  "serde-big-array",
@@ -6468,6 +6473,7 @@ dependencies = [
  "num-traits",
  "once_cell",
  "pbkdf2",
+ "pokenoun",
  "serde",
  "serde_json",
  "sha2",

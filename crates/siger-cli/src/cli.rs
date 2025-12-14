@@ -115,6 +115,9 @@ pub struct SignDraftArgs {
     /// Seed slot to sign with (default: 0)
     #[arg(long, default_value_t = 0)]
     pub slot: u8,
+    /// Recompute tx-id on the host and rewrite the wrapper/id before writing output
+    #[arg(long, default_value_t = false)]
+    pub host_txid: bool,
 }
 
 #[derive(Args, Clone)]
@@ -205,6 +208,7 @@ pub fn run() -> anyhow::Result<()> {
             &args.draft,
             args.out.as_deref(),
             args.slot,
+            args.host_txid,
         ),
         Cmd::Inspect(args) => {
             commands::inspect::run(&args.file, args.dump_noun, args.max_depth, args.max_items)

@@ -29,9 +29,43 @@ body {
   line-height: 1.6;
 }
 
+body.app-composer {
+  align-items: flex-start;
+  padding: 1rem;
+}
+
 .container {
   width: 700px;
   max-width: 100%;
+}
+
+.container-wide {
+  width: 1200px;
+  max-width: none;
+  flex-shrink: 0;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-bottom: 1.5rem;
+}
+
+.tab-btn {
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-base);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: var(--color-text);
+  color: var(--color-bg);
 }
 
 h1 {
@@ -53,6 +87,10 @@ h2 {
   border-radius: 4px;
   padding: 1.5rem;
   margin-bottom: 1.5rem;
+}
+
+.section.section-composer {
+  padding: 1rem;
 }
 
 .header-img {

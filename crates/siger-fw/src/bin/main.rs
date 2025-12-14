@@ -189,9 +189,19 @@ struct PendingConfirmation {
     prompt: &'static str,
 }
 
+struct PendingSignDraft {
+    msg_id: u32,
+    frag_id: u16,
+    sk_be: [u8; 32],
+    draft: Vec<u8>,
+}
+
 #[allow(clippy::declare_interior_mutable_const)]
 static PENDING_CONFIRMATION: Mutex<RefCell<Option<PendingConfirmation>>> =
     Mutex::new(RefCell::new(None));
+
+#[allow(clippy::declare_interior_mutable_const)]
+static PENDING_SIGN_DRAFT: Mutex<RefCell<Option<PendingSignDraft>>> = Mutex::new(RefCell::new(None));
 
 impl UnlockController {
     fn new() -> Self {
@@ -336,13 +346,20 @@ fn take_pending_confirmation() -> Option<PendingConfirmation> {
     })
 }
 
+fn take_pending_sign_draft() -> Option<PendingSignDraft> {
+    critical_section::with(|cs| {
+        let mut slot = PENDING_SIGN_DRAFT.borrow_ref_mut(cs);
+        slot.take()
+    })
+}
+
 /// cobs test
 #[cfg(test)]
 pub fn handle_one_frame_cobs(frame: &[u8]) -> alloc::vec::Vec<u8> {
     let mut out = alloc::vec::Vec::new();
     match postcard::from_bytes_cobs::<Msg<Frame>>(frame) {
         Ok(m) if m.v == PROTO_V1 => {
-            let body = handle_frame_v1(m.id, &m.msg);
+            let body = handle_frame_v1(m.id, &m.msg, None);
             let resp = Msg {
                 v: PROTO_V1,
                 id: m.id,
@@ -433,45 +450,104 @@ fn main() -> ! {
     let mut enc = [0u8; ENC_BUF_LEN];
     'main: loop {
         usb_service_tx(&mut usb);
-        if let Some(ui) = ui.as_mut() {
-            let event = ui.tick();
-            if let Some(decision) = ui.poll_confirmation_result() {
-                if let Some(pending) = take_pending_confirmation() {
-                    let resp_msg = if decision {
-                        ui.show_idle_message_timed("Approved", Duration::from_millis(3_000));
-                        let body = handle_frame_v1(pending.msg_id, &pending.frame);
+    if let Some(ui) = ui.as_mut() {
+        let event = ui.tick();
+        if let Some(decision) = ui.poll_confirmation_result() {
+            if let Some(pending) = take_pending_confirmation() {
+                let resp_msg = if decision {
+                    ui.show_idle_message_timed("Approved", Duration::from_millis(3_000));
+                        let body = handle_frame_v1(pending.msg_id, &pending.frame, None);
                         Msg {
                             v: PROTO_V1,
                             id: pending.msg_id,
                             msg: body,
                         }
-                    } else {
-                        ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
-                        Msg {
+                } else {
+                    ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
+                    Msg {
+                        v: PROTO_V1,
+                        id: pending.msg_id,
+                        msg: Response::Err {
+                            code: ERR_REJECTED_BY_USER,
+                        },
+                    }
+                };
+                if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                    let n = encode(used, &mut enc);
+                    let _ = usb_write(&mut usb, &enc[..n]);
+                    let _ = usb_write(&mut usb, &[0]);
+                } else {
+                    send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                }
+                if decision {
+                    usb_debug(&mut usb, b"confirm accepted\r\n");
+                } else {
+                    usb_debug(&mut usb, b"confirm rejected\r\n");
+                }
+            } else if let Some(mut pending) = take_pending_sign_draft() {
+                let resp_msg = if decision {
+                    ui.show_idle_message_timed("Signing...", Duration::from_millis(3_000));
+                    let cfg = siger_core::draft_sign::SignerConfig { sk_be: pending.sk_be };
+                    match siger_core::draft_sign::sign_draft_v1(pending.draft.as_slice(), &cfg) {
+                        Ok(out) => {
+                            let total = out.len() as u32;
+                            unsafe {
+                                OUT_FRAG = Some(OutFrag {
+                                    msg_id: pending.msg_id,
+                                    id: pending.frag_id,
+                                    kind: FragKind::SignDraft,
+                                    off: 0,
+                                    data: out,
+                                });
+                            }
+                            Msg {
+                                v: PROTO_V1,
+                                id: pending.msg_id,
+                                msg: Response::FragBegin {
+                                    id: pending.frag_id,
+                                    total_len: total,
+                                    kind: FragKind::SignDraft,
+                                },
+                            }
+                        }
+                        Err(siger_core::draft_sign::SignDraftError::Unsupported) => Msg {
                             v: PROTO_V1,
                             id: pending.msg_id,
                             msg: Response::Err {
-                                code: ERR_REJECTED_BY_USER,
+                                code: ERR_UNSUPPORTED_VERSION,
                             },
-                        }
-                    };
-                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
-                        let n = encode(used, &mut enc);
-                        let _ = usb_write(&mut usb, &enc[..n]);
-                        let _ = usb_write(&mut usb, &[0]);
-                    } else {
-                        send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
+                        },
+                        Err(_) => Msg {
+                            v: PROTO_V1,
+                            id: pending.msg_id,
+                            msg: Response::Err {
+                                code: ERR_BAD_COBS_OR_POSTCARD,
+                            },
+                        },
                     }
-                    if decision {
-                        usb_debug(&mut usb, b"confirm accepted\r\n");
-                    } else {
-                        usb_debug(&mut usb, b"confirm rejected\r\n");
+                } else {
+                    ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
+                    Msg {
+                        v: PROTO_V1,
+                        id: pending.msg_id,
+                        msg: Response::Err {
+                            code: ERR_REJECTED_BY_USER,
+                        },
                     }
+                };
+                pending.sk_be.zeroize();
+                if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                    let n = encode(used, &mut enc);
+                    let _ = usb_write(&mut usb, &enc[..n]);
+                    let _ = usb_write(&mut usb, &[0]);
+                } else {
+                    send_err(&mut usb, ERR_ENCODE_TOO_BIG, &mut enc);
                 }
             }
-            if let Some(event) = event {
-                match event {
-                    GuiInteraction::PinComplete(digits) => {
+        }
+        if let Some(event) = event {
+            match event {
+                GuiInteraction::PinComplete(digits) => {
                         let mut pin = HString::<16>::new();
                         for digit in digits.iter() {
                             let ch = char::from(b'0' + *digit);
@@ -656,7 +732,8 @@ fn main() -> ! {
                                         }),
                                     }
                                 } else {
-                                    let body = handle_frame_v1(m.id, &m.msg);
+                                    let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                    let body = handle_frame_v1(m.id, &m.msg, ui_ref);
 
                                     // Show result on GUI after unlock completes
                                     if let Frame::One(Request::Unlock { .. }) = &m.msg {
@@ -728,7 +805,7 @@ fn main() -> ! {
     }
 }
 
-fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
+fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> Response {
     match frame {
         Frame::One(req) => handle_request_v1(req),
         Frame::FragBegin {
@@ -817,36 +894,88 @@ fn handle_frame_v1(req_id: u32, frame: &Frame) -> Response {
                                 }
                             };
                             let cfg = siger_core::draft_sign::SignerConfig { sk_be: sk };
-                            let out = match siger_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg)
-                            {
-                                Ok(v) => v,
-                                Err(siger_core::draft_sign::SignDraftError::Unsupported) => {
-                                    FRAG = None;
-                                    return Response::Err {
-                                        code: ERR_UNSUPPORTED_VERSION,
-                                    };
-                                }
-                                Err(_) => {
-                                    FRAG = None;
-                                    return Response::Err {
-                                        code: ERR_BAD_COBS_OR_POSTCARD,
-                                    };
-                                }
-                            };
+                            if let Some(ui) = ui.as_mut() {
+                                let outputs = match siger_core::draft_sign::draft_outputs_v1(
+                                    st.buf.as_slice(),
+                                    &cfg,
+                                ) {
+                                    Ok(v) => v,
+                                    Err(siger_core::draft_sign::SignDraftError::Unsupported) => {
+                                        FRAG = None;
+                                        return Response::Err {
+                                            code: ERR_UNSUPPORTED_VERSION,
+                                        };
+                                    }
+                                    Err(_) => {
+                                        FRAG = None;
+                                        return Response::Err {
+                                            code: ERR_BAD_COBS_OR_POSTCARD,
+                                        };
+                                    }
+                                };
 
-                            let total = out.len() as u32;
-                            OUT_FRAG = Some(OutFrag {
-                                msg_id: req_id,
-                                id: st.id,
-                                kind: FragKind::SignDraft,
-                                off: 0,
-                                data: out,
-                            });
-                            FRAG = None;
-                            Response::FragBegin {
-                                id: *id,
-                                total_len: total,
-                                kind: FragKind::SignDraft,
+                                let draft = core::mem::take(&mut st.buf);
+                                let stored = critical_section::with(|cs| {
+                                    let mut slot = PENDING_SIGN_DRAFT.borrow_ref_mut(cs);
+                                    if slot.is_some() {
+                                        false
+                                    } else {
+                                        slot.replace(PendingSignDraft {
+                                            msg_id: req_id,
+                                            frag_id: st.id,
+                                            sk_be: sk,
+                                            draft,
+                                        });
+                                        true
+                                    }
+                                });
+
+                                if !stored {
+                                    FRAG = None;
+                                    return Response::Err { code: ERR_BUSY };
+                                }
+
+                                ui.request_tx_review(
+                                    outputs
+                                        .iter()
+                                        .filter(|o| !o.is_refund)
+                                        .map(|o| (o.gift, o.recipient_b58.as_str())),
+                                );
+                                FRAG = None;
+                                Response::Ok
+                            } else {
+                                let out =
+                                    match siger_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg)
+                                    {
+                                        Ok(v) => v,
+                                        Err(siger_core::draft_sign::SignDraftError::Unsupported) => {
+                                            FRAG = None;
+                                            return Response::Err {
+                                                code: ERR_UNSUPPORTED_VERSION,
+                                            };
+                                        }
+                                        Err(_) => {
+                                            FRAG = None;
+                                            return Response::Err {
+                                                code: ERR_BAD_COBS_OR_POSTCARD,
+                                            };
+                                        }
+                                    };
+
+                                let total = out.len() as u32;
+                                OUT_FRAG = Some(OutFrag {
+                                    msg_id: req_id,
+                                    id: st.id,
+                                    kind: FragKind::SignDraft,
+                                    off: 0,
+                                    data: out,
+                                });
+                                FRAG = None;
+                                Response::FragBegin {
+                                    id: *id,
+                                    total_len: total,
+                                    kind: FragKind::SignDraft,
+                                }
                             }
                         }
                     }

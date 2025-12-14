@@ -13,14 +13,18 @@ pub use state::{GuiInteraction, GuiMode};
 pub use touch::ScreenPoint;
 
 use constants::*;
+use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::{draw_target::DrawTarget, prelude::Point};
-use layout::{button_from_point_confirm, button_from_point_keypad, header_height, lock_button_rect};
+use layout::{
+    button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review, header_height,
+    lock_button_rect, tx_review_list_rect,
+};
 use render::{
     blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message, draw_keypad,
     draw_unlock_header, draw_unlock_spinner_frame, render_confirm_overlay, render_header,
-    render_idle_overlay,
+    render_idle_overlay, render_tx_review_overlay,
 };
-use state::{Button, ButtonHit, InteractionState};
+use state::{Button, ButtonHit, InteractionState, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS};
 use touch::transform_raw_touch;
 use display_interface_spi::SPIInterface;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
@@ -86,6 +90,9 @@ pub struct Gui<'d> {
     overlay_dirty: bool,
     auto_lock_deadline: Option<Instant>,
     seed_entry_state: seed::SeedEntryState,
+    tx_review_outputs: HVec<TxReviewOutput, TX_REVIEW_MAX_OUTPUTS>,
+    tx_review_scroll_y: i32,
+    tx_review_last_drag_y: Option<i32>,
 }
 
 impl<'d> Gui<'d> {
@@ -176,6 +183,9 @@ impl<'d> Gui<'d> {
             overlay_dirty: false,
             auto_lock_deadline: None,
             seed_entry_state: seed::SeedEntryState::new(),
+            tx_review_outputs: HVec::new(),
+            tx_review_scroll_y: 0,
+            tx_review_last_drag_y: None,
         };
 
         blit_boot_logo(&mut gui.display);
@@ -203,7 +213,7 @@ impl<'d> Gui<'d> {
                 }
             }
         }
-        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm) {
+        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview) {
             match self.auto_lock_deadline {
                 Some(deadline) => {
                     if now >= deadline {
@@ -390,6 +400,14 @@ impl<'d> Gui<'d> {
                     self.interaction.active_button.map(|hit| hit.button),
                 );
             }
+            GuiMode::TxReview => {
+                render_tx_review_overlay(
+                    &mut self.display,
+                    self.tx_review_outputs.as_slice(),
+                    self.tx_review_scroll_y,
+                    self.interaction.active_button.map(|hit| hit.button),
+                );
+            }
             _ => {}
         }
         self.overlay_dirty = false;
@@ -409,7 +427,7 @@ impl<'d> Gui<'d> {
     }
 
     fn refresh_auto_lock(&mut self, now: Instant) {
-        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm) {
+        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview) {
             self.auto_lock_deadline = Some(now + AUTO_LOCK_TIMEOUT);
         }
     }
@@ -455,7 +473,8 @@ impl<'d> Gui<'d> {
     }
 
     fn demo_render_range(&self) -> (u16, u16) {
-        let mut start: u16 = if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm) {
+        let mut start: u16 =
+            if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview) {
             header_height().max(0) as u16
         } else {
             0
@@ -572,8 +591,88 @@ impl<'d> Gui<'d> {
         self.refresh_auto_lock(Instant::now());
     }
 
+    fn tx_review_max_scroll(&self) -> i32 {
+        let rect = tx_review_list_rect();
+        let padding: i32 = 6;
+        let inner_h = rect.size.height as i32 - padding * 2;
+        if inner_h <= 0 {
+            return 0;
+        }
+        let line_gap: i32 = 2;
+        let line_h: i32 = FONT_6X10.character_size.height as i32 + line_gap;
+        let item_gap: i32 = 4;
+        let item_h: i32 = line_h * 2 + item_gap;
+        let total_h: i32 = (self.tx_review_outputs.len() as i32) * item_h;
+        (total_h - inner_h).max(0)
+    }
+
+    pub fn request_tx_review<'a, I>(&mut self, outputs: I)
+    where
+        I: IntoIterator<Item = (u64, &'a str)>,
+    {
+        self.tx_review_outputs.clear();
+        for (gift, recipient_b58) in outputs {
+            if self.tx_review_outputs.is_full() {
+                break;
+            }
+            let mut recipient_short = HString::<24>::new();
+            if recipient_b58.len() <= 12 {
+                let _ = recipient_short.push_str(recipient_b58);
+            } else {
+                let head = &recipient_b58[..4.min(recipient_b58.len())];
+                let tail = &recipient_b58[recipient_b58.len().saturating_sub(4)..];
+                let _ = recipient_short.push_str(head);
+                let _ = recipient_short.push_str("...");
+                let _ = recipient_short.push_str(tail);
+            }
+            let _ = self
+                .tx_review_outputs
+                .push(TxReviewOutput { gift, recipient_short });
+        }
+
+        self.tx_review_scroll_y = 0;
+        self.tx_review_last_drag_y = None;
+        self.mark_overlay_dirty();
+        self.disarm_active();
+        self.confirm_result = None;
+        self.mode = GuiMode::TxReview;
+        if self.unlock_demo_state.is_none() {
+            self.restart_unlock_demo();
+            let _ = self.display.clear(COLOR_BACKGROUND);
+        }
+        self.unlock_demo_paused = true;
+        render_header(&mut self.display, "Review Tx", COLOR_SURFACE_HIGH);
+        self.set_idle_message("");
+        self.render_current_overlay();
+        self.refresh_auto_lock(Instant::now());
+    }
+
     fn process_touch_point(&mut self, now: Instant, point: ScreenPoint) {
         self.refresh_auto_lock(now);
+        if self.mode == GuiMode::TxReview {
+            let pt = Point::new(point.x as i32, point.y as i32);
+            if button_from_point_tx_review(pt).is_none() {
+                let list_rect = tx_review_list_rect();
+                if list_rect.contains(pt) {
+                    self.clear_pending();
+                    self.deactivate_button();
+
+                    if let Some(last_y) = self.tx_review_last_drag_y {
+                        let delta = last_y - point.y as i32;
+                        if delta != 0 {
+                            self.tx_review_scroll_y = self.tx_review_scroll_y.saturating_add(delta);
+                            let max_scroll = self.tx_review_max_scroll();
+                            self.tx_review_scroll_y = self.tx_review_scroll_y.clamp(0, max_scroll);
+                            self.mark_overlay_dirty();
+                            self.render_current_overlay();
+                        }
+                    }
+                    self.tx_review_last_drag_y = Some(point.y as i32);
+                    return;
+                }
+            }
+            self.tx_review_last_drag_y = None;
+        }
         if self.mode == GuiMode::Unlocked {
             let rect = lock_button_rect();
             let pt = Point::new(point.x as i32, point.y as i32);
@@ -601,6 +700,9 @@ impl<'d> Gui<'d> {
             GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
             GuiMode::Confirm => {
                 button_from_point_confirm(Point::new(point.x as i32, point.y as i32))
+            }
+            GuiMode::TxReview => {
+                button_from_point_tx_review(Point::new(point.x as i32, point.y as i32))
             }
             GuiMode::SeedFirstBoot => {
                 seed::button_from_point_seed_setup(Point::new(point.x as i32, point.y as i32))
@@ -676,6 +778,7 @@ impl<'d> Gui<'d> {
                 if now - last_seen >= RELEASE_DEBOUNCE {
                     self.interaction.finger_down = false;
                     self.interaction.last_touch_sample_at = None;
+                    self.tx_review_last_drag_y = None;
                     self.clear_pending();
                     if self.interaction.cooldown_until.is_some() {
                         self.disarm_active();
@@ -714,7 +817,7 @@ impl<'d> Gui<'d> {
                 self.interaction.cooldown_until = Some(now + PRESS_COOLDOWN);
                 return match self.mode {
                     GuiMode::Locked => self.handle_pin_button(hit.button),
-                    GuiMode::Confirm => self.handle_confirm_button(hit.button),
+                    GuiMode::Confirm | GuiMode::TxReview => self.handle_confirm_button(hit.button),
                     GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => self.handle_seed_button(hit.button),
                     _ => None,
                 };
@@ -730,7 +833,7 @@ impl<'d> Gui<'d> {
         }
         self.deactivate_button();
         match self.mode {
-            GuiMode::Confirm => {
+            GuiMode::Confirm | GuiMode::TxReview => {
                 self.interaction.active_button = Some(hit);
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
@@ -755,7 +858,7 @@ impl<'d> Gui<'d> {
     fn deactivate_button(&mut self) {
         if let Some(old) = self.interaction.active_button.take() {
             match self.mode {
-                GuiMode::Confirm => {
+                GuiMode::Confirm | GuiMode::TxReview => {
                     self.mark_overlay_dirty();
                     self.render_current_overlay();
                 }
@@ -774,6 +877,7 @@ impl<'d> Gui<'d> {
         self.interaction.active_seen_at = None;
         self.interaction.cooldown_until = None;
         self.clear_lock_button();
+        self.tx_review_last_drag_y = None;
     }
 
     fn clear_pending(&mut self) {

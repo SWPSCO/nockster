@@ -4,6 +4,7 @@ import { SigerDevice, Response, formatCheetahPubkey } from 'siger-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import init, { ParsedTransaction } from 'siger-wasm';
 import { createSerialTransport  } from './serial';
+import { ComposerView } from './composer/Composer';
 import './App.css';
 
 const isTauri = typeof window !== 'undefined' && (
@@ -78,6 +79,19 @@ function App() {
   const [signingInputs, setSigningInputs] = useState<any[]>([]);
   const [signing, setSigning] = useState(false);
   const [signedTxBytes, setSignedTxBytes] = useState<Uint8Array | null>(null);
+  const [activeTab, setActiveTab] = useState<'device' | 'composer'>('device');
+
+  useEffect(() => {
+    const cls = 'app-composer';
+    if (activeTab === 'composer') {
+      document.body.classList.add(cls);
+    } else {
+      document.body.classList.remove(cls);
+    }
+    return () => {
+      document.body.classList.remove(cls);
+    };
+  }, [activeTab]);
 
   // Initialize WASM module (required for web target)
   useEffect(() => {
@@ -711,25 +725,47 @@ function App() {
     setStatus('');
   };
 
-  if (!isSupported) {
-    return (
-      <div className="container">
-        <img src="assets/nockster.png" width="400px"/>
-        <div className="error">
-          <p>Web Serial API not supported in this browser.</p>
-          <p>Please use Chrome, Edge, or Opera.</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="container">
+    <div className={activeTab === 'composer' ? 'container container-wide' : 'container'}>
       <div className="header-img">
         <img src="assets/nockster.png" width="400px"/>
       </div>
 
-      {connected && (
+      <div className="tab-bar">
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === 'device' ? 'active' : ''}`}
+          onClick={() => setActiveTab('device')}
+        >
+          device
+        </button>
+        <button
+          type="button"
+          className={`tab-btn ${activeTab === 'composer' ? 'active' : ''}`}
+          onClick={() => setActiveTab('composer')}
+        >
+          composer
+        </button>
+      </div>
+
+      {activeTab === 'composer' && (
+        <div className="section section-composer">
+          <h2>Transaction composer (V1)</h2>
+          <p className="seed-subtitle">
+            Compose an unsigned V1 transaction noun locally, then download the `.psnt`.
+          </p>
+          <ComposerView wasmReady={wasmReady} />
+        </div>
+      )}
+
+      {activeTab === 'device' && !isSupported && (
+        <div className="error">
+          <p>Web Serial API not supported in this browser.</p>
+          <p>Please use Chrome, Edge, or Opera.</p>
+        </div>
+      )}
+
+      {activeTab === 'device' && connected && (
         <>
           {showSeedForm && (
             <div className="section">
@@ -1114,7 +1150,7 @@ function App() {
         </>
       )}
 
-      {!connected && (
+      {activeTab === 'device' && !connected && (
         <div className="section">
           {isTauri && availablePorts.length === 0 && (
             <div style={{ display: 'flex', justifyContent: 'center' }}>

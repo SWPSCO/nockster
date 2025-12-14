@@ -102,6 +102,60 @@ pub(crate) fn button_from_point_confirm(point: Point) -> Option<ButtonHit> {
     None
 }
 
+pub(crate) fn tx_review_buttons() -> [ButtonHit; 2] {
+    let margin = 8;
+    let gap = 8;
+    let header_h = header_height();
+    let width = (SCREEN_WIDTH as i32 - margin * 2).max(80);
+    let button_h = 54;
+    let top = (SCREEN_HEIGHT as i32 - margin - button_h).max(header_h + margin);
+
+    let button_w = ((width - gap) / 2).max(32);
+
+    let deny = ButtonHit {
+        button: Button::Clear,
+        top_left: Point::new(margin, top),
+        size: Size::new(button_w as u32, button_h as u32),
+    };
+    let confirm = ButtonHit {
+        button: Button::Ok,
+        top_left: Point::new(margin + button_w + gap, top),
+        size: Size::new(button_w as u32, button_h as u32),
+    };
+
+    [deny, confirm]
+}
+
+pub(crate) fn tx_review_list_rect() -> Rectangle {
+    let margin = 8;
+    let header_h = header_height();
+    let top = header_h + margin;
+    let buttons = tx_review_buttons();
+    let buttons_top = buttons[0].top_left.y;
+    let bottom = (buttons_top - margin).max(top + 24);
+
+    Rectangle::new(
+        Point::new(margin, top),
+        Size::new(
+            (SCREEN_WIDTH as i32 - margin * 2).max(40) as u32,
+            (bottom - top).max(0) as u32,
+        ),
+    )
+}
+
+pub(crate) fn button_from_point_tx_review(point: Point) -> Option<ButtonHit> {
+    for hit in tx_review_buttons() {
+        let within_x =
+            point.x >= hit.top_left.x && point.x < hit.top_left.x + hit.size.width as i32;
+        let within_y =
+            point.y >= hit.top_left.y && point.y < hit.top_left.y + hit.size.height as i32;
+        if within_x && within_y {
+            return Some(hit);
+        }
+    }
+    None
+}
+
 pub(crate) fn keypad_grid() -> [[Button; 3]; 4] {
     [
         [Button::Digit(1), Button::Digit(2), Button::Digit(3)],

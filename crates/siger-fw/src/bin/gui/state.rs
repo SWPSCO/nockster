@@ -24,7 +24,7 @@ pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
 #[derive(Clone, Debug)]
 pub struct TxReviewOutput {
     pub gift: u64,
-    pub recipient_short: HString<24>,
+    pub recipient_b58: HString<64>,
 }
 
 use super::seed::SeedButton;

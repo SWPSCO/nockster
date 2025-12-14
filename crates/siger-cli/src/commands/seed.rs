@@ -3,8 +3,8 @@ use crate::keys;
 use crate::serial::{open, send_blob, send_call};
 use crate::util::parse_64;
 use siger_core::{
-    FragKind, Request, Response, ERR_ALREADY_INITIALIZED, ERR_DEVICE_LOCKED, ERR_OVERFLOW,
-    ERR_PIN_LOCKED_OUT, ERR_WRONG_PIN,
+    FragKind, Request, Response, ERR_ALREADY_INITIALIZED, ERR_CRYPTO, ERR_DEVICE_LOCKED, ERR_FLASH,
+    ERR_OVERFLOW, ERR_PIN_LOCKED_OUT, ERR_WRONG_PIN,
 };
 use std::fmt::Write as _;
 
@@ -56,6 +56,12 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
                         Response::Err { code: ERR_OVERFLOW } => {
                             anyhow::bail!("seed storage is full")
                         }
+                        Response::Err { code } if code == ERR_FLASH => {
+                            anyhow::bail!("add-seed failed: device flash error (code {code})")
+                        }
+                        Response::Err { code } if code == ERR_CRYPTO => {
+                            anyhow::bail!("add-seed failed: device crypto/RNG error (code {code})")
+                        }
                         Response::Err { code } => {
                             anyhow::bail!("add-seed failed with code {code}")
                         }
@@ -69,6 +75,12 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
                     code: ERR_PIN_LOCKED_OUT,
                 } => {
                     anyhow::bail!("pin locked out")
+                }
+                Response::Err { code } if code == ERR_FLASH => {
+                    anyhow::bail!("initialize failed: device flash error (code {code})")
+                }
+                Response::Err { code } if code == ERR_CRYPTO => {
+                    anyhow::bail!("initialize failed: device crypto/RNG error (code {code})")
                 }
                 Response::Err { code } => anyhow::bail!("initialize failed with code {code}"),
                 other => anyhow::bail!("unexpected initialize response: {other:?}"),
@@ -130,6 +142,12 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
                         Response::Err { code: ERR_OVERFLOW } => {
                             anyhow::bail!("seed storage is full")
                         }
+                        Response::Err { code } if code == ERR_FLASH => {
+                            anyhow::bail!("add-seed failed: device flash error (code {code})")
+                        }
+                        Response::Err { code } if code == ERR_CRYPTO => {
+                            anyhow::bail!("add-seed failed: device crypto/RNG error (code {code})")
+                        }
                         Response::Err { code } => anyhow::bail!("add-seed failed with code {code}"),
                         other => anyhow::bail!("unexpected add-seed response: {other:?}"),
                     }
@@ -141,6 +159,12 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
                     code: ERR_PIN_LOCKED_OUT,
                 } => {
                     anyhow::bail!("pin locked out")
+                }
+                Response::Err { code } if code == ERR_FLASH => {
+                    anyhow::bail!("initialize failed: device flash error (code {code})")
+                }
+                Response::Err { code } if code == ERR_CRYPTO => {
+                    anyhow::bail!("initialize failed: device crypto/RNG error (code {code})")
                 }
                 Response::Err { code } => anyhow::bail!("initialize failed with code {code}"),
                 other => anyhow::bail!("unexpected initialize response: {other:?}"),

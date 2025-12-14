@@ -144,6 +144,21 @@ pub(crate) fn tx_review_list_rect() -> Rectangle {
     )
 }
 
+pub(crate) fn tx_review_detail_rect() -> Rectangle {
+    let list = tx_review_list_rect();
+    let inset: i32 = 10;
+    if list.size.width <= (inset as u32 * 2) || list.size.height <= (inset as u32 * 2) {
+        return list;
+    }
+    Rectangle::new(
+        Point::new(list.top_left.x + inset, list.top_left.y + inset),
+        Size::new(
+            list.size.width.saturating_sub((inset as u32) * 2),
+            list.size.height.saturating_sub((inset as u32) * 2),
+        ),
+    )
+}
+
 pub(crate) fn button_from_point_tx_review(point: Point) -> Option<ButtonHit> {
     for hit in tx_review_buttons() {
         let within_x =

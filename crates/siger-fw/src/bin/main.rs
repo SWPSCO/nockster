@@ -313,7 +313,7 @@ fn begin_confirmation(
     prompt: &'static str,
     ui: Option<&mut Gui<'_>>,
 ) -> Result<(), ()> {
-    let mut spend_outputs: HVec<(u64, HString<24>), 24> = HVec::new();
+    let mut spend_outputs: HVec<(u64, HString<64>), 24> = HVec::new();
     let show_spend_outputs = match &frame {
         Frame::One(Request::SignSpendHash { meta: Some(meta), .. })
         | Frame::One(Request::SignSpendHashFor { meta: Some(meta), .. }) => {
@@ -321,8 +321,11 @@ fn begin_confirmation(
                 if out.gift == 0 || out.is_refund {
                     continue;
                 }
-                let recipient_short = shorten_b58(out.recipient_pkh_b58.as_str());
-                let candidate = (out.gift, recipient_short);
+                let mut recipient = HString::<64>::new();
+                let max = 64usize;
+                let take = out.recipient_pkh_b58.len().min(max);
+                let _ = recipient.push_str(&out.recipient_pkh_b58[..take]);
+                let candidate = (out.gift, recipient);
                 if let Err(candidate) = spend_outputs.push(candidate) {
                     // Keep only the largest outputs when more than the UI list can display.
                     let mut min_idx = 0usize;
@@ -803,8 +806,14 @@ fn main() -> ! {
                                     // Show result on GUI after seeding completes
                                     if let Frame::One(Request::InitializePIN { .. }) = &m.msg {
                                         if let Some(ui) = ui.as_mut() {
-                                            if matches!(&body, Response::Ok) {
-                                                ui.show_unlock_success();
+                                            match &body {
+                                                Response::Ok => ui.show_unlock_success(),
+                                                Response::Err { code }
+                                                    if *code == ERR_ALREADY_INITIALIZED =>
+                                                {
+                                                    ui.begin_unlock(None);
+                                                }
+                                                _ => ui.show_seed_setup(),
                                             }
                                         }
                                     }
@@ -1213,6 +1222,8 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(NvsError::AlreadyInitialized) => Response::Err {
                     code: ERR_ALREADY_INITIALIZED,
                 },
+                Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+                Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             };
             unsafe { DEVICE_BUSY = false; }
@@ -1246,6 +1257,8 @@ fn handle_request_v1(req: &Request) -> Response {
                     code: ERR_PIN_LOCKED_OUT,
                 },
                 Err(NvsError::Full) => Response::Err { code: ERR_OVERFLOW },
+                Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+                Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
@@ -1277,6 +1290,8 @@ fn handle_request_v1(req: &Request) -> Response {
                     code: ERR_PIN_LOCKED_OUT,
                 },
                 Err(NvsError::NotInitialized) => Response::Err { code: ERR_NO_SEED },
+                Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+                Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
@@ -1323,6 +1338,8 @@ fn handle_request_v1(req: &Request) -> Response {
                         store_master_key(&master_key);
                         Response::Ok
                     }
+                    Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+                    Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
                     Err(_) => Response::Err { code: ERR_NO_SEED },
                 },
                 Err(NvsError::WrongPin) => Response::Err {
@@ -1331,6 +1348,8 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(NvsError::LockedOut) => Response::Err {
                     code: ERR_PIN_LOCKED_OUT,
                 },
+                Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+                Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
@@ -1344,6 +1363,7 @@ fn handle_request_v1(req: &Request) -> Response {
             let mut nvs = NvsStore::new();
             match nvs.factory_reset() {
                 Ok(()) => Response::Ok,
+                Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }

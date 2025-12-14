@@ -9,7 +9,7 @@ use embedded_graphics::text::{Alignment, Text};
 use super::constants::*;
 use super::layout::{
     confirm_buttons, header_height, keypad_button_hit, keypad_grid, row_height, tx_review_buttons,
-    tx_review_list_rect,
+    tx_review_detail_rect, tx_review_list_rect,
 };
 use super::state::{Button, ButtonHit, GuiMode, TxReviewOutput};
 use super::GuiDisplay;
@@ -208,10 +208,10 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
                 .stroke_width(1)
                 .build(),
         )
-        .draw(display);
+    .draw(display);
 
     if size.width > 4 && size.height > 4 {
-        let highlight_height = (size.height / 3).max(4);
+        let highlight_height = (size.height / 5).clamp(4, 12);
         let highlight = Rectangle::new(
             Point::new(top_left.x + 1, top_left.y + 1),
             Size::new(size.width.saturating_sub(2), highlight_height),
@@ -225,7 +225,7 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
             )
             .draw(display);
 
-        let shadow_height = (size.height / 3).max(4);
+        let shadow_height = highlight_height;
         let shadow_top = top_left.y + size.height as i32 - shadow_height as i32 - 1;
         let shadow = Rectangle::new(
             Point::new(top_left.x + 1, shadow_top),
@@ -404,6 +404,7 @@ pub fn render_tx_review_overlay(
     display: &mut GuiDisplay<'_>,
     outputs: &[TxReviewOutput],
     scroll_y: i32,
+    expanded_index: Option<usize>,
     active_button: Option<Button>,
 ) {
     let header_h = header_height();
@@ -426,7 +427,45 @@ pub fn render_tx_review_overlay(
     let inner_bottom = list_rect.top_left.y + list_rect.size.height as i32 - padding;
 
     let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-    let subtle = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT_SUBTLE);
+    let subtle = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+
+    fn write_amount(buf: &mut heapless::String<32>, gift_nicks: u64) {
+        const NICKS_PER_NOCK: u64 = 1 << 16; // 65536
+        buf.clear();
+
+        if gift_nicks >= NICKS_PER_NOCK {
+            let whole = gift_nicks / NICKS_PER_NOCK;
+            let rem = gift_nicks % NICKS_PER_NOCK;
+            let mut frac = (rem.saturating_mul(100) + (NICKS_PER_NOCK / 2)) / NICKS_PER_NOCK;
+            let mut whole = whole;
+            if frac >= 100 {
+                whole = whole.saturating_add(1);
+                frac = 0;
+            }
+            let _ = write!(buf, "{}.{:02} N", whole, frac);
+        } else {
+            let _ = write!(buf, "{} n", gift_nicks);
+        }
+    }
+
+    fn write_truncated_recipient(buf: &mut heapless::String<32>, recipient: &str) {
+        buf.clear();
+        let bytes = recipient.as_bytes();
+        const HEAD: usize = 4;
+        const TAIL: usize = 4;
+        if bytes.len() <= HEAD + 3 + TAIL {
+            let _ = buf.push_str(recipient);
+            return;
+        }
+        let head = core::str::from_utf8(&bytes[..HEAD]).unwrap_or("");
+        let tail = core::str::from_utf8(&bytes[bytes.len() - TAIL..]).unwrap_or("");
+        let _ = write!(buf, "{}...{}", head, tail);
+    }
+
+    let line_gap: i32 = 2;
+    let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
+    let item_gap: i32 = 8;
+    let item_h: i32 = 2 * line_h + item_gap;
 
     if outputs.is_empty() {
         let center_x = (SCREEN_WIDTH / 2) as i32;
@@ -439,30 +478,66 @@ pub fn render_tx_review_overlay(
         )
         .draw(display);
     } else {
-        let line_gap: i32 = 2;
-        let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
-        let item_gap: i32 = 8;
-        let item_h: i32 = line_h * 2 + item_gap;
+        let mut y = inner_top - scroll_y;
+        for out in outputs {
+            let item_top = y;
+            let item_bottom = item_top + item_h;
 
-        for (idx, out) in outputs.iter().enumerate() {
-            let base_y = inner_top - scroll_y + (idx as i32) * item_h;
-            let y1 = base_y + FONT_10X20.character_size.height as i32;
-            let y2 = y1 + line_h;
-
-            if y2 < inner_top {
+            if item_bottom < inner_top {
+                y = y.saturating_add(item_h);
                 continue;
             }
-            if y1 > inner_bottom {
+            if item_top > inner_bottom {
                 break;
             }
 
+            let mut baseline = y + FONT_10X20.character_size.height as i32;
             let mut line1 = heapless::String::<32>::new();
-            let _ = write!(line1, "{} n", out.gift);
-            let _ = Text::new(line1.as_str(), Point::new(inner_left, y1), style).draw(display);
+            write_amount(&mut line1, out.gift);
+            let _ = Text::new(line1.as_str(), Point::new(inner_left, baseline), style)
+                .draw(display);
 
+            baseline += line_h;
             let mut line2 = heapless::String::<32>::new();
-            let _ = write!(line2, "to {}", out.recipient_short.as_str());
-            let _ = Text::new(line2.as_str(), Point::new(inner_left, y2), subtle).draw(display);
+            write_truncated_recipient(&mut line2, out.recipient_b58.as_str());
+            let _ = Text::new(line2.as_str(), Point::new(inner_left, baseline), subtle)
+                .draw(display);
+
+            y = y.saturating_add(item_h);
+        }
+    }
+
+    if let Some(idx) = expanded_index {
+        if let Some(out) = outputs.get(idx) {
+            let detail_rect = tx_review_detail_rect();
+            draw_panel(display, detail_rect.top_left, detail_rect.size);
+
+            let padding: i32 = 6;
+            let left = detail_rect.top_left.x + padding;
+            let top = detail_rect.top_left.y + padding;
+            let bottom = detail_rect.top_left.y + detail_rect.size.height as i32 - padding;
+
+            let font_w: i32 = FONT_10X20.character_size.width as i32;
+            let inner_w = (detail_rect.size.width as i32 - padding * 2).max(font_w);
+            let max_chars = (inner_w / font_w).max(1) as usize;
+
+            let mut baseline = top + FONT_10X20.character_size.height as i32;
+
+            let mut amount = heapless::String::<32>::new();
+            write_amount(&mut amount, out.gift);
+            let _ = Text::new(amount.as_str(), Point::new(left, baseline), style).draw(display);
+            baseline += line_h;
+
+            let recipient = out.recipient_b58.as_str();
+            let bytes = recipient.as_bytes();
+            let mut pos: usize = 0;
+            while pos < bytes.len() && baseline <= bottom {
+                let end = (pos + max_chars).min(bytes.len());
+                let part = core::str::from_utf8(&bytes[pos..end]).unwrap_or("");
+                let _ = Text::new(part, Point::new(left, baseline), subtle).draw(display);
+                pos = end;
+                baseline += line_h;
+            }
         }
     }
 

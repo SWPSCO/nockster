@@ -4,7 +4,6 @@ TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
 WASM_TOOLCHAIN := nightly
 WASM_TARGET := wasm32-unknown-unknown
-
 .PHONY: all build flash test clean fw cli core wasm js web tauri tauri-dev tauri-build
 
 all: build

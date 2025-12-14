@@ -53,6 +53,8 @@ pub const ERR_PIN_LOCKED_OUT: u16 = 132;
 pub const ERR_ALREADY_INITIALIZED: u16 = 133;
 pub const ERR_REJECTED_BY_USER: u16 = 134;
 pub const ERR_BUSY: u16 = 135;
+pub const ERR_FLASH: u16 = 140;
+pub const ERR_CRYPTO: u16 = 141;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Msg<T> {

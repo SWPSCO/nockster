@@ -659,21 +659,44 @@ fn zset_any_value(set: Noun, arena: &Arena) -> Option<Noun> {
     Some(value)
 }
 
-fn seed_recipient_pkh(seed_note_data: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
+fn zset_count_up_to(set: Noun, arena: &Arena, limit: u8) -> Result<u8, SignDraftError> {
+    if limit == 0 || set == arena.atom0() {
+        return Ok(0);
+    }
+    let (value, lr) = uncons(set, arena).ok_or(SignDraftError::Malformed)?;
+    let _ = value;
+
+    let mut count = 1u8;
+    if count >= limit {
+        return Ok(count);
+    }
+
+    let (left, right) = uncons(lr, arena).ok_or(SignDraftError::Malformed)?;
+    count = count.saturating_add(zset_count_up_to(left, arena, limit - count)?);
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zset_count_up_to(right, arena, limit - count)?);
+    Ok(count)
+}
+
+fn seed_recipient_pkh(seed_note_data: Noun, arena: &Arena) -> Result<Option<[u64; 5]>, SignDraftError> {
     // note-data is a z-map of @tas -> *
     // We expect key "lock" to be lock-data: [%0 spend-condition]
-    let lock_data = note_data_find(seed_note_data, arena, b"lock").ok_or(SignDraftError::Malformed)?;
+    let Some(lock_data) = note_data_find(seed_note_data, arena, b"lock") else {
+        return Ok(None);
+    };
 
     let (ver, lock) = tuple2(lock_data, arena).ok_or(SignDraftError::Malformed)?;
     if noun_atom_u64(ver, arena) != Some(0) {
-        return Err(SignDraftError::Unsupported);
+        return Ok(None);
     }
 
     // spend-condition is a list of lock-primitives; we only support a single %pkh primitive.
     let (prim, _rest) = uncons(lock, arena).ok_or(SignDraftError::Malformed)?;
     let (header, body) = tuple2(prim, arena).ok_or(SignDraftError::Malformed)?;
     if !atom_eq_bytes(header, b"pkh", arena) {
-        return Err(SignDraftError::Unsupported);
+        return Ok(None);
     }
 
     // body for pkh: [m h=(z-set hash)]
@@ -683,8 +706,14 @@ fn seed_recipient_pkh(seed_note_data: Noun, arena: &Arena) -> Result<[u64; 5], S
         return Err(SignDraftError::Malformed);
     }
 
+    // If multiple recipient hashes exist, fall back to lock-root instead of picking an arbitrary one.
+    if zset_count_up_to(h_set, arena, 2)? != 1 {
+        return Ok(None);
+    }
+
     let any = zset_any_value(h_set, arena).ok_or(SignDraftError::Malformed)?;
-    parse_hash(any, arena).ok_or(SignDraftError::Malformed)
+    let digest = parse_hash(any, arena).ok_or(SignDraftError::Malformed)?;
+    Ok(Some(digest))
 }
 
 fn collect_outputs_from_seeds(
@@ -708,7 +737,8 @@ fn collect_outputs_from_seeds(
         _ => return Err(SignDraftError::Malformed),
     };
     if gift != 0 {
-        let recipient = seed_recipient_pkh(note_data, arena)?;
+        let lock_root_digest = parse_hash(_lock_root, arena).ok_or(SignDraftError::Malformed)?;
+        let recipient = seed_recipient_pkh(note_data, arena)?.unwrap_or(lock_root_digest);
         if recipient == signer_pkh {
             let next = refund.unwrap_or(0).checked_add(gift).ok_or(SignDraftError::Malformed)?;
             *refund = Some(next);

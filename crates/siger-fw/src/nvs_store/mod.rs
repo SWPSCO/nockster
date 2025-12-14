@@ -87,12 +87,36 @@ impl Header {
         }
         let mut salt = [0u8; 32];
         salt.copy_from_slice(&buf[8..40]);
-        Some(Self {
+        let header = Self {
             flags: buf[5],
             attempts: buf[6],
             slot_count: buf[7],
             salt,
-        })
+        };
+
+        // Reject obviously corrupt headers. This avoids getting stuck in an
+        // "initialized but impossible" state if a flash write is interrupted.
+        if header.flags & !FLAG_INITIALIZED != 0 {
+            return None;
+        }
+        if header.attempts > MAX_PIN_ATTEMPTS {
+            return None;
+        }
+        if header.slot_count as usize > MAX_SEED_SLOTS {
+            return None;
+        }
+        if header.initialized() {
+            if header.slot_count == 0 {
+                return None;
+            }
+            // Salt should never be all-0xFF in a valid initialized header
+            // (we set it via getrandom).
+            if header.salt.iter().all(|b| *b == 0xFF) {
+                return None;
+            }
+        }
+
+        Some(header)
     }
 }
 
@@ -184,14 +208,20 @@ impl NvsStore {
 
         let mut header = Header::new_uninitialized();
         header.slot_count = 1;
-        header.set_initialized();
         getrandom::getrandom(&mut header.salt).map_err(|_| NvsError::Crypto)?;
 
         let key = Self::derive_master_key(pin, &header.salt)?;
         let slot_record = self.encrypt_seed_record(&key, seed64, pub_xy)?;
 
+        // Atomic-ish initialization: write the header without the initialized flag,
+        // then write the slot, then finally mark initialized.
+        //
+        // This prevents leaving the device in a "looks initialized" state if the
+        // slot write fails partway through.
         self.write_header(&header)?;
         self.write_slot(0, &slot_record)?;
+        header.set_initialized();
+        self.write_header(&header)?;
         Ok((key, 0))
     }
 

@@ -17,7 +17,7 @@ use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::{draw_target::DrawTarget, prelude::Point};
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review, header_height,
-    lock_button_rect, tx_review_list_rect,
+    lock_button_rect, tx_review_detail_rect, tx_review_list_rect,
 };
 use render::{
     blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message, draw_keypad,
@@ -93,6 +93,11 @@ pub struct Gui<'d> {
     tx_review_outputs: HVec<TxReviewOutput, TX_REVIEW_MAX_OUTPUTS>,
     tx_review_scroll_y: i32,
     tx_review_last_drag_y: Option<i32>,
+    tx_review_expanded_index: Option<usize>,
+    tx_review_touch_start: Option<ScreenPoint>,
+    tx_review_tap_index: Option<usize>,
+    tx_review_drag_active: bool,
+    tx_review_ignore_until_release: bool,
 }
 
 impl<'d> Gui<'d> {
@@ -186,6 +191,11 @@ impl<'d> Gui<'d> {
             tx_review_outputs: HVec::new(),
             tx_review_scroll_y: 0,
             tx_review_last_drag_y: None,
+            tx_review_expanded_index: None,
+            tx_review_touch_start: None,
+            tx_review_tap_index: None,
+            tx_review_drag_active: false,
+            tx_review_ignore_until_release: false,
         };
 
         blit_boot_logo(&mut gui.display);
@@ -405,6 +415,7 @@ impl<'d> Gui<'d> {
                     &mut self.display,
                     self.tx_review_outputs.as_slice(),
                     self.tx_review_scroll_y,
+                    self.tx_review_expanded_index,
                     self.interaction.active_button.map(|hit| hit.button),
                 );
             }
@@ -606,9 +617,31 @@ impl<'d> Gui<'d> {
         let line_gap: i32 = 2;
         let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
         let item_gap: i32 = 8;
-        let item_h: i32 = line_h * 2 + item_gap;
-        let total_h: i32 = (self.tx_review_outputs.len() as i32) * item_h;
+        let item_h: i32 = 2 * line_h + item_gap;
+        let total_h: i32 = (self.tx_review_outputs.len() as i32).saturating_mul(item_h);
         (total_h - inner_h).max(0)
+    }
+
+    fn tx_review_tap_index(&self, pt: Point) -> Option<usize> {
+        if self.tx_review_outputs.is_empty() {
+            return None;
+        }
+        let rect = tx_review_list_rect();
+        let padding: i32 = 6;
+        let inner_top = rect.top_left.y + padding;
+        let y = pt.y - inner_top + self.tx_review_scroll_y;
+        if y < 0 {
+            return None;
+        }
+        let line_gap: i32 = 2;
+        let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
+        let item_gap: i32 = 8;
+        let item_h: i32 = 2 * line_h + item_gap;
+        let idx = (y / item_h) as usize;
+        if idx >= self.tx_review_outputs.len() {
+            return None;
+        }
+        Some(idx)
     }
 
     pub fn request_tx_review<'a, I>(&mut self, outputs: I)
@@ -627,23 +660,25 @@ impl<'d> Gui<'d> {
             if self.tx_review_outputs.is_full() {
                 break;
             }
-            let mut recipient_short = HString::<24>::new();
-            if recipient_b58.len() <= 12 {
-                let _ = recipient_short.push_str(recipient_b58);
-            } else {
-                let head = &recipient_b58[..4.min(recipient_b58.len())];
-                let tail = &recipient_b58[recipient_b58.len().saturating_sub(4)..];
-                let _ = recipient_short.push_str(head);
-                let _ = recipient_short.push_str("...");
-                let _ = recipient_short.push_str(tail);
-            }
+            let mut recipient_buf = HString::<64>::new();
+            let max = 64usize;
+            let take = recipient_b58.len().min(max);
+            let _ = recipient_buf.push_str(&recipient_b58[..take]);
             let _ = self
                 .tx_review_outputs
-                .push(TxReviewOutput { gift, recipient_short });
+                .push(TxReviewOutput {
+                    gift,
+                    recipient_b58: recipient_buf,
+                });
         }
 
         self.tx_review_scroll_y = 0;
         self.tx_review_last_drag_y = None;
+        self.tx_review_expanded_index = None;
+        self.tx_review_touch_start = None;
+        self.tx_review_tap_index = None;
+        self.tx_review_drag_active = false;
+        self.tx_review_ignore_until_release = false;
         self.mark_overlay_dirty();
         self.disarm_active();
         self.confirm_result = None;
@@ -662,28 +697,85 @@ impl<'d> Gui<'d> {
     fn process_touch_point(&mut self, now: Instant, point: ScreenPoint) {
         self.refresh_auto_lock(now);
         if self.mode == GuiMode::TxReview {
+            if self.tx_review_ignore_until_release {
+                return;
+            }
             let pt = Point::new(point.x as i32, point.y as i32);
+            if self.tx_review_expanded_index.is_some() {
+                self.clear_pending();
+                self.deactivate_button();
+
+                if !tx_review_detail_rect().contains(pt) {
+                    self.tx_review_expanded_index = None;
+                    self.tx_review_ignore_until_release = true;
+                    self.mark_overlay_dirty();
+                    self.render_current_overlay();
+                }
+                self.tx_review_last_drag_y = None;
+                self.tx_review_touch_start = None;
+                self.tx_review_tap_index = None;
+                self.tx_review_drag_active = false;
+                return;
+            }
             if button_from_point_tx_review(pt).is_none() {
                 let list_rect = tx_review_list_rect();
                 if list_rect.contains(pt) {
                     self.clear_pending();
                     self.deactivate_button();
 
-                    if let Some(last_y) = self.tx_review_last_drag_y {
-                        let delta = last_y - point.y as i32;
-                        if delta != 0 {
-                            self.tx_review_scroll_y = self.tx_review_scroll_y.saturating_add(delta);
-                            let max_scroll = self.tx_review_max_scroll();
-                            self.tx_review_scroll_y = self.tx_review_scroll_y.clamp(0, max_scroll);
-                            self.mark_overlay_dirty();
-                            self.render_current_overlay();
+                    const DRAG_THRESHOLD: i32 = 6;
+                    let is_first = self.tx_review_touch_start.is_none();
+                    if is_first {
+                        self.tx_review_touch_start = Some(point);
+                        self.tx_review_tap_index = self.tx_review_tap_index(pt);
+                        self.tx_review_drag_active = false;
+                        self.tx_review_last_drag_y = Some(point.y as i32);
+                        return;
+                    }
+
+                    if let Some(start) = self.tx_review_touch_start {
+                        let dx = point.x as i32 - start.x as i32;
+                        let dy = point.y as i32 - start.y as i32;
+                        if !self.tx_review_drag_active
+                            && (dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD)
+                        {
+                            self.tx_review_drag_active = true;
+                            self.tx_review_tap_index = None;
+                            let delta = start.y as i32 - point.y as i32;
+                            if delta != 0 {
+                                self.tx_review_scroll_y =
+                                    self.tx_review_scroll_y.saturating_add(delta);
+                                let max_scroll = self.tx_review_max_scroll();
+                                self.tx_review_scroll_y = self.tx_review_scroll_y.clamp(0, max_scroll);
+                                self.mark_overlay_dirty();
+                                self.render_current_overlay();
+                            }
+                            self.tx_review_last_drag_y = Some(point.y as i32);
+                            return;
                         }
                     }
-                    self.tx_review_last_drag_y = Some(point.y as i32);
+
+                    if self.tx_review_drag_active {
+                        if let Some(last_y) = self.tx_review_last_drag_y {
+                            let delta = last_y - point.y as i32;
+                            if delta != 0 {
+                                self.tx_review_scroll_y =
+                                    self.tx_review_scroll_y.saturating_add(delta);
+                                let max_scroll = self.tx_review_max_scroll();
+                                self.tx_review_scroll_y = self.tx_review_scroll_y.clamp(0, max_scroll);
+                                self.mark_overlay_dirty();
+                                self.render_current_overlay();
+                            }
+                        }
+                        self.tx_review_last_drag_y = Some(point.y as i32);
+                    }
                     return;
                 }
             }
             self.tx_review_last_drag_y = None;
+            self.tx_review_touch_start = None;
+            self.tx_review_tap_index = None;
+            self.tx_review_drag_active = false;
         }
         if self.mode == GuiMode::Unlocked {
             let rect = lock_button_rect();
@@ -714,6 +806,9 @@ impl<'d> Gui<'d> {
                 button_from_point_confirm(Point::new(point.x as i32, point.y as i32))
             }
             GuiMode::TxReview => {
+                self.tx_review_touch_start = None;
+                self.tx_review_tap_index = None;
+                self.tx_review_drag_active = false;
                 button_from_point_tx_review(Point::new(point.x as i32, point.y as i32))
             }
             GuiMode::SeedFirstBoot => {
@@ -790,7 +885,20 @@ impl<'d> Gui<'d> {
                 if now - last_seen >= RELEASE_DEBOUNCE {
                     self.interaction.finger_down = false;
                     self.interaction.last_touch_sample_at = None;
+                    self.tx_review_ignore_until_release = false;
+                    let open_tx_review_detail = if self.mode == GuiMode::TxReview
+                        && self.interaction.active_button.is_none()
+                        && self.tx_review_expanded_index.is_none()
+                        && !self.tx_review_drag_active
+                    {
+                        self.tx_review_tap_index
+                    } else {
+                        None
+                    };
                     self.tx_review_last_drag_y = None;
+                    self.tx_review_touch_start = None;
+                    self.tx_review_tap_index = None;
+                    self.tx_review_drag_active = false;
                     self.clear_pending();
                     if self.interaction.cooldown_until.is_some() {
                         self.disarm_active();
@@ -798,6 +906,14 @@ impl<'d> Gui<'d> {
                     }
                     if let Some(result) = self.finalize_press(now) {
                         return Some(result);
+                    }
+                    if let Some(idx) = open_tx_review_detail {
+                        if idx < self.tx_review_outputs.len() {
+                            self.tx_review_expanded_index = Some(idx);
+                            self.mark_overlay_dirty();
+                            self.render_current_overlay();
+                        }
+                        return None;
                     }
                     if self.mode == GuiMode::Unlocked {
                         return self.finalize_lock_button(now);

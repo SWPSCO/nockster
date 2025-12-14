@@ -78,6 +78,19 @@ pub struct Xpub {
     pub pubkey33: [u8; 33],
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SpendOutputMeta {
+    pub gift: u64,
+    pub recipient_pkh_b58: alloc::string::String,
+    #[serde(default)]
+    pub is_refund: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SpendMeta {
+    pub outputs: alloc::vec::Vec<SpendOutputMeta>,
+}
+
 // siger-core
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FragKind {
@@ -135,12 +148,18 @@ pub enum Request {
         slot: u8,
         path: alloc_path::Path,
         msg5: [u64; 5],
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        meta: Option<SpendMeta>,
     },
     SignSpendHashFor {
         slot: u8,
         path: alloc_path::Path,
         msg5: [u64; 5],
         pubkey: ([u64; 6], [u64; 6]),
+        #[serde(default)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        meta: Option<SpendMeta>,
     },
 
     // self-test

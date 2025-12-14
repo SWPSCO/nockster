@@ -7,6 +7,16 @@ import { PostcardReader, PostcardWriter } from './postcard';
 export type Frame =
   | { type: 'One'; request: Request };
 
+export interface SpendOutputMeta {
+  gift: bigint;
+  recipient_pkh_b58: string;
+  is_refund?: boolean;
+}
+
+export interface SpendMeta {
+  outputs: SpendOutputMeta[];
+}
+
 export type Request =
   | { type: 'Hello' }
   | { type: 'GetInfo' }
@@ -18,13 +28,14 @@ export type Request =
   | { type: 'GetXpub'; path: number[] }
   | { type: 'SignDigest'; path: number[]; digest32: Uint8Array }
   | { type: 'GetCheetahPub'; slot: number; path: number[] }
-  | { type: 'SignSpendHash'; slot: number; path: number[]; msg5: bigint[] }
+  | { type: 'SignSpendHash'; slot: number; path: number[]; msg5: bigint[]; meta?: SpendMeta }
   | {
       type: 'SignSpendHashFor';
       slot: number;
       path: number[];
       msg5: bigint[];
       pubkey: { x: bigint[]; y: bigint[] };
+      meta?: SpendMeta;
     }
   | { type: 'Health' }
   | { type: 'InitializePIN'; pin: string; seed64: Uint8Array }
@@ -74,6 +85,21 @@ export const ERR_ALREADY_INITIALIZED = 133;
 export const ERR_BUSY = 135;
 
 export const PROTO_V1 = 1;
+
+function serializeSpendMetaOptional(w: PostcardWriter, meta: SpendMeta | undefined) {
+  if (!meta || !Array.isArray(meta.outputs) || meta.outputs.length === 0) {
+    return;
+  }
+  // Option::Some
+  w.writeVarint(1);
+  // SpendMeta { outputs: Vec<SpendOutputMeta> }
+  w.writeVarint(meta.outputs.length);
+  for (const out of meta.outputs) {
+    w.writeU64Varint(out.gift);
+    w.writeString(out.recipient_pkh_b58);
+    w.writeBool(out.is_refund ?? false);
+  }
+}
 
 /**
  * Serialize a Request to bytes using Postcard format
@@ -142,6 +168,7 @@ export function serializeRequest(req: Request): Uint8Array {
       for (const val of req.msg5) {
         w.writeU64Varint(val);
       }
+      serializeSpendMetaOptional(w, req.meta);
       break;
     case 'SignSpendHashFor':
       w.writeVarint(11);
@@ -159,6 +186,7 @@ export function serializeRequest(req: Request): Uint8Array {
       for (const limb of req.pubkey.y) {
         w.writeU64Varint(limb);
       }
+      serializeSpendMetaOptional(w, req.meta);
       break;
     case 'Health':
       w.writeVarint(12);
@@ -340,6 +368,7 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
       for (const val of req.msg5) {
         w.writeU64Varint(val);
       }
+      serializeSpendMetaOptional(w, req.meta);
       break;
     case 'SignSpendHashFor':
       w.writeVarint(11);
@@ -357,6 +386,7 @@ export function serializeMsg(msg: Msg<Request>): Uint8Array {
       for (const limb of req.pubkey.y) {
         w.writeU64Varint(limb);
       }
+      serializeSpendMetaOptional(w, req.meta);
       break;
     case 'Health':
       w.writeVarint(12);

@@ -143,6 +143,7 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str, vers
             slot: 0,
             path: path.clone(),
             msg5: dummy.values,
+            meta: None,
         },
     )? {
         Response::OkCheetahSig { chal, sig } => {
@@ -162,6 +163,7 @@ pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str, vers
             slot: 0,
             path: path.clone(),
             msg5: dummy.values,
+            meta: None,
         },
     )? {
         Response::OkCheetahSig { chal, sig } => (chal, sig),

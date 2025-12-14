@@ -43,22 +43,23 @@ pub(crate) fn keypad_button_hit(row: usize, col: usize) -> ButtonHit {
 }
 
 pub(crate) fn confirm_buttons() -> [ButtonHit; 2] {
-    let margin = 12;
+    let margin = 6;
+    let gap = 6;
     let header_h = header_height();
-    let top = header_h + margin;
-    let width = (SCREEN_WIDTH as i32 - margin * 2).max(40);
-    let available_height = SCREEN_HEIGHT as i32 - top - margin;
-    let height = (available_height / 2).max(72);
+    let width = (SCREEN_WIDTH as i32 - margin * 2).max(80);
+    let button_h = 44;
+    let top = (SCREEN_HEIGHT as i32 - margin - button_h).max(header_h + margin);
+    let button_w = ((width - gap) / 2).max(32);
 
     let reject = ButtonHit {
         button: Button::Clear,
         top_left: Point::new(margin, top),
-        size: Size::new(width as u32, height as u32),
+        size: Size::new(button_w as u32, button_h as u32),
     };
     let approve = ButtonHit {
         button: Button::Ok,
-        top_left: Point::new(margin, top + height + margin),
-        size: Size::new(width as u32, height as u32),
+        top_left: Point::new(margin + button_w + gap, top),
+        size: Size::new(button_w as u32, button_h as u32),
     };
 
     [reject, approve]
@@ -103,11 +104,11 @@ pub(crate) fn button_from_point_confirm(point: Point) -> Option<ButtonHit> {
 }
 
 pub(crate) fn tx_review_buttons() -> [ButtonHit; 2] {
-    let margin = 8;
-    let gap = 8;
+    let margin = 6;
+    let gap = 6;
     let header_h = header_height();
     let width = (SCREEN_WIDTH as i32 - margin * 2).max(80);
-    let button_h = 54;
+    let button_h = 44;
     let top = (SCREEN_HEIGHT as i32 - margin - button_h).max(header_h + margin);
 
     let button_w = ((width - gap) / 2).max(32);
@@ -127,7 +128,7 @@ pub(crate) fn tx_review_buttons() -> [ButtonHit; 2] {
 }
 
 pub(crate) fn tx_review_list_rect() -> Rectangle {
-    let margin = 8;
+    let margin = 6;
     let header_h = header_height();
     let top = header_h + margin;
     let buttons = tx_review_buttons();

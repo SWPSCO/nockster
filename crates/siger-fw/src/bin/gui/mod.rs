@@ -13,7 +13,7 @@ pub use state::{GuiInteraction, GuiMode};
 pub use touch::ScreenPoint;
 
 use constants::*;
-use embedded_graphics::mono_font::ascii::FONT_6X10;
+use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::{draw_target::DrawTarget, prelude::Point};
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review, header_height,
@@ -574,6 +574,10 @@ impl<'d> Gui<'d> {
     }
 
     pub fn request_confirmation(&mut self, prompt: &str) {
+        self.request_confirmation_with_details(prompt, None);
+    }
+
+    pub fn request_confirmation_with_details(&mut self, prompt: &str, details: Option<&str>) {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
         self.mark_overlay_dirty();
@@ -586,7 +590,8 @@ impl<'d> Gui<'d> {
         }
         self.unlock_demo_paused = true;
         render_header(&mut self.display, "Confirm", COLOR_SURFACE_HIGH);
-        self.set_idle_message("");
+        self.idle_message_until = None;
+        self.set_idle_message(details.unwrap_or(""));
         self.render_current_overlay();
         self.refresh_auto_lock(Instant::now());
     }
@@ -599,14 +604,21 @@ impl<'d> Gui<'d> {
             return 0;
         }
         let line_gap: i32 = 2;
-        let line_h: i32 = FONT_6X10.character_size.height as i32 + line_gap;
-        let item_gap: i32 = 4;
+        let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
+        let item_gap: i32 = 8;
         let item_h: i32 = line_h * 2 + item_gap;
         let total_h: i32 = (self.tx_review_outputs.len() as i32) * item_h;
         (total_h - inner_h).max(0)
     }
 
     pub fn request_tx_review<'a, I>(&mut self, outputs: I)
+    where
+        I: IntoIterator<Item = (u64, &'a str)>,
+    {
+        self.request_tx_review_with_header("Review Tx", outputs);
+    }
+
+    pub fn request_tx_review_with_header<'a, I>(&mut self, header: &str, outputs: I)
     where
         I: IntoIterator<Item = (u64, &'a str)>,
     {
@@ -641,7 +653,7 @@ impl<'d> Gui<'d> {
             let _ = self.display.clear(COLOR_BACKGROUND);
         }
         self.unlock_demo_paused = true;
-        render_header(&mut self.display, "Review Tx", COLOR_SURFACE_HIGH);
+        render_header(&mut self.display, header, COLOR_SURFACE_HIGH);
         self.set_idle_message("");
         self.render_current_overlay();
         self.refresh_auto_lock(Instant::now());

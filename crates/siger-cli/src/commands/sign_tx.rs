@@ -11,7 +11,9 @@ use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
 
-use siger_core::{Frame, Msg, Request, Response, MAX_INFO_CHEETAH_PUBS, PROTO_V1};
+use siger_core::{
+    Frame, Msg, Request, Response, SpendMeta, SpendOutputMeta, MAX_INFO_CHEETAH_PUBS, PROTO_V1,
+};
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::{
     Hash, NName, Spend, SpendBody, Chal, Sig, SchnorrPubkey, SchnorrSignature,
@@ -22,10 +24,67 @@ use tx_types::transaction_types_v1::{
     compute_tx_id_v1, PkhSignature, PkhSignatureValue, RawTransactionV1, SpendsV1, TxV1,
 };
 use tx_types::RawTransaction;
+use tx_types::tx_builder_v1::LockData;
+use tx_types::transaction_types_v1::LockPrimitiveBody;
 
 use crate::keys;
 use crate::serial::{open, round_trip_frame, send_call};
 use crate::util::{fmt_u64x5, t8_from_device, transaction_name_from_bytes};
+
+fn seed_recipient_pkh_v1(
+    seed: &tx_types::transaction_types_v1::SeedV1,
+    lock_key: &String,
+) -> Option<Hash> {
+    let lock_untyped = seed.note_data.map.get(lock_key)?;
+    let lock_data: LockData = lock_untyped.to_typed().ok()?;
+    let LockData::V0(spend_condition) = lock_data;
+    let primitive = spend_condition
+        .p
+        .iter()
+        .find(|lp| matches!(lp.body, LockPrimitiveBody::Pkh(_)))?;
+    match &primitive.body {
+        LockPrimitiveBody::Pkh(pkh) => pkh.h.iter().next().cloned(),
+        _ => None,
+    }
+}
+
+fn spend_meta_v1(
+    spend_v1: &tx_types::transaction_types_v1::SpendV1,
+    signer_pkh: &Hash,
+) -> Option<SpendMeta> {
+    use std::collections::BTreeMap;
+
+    let mut by_recipient: BTreeMap<Hash, (u64, bool)> = BTreeMap::new();
+    let lock_key = "lock".to_string();
+    for seed in spend_v1.seeds.set.iter() {
+        let gift = seed.gift.value;
+        if gift == 0 {
+            continue;
+        }
+        let Some(recipient_hash) = seed_recipient_pkh_v1(seed, &lock_key) else {
+            continue;
+        };
+        let is_refund = &recipient_hash == signer_pkh;
+        let entry = by_recipient.entry(recipient_hash).or_insert((0u64, false));
+        entry.0 = entry.0.saturating_add(gift);
+        entry.1 |= is_refund;
+    }
+
+    if by_recipient.is_empty() {
+        return None;
+    }
+
+    let outputs: Vec<SpendOutputMeta> = by_recipient
+        .into_iter()
+        .map(|(recipient_hash, (gift, is_refund))| SpendOutputMeta {
+            gift,
+            recipient_pkh_b58: recipient_hash.to_b58(),
+            is_refund,
+        })
+        .collect();
+
+    Some(SpendMeta { outputs })
+}
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
     match explicit {
@@ -394,6 +453,7 @@ fn sign_v0_transaction(
                         slot,
                         path: path.clone(),
                         msg5,
+                        meta: None,
                     }),
                 };
                 let resp: Msg<Response> = round_trip_frame(sp, &req)?;
@@ -520,6 +580,7 @@ fn sign_v1_transaction(
 
                 println!("    signing V1 spend {:?}: {}", name, fmt_u64x5(&msg5));
 
+                let spend_meta = spend_meta_v1(spend_v1, &pk_hash);
                 let req = Msg {
                     v: PROTO_V1,
                     id: 0x4200,
@@ -527,6 +588,7 @@ fn sign_v1_transaction(
                         slot,
                         path: path.clone(),
                         msg5,
+                        meta: spend_meta,
                     }),
                 };
                 let resp: Msg<Response> = round_trip_frame(sp, &req)?;

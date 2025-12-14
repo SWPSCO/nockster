@@ -313,7 +313,39 @@ fn begin_confirmation(
     prompt: &'static str,
     ui: Option<&mut Gui<'_>>,
 ) -> Result<(), ()> {
-    let mut frame_slot = Some(frame);
+    let mut spend_outputs: HVec<(u64, HString<24>), 24> = HVec::new();
+    let show_spend_outputs = match &frame {
+        Frame::One(Request::SignSpendHash { meta: Some(meta), .. })
+        | Frame::One(Request::SignSpendHashFor { meta: Some(meta), .. }) => {
+            for out in meta.outputs.iter() {
+                if out.gift == 0 || out.is_refund {
+                    continue;
+                }
+                let recipient_short = shorten_b58(out.recipient_pkh_b58.as_str());
+                let candidate = (out.gift, recipient_short);
+                if let Err(candidate) = spend_outputs.push(candidate) {
+                    // Keep only the largest outputs when more than the UI list can display.
+                    let mut min_idx = 0usize;
+                    let mut min_gift = spend_outputs[0].0;
+                    for (idx, (gift, _)) in spend_outputs.iter().enumerate().skip(1) {
+                        if *gift < min_gift {
+                            min_gift = *gift;
+                            min_idx = idx;
+                        }
+                    }
+                    if candidate.0 > min_gift {
+                        spend_outputs[min_idx] = candidate;
+                    }
+                }
+            }
+            spend_outputs
+                .as_mut_slice()
+                .sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            true
+        }
+        _ => false,
+    };
+
     let stored = critical_section::with(|cs| {
         let mut pending = PENDING_CONFIRMATION.borrow_ref_mut(cs);
         if pending.is_some() {
@@ -321,7 +353,7 @@ fn begin_confirmation(
         } else {
             pending.replace(PendingConfirmation {
                 msg_id,
-                frame: frame_slot.take().unwrap(),
+                frame,
                 prompt,
             });
             true
@@ -333,7 +365,16 @@ fn begin_confirmation(
     }
 
     if let Some(ui) = ui {
-        ui.request_confirmation(prompt);
+        if show_spend_outputs {
+            ui.request_tx_review_with_header(
+                prompt,
+                spend_outputs
+                    .iter()
+                    .map(|(gift, recipient)| (*gift, recipient.as_str())),
+            );
+        } else {
+            ui.request_confirmation_with_details(prompt, None);
+        }
     }
 
     Ok(())
@@ -718,20 +759,25 @@ fn main() -> ! {
                                     }
 
                                     if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
-                                    let frame_clone = m.msg.clone();
-                                    let begin_result = {
-                                        let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
-                                        begin_confirmation(m.id, frame_clone, prompt, ui_ref)
-                                    };
-                                    match begin_result {
-                                        Ok(()) => None,
-                                        Err(()) => Some(Msg {
-                                            v: PROTO_V1,
-                                            id: m.id,
-                                            msg: Response::Err { code: ERR_BUSY },
-                                        }),
-                                    }
-                                } else {
+                                        let frame_clone = m.msg.clone();
+                                        let begin_result = {
+                                            let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                            begin_confirmation(
+                                                m.id,
+                                                frame_clone,
+                                                prompt,
+                                                ui_ref,
+                                            )
+                                        };
+                                        match begin_result {
+                                            Ok(()) => None,
+                                            Err(()) => Some(Msg {
+                                                v: PROTO_V1,
+                                                id: m.id,
+                                                msg: Response::Err { code: ERR_BUSY },
+                                            }),
+                                        }
+                                    } else {
                                     let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
                                     let body = handle_frame_v1(m.id, &m.msg, ui_ref);
 
@@ -768,7 +814,7 @@ fn main() -> ! {
                                         id: m.id,
                                         msg: body,
                                     })
-                                }
+                                    }
                                 }
                             }
                             Ok(_) => Some(Msg {
@@ -1072,7 +1118,12 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             }
         }
-        Request::SignSpendHash { slot, path, msg5 } => {
+        Request::SignSpendHash {
+            slot,
+            path,
+            msg5,
+            ..
+        } => {
             if is_device_locked() {
                 return Response::Err {
                     code: ERR_DEVICE_LOCKED,
@@ -1096,6 +1147,7 @@ fn handle_request_v1(req: &Request) -> Response {
             path,
             msg5,
             pubkey,
+            ..
         } => {
             if is_device_locked() {
                 return Response::Err {
@@ -1320,6 +1372,20 @@ fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
         Frame::One(Request::SignSpendHashFor { .. }) => Some("Approve spend?"),
         _ => None,
     }
+}
+
+fn shorten_b58(s: &str) -> HString<24> {
+    let mut out = HString::<24>::new();
+    if s.len() <= 12 {
+        let _ = out.push_str(s);
+    } else {
+        let head = &s[..4.min(s.len())];
+        let tail = &s[s.len().saturating_sub(4)..];
+        let _ = out.push_str(head);
+        let _ = out.push_str("...");
+        let _ = out.push_str(tail);
+    }
+    out
 }
 
 fn is_device_locked() -> bool {

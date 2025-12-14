@@ -617,6 +617,7 @@ pub fn sign_draft_with_paths(
                     slot,
                     path: path.clone(),
                     msg5,
+                    meta: None,
                 }),
             };
             let resp: Msg<Response> = round_trip_frame(sp, &req)?;

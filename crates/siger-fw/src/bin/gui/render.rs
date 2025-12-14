@@ -1,6 +1,6 @@
 use core::fmt::Write as _;
 
-use embedded_graphics::mono_font::{ascii::{FONT_10X20, FONT_6X10}, MonoTextStyle};
+use embedded_graphics::mono_font::{ascii::FONT_10X20, MonoTextStyle};
 use embedded_graphics::pixelcolor::{raw::RawU16, Rgb565};
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
@@ -308,16 +308,31 @@ pub fn render_confirm_overlay(
     subtitle: Option<&str>,
     active_button: Option<Button>,
 ) {
-    let margin = 8;
-    let panel_height = 72;
+    let header_h = header_height();
+    if header_h < SCREEN_HEIGHT as i32 {
+        let body = Rectangle::new(
+            Point::new(0, header_h),
+            Size::new(SCREEN_WIDTH.into(), (SCREEN_HEIGHT as i32 - header_h) as u32),
+        );
+        let _ = body
+            .into_styled(PrimitiveStyleBuilder::new().fill_color(COLOR_BACKGROUND).build())
+            .draw(display);
+    }
+
+    let margin = 6;
+    let buttons = confirm_buttons();
+    let buttons_top = buttons[0].top_left.y;
+    let panel_top = header_h + margin;
+    let panel_bottom = (buttons_top - margin).max(panel_top + 40);
+    let panel_height = (panel_bottom - panel_top).max(0);
     let panel_width = SCREEN_WIDTH as i32 - margin * 2;
-    let panel_top_left = Point::new(margin, margin);
+    let panel_top_left = Point::new(margin, panel_top);
     let panel_size = Size::new(panel_width as u32, panel_height as u32);
     draw_panel(display, panel_top_left, panel_size);
 
     let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
     let center_x = (SCREEN_WIDTH / 2) as i32;
-    let prompt_baseline = margin + FONT_10X20.character_size.height as i32 + 2;
+    let prompt_baseline = panel_top + FONT_10X20.character_size.height as i32 + 2;
     let _ = Text::with_alignment(
         prompt,
         Point::new(center_x, prompt_baseline),
@@ -326,18 +341,26 @@ pub fn render_confirm_overlay(
     )
     .draw(display);
 
-    if let Some(line) = subtitle.filter(|s| !s.is_empty()) {
-        let subtitle_baseline = margin + panel_height - 12;
-        let _ = Text::with_alignment(
-            line,
-            Point::new(center_x, subtitle_baseline),
-            style,
-            Alignment::Center,
-        )
-        .draw(display);
+    if let Some(details) = subtitle.filter(|s| !s.is_empty()) {
+        let subtle = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT_SUBTLE);
+        let line_gap: i32 = 2;
+        let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
+        let mut baseline = prompt_baseline + line_h + 6;
+
+        for (idx, line) in details.lines().filter(|l| !l.is_empty()).take(3).enumerate() {
+            let line_style = if idx == 0 { style } else { subtle };
+            let _ = Text::with_alignment(
+                line,
+                Point::new(center_x, baseline),
+                line_style,
+                Alignment::Center,
+            )
+            .draw(display);
+            baseline += line_h;
+        }
     }
 
-    for hit in confirm_buttons() {
+    for hit in buttons {
         let (base, light, dark) = match hit.button {
             Button::Ok => (
                 COLOR_BTN_PRIMARY_BASE,
@@ -402,8 +425,8 @@ pub fn render_tx_review_overlay(
     let inner_top = list_rect.top_left.y + padding;
     let inner_bottom = list_rect.top_left.y + list_rect.size.height as i32 - padding;
 
-    let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
-    let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let subtle = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT_SUBTLE);
 
     if outputs.is_empty() {
         let center_x = (SCREEN_WIDTH / 2) as i32;
@@ -417,13 +440,13 @@ pub fn render_tx_review_overlay(
         .draw(display);
     } else {
         let line_gap: i32 = 2;
-        let line_h: i32 = FONT_6X10.character_size.height as i32 + line_gap;
-        let item_gap: i32 = 4;
+        let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
+        let item_gap: i32 = 8;
         let item_h: i32 = line_h * 2 + item_gap;
 
         for (idx, out) in outputs.iter().enumerate() {
             let base_y = inner_top - scroll_y + (idx as i32) * item_h;
-            let y1 = base_y + FONT_6X10.character_size.height as i32;
+            let y1 = base_y + FONT_10X20.character_size.height as i32;
             let y2 = y1 + line_h;
 
             if y2 < inner_top {
@@ -434,7 +457,7 @@ pub fn render_tx_review_overlay(
             }
 
             let mut line1 = heapless::String::<32>::new();
-            let _ = write!(line1, "send {} n", out.gift);
+            let _ = write!(line1, "{} n", out.gift);
             let _ = Text::new(line1.as_str(), Point::new(inner_left, y1), style).draw(display);
 
             let mut line2 = heapless::String::<32>::new();
@@ -449,7 +472,7 @@ pub fn render_tx_review_overlay(
                 COLOR_BTN_PRIMARY_BASE,
                 COLOR_BTN_PRIMARY_LIGHT,
                 COLOR_BTN_PRIMARY_DARK,
-                "Confirm",
+                "Approve",
             ),
             Button::Clear => (
                 COLOR_BTN_SECONDARY_BASE,
@@ -639,7 +662,7 @@ fn button_label(button: Button) -> &'static str {
 fn confirm_button_label(button: Button) -> &'static str {
     match button {
         Button::Ok => "Approve",
-        Button::Clear => "Reject",
+        Button::Clear => "Deny",
         Button::Digit(_) => "",
         Button::Seed(_) => "",
     }

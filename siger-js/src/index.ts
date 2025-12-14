@@ -14,7 +14,7 @@ export { PostcardReader, PostcardWriter } from './postcard';
 export { COBSEncoder, COBSFrameReader } from './cobs';
 
 // Protocol types and functions
-export type { Request, Response, Msg, Frame, CheetahPubInfo } from './protocol';
+export type { Request, Response, Msg, Frame, CheetahPubInfo, SpendMeta, SpendOutputMeta } from './protocol';
 export {
   serializeRequest,
   deserializeResponse,

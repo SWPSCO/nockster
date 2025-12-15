@@ -216,8 +216,7 @@ const encoded = COBSEncoder.encode(serialized);
 
 // decode COBS frames
 const frameReader = new COBSFrameReader();
-frameReader.push(encoded);
-const frames = frameReader.getFrames();
+const frames = frameReader.push(encoded);
 
 // deserialize message
 const decoded = deserializeMsg(frames[0]);

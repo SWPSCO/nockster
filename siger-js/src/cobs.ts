@@ -84,9 +84,10 @@ export class COBSFrameReader {
   /**
    * Add bytes to the buffer
    * @param data - Incoming data
-   * @returns Decoded frame if complete, or null if still accumulating
+   * @returns All decoded frames completed by this push
    */
-  push(data: Uint8Array): Uint8Array | null {
+  push(data: Uint8Array): Uint8Array[] {
+    const frames: Uint8Array[] = [];
     for (const byte of data) {
       if (byte === 0x00) {
         // Frame complete
@@ -95,12 +96,15 @@ export class COBSFrameReader {
         }
         const frame = new Uint8Array(this.buffer);
         this.buffer = [];
-        return COBSEncoder.decode(frame);
+        try {
+          frames.push(COBSEncoder.decode(frame));
+        } catch {
+        }
       } else {
         this.buffer.push(byte);
       }
     }
-    return null; // Frame not yet complete
+    return frames;
   }
 
   /**

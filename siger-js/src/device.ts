@@ -63,8 +63,7 @@ export class SigerDevice {
     if (this.transport) {
       await this.transport.connect();
       this.transport.startReading((data) => {
-        const frame = this.frameReader.push(data);
-        if (frame) {
+        for (const frame of this.frameReader.push(data)) {
           this.handleFrame(frame);
         }
       });
@@ -167,8 +166,7 @@ export class SigerDevice {
         return;
       }
       const payload = new Uint8Array(event.data.buffer, event.data.byteOffset + 1, maxLen);
-      const frame = this.frameReader.push(payload);
-      if (frame) {
+      for (const frame of this.frameReader.push(payload)) {
         this.handleFrame(frame);
       }
     };
@@ -536,8 +534,7 @@ export class SigerDevice {
         const { value, done } = await this.reader.read();
         if (done) break;
 
-        const frame = this.frameReader.push(value);
-        if (frame) {
+        for (const frame of this.frameReader.push(value)) {
           this.handleFrame(frame);
         }
       }

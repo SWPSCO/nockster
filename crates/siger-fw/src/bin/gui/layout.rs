@@ -91,11 +91,13 @@ pub(crate) fn button_from_point_keypad(point: Point) -> Option<ButtonHit> {
 }
 
 pub(crate) fn button_from_point_confirm(point: Point) -> Option<ButtonHit> {
+    let bottom_slack: i32 = 16;
     for hit in confirm_buttons() {
         let within_x =
             point.x >= hit.top_left.x && point.x < hit.top_left.x + hit.size.width as i32;
-        let within_y =
-            point.y >= hit.top_left.y && point.y < hit.top_left.y + hit.size.height as i32;
+        let bottom = (hit.top_left.y + hit.size.height as i32 + bottom_slack)
+            .min(SCREEN_HEIGHT as i32);
+        let within_y = point.y >= hit.top_left.y && point.y < bottom;
         if within_x && within_y {
             return Some(hit);
         }
@@ -160,11 +162,13 @@ pub(crate) fn tx_review_detail_rect() -> Rectangle {
 }
 
 pub(crate) fn button_from_point_tx_review(point: Point) -> Option<ButtonHit> {
+    let bottom_slack: i32 = 16;
     for hit in tx_review_buttons() {
         let within_x =
             point.x >= hit.top_left.x && point.x < hit.top_left.x + hit.size.width as i32;
-        let within_y =
-            point.y >= hit.top_left.y && point.y < hit.top_left.y + hit.size.height as i32;
+        let bottom = (hit.top_left.y + hit.size.height as i32 + bottom_slack)
+            .min(SCREEN_HEIGHT as i32);
+        let within_y = point.y >= hit.top_left.y && point.y < bottom;
         if within_x && within_y {
             return Some(hit);
         }

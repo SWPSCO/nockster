@@ -48,6 +48,7 @@ function App() {
   );
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState<string>('');
+  const [banner, setBanner] = useState<{ open: boolean; message: string } | null>(null);
   const [locked, setLocked] = useState<boolean | null>(null);
   const [attemptsRemaining, setAttemptsRemaining] = useState<number | null>(null);
   const [pin, setPin] = useState('');
@@ -579,6 +580,7 @@ function App() {
         await device.selectSeed(selectedSlot);
 
         setStatus('Sending draft to device (approve on-device)...');
+        setBanner({ open: true, message: 'Sending draft to device (approve on-device)...' });
         const signedBytes = await device.signDraft(txBytes);
 
         const signedParsed = new ParsedTransaction(signedBytes);
@@ -759,6 +761,7 @@ function App() {
       setSigning(false);
       deviceBusyRef.current = false;
       setDeviceBusy(false);
+      setBanner(null);
     }
   };
 
@@ -804,6 +807,24 @@ function App() {
 
   return (
     <div className={activeTab === 'composer' ? 'container container-wide' : 'container'}>
+      <div className={`toast ${banner?.open ? 'toast-open' : ''}`}>
+        {banner?.open && (
+          <div className="toast-inner">
+            <div className="toast-body">
+              <div className="toast-title">Device</div>
+              <div className="toast-message">{banner.message}</div>
+            </div>
+            <button
+              type="button"
+              className="toast-close"
+              onClick={() => setBanner((prev) => (prev ? { ...prev, open: false } : prev))}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        )}
+      </div>
       <div className="header-img">
         <img src="assets/nockster.png" width="400px"/>
       </div>

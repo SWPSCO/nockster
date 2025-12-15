@@ -49,6 +49,7 @@ pub enum Cmd {
 
 #[derive(Args, Clone)]
 pub struct PortArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -60,6 +61,7 @@ pub struct PortArgs {
 
 #[derive(Args, Clone)]
 pub struct TestArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -77,6 +79,7 @@ pub struct TestArgs {
 
 #[derive(Args, Clone)]
 pub struct PlanArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -87,6 +90,7 @@ pub struct PlanArgs {
 
 #[derive(Args, Clone)]
 pub struct SignTxArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -103,6 +107,7 @@ pub struct SignTxArgs {
 
 #[derive(Args, Clone)]
 pub struct SignDraftArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -138,7 +143,8 @@ pub struct InspectArgs {
 
 #[derive(Args, Clone)]
 pub struct SeedArgs {
-    /// required for seeding the device (ignored for pure file export from sk)
+    /// required for seeding the device (ignored for pure file export from sk);
+    /// can be a serial port (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
@@ -176,6 +182,7 @@ pub struct SeedArgs {
 
 #[derive(Args, Clone)]
 pub struct UnlockArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
     #[arg(long, required = true)]
     pub port: String,
     #[arg(long, default_value_t = 115200)]

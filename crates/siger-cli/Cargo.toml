@@ -9,6 +9,7 @@ anyhow = "1"
 bytes = "1.10.1"
 clap = { workspace = true, features = ["derive"] }
 serialport = "4"
+hidapi = "2.6.3"
 postcard   = { workspace = true, features = ["use-std"] } # to_stdvec_cobs
 serde = { workspace = true, features = ["std", "derive"] }
 serde-big-array = "0.5"

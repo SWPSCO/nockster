@@ -2,11 +2,11 @@
  * siger-js - TypeScript library for communicating with Siger hardware wallet
  *
  * This library provides:
- * - COBS framing for serial communication
+ * - COBS framing for USB communication (HID/Serial)
  * - Postcard serialization/deserialization
  * - Protocol types and message handling
  * - Cheetah public key encoding
- * - Device connection management via Web Serial API
+ * - Device connection management via WebHID/Web Serial API
  */
 
 // Core serialization
@@ -42,5 +42,5 @@ export {
   formatCheetahPubkey,
 } from './cheetah';
 
-// Device connection (Web Serial API)
+// Device connection (WebHID/Web Serial API)
 export { SigerDevice } from './device';

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use serialport::SerialPort;
 
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
@@ -28,7 +27,7 @@ use tx_types::tx_builder_v1::LockData;
 use tx_types::transaction_types_v1::LockPrimitiveBody;
 
 use crate::keys;
-use crate::serial::{open, round_trip_frame, send_call};
+use crate::serial::{open, round_trip_frame, send_call, Link};
 use crate::util::{fmt_u64x5, t8_from_device, transaction_name_from_bytes};
 
 fn seed_recipient_pkh_v1(
@@ -126,7 +125,7 @@ fn signer_slot() -> u8 {
 }
 
 fn fetch_device_pks(
-    sp: &mut dyn SerialPort,
+    sp: &mut dyn Link,
     slot: u8,
     paths: &[Vec<u32>],
 ) -> Result<Vec<(Vec<u32>, SchnorrPubkey)>> {
@@ -418,7 +417,7 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
 
 /// Sign a V0 transaction
 fn sign_v0_transaction(
-    sp: &mut dyn SerialPort,
+    sp: &mut dyn Link,
     slot: u8,
     dev_keys: &[(Vec<u32>, SchnorrPubkey)],
     raw: RawTransactionV0,
@@ -543,7 +542,7 @@ fn sign_v0_transaction(
 
 /// Sign a V1 transaction
 fn sign_v1_transaction(
-    sp: &mut dyn SerialPort,
+    sp: &mut dyn Link,
     slot: u8,
     dev_keys: &[(Vec<u32>, SchnorrPubkey)],
     raw: RawTransactionV1,

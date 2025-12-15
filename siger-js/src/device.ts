@@ -17,11 +17,19 @@ export interface SerialTransport {
   isConnected(): boolean;
 }
 
+const SIGER_HID_VENDOR_ID = 0x303a;
+const SIGER_HID_PRODUCT_ID = 0x2001;
+const SIGER_HID_REPORT_ID = 1;
+const SIGER_HID_REPORT_DATA_LEN = 63; // excluding report ID
+const SIGER_HID_PAYLOAD_MAX = SIGER_HID_REPORT_DATA_LEN - 1; // first byte is payload length
+
 export class SigerDevice {
   private transport: SerialTransport | null = null;
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  private hidDevice: HIDDevice | null = null;
+  private hidOnInputReport: ((event: HIDInputReportEvent) => void) | null = null;
   private frameReader = new COBSFrameReader();
   private nextMsgId = 1;
   private pendingCalls = new Map<number, {
@@ -40,7 +48,7 @@ export class SigerDevice {
   }
 
   static isSupported(): boolean {
-    return 'serial' in navigator || ('__TAURI__' in window);
+    return !!navigator.hid || !!navigator.serial || ('__TAURI__' in window);
   }
 
   async connect(): Promise<void> {
@@ -55,17 +63,32 @@ export class SigerDevice {
       return;
     }
 
-    if (!('serial' in navigator)) {
-      throw new Error('Web Serial API not supported in this browser');
+    if (navigator.hid) {
+      const devices = await navigator.hid.requestDevice({
+        filters: [{ vendorId: SIGER_HID_VENDOR_ID, productId: SIGER_HID_PRODUCT_ID }],
+      });
+      if (!devices.length) {
+        throw new Error('No HID device selected');
+      }
+      const device = devices[0];
+      this.hidDevice = device;
+      await device.open();
+      this.startHidReading();
+      return;
     }
 
-    this.port = await navigator.serial.requestPort({
+    if (!navigator.serial) {
+      throw new Error('WebHID/Web Serial API not supported in this browser');
+    }
+
+    const port = await navigator.serial.requestPort({
       filters: [
         { usbVendorId: 0x303a, usbProductId: 0x1001 },
       ],
     });
 
-    await this.port.open({ baudRate: 115200 });
+    this.port = port;
+    await port.open({ baudRate: 115200 });
     this.startReading();
   }
 
@@ -77,6 +100,16 @@ export class SigerDevice {
 
     if (this.transport) {
       await this.transport.disconnect();
+      return;
+    }
+
+    if (this.hidDevice) {
+      if (this.hidOnInputReport) {
+        this.hidDevice.removeEventListener('inputreport', this.hidOnInputReport as EventListener);
+        this.hidOnInputReport = null;
+      }
+      await this.hidDevice.close();
+      this.hidDevice = null;
       return;
     }
 
@@ -98,7 +131,53 @@ export class SigerDevice {
     if (this.transport) {
       return this.transport.isConnected();
     }
+    if (this.hidDevice) {
+      return this.hidDevice.opened;
+    }
     return this.port !== null && this.writer !== null;
+  }
+
+  private startHidReading(): void {
+    if (!this.hidDevice) {
+      throw new Error('HID device not connected');
+    }
+
+    this.hidOnInputReport = (event: HIDInputReportEvent) => {
+      if (event.reportId !== SIGER_HID_REPORT_ID) {
+        return;
+      }
+      if (event.data.byteLength < 1) {
+        return;
+      }
+      const claimedLen = event.data.getUint8(0);
+      const maxLen = Math.min(claimedLen, SIGER_HID_PAYLOAD_MAX, event.data.byteLength - 1);
+      if (maxLen <= 0) {
+        return;
+      }
+      const payload = new Uint8Array(event.data.buffer, event.data.byteOffset + 1, maxLen);
+      const frame = this.frameReader.push(payload);
+      if (frame) {
+        this.handleFrame(frame);
+      }
+    };
+
+    this.hidDevice.addEventListener('inputreport', this.hidOnInputReport as EventListener);
+  }
+
+  private async hidWrite(data: Uint8Array): Promise<void> {
+    if (!this.hidDevice || !this.hidDevice.opened) {
+      throw new Error('HID device not connected');
+    }
+
+    let off = 0;
+    while (off < data.length) {
+      const take = Math.min(SIGER_HID_PAYLOAD_MAX, data.length - off);
+      const report = new Uint8Array(SIGER_HID_REPORT_DATA_LEN);
+      report[0] = take;
+      report.set(data.subarray(off, off + take), 1);
+      await this.hidDevice.sendReport(SIGER_HID_REPORT_ID, report);
+      off += take;
+    }
   }
 
   async call(request: Request, timeoutMs: number = 30000): Promise<Response> {
@@ -152,6 +231,8 @@ export class SigerDevice {
 
     if (this.transport) {
       await this.transport.write(encoded);
+    } else if (this.hidDevice) {
+      await this.hidWrite(encoded);
     } else {
       await this.writer!.write(encoded);
     }

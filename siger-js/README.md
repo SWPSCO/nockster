@@ -4,9 +4,9 @@ TypeScript/JavaScript library for communicating with Siger hardware wallet.
 
 ### Notes
 
-- Web Serial only works in Chrome/Edge/Opera
-- Web Serial requires secure context (HTTPS or localhost)
-- Browser will prompt user to select serial port
+- WebHID/Web Serial only works in Chrome/Edge/Opera
+- WebHID/Web Serial requires secure context (HTTPS or localhost)
+- Browser will prompt user to select a device
 - Only one connection per device at a time
 - All integers (u16, u32, u64) use varint encoding in postcard
 
@@ -18,13 +18,13 @@ siger-js/
 │   ├── protocol.ts   # Protocol types and message handlers
 │   ├── cheetah.ts    # Cheetah public key encoding
 │   ├── cobs.ts       # COBS framing
-│   ├── device.ts     # SigerDevice class (Web Serial)
-│   └── types.d.ts    # Web Serial API type definitions
+│   ├── device.ts     # SigerDevice class (WebHID/Web Serial)
+│   └── types.d.ts    # WebHID/Web Serial API type definitions
 ```
 
 ### 1. **COBS Framing** (`cobs.ts`)
-- `COBSEncoder.encode()` - Encode messages for serial transmission
-- `COBSFrameReader` - Stream-based frame extraction from serial data
+- `COBSEncoder.encode()` - Encode messages for USB transmission
+- `COBSFrameReader` - Stream-based frame extraction from USB byte streams
 
 ### 2. **Postcard Serialization** (`postcard.ts`)
 - `PostcardWriter` - Serialize messages to binary format
@@ -42,7 +42,7 @@ siger-js/
 - `serializeCheetahPublicKey()` - 97-byte serialization format
 
 ### 5. **Device Connection** (`device.ts`)
-- `SigerDevice` class - High-level Web Serial API wrapper
+- `SigerDevice` class - High-level WebHID/Web Serial API wrapper
 - `connect()` / `disconnect()` - Connection management
 - `call()` - Send request and wait for response
 - Optional debug logging
@@ -93,12 +93,12 @@ import { SigerDevice } from 'siger-js';
 
 const device = new SigerDevice({ debug: false });
 
-// check if Web Serial is supported
+// check if WebHID/Web Serial is supported
 if (!SigerDevice.isSupported()) {
-  console.error('Web Serial API not supported in this browser');
+  console.error('WebHID/Web Serial API not supported in this browser');
 }
 
-await device.connect({ baudRate: 115200 });
+await device.connect();
 
 if (device.isConnected()) {
   console.log('Connected to Siger device');

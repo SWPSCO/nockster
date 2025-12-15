@@ -118,11 +118,13 @@ export class PostcardReader {
   }
 
   readVarint(): number {
+    // Avoid bitwise operators here: they truncate to signed 32-bit, which breaks
+    // decoding u32 values like hardened BIP32 indices (0x80000000).
     let value = 0;
     let shift = 0;
     while (true) {
       const byte = this.data[this.offset++];
-      value |= (byte & 0x7F) << shift;
+      value += (byte & 0x7F) * (2 ** shift);
       if ((byte & 0x80) === 0) break;
       shift += 7;
     }

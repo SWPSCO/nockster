@@ -14,7 +14,16 @@ export { PostcardReader, PostcardWriter } from './postcard';
 export { COBSEncoder, COBSFrameReader } from './cobs';
 
 // Protocol types and functions
-export type { Request, Response, Msg, Frame, CheetahPubInfo, SpendMeta, SpendOutputMeta } from './protocol';
+export type {
+  Request,
+  Response,
+  Msg,
+  Frame,
+  CheetahPubInfo,
+  SpendMeta,
+  SpendOutputMeta,
+  Xpub,
+} from './protocol';
 export {
   serializeRequest,
   deserializeResponse,
@@ -32,7 +41,11 @@ export {
   ERR_WRONG_PIN,
   ERR_PIN_LOCKED_OUT,
   ERR_ALREADY_INITIALIZED,
+  ERR_REJECTED_BY_USER,
   PROTO_V1,
+  ERR_BUSY,
+  ERR_FLASH,
+  ERR_CRYPTO,
 } from './protocol';
 
 // Cheetah public key encoding

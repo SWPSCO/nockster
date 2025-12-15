@@ -5,7 +5,11 @@ import { PostcardReader, PostcardWriter } from './postcard';
  */
 
 export type Frame =
-  | { type: 'One'; request: Request };
+  | { type: 'One'; request: Request }
+  | { type: 'FragBegin'; id: number; total_len: number; kind: FragKind }
+  | { type: 'FragPart'; id: number; offset: number; chunk: Uint8Array; last: boolean };
+
+export type FragKind = 'SetSeed' | 'SignDraft';
 
 export interface SpendOutputMeta {
   gift: bigint;
@@ -15,6 +19,14 @@ export interface SpendOutputMeta {
 
 export interface SpendMeta {
   outputs: SpendOutputMeta[];
+}
+
+export interface Xpub {
+  depth: number;
+  fp4: Uint8Array;
+  child: number;
+  chain_code: Uint8Array;
+  pubkey33: Uint8Array;
 }
 
 export type Request =
@@ -57,9 +69,16 @@ export interface CheetahPubInfo {
 
 export type Response =
   | { type: 'Hello'; proto_v: number; compressed_pk: boolean }
+  | { type: 'FragBegin'; id: number; total_len: number; kind: FragKind }
+  | { type: 'FragPart'; id: number; offset: number; chunk: Uint8Array; last: boolean }
   | { type: 'Info'; proto_v: number; fw_major: number; fw_minor: number; features: number; has_seed: boolean; cheetah_pubs: CheetahPubInfo[] }
   | { type: 'Pong' }
   | { type: 'Ok' }
+  | { type: 'OkSig'; sig64: Uint8Array }
+  | { type: 'OkFingerprint'; fp4: Uint8Array }
+  | { type: 'OkPubkey'; uncompressed: Uint8Array }
+  | { type: 'OkPubkeyCompressed'; compressed: Uint8Array }
+  | { type: 'OkXpub'; xpub: Xpub }
   | { type: 'OkLockStatus'; locked: boolean; attempts_remaining: number }
   | { type: 'OkCheetahPub'; x: bigint[]; y: bigint[] }
   | { type: 'OkCheetahSig'; chal: bigint[]; sig: bigint[] }
@@ -82,9 +101,35 @@ export const ERR_DEVICE_LOCKED = 130;
 export const ERR_WRONG_PIN = 131;
 export const ERR_PIN_LOCKED_OUT = 132;
 export const ERR_ALREADY_INITIALIZED = 133;
+export const ERR_REJECTED_BY_USER = 134;
 export const ERR_BUSY = 135;
+export const ERR_FLASH = 140;
+export const ERR_CRYPTO = 141;
 
 export const PROTO_V1 = 1;
+
+function serializeFragKind(w: PostcardWriter, kind: FragKind) {
+  // siger-core::FragKind: SetSeed=0, SignDraft=1
+  switch (kind) {
+    case 'SetSeed':
+      w.writeVarint(0);
+      break;
+    case 'SignDraft':
+      w.writeVarint(1);
+      break;
+  }
+}
+
+function deserializeFragKind(kind: number): FragKind {
+  switch (kind) {
+    case 0:
+      return 'SetSeed';
+    case 1:
+      return 'SignDraft';
+    default:
+      throw new Error(`Unknown frag kind: ${kind}`);
+  }
+}
 
 function serializeSpendMetaOptional(w: PostcardWriter, meta: SpendMeta | undefined) {
   if (!meta || !Array.isArray(meta.outputs) || meta.outputs.length === 0) {
@@ -131,7 +176,7 @@ export function serializeRequest(req: Request): Uint8Array {
       w.writeVarint(6);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
-        w.writeU32(p);
+        w.writeVarint(p);
       }
       w.writeBool(req.compressed ?? false);
       break;
@@ -139,14 +184,14 @@ export function serializeRequest(req: Request): Uint8Array {
       w.writeVarint(7);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
-        w.writeU32(p);
+        w.writeVarint(p);
       }
       break;
     case 'SignDigest':
       w.writeVarint(8);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
-        w.writeU32(p);
+        w.writeVarint(p);
       }
       w.writeFixedBytes(req.digest32);
       break;
@@ -155,7 +200,7 @@ export function serializeRequest(req: Request): Uint8Array {
       w.writeU8(req.slot);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
-        w.writeU32(p);
+        w.writeVarint(p);
       }
       break;
     case 'SignSpendHash':
@@ -163,7 +208,7 @@ export function serializeRequest(req: Request): Uint8Array {
       w.writeU8(req.slot);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
-        w.writeU32(p);
+        w.writeVarint(p);
       }
       for (const val of req.msg5) {
         w.writeU64Varint(val);
@@ -175,7 +220,7 @@ export function serializeRequest(req: Request): Uint8Array {
       w.writeU8(req.slot);
       w.writeVarint(req.path.length);
       for (const p of req.path) {
-        w.writeU32(p);
+        w.writeVarint(p);
       }
       for (const val of req.msg5) {
         w.writeU64Varint(val);
@@ -246,6 +291,19 @@ export function deserializeResponse(data: Uint8Array): Response {
       const compressed_pk = r.readBool();
       return { type: 'Hello', proto_v, compressed_pk };
     }
+    case 1: { // FragBegin
+      const id = r.readVarint();
+      const total_len = r.readVarint();
+      const kind = deserializeFragKind(r.readVarint());
+      return { type: 'FragBegin', id, total_len, kind };
+    }
+    case 2: { // FragPart
+      const id = r.readVarint();
+      const offset = r.readVarint();
+      const chunk = r.readBytes();
+      const last = r.readBool();
+      return { type: 'FragPart', id, offset, chunk, last };
+    }
     case 3: { // Info
       const proto_v = r.readU8();
       const fw_major = r.readVarint(); // postcard encodes u16 as varint
@@ -259,7 +317,7 @@ export function deserializeResponse(data: Uint8Array): Response {
         const pathLen = r.readVarint();
         const path: number[] = [];
         for (let j = 0; j < pathLen; j++) {
-          path.push(r.readU32());
+          path.push(r.readVarint());
         }
         const x = r.readU64Array(6);
         const y = r.readU64Array(6);
@@ -271,6 +329,30 @@ export function deserializeResponse(data: Uint8Array): Response {
       return { type: 'Pong' };
     case 5: // Ok
       return { type: 'Ok' };
+    case 6: { // OkSig
+      const sig64 = r.readFixedBytes(64);
+      return { type: 'OkSig', sig64 };
+    }
+    case 7: { // OkFingerprint
+      const fp4 = r.readFixedBytes(4);
+      return { type: 'OkFingerprint', fp4 };
+    }
+    case 8: { // OkPubkey
+      const uncompressed = r.readFixedBytes(65);
+      return { type: 'OkPubkey', uncompressed };
+    }
+    case 9: { // OkPubkeyCompressed
+      const compressed = r.readFixedBytes(33);
+      return { type: 'OkPubkeyCompressed', compressed };
+    }
+    case 10: { // OkXpub
+      const depth = r.readU8();
+      const fp4 = r.readFixedBytes(4);
+      const child = r.readVarint(); // postcard encodes u32 as varint
+      const chain_code = r.readFixedBytes(32);
+      const pubkey33 = r.readFixedBytes(33);
+      return { type: 'OkXpub', xpub: { depth, fp4, child, chain_code, pubkey33 } };
+    }
     case 11: { // OkCheetahPub
       const x = r.readU64Array(6);
       const y = r.readU64Array(6);
@@ -287,7 +369,7 @@ export function deserializeResponse(data: Uint8Array): Response {
       return { type: 'OkLockStatus', locked, attempts_remaining };
     }
     case 14: { // Err
-      const code = r.readU16();
+      const code = r.readVarint();
       return { type: 'Err', code };
     }
     default:
@@ -296,136 +378,35 @@ export function deserializeResponse(data: Uint8Array): Response {
 }
 
 /**
- * Serialize a Msg<Frame> where Frame wraps Request
+ * Serialize a Msg<Frame> (requests are wrapped in Frame::One)
  */
-export function serializeMsg(msg: Msg<Request>): Uint8Array {
+export function serializeMsg(msg: Msg<Frame>): Uint8Array {
   const w = new PostcardWriter();
   w.writeU8(msg.v);
   w.writeVarint(msg.id); // u32 is serialized as varint in postcard
 
   // Frame enum: 0 = One, 1 = FragBegin, 2 = FragPart
-  w.writeVarint(0); // Frame::One
-
-  const req = msg.msg;
-  switch (req.type) {
-    case 'Hello':
+  switch (msg.msg.type) {
+    case 'One': {
       w.writeVarint(0);
+      w.writeFixedBytes(serializeRequest(msg.msg.request));
       break;
-    case 'GetInfo':
+    }
+    case 'FragBegin': {
       w.writeVarint(1);
+      w.writeVarint(msg.msg.id);
+      w.writeVarint(msg.msg.total_len);
+      serializeFragKind(w, msg.msg.kind);
       break;
-    case 'Ping':
+    }
+    case 'FragPart': {
       w.writeVarint(2);
+      w.writeVarint(msg.msg.id);
+      w.writeVarint(msg.msg.offset);
+      w.writeBytes(msg.msg.chunk);
+      w.writeBool(msg.msg.last);
       break;
-    case 'Wipe':
-      w.writeVarint(3);
-      break;
-    case 'SetSeed':
-      w.writeVarint(4);
-      w.writeFixedBytes(req.seed64);
-      break;
-    case 'GetFingerprint':
-      w.writeVarint(5);
-      break;
-    case 'GetPubkey':
-      w.writeVarint(6);
-      w.writeVarint(req.path.length);
-      for (const p of req.path) {
-        w.writeU32(p);
-      }
-      w.writeBool(req.compressed ?? false);
-      break;
-    case 'GetXpub':
-      w.writeVarint(7);
-      w.writeVarint(req.path.length);
-      for (const p of req.path) {
-        w.writeU32(p);
-      }
-      break;
-    case 'SignDigest':
-      w.writeVarint(8);
-      w.writeVarint(req.path.length);
-      for (const p of req.path) {
-        w.writeU32(p);
-      }
-      w.writeFixedBytes(req.digest32);
-      break;
-    case 'GetCheetahPub':
-      w.writeVarint(9);
-      w.writeU8(req.slot);
-      w.writeVarint(req.path.length);
-      for (const p of req.path) {
-        w.writeU32(p);
-      }
-      break;
-    case 'SignSpendHash':
-      w.writeVarint(10);
-      w.writeU8(req.slot);
-      w.writeVarint(req.path.length);
-      for (const p of req.path) {
-        w.writeU32(p);
-      }
-      for (const val of req.msg5) {
-        w.writeU64Varint(val);
-      }
-      serializeSpendMetaOptional(w, req.meta);
-      break;
-    case 'SignSpendHashFor':
-      w.writeVarint(11);
-      w.writeU8(req.slot);
-      w.writeVarint(req.path.length);
-      for (const p of req.path) {
-        w.writeU32(p);
-      }
-      for (const val of req.msg5) {
-        w.writeU64Varint(val);
-      }
-      for (const limb of req.pubkey.x) {
-        w.writeU64Varint(limb);
-      }
-      for (const limb of req.pubkey.y) {
-        w.writeU64Varint(limb);
-      }
-      serializeSpendMetaOptional(w, req.meta);
-      break;
-    case 'Health':
-      w.writeVarint(12);
-      break;
-    case 'InitializePIN':
-      w.writeVarint(13);
-      w.writeString(req.pin);
-      w.writeFixedBytes(req.seed64);
-      break;
-    case 'AddSeed':
-      w.writeVarint(14);
-      w.writeFixedBytes(req.seed64);
-      break;
-    case 'DeleteSeed':
-      w.writeVarint(15);
-      w.writeU8(req.slot);
-      break;
-    case 'Unlock':
-      w.writeVarint(16);
-      w.writeString(req.pin);
-      break;
-    case 'Lock':
-      w.writeVarint(17);
-      break;
-    case 'ResetPIN':
-      w.writeVarint(18);
-      w.writeString(req.current_pin);
-      w.writeString(req.new_pin);
-      break;
-    case 'GetLockStatus':
-      w.writeVarint(19);
-      break;
-    case 'SelectSeed':
-      w.writeVarint(20);
-      w.writeU8(req.slot);
-      break;
-    case 'Reset':
-      w.writeVarint(21);
-      break;
+    }
   }
 
   return w.toBytes();
@@ -471,8 +452,14 @@ export function getErrorMessage(code: number): string {
       return 'Device locked out (too many failed attempts)';
     case ERR_ALREADY_INITIALIZED:
       return 'Device already initialized';
+    case ERR_REJECTED_BY_USER:
+      return 'Rejected by user';
     case ERR_BUSY:
       return 'Device is busy';
+    case ERR_FLASH:
+      return 'Flash error';
+    case ERR_CRYPTO:
+      return 'Crypto error';
     case ERR_WRONG_PUBKEY:
       return 'Wrong public key';
     default:

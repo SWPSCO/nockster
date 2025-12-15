@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { SigerDevice, Response, formatCheetahPubkey } from 'siger-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
-import init, { ParsedTransaction } from 'siger-wasm';
+import init, { ParsedTransaction, cheetah_pkh_b58 } from 'siger-wasm';
 import { createSerialTransport  } from './serial';
 import { ComposerView } from './composer/Composer';
 import './App.css';
@@ -76,6 +76,7 @@ function App() {
   const [tx, setTx] = useState<ParsedTransaction | null>(null);
   const [txInfo, setTxInfo] = useState<any>(null);
   const [txDetails, setTxDetails] = useState<any>(null);
+  const [txBytes, setTxBytes] = useState<Uint8Array | null>(null);
   const [signingInputs, setSigningInputs] = useState<any[]>([]);
   const [signing, setSigning] = useState(false);
   const [signedTxBytes, setSignedTxBytes] = useState<Uint8Array | null>(null);
@@ -505,6 +506,7 @@ function App() {
       setStatus('Loading transaction...');
 
       const bytes = new Uint8Array(await file.arrayBuffer());
+      setTxBytes(bytes);
       console.log('File loaded, bytes:', bytes.length);
       console.log('First 32 bytes:', Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '));
 
@@ -546,7 +548,8 @@ function App() {
       setTxDetails(detailsObj);
       setSignedTxBytes(null);
       setSigningInputs([]); // Reset signing inputs
-      setStatus(`Loaded transaction: ${info.tx_id} (${info.input_count} inputs)`);
+      const countLabel = detailsObj?.version === 1 ? 'spends' : 'inputs';
+      setStatus(`Loaded transaction: ${info.tx_id} (${info.input_count} ${countLabel})`);
 
     } catch (error: any) {
       console.error('Transaction load error:', error);
@@ -556,8 +559,12 @@ function App() {
   };
 
   const signTransaction = async () => {
-    if (!tx || !connected || locked) {
+    if (!tx || !txInfo || !connected || locked) {
       setStatus('Device must be connected and unlocked');
+      return;
+    }
+    if (!txBytes) {
+      setStatus('Missing transaction bytes; reload the file');
       return;
     }
 
@@ -565,6 +572,61 @@ function App() {
       deviceBusyRef.current = true;
       setDeviceBusy(true);
       setSigning(true);
+      const txVersion = txDetails?.version ?? 0;
+      if (txVersion === 1) {
+        setSigningInputs([]);
+        setStatus(`Selecting slot ${selectedSlot}...`);
+        await device.selectSeed(selectedSlot);
+
+        setStatus('Sending draft to device (approve on-device)...');
+        const signedBytes = await device.signDraft(txBytes);
+
+        const signedParsed = new ParsedTransaction(signedBytes);
+        const signedInfo = signedParsed.info();
+        const signedDetails = signedParsed.get_details();
+
+        const convertMapToObject = (obj: any): any => {
+          if (obj instanceof Map) {
+            const result: any = {};
+            obj.forEach((value, key) => {
+              result[key] = convertMapToObject(value);
+            });
+            return result;
+          } else if (Array.isArray(obj)) {
+            return obj.map(convertMapToObject);
+          } else if (obj && typeof obj === 'object') {
+            const result: any = {};
+            for (const key in obj) {
+              result[key] = convertMapToObject(obj[key]);
+            }
+            return result;
+          }
+          return obj;
+        };
+
+        setTx(signedParsed);
+        setTxInfo(signedInfo);
+        setTxDetails(convertMapToObject(signedDetails));
+        setTxBytes(signedBytes);
+        setSignedTxBytes(signedBytes);
+
+        const filename = `${signedInfo.tx_id.slice(0, 16)}.tx`;
+        const ab = new ArrayBuffer(signedBytes.byteLength);
+        new Uint8Array(ab).set(signedBytes);
+        const txBlob = new Blob([ab], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(txBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        setStatus(`Signed and downloaded ${filename}`);
+        return;
+      }
+
       setStatus('Finding inputs to sign...');
 
       if (deviceKeys.length === 0) {
@@ -720,9 +782,24 @@ function App() {
     setTx(null);
     setTxInfo(null);
     setTxDetails(null);
+    setTxBytes(null);
     setSigningInputs([]);
     setSignedTxBytes(null);
     setStatus('');
+  };
+
+  const formatDeviceAddress = (pub: DeviceKey): string => {
+    if (wasmReady) {
+      try {
+        return cheetah_pkh_b58(
+          pub.x.map((n) => n.toString()),
+          pub.y.map((n) => n.toString())
+        );
+      } catch {
+        // fall back to old (pubkey) encoding
+      }
+    }
+    return formatCheetahPubkey(pub.x, pub.y);
   };
 
   return (
@@ -919,11 +996,11 @@ function App() {
                                 <span className="path-tag">slot {pub.slot} · {formatDerivationPath(pub.path)}</span>
                               </div>
                               <div className="pubkey-display">
-                                <span className="pubkey-text">{formatCheetahPubkey(pub.x, pub.y)}</span>
+                                <span className="pubkey-text">{formatDeviceAddress(pub)}</span>
                                 <div className="pubkey-actions">
                                   <button
                                     onClick={() => {
-                                      navigator.clipboard.writeText(formatCheetahPubkey(pub.x, pub.y));
+                                      navigator.clipboard.writeText(formatDeviceAddress(pub));
                                       setStatus(
                                         `Copied slot ${pub.slot} ${formatDerivationPath(pub.path)} to clipboard`
                                       );
@@ -1077,10 +1154,10 @@ function App() {
 
               {!tx ? (
                 <div>
-                  <p>Upload a transaction draft (.draft file) to sign</p>
+                  <p>Upload an unsigned transaction draft (.draft, .wallet, or .psnt) to sign</p>
                   <input
                     type="file"
-                    accept=".draft"
+                    accept=".draft,.wallet,.psnt"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) loadTransaction(file);

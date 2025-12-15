@@ -457,6 +457,7 @@ fn union_inputs_timelock_range_v0(inputs: &InputsV0) -> TimelockRange {
 pub struct TransactionInfo {
     tx_id: String,
     shape: String,
+    version: u8,
     input_count: usize,
 }
 
@@ -469,6 +470,10 @@ impl TransactionInfo {
     #[wasm_bindgen(getter)]
     pub fn shape(&self) -> String {
         self.shape.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn version(&self) -> u8 {
+        self.version
     }
     #[wasm_bindgen(getter)]
     pub fn input_count(&self) -> usize {
@@ -577,29 +582,373 @@ impl SignatureDataJs {
 }
 
 /// ---- ParsedTransaction ---------------------------------------------------
-/// Note: WASM currently only supports V0 transactions
 
 #[wasm_bindgen]
 pub struct ParsedTransaction {
     inner: ParsedTxInner,
 }
 
-struct ParsedTxInner {
-    outer: OuterType,
+enum ParsedTxInner {
+    V0(ParsedTxV0),
+    V1(ParsedTxV1),
+}
+
+struct ParsedTxV0 {
+    outer: OuterTypeV0,
     raw: RawTransactionV0,
     tail_jam: Option<Vec<u8>>,
 }
 
-enum OuterType {
+struct ParsedTxV1 {
+    outer: OuterTypeV1,
+    tx_id_b58: String,
+    spend_count: usize,
+    arena: tx_types::pokenoun::Arena,
+    spends: tx_types::pokenoun::Noun,
+}
+
+enum OuterTypeV0 {
     RawTx,
     TxTransact,
     WalletTx(Transaction),
 }
 
+enum OuterTypeV1 {
+    RawTx,
+    TxTransact,
+    WalletTx,
+}
+
+mod v1_draft {
+    use super::*;
+    use tx_types::pokenoun::{cue, Arena, CodecError, Noun};
+
+    fn uncons(noun: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+        match noun {
+            Noun::Cell(id) => {
+                let cell = arena.cell(id);
+                Some((cell.head, cell.tail))
+            }
+            _ => None,
+        }
+    }
+
+    fn tuple2(noun: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+        uncons(noun, arena)
+    }
+
+    fn tuple3(noun: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun)> {
+        let (a, bc) = uncons(noun, arena)?;
+        let (b, c) = uncons(bc, arena)?;
+        Some((a, b, c))
+    }
+
+    fn tuple4(noun: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun, Noun)> {
+        let (a, bcd) = uncons(noun, arena)?;
+        let (b, cd) = uncons(bcd, arena)?;
+        let (c, d) = uncons(cd, arena)?;
+        Some((a, b, c, d))
+    }
+
+    fn tuple5(noun: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun, Noun, Noun)> {
+        let (a, bcde) = uncons(noun, arena)?;
+        let (b, cde) = uncons(bcde, arena)?;
+        let (c, de) = uncons(cde, arena)?;
+        let (d, e) = uncons(de, arena)?;
+        Some((a, b, c, d, e))
+    }
+
+    fn noun_atom_u64(noun: Noun, arena: &Arena) -> Option<u64> {
+        match noun {
+            Noun::Atom(id) => arena.atom_u64(id),
+            _ => None,
+        }
+    }
+
+    fn parse_hash(noun: Noun, arena: &Arena) -> Option<[u64; 5]> {
+        let (a0, rest) = uncons(noun, arena)?;
+        let (a1, rest) = uncons(rest, arena)?;
+        let (a2, rest) = uncons(rest, arena)?;
+        let (a3, a4) = uncons(rest, arena)?;
+        Some([
+            noun_atom_u64(a0, arena)?,
+            noun_atom_u64(a1, arena)?,
+            noun_atom_u64(a2, arena)?,
+            noun_atom_u64(a3, arena)?,
+            noun_atom_u64(a4, arena)?,
+        ])
+    }
+
+    fn hash_to_b58(digest: [u64; 5]) -> String {
+        tx_types::transaction_types::Hash { values: digest }.to_b58()
+    }
+
+    fn parse_nname(noun: Noun, arena: &Arena) -> Option<(String, String)> {
+        let (first, rest) = uncons(noun, arena)?;
+        let (second, _end) = uncons(rest, arena)?;
+        let first = parse_hash(first, arena)?;
+        let second = parse_hash(second, arena)?;
+        Some((hash_to_b58(first), hash_to_b58(second)))
+    }
+
+    fn decompose_map(map: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun)> {
+        let (node, tail) = uncons(map, arena)?;
+        if let Some((left, right)) = uncons(tail, arena) {
+            Some((node, left, right))
+        } else {
+            Some((node, tail, arena.atom0()))
+        }
+    }
+
+    fn decompose_pair(pair: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+        uncons(pair, arena)
+    }
+
+    fn zmap_count(map: Noun, arena: &Arena) -> usize {
+        if map == arena.atom0() {
+            return 0;
+        }
+        let Some((_node, left, right)) = decompose_map(map, arena) else {
+            return 0;
+        };
+        1 + zmap_count(left, arena) + zmap_count(right, arena)
+    }
+
+    fn zset_for_each(set: Noun, arena: &Arena, f: &mut impl FnMut(Noun)) {
+        if set == arena.atom0() {
+            return;
+        }
+        let Some((value, left, right)) = tuple3(set, arena) else {
+            return;
+        };
+        f(value);
+        zset_for_each(left, arena, f);
+        zset_for_each(right, arena, f);
+    }
+
+    fn map_get_atom_key(map: Noun, arena: &Arena, key_bytes: &[u8]) -> Option<Noun> {
+        if map == arena.atom0() {
+            return None;
+        }
+        let (node, left, right) = decompose_map(map, arena)?;
+        let (key, value) = decompose_pair(node, arena)?;
+        if let Noun::Atom(id) = key {
+            if arena.atom_bytes(id) == key_bytes {
+                return Some(value);
+            }
+        }
+        map_get_atom_key(left, arena, key_bytes).or_else(|| map_get_atom_key(right, arena, key_bytes))
+    }
+
+    fn seed_recipient_pkh(note_data: Noun, arena: &Arena) -> Option<[u64; 5]> {
+        let lock_data = map_get_atom_key(note_data, arena, b"lock")?;
+        let (ver, lock) = tuple2(lock_data, arena)?;
+        if noun_atom_u64(ver, arena) != Some(0) {
+            return None;
+        }
+        let (prim, _rest) = uncons(lock, arena)?;
+        let (header, body) = tuple2(prim, arena)?;
+        let header_id = match header {
+            Noun::Atom(id) => id,
+            _ => return None,
+        };
+        if arena.atom_bytes(header_id) != b"pkh" {
+            return None;
+        }
+        let (m, h_set) = tuple2(body, arena)?;
+        if noun_atom_u64(m, arena) != Some(1) {
+            return None;
+        }
+        // any value is fine; it is a z-set of hashes
+        let (any, _l, _r) = tuple3(h_set, arena)?;
+        parse_hash(any, arena)
+    }
+
+    fn collect_spend_details(spends: Noun, arena: &Arena) -> serde_json::Value {
+        use serde_json::json;
+        if spends == arena.atom0() {
+            return json!([]);
+        }
+
+        let mut out: Vec<serde_json::Value> = Vec::new();
+        let mut walk = |pair: Noun, _left: Noun, _right: Noun| {
+            let Some((name_noun, spend_noun)) = decompose_pair(pair, arena) else {
+                return;
+            };
+            let (name_first, name_last) = match parse_nname(name_noun, arena) {
+                Some(v) => v,
+                None => ("".to_string(), "".to_string()),
+            };
+            let Some((ver, body)) = tuple2(spend_noun, arena) else {
+                return;
+            };
+            if noun_atom_u64(ver, arena) != Some(1) {
+                return;
+            }
+            let Some((_witness, seeds, fee_noun)) = tuple3(body, arena) else {
+                return;
+            };
+            let fee = noun_atom_u64(fee_noun, arena).unwrap_or(0);
+
+            let mut seeds_out: Vec<serde_json::Value> = Vec::new();
+            zset_for_each(seeds, arena, &mut |seed| {
+                let Some((_output_source, lock_root_noun, note_data_noun, gift_noun, parent_hash_noun)) =
+                    tuple5(seed, arena)
+                else {
+                    return;
+                };
+                let lock_root = parse_hash(lock_root_noun, arena);
+                let recipient = seed_recipient_pkh(note_data_noun, arena).or(lock_root);
+                let gift = noun_atom_u64(gift_noun, arena).unwrap_or(0);
+                let parent_hash = parse_hash(parent_hash_noun, arena);
+
+                seeds_out.push(json!({
+                    "gift": gift,
+                    "recipient_pkh": recipient.map(hash_to_b58),
+                    "lock_root": lock_root.map(hash_to_b58),
+                    "parent_hash": parent_hash.map(hash_to_b58),
+                }));
+            });
+
+            out.push(json!({
+                "name_first": name_first,
+                "name_last": name_last,
+                "fee": fee,
+                "seeds": seeds_out,
+            }));
+        };
+
+        fn walk_map(
+            map: Noun,
+            arena: &Arena,
+            f: &mut impl FnMut(Noun, Noun, Noun),
+        ) {
+            if map == arena.atom0() {
+                return;
+            }
+            let Some((node, left, right)) = decompose_map(map, arena) else {
+                return;
+            };
+            f(node, left, right);
+            walk_map(left, arena, f);
+            walk_map(right, arena, f);
+        }
+
+        walk_map(spends, arena, &mut walk);
+        serde_json::Value::Array(out)
+    }
+
+    pub(super) struct ParsedV1 {
+        pub outer: OuterTypeV1,
+        pub tx_id_b58: String,
+        pub spend_count: usize,
+        pub arena: Arena,
+        pub spends: Noun,
+    }
+
+    pub(super) fn parse(bytes: &[u8]) -> Result<ParsedV1, JsValue> {
+        let mut arena = Arena::new();
+        let root = cue(bytes, &mut arena).map_err(|e| match e {
+            CodecError::UnexpectedEof => JsValue::from_str("jam decode: unexpected eof"),
+            CodecError::AtomTooLarge => JsValue::from_str("jam decode: atom too large"),
+            CodecError::InvalidBackref => JsValue::from_str("jam decode: invalid backref"),
+            CodecError::InvalidEncoding => JsValue::from_str("jam decode: invalid encoding"),
+        })?;
+
+        // wallet tx v1: [name=@t spends]
+        if let Some((name_noun, spends)) = tuple2(root, &arena) {
+            if let Noun::Atom(name_atom) = name_noun {
+                if let Ok(name_str) = core::str::from_utf8(arena.atom_bytes(name_atom)) {
+                    if tx_types::transaction_types::Hash::from_b58(name_str).is_ok() {
+                        let tx_id_b58 = name_str.to_string();
+                        let spend_count = zmap_count(spends, &arena);
+                        return Ok(ParsedV1 {
+                            outer: OuterTypeV1::WalletTx,
+                            tx_id_b58,
+                            spend_count,
+                            arena,
+                            spends,
+                        });
+                    }
+                }
+            }
+        }
+
+        // raw tx v1: [ver=1 id spends]
+        if let Some((ver, id, spends)) = tuple3(root, &arena) {
+            if noun_atom_u64(ver, &arena) == Some(1) {
+                if let Some(id_digest) = parse_hash(id, &arena) {
+                    let tx_id_b58 = hash_to_b58(id_digest);
+                    let spend_count = zmap_count(spends, &arena);
+                    return Ok(ParsedV1 {
+                        outer: OuterTypeV1::RawTx,
+                        tx_id_b58,
+                        spend_count,
+                        arena,
+                        spends,
+                    });
+                }
+            }
+        }
+
+        // [raw-tx tail]
+        if let Some((head, _tail)) = uncons(root, &arena) {
+            if let Some((ver, id, spends)) = tuple3(head, &arena) {
+                if noun_atom_u64(ver, &arena) == Some(1) {
+                    if let Some(id_digest) = parse_hash(id, &arena) {
+                        let tx_id_b58 = hash_to_b58(id_digest);
+                        let spend_count = zmap_count(spends, &arena);
+                        return Ok(ParsedV1 {
+                            outer: OuterTypeV1::TxTransact,
+                            tx_id_b58,
+                            spend_count,
+                            arena,
+                            spends,
+                        });
+                    }
+                }
+            }
+        }
+
+        // tx-engine wrapper (TxV1): [ver=1 raw-tx total-size outputs]
+        if let Some((ver, raw_tx, _total, _outputs)) = tuple4(root, &arena) {
+            if noun_atom_u64(ver, &arena) == Some(1) {
+                if let Some((ver2, id, spends)) = tuple3(raw_tx, &arena) {
+                    if noun_atom_u64(ver2, &arena) == Some(1) {
+                        if let Some(id_digest) = parse_hash(id, &arena) {
+                            let tx_id_b58 = hash_to_b58(id_digest);
+                            let spend_count = zmap_count(spends, &arena);
+                            return Ok(ParsedV1 {
+                                outer: OuterTypeV1::RawTx,
+                                tx_id_b58,
+                                spend_count,
+                                arena,
+                                spends,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Err(JsValue::from_str("unrecognized v1 transaction shape"))
+    }
+
+    pub(super) fn details_json(tx_id_b58: &str, spends: Noun, arena: &Arena) -> serde_json::Value {
+        use serde_json::json;
+        let spends_json = collect_spend_details(spends, arena);
+        json!({
+            "version": 1,
+            "transaction_id": tx_id_b58,
+            "spend_count": zmap_count(spends, arena),
+            "spends": spends_json,
+        })
+    }
+}
+
 #[wasm_bindgen]
 impl ParsedTransaction {
     /// Parse a jam file (transaction draft) from bytes
-    /// Note: Currently only supports V0 transactions
     #[wasm_bindgen(constructor)]
     pub fn new(bytes: &[u8]) -> Result<ParsedTransaction, JsValue> {
         let mut slab: NounSlab = NounSlab::new();
@@ -614,7 +963,11 @@ impl ParsedTransaction {
                 // Extract V0 inputs from Transaction
                 let inputs = match &tx.p {
                     Inputs::V0(v0) => v0.clone(),
-                    Inputs::V1(_) => return Err(JsValue::from_str("V1 transactions not yet supported in WASM")),
+                    Inputs::V1(_) => {
+                        return Err(JsValue::from_str(
+                            "Unrecognized transaction format (wallet-tx V1 not supported in this format)",
+                        ))
+                    }
                 };
                 let total_fees = sum_inputs_fees_v0(&inputs);
                 let tl = union_inputs_timelock_range_v0(&inputs);
@@ -630,11 +983,11 @@ impl ParsedTransaction {
                 };
 
                 return Ok(ParsedTransaction {
-                    inner: ParsedTxInner {
-                        outer: OuterType::WalletTx(tx),
+                    inner: ParsedTxInner::V0(ParsedTxV0 {
+                        outer: OuterTypeV0::WalletTx(tx),
                         raw,
                         tail_jam: None,
-                    },
+                    }),
                 });
             }
             Err(e) => {
@@ -650,11 +1003,11 @@ impl ParsedTransaction {
                 s2.copy_into(copied_tail);
                 let tail_jam = s2.jam().to_vec();
                 return Ok(ParsedTransaction {
-                    inner: ParsedTxInner {
-                        outer: OuterType::TxTransact,
+                    inner: ParsedTxInner::V0(ParsedTxV0 {
+                        outer: OuterTypeV0::TxTransact,
                         raw: r,
                         tail_jam: Some(tail_jam),
-                    },
+                    }),
                 });
             }
         }
@@ -662,120 +1015,163 @@ impl ParsedTransaction {
         // bare raw-tx (V0)
         if let Ok(r) = RawTransactionV0::from_noun(&noun) {
             return Ok(ParsedTransaction {
-                inner: ParsedTxInner {
-                    outer: OuterType::RawTx,
+                inner: ParsedTxInner::V0(ParsedTxV0 {
+                    outer: OuterTypeV0::RawTx,
                     raw: r,
                     tail_jam: None,
-                },
+                }),
             });
         }
 
-        Err(JsValue::from_str("Unrecognized transaction format (V1 not yet supported in WASM)"))
+        // V1 drafts/txs: parse via pokenoun (no panics, works in wasm/no_std contexts)
+        match v1_draft::parse(bytes) {
+            Ok(v1) => Ok(ParsedTransaction {
+                inner: ParsedTxInner::V1(ParsedTxV1 {
+                    outer: v1.outer,
+                    tx_id_b58: v1.tx_id_b58,
+                    spend_count: v1.spend_count,
+                    arena: v1.arena,
+                    spends: v1.spends,
+                }),
+            }),
+            Err(_) => Err(JsValue::from_str("Unrecognized transaction format")),
+        }
     }
 
     /// get transaction info
     pub fn info(&self) -> TransactionInfo {
-        let raw = &self.inner.raw;
-        TransactionInfo {
-            tx_id: raw.id.to_b58(),
-            shape: match &self.inner.outer {
-                OuterType::RawTx => "raw-tx".to_string(),
-                OuterType::TxTransact => "[raw-tx tail]".to_string(),
-                OuterType::WalletTx(_) => "wallet-tx".to_string(),
+        match &self.inner {
+            ParsedTxInner::V0(v0) => {
+                let raw = &v0.raw;
+                TransactionInfo {
+                    tx_id: raw.id.to_b58(),
+                    shape: match &v0.outer {
+                        OuterTypeV0::RawTx => "raw-tx".to_string(),
+                        OuterTypeV0::TxTransact => "[raw-tx tail]".to_string(),
+                        OuterTypeV0::WalletTx(_) => "wallet-tx".to_string(),
+                    },
+                    version: 0,
+                    input_count: raw.inputs.p.wyt(),
+                }
+            }
+            ParsedTxInner::V1(v1) => TransactionInfo {
+                tx_id: v1.tx_id_b58.clone(),
+                shape: match &v1.outer {
+                    OuterTypeV1::RawTx => "raw-tx".to_string(),
+                    OuterTypeV1::TxTransact => "[raw-tx tail]".to_string(),
+                    OuterTypeV1::WalletTx => "wallet-tx".to_string(),
+                },
+                version: 1,
+                input_count: v1.spend_count,
             },
-            input_count: raw.inputs.p.wyt(),
         }
     }
 
     /// get transaction details as json
     pub fn get_details(&self) -> JsValue {
-        use serde_json::json;
-        let raw = &self.inner.raw;
+        match &self.inner {
+            ParsedTxInner::V0(v0) => {
+                use serde_json::json;
+                let raw = &v0.raw;
 
-        let inputs_json: Vec<_> = raw
-            .inputs
-            .p
-            .tap()
-            .into_iter()
-            .enumerate()
-            .map(|(idx, (name, input))| {
-                let (first, last) = nname_b58_pair(&name);
-                let name_display = if last.is_empty() {
-                    format!("[{}]", first)
-                } else {
-                    format!("[{} {}]", first, last)
-                };
-
-                let (m, pks_b58) = input.note.lock.to_b58();
-                let lock_display = format!("{}-of-{} signers", m, pks_b58.len());
-
-                let seeds_json: Vec<_> = input
-                    .spend
-                    .seeds
-                    .set
-                    .iter()
+                let inputs_json: Vec<_> = raw
+                    .inputs
+                    .p
+                    .tap()
+                    .into_iter()
                     .enumerate()
-                    .map(|(_k, seed)| {
-                        let (m, pks_b58) = seed.recipient.to_b58();
-                        let lock = format!("{}-of-{}", m, pks_b58.len());
+                    .map(|(idx, (name, input))| {
+                        let (first, last) = nname_b58_pair(&name);
+                        let name_display = if last.is_empty() {
+                            format!("[{}]", first)
+                        } else {
+                            format!("[{} {}]", first, last)
+                        };
+
+                        let (m, pks_b58) = input.note.lock.to_b58();
+                        let lock_display = format!("{}-of-{} signers", m, pks_b58.len());
+
+                        let seeds_json: Vec<_> = input
+                            .spend
+                            .seeds
+                            .set
+                            .iter()
+                            .enumerate()
+                            .map(|(_k, seed)| {
+                                let (m, pks_b58) = seed.recipient.to_b58();
+                                let lock = format!("{}-of-{}", m, pks_b58.len());
+
+                                json!({
+                                    "gift": seed.gift.value,
+                                    "lock": lock,
+                                    "recipient": pks_b58,
+                                    "parent_hash": seed.parent_hash.to_b58(),
+                                })
+                            })
+                            .collect();
+
+                        let sig_count = input
+                            .spend
+                            .signature
+                            .as_ref()
+                            .map(|m| m.map.wyt())
+                            .unwrap_or(0);
 
                         json!({
-                            "gift": seed.gift.value,
-                            "lock": lock,
-                            "recipient": pks_b58,
-                            "parent_hash": seed.parent_hash.to_b58(),
+                            "index": idx,
+                            "name": name_display,
+                            "origin_page": input.note.meta.origin_page.value,
+                            "assets": input.note.assets.value,
+                            "source": format_hash(&input.note.source.p),
+                            "coinbase": input.note.source.is_coinbase,
+                            "lock": lock_display,
+                            "lock_pubkeys": pks_b58,
+                            "fee": input.spend.fee.value,
+                            "signatures": sig_count,
+                            "seeds": seeds_json,
                         })
                     })
                     .collect();
 
-                let sig_count = input
-                    .spend
-                    .signature
-                    .as_ref()
-                    .map(|m| m.map.wyt())
-                    .unwrap_or(0);
+                let details = json!({
+                    "version": 0,
+                    "transaction_id": raw.id.to_b58(),
+                    "input_count": raw.inputs.p.wyt(),
+                    "total_fees": raw.total_fees.value,
+                    "timelock_min": raw.timelock_range.min.as_ref().map(|p| p.value),
+                    "timelock_max": raw.timelock_range.max.as_ref().map(|p| p.value),
+                    "inputs": inputs_json,
+                });
 
-                json!({
-                    "index": idx,
-                    "name": name_display,
-                    "origin_page": input.note.meta.origin_page.value,
-                    "assets": input.note.assets.value,
-                    "source": format_hash(&input.note.source.p),
-                    "coinbase": input.note.source.is_coinbase,
-                    "lock": lock_display,
-                    "lock_pubkeys": pks_b58,
-                    "fee": input.spend.fee.value,
-                    "signatures": sig_count,
-                    "seeds": seeds_json,
-                })
-            })
-            .collect();
-
-        let details = json!({
-            "transaction_id": raw.id.to_b58(),
-            "input_count": raw.inputs.p.wyt(),
-            "total_fees": raw.total_fees.value,
-            "timelock_min": raw.timelock_range.min.as_ref().map(|p| p.value),
-            "timelock_max": raw.timelock_range.max.as_ref().map(|p| p.value),
-            "inputs": inputs_json,
-        });
-
-        web_sys::console::log_1(&format!("WASM: transaction details: {}", details).into());
-
-        match serde_wasm_bindgen::to_value(&details) {
-            Ok(result) => result,
-            Err(e) => {
-                web_sys::console::error_1(&format!("WASM: serialization failed: {}", e).into());
-                JsValue::from_str("{\"error\": \"serialization failed\"}")
+                match serde_wasm_bindgen::to_value(&details) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("WASM: serialization failed: {}", e).into());
+                        JsValue::from_str("{\"error\": \"serialization failed\"}")
+                    }
+                }
+            }
+            ParsedTxInner::V1(v1) => {
+                let details = v1_draft::details_json(&v1.tx_id_b58, v1.spends, &v1.arena);
+                match serde_wasm_bindgen::to_value(&details) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        web_sys::console::error_1(&format!("WASM: serialization failed: {}", e).into());
+                        JsValue::from_str("{\"error\": \"serialization failed\"}")
+                    }
+                }
             }
         }
     }
 
     pub fn get_signing_inputs(&self, device_pubkeys: JsValue) -> Result<Vec<JsValue>, JsValue> {
+        let ParsedTxInner::V0(v0) = &self.inner else {
+            return Ok(Vec::new());
+        };
         let dev_keys: Vec<DevicePubkey> = serde_wasm_bindgen::from_value(device_pubkeys)
             .map_err(|e| JsValue::from_str(&format!("Invalid device_pubkeys: {}", e)))?;
 
-        let raw = &self.inner.raw;
+        let raw = &v0.raw;
         let mut signing_inputs = Vec::new();
 
         for (name, input) in raw.inputs.p.tap() {
@@ -867,6 +1263,9 @@ impl ParsedTransaction {
           sig: bigint[]}
     */
     pub fn apply_signatures(&mut self, signatures: JsValue) -> Result<(), JsValue> {
+        let ParsedTxInner::V0(v0) = &mut self.inner else {
+            return Err(JsValue::from_str("apply_signatures: unsupported for v1 transactions"));
+        };
         use tx_types::collections::ZMap;
 
         let sigs_js: Vec<SignatureDataJs> = serde_wasm_bindgen::from_value(signatures)
@@ -879,7 +1278,7 @@ impl ParsedTransaction {
 
         web_sys::console::log_1(&format!("apply_signatures: got {} signatures", sigs.len()).into());
 
-        let raw = &mut self.inner.raw;
+        let raw = &mut v0.raw;
         let mut new_inputs: ZMap<NName, InputV0> = ZMap::new();
 
         for (name, mut input) in raw.inputs.p.tap() {
@@ -943,6 +1342,9 @@ impl ParsedTransaction {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
+        let ParsedTxInner::V0(v0) = &self.inner else {
+            return Err(JsValue::from_str("to_bytes: unsupported for v1 transactions"));
+        };
         // Native builds keep using a transient stack allocation. In wasm we skip this
         // entirely to avoid hitting the allocator again (hashing already exercised the
         // static arena).
@@ -955,18 +1357,17 @@ impl ParsedTransaction {
             let _ = &mut _stack; // keep the allocation alive for the duration of this scope
         }
 
-        let raw = &self.inner.raw;
+        let raw = &v0.raw;
 
-        let out_bytes = match &self.inner.outer {
-            OuterType::RawTx => {
+        let out_bytes = match &v0.outer {
+            OuterTypeV0::RawTx => {
                 let mut out_slab: NounSlab = NounSlab::new();
                 let n = raw.to_noun(&mut out_slab);
                 out_slab.copy_into(n);
                 out_slab.jam()
             }
-            OuterType::TxTransact => {
-                let tail_jam = self
-                    .inner
+            OuterTypeV0::TxTransact => {
+                let tail_jam = v0
                     .tail_jam
                     .as_ref()
                     .ok_or_else(|| JsValue::from_str("Missing tail jam"))?;
@@ -979,7 +1380,7 @@ impl ParsedTransaction {
                 out_slab.copy_into(cell);
                 out_slab.jam()
             }
-            OuterType::WalletTx(orig_tx) => {
+            OuterTypeV0::WalletTx(orig_tx) => {
                 // wallet transaction wrapper [name=@t p=inputs]
                 let mut tx = orig_tx.clone();
                 tx.p = Inputs::V0(raw.inputs.clone());
@@ -994,4 +1395,34 @@ impl ParsedTransaction {
 
         Ok(out_bytes.to_vec())
     }
+}
+
+#[wasm_bindgen]
+pub fn cheetah_pkh_b58(pubkey_x: Vec<String>, pubkey_y: Vec<String>) -> Result<String, JsValue> {
+    if pubkey_x.len() != 6 || pubkey_y.len() != 6 {
+        return Err(JsValue::from_str("expected 6 limbs for x and y"));
+    }
+    let mut x = [0u64; 6];
+    let mut y = [0u64; 6];
+    for (i, s) in pubkey_x.iter().enumerate() {
+        x[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in x"))?;
+    }
+    for (i, s) in pubkey_y.iter().enumerate() {
+        y[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in y"))?;
+    }
+
+    let pk = SchnorrPubkey {
+        x: F6LT { values: x },
+        y: F6LT { values: y },
+        inf: false,
+    };
+    let mut slab: NounSlab = NounSlab::new();
+    let pk_noun = pk.to_noun(&mut slab);
+    let digest = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun)
+        .map_err(|_| JsValue::from_str("failed to hash pubkey"))?;
+    Ok(digest.to_b58())
 }

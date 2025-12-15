@@ -1,5 +1,6 @@
 import { COBSEncoder, COBSFrameReader } from './cobs';
 import {
+  Frame,
   Request,
   Response,
   Msg,
@@ -32,10 +33,17 @@ export class SigerDevice {
   private hidOnInputReport: ((event: HIDInputReportEvent) => void) | null = null;
   private frameReader = new COBSFrameReader();
   private nextMsgId = 1;
-  private pendingCalls = new Map<number, {
-    resolve: (response: Response) => void;
-    reject: (error: Error) => void;
-  }>();
+  private nextFragId = 1;
+  private pendingWaiters = new Map<
+    number,
+    Array<{
+      predicate: (response: Response) => boolean;
+      resolve: (response: Response) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }>
+  >();
+  private responseBacklog = new Map<number, Response[]>();
   private debug: boolean;
 
   constructor(transportOrOptions?: SerialTransport | { debug?: boolean }) {
@@ -93,10 +101,14 @@ export class SigerDevice {
   }
 
   async disconnect(): Promise<void> {
-    for (const [, { reject }] of this.pendingCalls) {
-      reject(new Error('Device disconnected'));
+    for (const [, waiters] of this.pendingWaiters) {
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error('Device disconnected'));
+      }
     }
-    this.pendingCalls.clear();
+    this.pendingWaiters.clear();
+    this.responseBacklog.clear();
 
     if (this.transport) {
       await this.transport.disconnect();
@@ -180,25 +192,26 @@ export class SigerDevice {
     }
   }
 
-  async call(request: Request, timeoutMs: number = 30000): Promise<Response> {
+  private async sendFrame(msgId: number, frame: Frame): Promise<void> {
     if (!this.isConnected()) {
       throw new Error('Device not connected');
     }
 
-    const msgId = this.nextMsgId++;
-    const msg: Msg<Request> = {
+    const msg: Msg<Frame> = {
       v: PROTO_V1,
       id: msgId,
-      msg: request,
+      msg: frame,
     };
     const serialized = serializeMsg(msg);
 
     if (this.debug) {
       console.log('Sending:', {
         msgId,
-        request: request.type,
-        serializedBytes: Array.from(serialized).map(b => b.toString(16).padStart(2, '0')).join(' '),
-        length: serialized.length
+        frame: frame.type,
+        serializedBytes: Array.from(serialized)
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join(' '),
+        length: serialized.length,
       });
     }
 
@@ -206,28 +219,12 @@ export class SigerDevice {
 
     if (this.debug) {
       console.log('COBS:', {
-        encodedBytes: Array.from(encoded).map(b => b.toString(16).padStart(2, '0')).join(' '),
-        length: encoded.length
+        encodedBytes: Array.from(encoded)
+          .map((b) => b.toString(16).padStart(2, '0'))
+          .join(' '),
+        length: encoded.length,
       });
     }
-
-    const promise = new Promise<Response>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingCalls.delete(msgId);
-        reject(new Error(`Request timeout after ${timeoutMs}ms (msgId: ${msgId}, type: ${request.type})`));
-      }, timeoutMs);
-
-      this.pendingCalls.set(msgId, {
-        resolve: (response: Response) => {
-          clearTimeout(timer);
-          resolve(response);
-        },
-        reject: (error: Error) => {
-          clearTimeout(timer);
-          reject(error);
-        }
-      });
-    });
 
     if (this.transport) {
       await this.transport.write(encoded);
@@ -236,8 +233,56 @@ export class SigerDevice {
     } else {
       await this.writer!.write(encoded);
     }
+  }
 
-    return promise;
+  private waitForResponse(
+    msgId: number,
+    predicate: (response: Response) => boolean,
+    timeoutMs: number,
+  ): Promise<Response> {
+    const backlog = this.responseBacklog.get(msgId);
+    if (backlog && backlog.length) {
+      const idx = backlog.findIndex(predicate);
+      if (idx >= 0) {
+        const [found] = backlog.splice(idx, 1);
+        if (backlog.length === 0) {
+          this.responseBacklog.delete(msgId);
+        }
+        return Promise.resolve(found);
+      }
+    }
+
+    return new Promise<Response>((resolve, reject) => {
+      const waiter = {
+        predicate,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const waiters = this.pendingWaiters.get(msgId);
+          if (waiters) {
+            const idx = waiters.indexOf(waiter);
+            if (idx >= 0) {
+              waiters.splice(idx, 1);
+            }
+            if (waiters.length === 0) {
+              this.pendingWaiters.delete(msgId);
+            }
+          }
+          reject(new Error(`Request timeout after ${timeoutMs}ms (msgId: ${msgId})`));
+        }, timeoutMs),
+      };
+
+      const waiters = this.pendingWaiters.get(msgId) ?? [];
+      waiters.push(waiter);
+      this.pendingWaiters.set(msgId, waiters);
+    });
+  }
+
+  async call(request: Request, timeoutMs: number = 30000): Promise<Response> {
+    const msgId = this.nextMsgId++;
+    const respP = this.waitForResponse(msgId, () => true, timeoutMs);
+    await this.sendFrame(msgId, { type: 'One', request });
+    return await respP;
   }
 
   async getInfo() {
@@ -354,6 +399,130 @@ export class SigerDevice {
     return resp;
   }
 
+  async signDraft(draft: Uint8Array, timeoutMs: number = 120000): Promise<Uint8Array> {
+    if (!this.isConnected()) {
+      throw new Error('Device not connected');
+    }
+    if (!draft.length) {
+      throw new Error('draft is empty');
+    }
+
+    const msgId = this.nextMsgId++;
+    const fragId = (this.nextFragId++ & 0xffff) || 1;
+
+    // 1) Begin
+    const beginRespP = this.waitForResponse(msgId, () => true, timeoutMs);
+    await this.sendFrame(msgId, {
+      type: 'FragBegin',
+      id: fragId,
+      total_len: draft.length,
+      kind: 'SignDraft',
+    });
+    const beginResp = await beginRespP;
+    if (beginResp.type === 'Err') {
+      throw new Error(getErrorMessage(beginResp.code));
+    }
+    if (beginResp.type !== 'Ok') {
+      throw new Error(`unexpected response to FragBegin: ${beginResp.type}`);
+    }
+
+    // 2) Send parts; device replies Ok per part. Final part replies Ok (GUI path) or FragBegin (headless).
+    let offset = 0;
+    const maxChunk = 180;
+    while (offset < draft.length) {
+      const end = Math.min(draft.length, offset + maxChunk);
+      const chunk = draft.subarray(offset, end);
+      const last = end === draft.length;
+
+      const partRespP = this.waitForResponse(msgId, () => true, timeoutMs);
+      await this.sendFrame(msgId, { type: 'FragPart', id: fragId, offset, chunk, last });
+      const partResp = await partRespP;
+
+      if (partResp.type === 'Err') {
+        throw new Error(getErrorMessage(partResp.code));
+      }
+
+      if (!last) {
+        if (partResp.type !== 'Ok') {
+          throw new Error(`unexpected response to FragPart: ${partResp.type}`);
+        }
+      } else if (partResp.type === 'FragBegin') {
+        if (partResp.id !== fragId || partResp.kind !== 'SignDraft') {
+          throw new Error('unexpected FragBegin (id/kind mismatch)');
+        }
+        return await this.receiveFragBlob(msgId, fragId, partResp.total_len, timeoutMs);
+      } else if (partResp.type !== 'Ok') {
+        throw new Error(`unexpected response to last FragPart: ${partResp.type}`);
+      }
+
+      offset = end;
+    }
+
+    // 3) GUI path: wait for approval result (Err) or outbound frag begin.
+    const ready = await this.waitForResponse(
+      msgId,
+      (r) =>
+        r.type === 'Err' ||
+        (r.type === 'FragBegin' && r.id === fragId && r.kind === 'SignDraft'),
+      timeoutMs,
+    );
+    if (ready.type === 'Err') {
+      throw new Error(getErrorMessage(ready.code));
+    }
+    if (ready.type !== 'FragBegin') {
+      throw new Error(`unexpected response while waiting for approval: ${ready.type}`);
+    }
+    if (ready.id !== fragId || ready.kind !== 'SignDraft') {
+      throw new Error('unexpected FragBegin (id/kind mismatch)');
+    }
+    return await this.receiveFragBlob(msgId, fragId, ready.total_len, timeoutMs);
+  }
+
+  private async receiveFragBlob(
+    msgId: number,
+    fragId: number,
+    totalLen: number,
+    timeoutMs: number,
+  ): Promise<Uint8Array> {
+    if (totalLen <= 0 || totalLen > 64 * 1024) {
+      throw new Error(`invalid fragment total_len: ${totalLen}`);
+    }
+
+    const out = new Uint8Array(totalLen);
+    let nextOff = 0;
+
+    while (true) {
+      const resp = await this.waitForResponse(
+        msgId,
+        (r) => r.type === 'Err' || (r.type === 'FragPart' && r.id === fragId),
+        timeoutMs,
+      );
+
+      if (resp.type === 'Err') {
+        throw new Error(getErrorMessage(resp.code));
+      }
+      if (resp.type !== 'FragPart') {
+        continue;
+      }
+      if (resp.offset !== nextOff) {
+        throw new Error(`fragment offset mismatch: got ${resp.offset}, expected ${nextOff}`);
+      }
+      if (nextOff + resp.chunk.length > totalLen) {
+        throw new Error('fragment overflow');
+      }
+
+      out.set(resp.chunk, nextOff);
+      nextOff += resp.chunk.length;
+
+      if (resp.last) {
+        if (nextOff !== totalLen) {
+          throw new Error('fragment ended early');
+        }
+        return out;
+      }
+    }
+  }
+
   private async startReading() {
     if (!this.port || !this.port.readable) {
       return;
@@ -396,21 +565,29 @@ export class SigerDevice {
           msgIdHex: '0x' + msg.id.toString(16),
           version: msg.v,
           response: msg.msg.type,
-          pendingIds: Array.from(this.pendingCalls.keys())
+          pendingIds: Array.from(this.pendingWaiters.keys())
         });
       }
 
-      const pending = this.pendingCalls.get(msg.id);
-      if (!pending) {
-        if (this.debug) {
-          console.warn('Received response for unknown message ID:', msg.id,
-            'Pending IDs:', Array.from(this.pendingCalls.keys()));
+      const waiters = this.pendingWaiters.get(msg.id);
+      if (waiters && waiters.length) {
+        const idx = waiters.findIndex((w) => w.predicate(msg.msg));
+        if (idx >= 0) {
+          const [w] = waiters.splice(idx, 1);
+          clearTimeout(w.timer);
+          if (waiters.length === 0) {
+            this.pendingWaiters.delete(msg.id);
+          } else {
+            this.pendingWaiters.set(msg.id, waiters);
+          }
+          w.resolve(msg.msg);
+          return;
         }
-        return;
       }
 
-      this.pendingCalls.delete(msg.id);
-      pending.resolve(msg.msg);
+      const backlog = this.responseBacklog.get(msg.id) ?? [];
+      backlog.push(msg.msg);
+      this.responseBacklog.set(msg.id, backlog);
     } catch (error) {
       if (this.debug) {
         console.error('Failed to deserialize frame:', error);

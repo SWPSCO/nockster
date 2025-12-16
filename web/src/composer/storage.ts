@@ -1,4 +1,4 @@
-import type { AddressBookEntry, NoteV1 } from './types';
+import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1 } from './types';
 
 const KEY_WALLETS = 'siger.composer.wallets.v1';
 const KEY_ADDRESS_BOOK = 'siger.composer.addressBook.v1';
@@ -28,6 +28,27 @@ export function loadAddressBook(): AddressBookEntry[] {
       const alias = typeof e.alias === 'string' ? e.alias : null;
       const address = typeof e.address === 'string' ? e.address : null;
       if (!id || !alias || !address) return null;
+
+      const kindRaw = (e as any).kind;
+      const kind: AddressKind = kindRaw === 'multisig' ? 'multisig' : 'pkh';
+
+      if (kind === 'multisig') {
+        const ms = (e as any).multisig as Partial<MultisigDescriptor> | undefined;
+        const m = Number(ms?.m);
+        const pkhsRaw = Array.isArray(ms?.pkhs) ? (ms!.pkhs as any[]) : [];
+        const pkhs = pkhsRaw.filter((v) => typeof v === 'string') as string[];
+        if (!Number.isFinite(m) || m < 1) return null;
+        if (pkhs.length === 0) return null;
+        if (m > pkhs.length) return null;
+        return {
+          id,
+          alias,
+          kind,
+          address,
+          multisig: { m, pkhs },
+        };
+      }
+
       const notesRaw = Array.isArray((e as any).notes) ? ((e as any).notes as any[]) : [];
       const notes: NoteV1[] = notesRaw
         .map((n) => {
@@ -52,7 +73,7 @@ export function loadAddressBook(): AddressBookEntry[] {
           return note;
         })
         .filter(Boolean) as NoteV1[];
-      return { id, alias, address, notes };
+      return { id, alias, kind, address, notes };
     })
     .filter(Boolean) as AddressBookEntry[];
 
@@ -75,6 +96,7 @@ export function loadAddressBook(): AddressBookEntry[] {
         entries.push({
           id: typeof wallet.id === 'string' ? wallet.id : newId(),
           alias: typeof wallet.alias === 'string' ? wallet.alias : 'wallet',
+          kind: 'pkh',
           address,
           notes: Array.isArray(wallet.notes) ? wallet.notes : [],
         });

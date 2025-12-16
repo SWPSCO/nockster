@@ -726,6 +726,25 @@ mod v1_draft {
         zset_for_each(right, arena, f);
     }
 
+    fn zset_count_up_to(set: Noun, arena: &Arena, limit: u8) -> u8 {
+        if limit == 0 || set == arena.atom0() {
+            return 0;
+        }
+        let Some((_value, left, right)) = tuple3(set, arena) else {
+            return 0;
+        };
+        let mut count = 1u8;
+        if count >= limit {
+            return count;
+        }
+        count = count.saturating_add(zset_count_up_to(left, arena, limit - count));
+        if count >= limit {
+            return count;
+        }
+        count = count.saturating_add(zset_count_up_to(right, arena, limit - count));
+        count
+    }
+
     fn map_get_atom_key(map: Noun, arena: &Arena, key_bytes: &[u8]) -> Option<Noun> {
         if map == arena.atom0() {
             return None;
@@ -759,7 +778,11 @@ mod v1_draft {
         if noun_atom_u64(m, arena) != Some(1) {
             return None;
         }
-        // any value is fine; it is a z-set of hashes
+        // Only treat it as a simple recipient if there's exactly one allowed pkh hash.
+        // For multisig (or 1-of-n), fall back to lock-root rather than picking an arbitrary hash.
+        if zset_count_up_to(h_set, arena, 2) != 1 {
+            return None;
+        }
         let (any, _l, _r) = tuple3(h_set, arena)?;
         parse_hash(any, arena)
     }
@@ -854,6 +877,26 @@ mod v1_draft {
             CodecError::InvalidBackref => JsValue::from_str("jam decode: invalid backref"),
             CodecError::InvalidEncoding => JsValue::from_str("jam decode: invalid encoding"),
         })?;
+
+        if let Some((tag, name_noun, spends, _display, _witness_data)) = tuple5(root, &arena) {
+            if noun_atom_u64(tag, &arena) == Some(1) {
+                if let Noun::Atom(name_atom) = name_noun {
+                    if let Ok(name_str) = core::str::from_utf8(arena.atom_bytes(name_atom)) {
+                        if tx_types::transaction_types::Hash::from_b58(name_str).is_ok() {
+                            let tx_id_b58 = name_str.to_string();
+                            let spend_count = zmap_count(spends, &arena);
+                            return Ok(ParsedV1 {
+                                outer: OuterTypeV1::WalletTx,
+                                tx_id_b58,
+                                spend_count,
+                                arena,
+                                spends,
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         // wallet tx v1: [name=@t spends]
         if let Some((name_noun, spends)) = tuple2(root, &arena) {

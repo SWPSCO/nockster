@@ -4,6 +4,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
+use nockapp::AtomExt;
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
@@ -45,6 +46,50 @@ fn rewrite_txid_v1_host(bytes: &[u8]) -> Result<Vec<u8>> {
     let noun: Noun = slab_in
         .cue_into(Bytes::from(bytes.to_vec()))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
+
+    if let Ok(root) = noun.as_cell() {
+        if let Ok(tag_atom) = root.head().as_atom() {
+            if tag_atom.as_u64() == Ok(1) {
+                if let Ok(t1) = root.tail().as_cell() {
+                    let name_noun = t1.head();
+                    if let Ok(name_atom) = name_noun.as_atom() {
+                        if let Ok(name_bytes) = name_atom.to_bytes_until_nul() {
+                            if let Ok(current_name) = std::str::from_utf8(&name_bytes) {
+                                if let Ok(t2) = t1.tail().as_cell() {
+                                    let spends_noun = t2.head();
+                                    if let Some(spends) = decode_no_panic::<SpendsV1>(&spends_noun) {
+                                        let computed_id = compute_tx_id_v1(&spends);
+                                        let name = computed_id.to_b58();
+                                        if current_name == name {
+                                            return Ok(bytes.to_vec());
+                                        }
+
+                                        if let Ok(t3) = t2.tail().as_cell() {
+                                            let display_noun = t3.head();
+                                            let witness_data_noun = t3.tail();
+
+                                            let mut slab_out: NounSlab = NounSlab::new();
+                                            let tag_out = 1u64.to_noun(&mut slab_out);
+                                            let name_out = name.to_noun(&mut slab_out);
+                                            let spends_out = slab_out.copy_into(spends_noun);
+                                            let display_out = slab_out.copy_into(display_noun);
+                                            let witness_out = slab_out.copy_into(witness_data_noun);
+                                            let out_noun = T(
+                                                &mut slab_out,
+                                                &[tag_out, name_out, spends_out, display_out, witness_out],
+                                            );
+                                            slab_out.set_root(out_noun);
+                                            return Ok(slab_out.jam().to_vec());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // wallet transaction wrapper: [name spends]
     if let Some(wallet) = decode_no_panic::<WalletTransactionV1>(&noun) {

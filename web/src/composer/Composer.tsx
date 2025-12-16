@@ -20,8 +20,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { compose_tx_v1_unsigned } from 'siger-wasm';
-import type { AddressBookEntry, NoteV1 } from './types';
+import { compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'siger-wasm';
+import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1 } from './types';
 import { loadAddressBook, newId, saveAddressBook } from './storage';
 
 import './Composer.css';
@@ -29,7 +29,9 @@ import './Composer.css';
 type AddressNodeData = {
   entryId: string;
   alias: string;
+  kind: AddressKind;
   address: string;
+  multisig?: MultisigDescriptor;
   noteCount: number;
   total: number;
   amount: string;
@@ -70,6 +72,13 @@ function shortHash(h: string, keep = 4): string {
   const s = (h ?? '').trim();
   if (s.length <= keep * 2 + 3) return s;
   return `${s.slice(0, keep)}...${s.slice(-keep)}`;
+}
+
+function parsePkhListText(text: string): string[] {
+  return (text ?? '')
+    .split(/[\s,]+/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function bigintToSafeNumber(value: bigint): number | null {
@@ -169,11 +178,16 @@ function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { unitMode
   return (
     <div className="node-card">
       <div className="node-header address">
-        <span>Address</span>
+        <span>{data.kind === 'multisig' ? 'Multisig' : 'Address'}</span>
       </div>
       <div className="node-body">
         <div>{data.alias}</div>
         <div className="node-mono">{shortHash(data.address)}</div>
+        {data.kind === 'multisig' && data.multisig && (
+          <div className="inspector-help">
+            {data.multisig.m}-of-{data.multisig.pkhs.length}
+          </div>
+        )}
         {showNotes && (
           <div className="inspector-help">
             {data.noteCount} notes · {formatAmountWithUnit(data.total, unitMode)}
@@ -317,7 +331,10 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   const [noteAddOpen, setNoteAddOpen] = useState(false);
 
   const [entryFormAlias, setEntryFormAlias] = useState('');
+  const [entryFormKind, setEntryFormKind] = useState<AddressKind>('pkh');
   const [entryFormAddress, setEntryFormAddress] = useState('');
+  const [entryFormMultisigM, setEntryFormMultisigM] = useState('2');
+  const [entryFormMultisigPkhs, setEntryFormMultisigPkhs] = useState('');
   const [entryFormError, setEntryFormError] = useState<string | null>(null);
 
   const [noteFormFirst, setNoteFormFirst] = useState('');
@@ -325,6 +342,22 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   const [noteFormOriginPage, setNoteFormOriginPage] = useState('');
   const [noteFormAssets, setNoteFormAssets] = useState('');
   const [noteFormError, setNoteFormError] = useState<string | null>(null);
+
+  const multisigPreview = useMemo(() => {
+    if (entryFormKind !== 'multisig') return { address: '', error: null as string | null };
+    if (!wasmReady) return { address: '', error: 'WASM not ready yet' };
+    const m = Number(entryFormMultisigM.trim());
+    const pkhs = parsePkhListText(entryFormMultisigPkhs);
+    if (!Number.isFinite(m) || m < 1) return { address: '', error: 'm must be >= 1' };
+    if (pkhs.length === 0) return { address: '', error: 'enter at least one signer pkh' };
+    if (m > pkhs.length) return { address: '', error: 'm must be <= number of signers' };
+    try {
+      const address = compose_tx_v1_recipient_address({ m, pkhs });
+      return { address, error: null };
+    } catch (err: any) {
+      return { address: '', error: err?.message ?? String(err) };
+    }
+  }, [entryFormKind, entryFormMultisigM, entryFormMultisigPkhs, wasmReady]);
 
   const nodeTypes: NodeTypes = useMemo(
     () => ({
@@ -578,6 +611,10 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
             updateNodeData(nodeId, { lastError: 'Input address not found in address book.' });
             return;
           }
+          if ((entry.kind ?? 'pkh') !== 'pkh') {
+            updateNodeData(nodeId, { lastError: 'Multisig address entries cannot be used as inputs yet.' });
+            return;
+          }
 
           const availableNotes = entry.notes ?? [];
           let inputNotes: NoteV1[] = [];
@@ -602,7 +639,8 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
           }
 
           const recipientEdges = edgesNow.filter((e) => e.source === nodeId && e.sourceHandle === 'out');
-          const outputs: { recipient: string; amount: number; alias?: string }[] = [];
+          type Recipient = string | { m: number; pkhs: string[] };
+          const outputs: { recipient: Recipient; amount: number; alias?: string }[] = [];
           const outputErrors: string[] = [];
           for (const e of recipientEdges) {
             const rNode = nodesNow.find((n) => n.id === e.target && n.type === 'address');
@@ -624,7 +662,19 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
               continue;
             }
 
-            outputs.push({ recipient: address, amount: parsedAmount.nicks, alias: rData.alias });
+            if (rData.kind === 'multisig') {
+              if (!rData.multisig || !Array.isArray(rData.multisig.pkhs) || rData.multisig.pkhs.length === 0) {
+                outputErrors.push(`${rData.alias ?? address}: multisig is missing signer pubkeys`);
+                continue;
+              }
+              outputs.push({
+                recipient: { m: rData.multisig.m, pkhs: rData.multisig.pkhs },
+                amount: parsedAmount.nicks,
+                alias: rData.alias,
+              });
+            } else {
+              outputs.push({ recipient: address, amount: parsedAmount.nicks, alias: rData.alias });
+            }
           }
 
           if (outputErrors.length) {
@@ -731,6 +781,8 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
       if (parsed.kind === 'address' && parsed.entryId) {
         const entry = entryById(parsed.entryId);
         if (!entry) return;
+        const kind: AddressKind = entry.kind ?? 'pkh';
+        const notes = kind === 'pkh' ? (entry.notes ?? []) : [];
         const id = `address-${newId()}`;
         setNodes((ns) =>
           ns.concat({
@@ -740,9 +792,11 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
             data: {
               entryId: entry.id,
               alias: entry.alias,
+              kind,
               address: entry.address,
-              noteCount: (entry.notes ?? []).length,
-              total: sumAssets(entry.notes ?? []),
+              multisig: kind === 'multisig' ? entry.multisig : undefined,
+              noteCount: notes.length,
+              total: sumAssets(notes),
               amount: '',
               onChangeAmount: (next: string) => updateNodeData(id, { amount: next }),
             } satisfies AddressNodeData,
@@ -774,24 +828,72 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
 
   const selectedEntry = selectedEntryId ? entryById(selectedEntryId) : null;
 
-  const addEntry = useCallback(() => {
+  const addEntry = useCallback(async () => {
     const alias = entryFormAlias.trim();
-    const address = entryFormAddress.trim();
-    if (!alias || !address) {
-      setEntryFormError('Alias + address are required');
+    if (!alias) {
+      setEntryFormError('Alias is required');
       return;
     }
 
-    const entry: AddressBookEntry = { id: newId(), alias, address, notes: [] };
+    const kind: AddressKind = entryFormKind;
+    let entry: AddressBookEntry;
+
+    if (kind === 'multisig') {
+      if (!wasmReady) {
+        setEntryFormError('WASM not ready yet');
+        return;
+      }
+      const m = Number(entryFormMultisigM.trim());
+      const pkhs = parsePkhListText(entryFormMultisigPkhs);
+      if (!Number.isFinite(m) || m < 1) {
+        setEntryFormError('m must be >= 1');
+        return;
+      }
+      if (pkhs.length === 0) {
+        setEntryFormError('enter at least one signer pkh');
+        return;
+      }
+      if (m > pkhs.length) {
+        setEntryFormError('m must be <= number of signers');
+        return;
+      }
+      let address: string;
+      try {
+        address = compose_tx_v1_recipient_address({ m, pkhs });
+      } catch (err: any) {
+        setEntryFormError(err?.message ?? String(err));
+        return;
+      }
+      entry = { id: newId(), alias, kind, address, multisig: { m, pkhs } };
+    } else {
+      const address = entryFormAddress.trim();
+      if (!address) {
+        setEntryFormError('Address is required');
+        return;
+      }
+      entry = { id: newId(), alias, kind: 'pkh', address, notes: [] };
+    }
+
     const next = [...addressBook, entry];
     setAddressBook(next);
     saveAddressBook(next);
     setSelectedEntryId(entry.id);
     setEntryFormAlias('');
+    setEntryFormKind('pkh');
     setEntryFormAddress('');
+    setEntryFormMultisigM('2');
+    setEntryFormMultisigPkhs('');
     setEntryFormError(null);
     setAddressAddOpen(false);
-  }, [addressBook, entryFormAddress, entryFormAlias]);
+  }, [
+    addressBook,
+    entryFormAddress,
+    entryFormAlias,
+    entryFormKind,
+    entryFormMultisigM,
+    entryFormMultisigPkhs,
+    wasmReady,
+  ]);
 
   const removeEntry = useCallback(
     (entryId: string) => {
@@ -808,6 +910,10 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   const addNoteToSelectedEntry = useCallback(() => {
     if (!selectedEntry) {
       setNoteFormError('Select an address first');
+      return;
+    }
+    if ((selectedEntry.kind ?? 'pkh') !== 'pkh') {
+      setNoteFormError('Notes can only be added to single-sig (pkh) entries');
       return;
     }
 
@@ -949,15 +1055,59 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                         if (entryFormError) setEntryFormError(null);
                       }}
                     />
+                    <select
+                      className="node-input"
+                      value={entryFormKind}
+                      onChange={(e) => {
+                        setEntryFormKind(e.target.value === 'multisig' ? 'multisig' : 'pkh');
+                        if (entryFormError) setEntryFormError(null);
+                      }}
+                    >
+                      <option value="pkh">single-sig (pkh)</option>
+                      <option value="multisig">multisig (pkh lock)</option>
+                    </select>
+                    {entryFormKind === 'multisig' ? (
+                      <>
+                        <input
+                          className="node-input"
+                          placeholder="m (threshold)"
+                          type="number"
+                          min={1}
+                          value={entryFormMultisigM}
+                          onChange={(e) => {
+                            setEntryFormMultisigM(e.target.value);
+                            if (entryFormError) setEntryFormError(null);
+                          }}
+                        />
+                        <textarea
+                          className="node-input"
+                          placeholder="signer pkhs (base58), one per line or space-separated"
+                          rows={4}
+                          value={entryFormMultisigPkhs}
+                          onChange={(e) => {
+                            setEntryFormMultisigPkhs(e.target.value);
+                            if (entryFormError) setEntryFormError(null);
+                          }}
+                        />
+                        <input
+                          className="node-input node-input-compact"
+                          placeholder="computed address (lock_root)"
+                          value={multisigPreview.address || ''}
+                          readOnly
+                        />
+                        {multisigPreview.error && <div className="validation-text">{multisigPreview.error}</div>}
+                      </>
+                    ) : (
                     <input
                       className="node-input"
-                      placeholder="address (base58)"
+                      placeholder="address pkh (base58)"
                       value={entryFormAddress}
                       onChange={(e) => {
                         setEntryFormAddress(e.target.value);
                         if (entryFormError) setEntryFormError(null);
                       }}
                     />
+                    )}
                     <div className="composer-row">
                       <button type="button" className="btn btn-small btn-secondary" onClick={addEntry}>
                         add
@@ -967,7 +1117,10 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                         className="btn btn-small btn-secondary"
                         onClick={() => {
                           setEntryFormAlias('');
+                          setEntryFormKind('pkh');
                           setEntryFormAddress('');
+                          setEntryFormMultisigM('2');
+                          setEntryFormMultisigPkhs('');
                           setEntryFormError(null);
                           setAddressAddOpen(false);
                         }}
@@ -984,7 +1137,9 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                 ) : (
                   <div className="composer-list">
                     {addressBook.map((entry) => {
-                      const notes = entry.notes ?? [];
+                      const kind: AddressKind = entry.kind ?? 'pkh';
+                      const notes = kind === 'pkh' ? (entry.notes ?? []) : [];
+                      const multisig = kind === 'multisig' ? entry.multisig : undefined;
                       return (
                         <div
                           key={entry.id}
@@ -1016,9 +1171,15 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                             </button>
                           </div>
                           <div className="composer-item-meta">{shortHash(entry.address)}</div>
-                          <div className="composer-item-meta">
-                            notes: {notes.length} · total: {formatAmountWithUnit(sumAssets(notes), unitMode)}
-                          </div>
+                          {kind === 'multisig' && multisig ? (
+                            <div className="composer-item-meta">
+                              multisig: {multisig.m}-of-{multisig.pkhs.length}
+                            </div>
+                          ) : (
+                            <div className="composer-item-meta">
+                              notes: {notes.length} · total: {formatAmountWithUnit(sumAssets(notes), unitMode)}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1027,7 +1188,7 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
               </div>
             </details>
 
-            {selectedEntry && (
+            {selectedEntry && (selectedEntry.kind ?? 'pkh') === 'pkh' && (
               <details className="composer-details" open>
                 <summary className="composer-summary">
                   <span>Notes ({(selectedEntry.notes ?? []).length})</span>
@@ -1146,6 +1307,20 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                       ))}
                     </div>
                   )}
+                </div>
+              </details>
+            )}
+
+            {selectedEntry && (selectedEntry.kind ?? 'pkh') === 'multisig' && (
+              <details className="composer-details" open>
+                <summary className="composer-summary">
+                  <span>Multisig</span>
+                </summary>
+                <div className="composer-details-body">
+                  <div className="inspector-help">
+                    {(selectedEntry.multisig?.m ?? 0)}-of-{selectedEntry.multisig?.pkhs?.length ?? 0}
+                  </div>
+                  <div className="node-mono">{selectedEntry.address}</div>
                 </div>
               </details>
             )}
@@ -1279,9 +1454,15 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                         <strong>{data.alias}</strong>
                       </div>
                       <div className="node-mono">{data.address}</div>
-                      <div className="inspector-help">
-                        {data.noteCount} notes · {formatAmountWithUnit(data.total, unitMode)}
-                      </div>
+                      {data.kind === 'multisig' && data.multisig ? (
+                        <div className="inspector-help">
+                          {data.multisig.m}-of-{data.multisig.pkhs.length}
+                        </div>
+                      ) : (
+                        <div className="inspector-help">
+                          {data.noteCount} notes · {formatAmountWithUnit(data.total, unitMode)}
+                        </div>
+                      )}
                       <div className="inspector-help">amount: {data.amount || '(unset)'}</div>
                       {parsed && 'nicks' in parsed && (
                         <div className="inspector-help">{formatAmountWithUnit(parsed.nicks, unitMode)}</div>

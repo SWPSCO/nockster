@@ -197,6 +197,30 @@ fn detect_outer(bytes: &[u8]) -> Result<(Outer, RawTransaction, Noun)> {
         .cue_into(Bytes::from(bytes.to_vec()))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
+    if let Ok(root) = noun.as_cell() {
+        if let Ok(tag_atom) = root.head().as_atom() {
+            if tag_atom.as_u64() == Ok(1) {
+                if let Ok(t1) = root.tail().as_cell() {
+                    if let Ok(t2) = t1.tail().as_cell() {
+                        let spends_noun = t2.head();
+                        if let Some(spends) = decode_no_panic::<SpendsV1>(&spends_noun) {
+                            let computed_id = compute_tx_id_v1(&spends);
+                            return Ok((
+                                Outer::WalletTxV1,
+                                RawTransaction::V1(RawTransactionV1 {
+                                    version: 1,
+                                    id: computed_id,
+                                    spends,
+                                }),
+                                noun,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // try wallet transaction wrapper (v1): [name spends]
     if let Some(wallet_tx) = decode_no_panic::<WalletTransactionV1>(&noun) {
         let computed_id = compute_tx_id_v1(&wallet_tx.spends);

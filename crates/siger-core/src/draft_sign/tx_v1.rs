@@ -273,6 +273,7 @@ fn sign_spend_v1(
     spend: Noun,
     pk_noun: Noun,
     pkh_key_noun: Noun,
+    pkh_digest: [u64; 5],
     cfg: &SignerConfig,
     pk_coords: ([u64; 6], [u64; 6]),
 ) -> Result<Noun, SignDraftError> {
@@ -284,6 +285,16 @@ fn sign_spend_v1(
     // SpendV1 body: [witness seeds fee]
     let (witness, seeds, fee) = tuple3(body_noun, arena).ok_or(SignDraftError::Malformed)?;
     let (lmp, pkh_map, hax, tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+
+    // Only sign if the input lock actually authorizes our pkh, and only if doing so does not
+    // exceed the lock's m-of-n signature count (tx-engine-1.hoon requires exactly m signatures).
+    let (spend_condition, _axis, _merk) = tuple3(lmp, arena).ok_or(SignDraftError::Malformed)?;
+    let Some((m_required, allowed_hashes)) = spend_condition_pkh_lock(spend_condition, arena)? else {
+        return Ok(spend);
+    };
+    if !zset_contains_hash(allowed_hashes, arena, pkh_digest)? {
+        return Ok(spend);
+    }
 
     let msg5 = spend_v1_sig_hash(body_noun, arena)?;
     let hash = crate::Hash { values: msg5 };
@@ -318,7 +329,24 @@ fn sign_spend_v1(
     // PkhSignatureValue = [pk sig]
     let value_noun = build_tuple(arena, &[pk_noun, schnorr_sig]);
 
-    let new_pkh_map = zmap::canonical_zmap_put(arena, pkh_map, pkh_key_noun, value_noun)?;
+    // If our key is already present (including a fake placeholder signature used for fee sizing),
+    // overwrite it unconditionally. Otherwise, ensure we don't exceed m signatures by evicting a
+    // placeholder entry when the map is already full.
+    let has_ours = zmap_contains_hash(pkh_map, arena, pkh_digest)?;
+    let mut pkh_map_for_signing = pkh_map;
+    if !has_ours {
+        loop {
+            let have = zmap_count_up_to(pkh_map_for_signing, arena, m_required.saturating_add(1))?;
+            if have < m_required {
+                break;
+            }
+            let Some(key) = zmap_find_replaceable_key(pkh_map_for_signing, arena)? else {
+                return Ok(spend);
+            };
+            pkh_map_for_signing = zmap_remove_key(arena, pkh_map_for_signing, key)?;
+        }
+    }
+    let new_pkh_map = zmap::canonical_zmap_put(arena, pkh_map_for_signing, pkh_key_noun, value_noun)?;
     let new_witness = build_tuple(arena, &[lmp, new_pkh_map, hax, tim]);
     let new_body = build_tuple(arena, &[new_witness, seeds, fee]);
     Ok(build_tuple(arena, &[ver_noun, new_body]))
@@ -329,6 +357,7 @@ fn sign_spends_map(
     spends: Noun,
     pk_noun: Noun,
     pkh_key_noun: Noun,
+    pkh_digest: [u64; 5],
     cfg: &SignerConfig,
     pk_coords: ([u64; 6], [u64; 6]),
 ) -> Result<Noun, SignDraftError> {
@@ -339,12 +368,161 @@ fn sign_spends_map(
     let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
     let (key, spend) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
 
-    let new_left = sign_spends_map(arena, left, pk_noun, pkh_key_noun, cfg, pk_coords)?;
-    let new_right = sign_spends_map(arena, right, pk_noun, pkh_key_noun, cfg, pk_coords)?;
-    let new_spend = sign_spend_v1(arena, spend, pk_noun, pkh_key_noun, cfg, pk_coords)?;
+    let new_left = sign_spends_map(arena, left, pk_noun, pkh_key_noun, pkh_digest, cfg, pk_coords)?;
+    let new_right = sign_spends_map(arena, right, pk_noun, pkh_key_noun, pkh_digest, cfg, pk_coords)?;
+    let new_spend = sign_spend_v1(arena, spend, pk_noun, pkh_key_noun, pkh_digest, cfg, pk_coords)?;
 
     let new_node = build_tuple(arena, &[key, new_spend]);
     Ok(build_tuple(arena, &[new_node, new_left, new_right]))
+}
+
+fn spend_condition_pkh_lock(
+    spend_condition: Noun,
+    arena: &Arena,
+) -> Result<Option<(u64, Noun)>, SignDraftError> {
+    if spend_condition == arena.atom0() {
+        return Ok(None);
+    }
+    let (head, tail) = uncons(spend_condition, arena).ok_or(SignDraftError::Malformed)?;
+    let (header, body) = tuple2(head, arena).ok_or(SignDraftError::Malformed)?;
+    if atom_eq_bytes(header, b"pkh", arena) {
+        let (m, h_set) = tuple2(body, arena).ok_or(SignDraftError::Malformed)?;
+        let m_u64 = noun_atom_u64(m, arena).ok_or(SignDraftError::Malformed)?;
+        if m_u64 == 0 {
+            return Err(SignDraftError::Malformed);
+        }
+        return Ok(Some((m_u64, h_set)));
+    }
+    spend_condition_pkh_lock(tail, arena)
+}
+
+fn zset_contains_hash(set: Noun, arena: &Arena, want: [u64; 5]) -> Result<bool, SignDraftError> {
+    if set == arena.atom0() {
+        return Ok(false);
+    }
+    let (value, left, right) = tuple3(set, arena).ok_or(SignDraftError::Malformed)?;
+    let digest = parse_hash(value, arena).ok_or(SignDraftError::Malformed)?;
+    if digest == want {
+        return Ok(true);
+    }
+    Ok(zset_contains_hash(left, arena, want)? || zset_contains_hash(right, arena, want)?)
+}
+
+fn zmap_contains_hash(map: Noun, arena: &Arena, want: [u64; 5]) -> Result<bool, SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(false);
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, _value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    let here = parse_hash(key, arena).is_some_and(|digest| digest == want);
+    Ok(here || zmap_contains_hash(left, arena, want)? || zmap_contains_hash(right, arena, want)?)
+}
+
+fn zmap_count_up_to(map: Noun, arena: &Arena, limit: u64) -> Result<u64, SignDraftError> {
+    if limit == 0 || map == arena.atom0() {
+        return Ok(0);
+    }
+    let (_node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+
+    let mut count = 1u64;
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zmap_count_up_to(left, arena, limit - count)?);
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zmap_count_up_to(right, arena, limit - count)?);
+    Ok(count)
+}
+
+fn tuple_all_u64_eq(noun: Noun, arena: &Arena, count: usize, want: u64) -> Result<bool, SignDraftError> {
+    if count == 0 {
+        return Ok(noun == arena.atom0());
+    }
+    let mut cur = noun;
+    for _ in 0..count.saturating_sub(1) {
+        let (head, tail) = uncons(cur, arena).ok_or(SignDraftError::Malformed)?;
+        let v = noun_atom_u64(head, arena).ok_or(SignDraftError::Malformed)?;
+        if v != want {
+            return Ok(false);
+        }
+        cur = tail;
+    }
+    let v = noun_atom_u64(cur, arena).ok_or(SignDraftError::Malformed)?;
+    Ok(v == want)
+}
+
+fn is_placeholder_pkh_signature_value(value: Noun, arena: &Arena) -> Result<bool, SignDraftError> {
+    let Some((pk, sig)) = tuple2(value, arena) else {
+        return Ok(true);
+    };
+    let Some((x, y, _inf)) = tuple3(pk, arena) else {
+        return Ok(true);
+    };
+    if !tuple_all_u64_eq(x, arena, 6, 0)? {
+        return Ok(false);
+    }
+    if !tuple_all_u64_eq(y, arena, 6, 0)? {
+        return Ok(false);
+    }
+    let Some((chal, sig_s)) = tuple2(sig, arena) else {
+        return Ok(true);
+    };
+    if !tuple_all_u64_eq(chal, arena, 8, 0)? {
+        return Ok(false);
+    }
+    if !tuple_all_u64_eq(sig_s, arena, 8, 0)? {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn zmap_find_replaceable_key(map: Noun, arena: &Arena) -> Result<Option<Noun>, SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(None);
+    }
+
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+
+    if parse_hash(key, arena).is_none() || is_placeholder_pkh_signature_value(value, arena)? {
+        return Ok(Some(key));
+    }
+
+    if let Some(k) = zmap_find_replaceable_key(left, arena)? {
+        return Ok(Some(k));
+    }
+    zmap_find_replaceable_key(right, arena)
+}
+
+fn zmap_remove_key(arena: &mut Arena, map: Noun, key_to_remove: Noun) -> Result<Noun, SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(map);
+    }
+
+    let mut out = arena.atom0();
+    zmap_rebuild_skipping_key(arena, map, key_to_remove, &mut out)?;
+    Ok(out)
+}
+
+fn zmap_rebuild_skipping_key(
+    arena: &mut Arena,
+    map: Noun,
+    key_to_remove: Noun,
+    out: &mut Noun,
+) -> Result<(), SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(());
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    if key != key_to_remove {
+        *out = zmap::canonical_zmap_put(arena, *out, key, value)?;
+    }
+    zmap_rebuild_skipping_key(arena, left, key_to_remove, out)?;
+    zmap_rebuild_skipping_key(arena, right, key_to_remove, out)?;
+    Ok(())
 }
 
 struct TxIdCtx {
@@ -837,8 +1015,14 @@ pub fn draft_outputs_v1(
             } else {
                 return Err(SignDraftError::Unsupported);
             }
-        } else if let Noun::Atom(_) = head {
-            tail
+        } else if matches!(head, Noun::Atom(_)) {
+            if noun_atom_u64(head, &arena) == Some(1) {
+                let (_name, spends, _display, _witness_data) =
+                    tuple4(tail, &arena).ok_or(SignDraftError::Malformed)?;
+                spends
+            } else {
+                tail
+            }
         } else {
             return Err(SignDraftError::Malformed);
         }
@@ -918,6 +1102,7 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
         RawTx { raw: Noun },
         TxTransact { raw: Noun, tail: Noun },
         WalletV1 { spends: Noun },
+        WalletTxV1 { tag: Noun, spends: Noun, display: Noun, witness_data: Noun },
     }
 
     let outer = if let Some((ver, id, _spends)) = tuple3(root, &arena) {
@@ -939,27 +1124,58 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
             } else {
                 return Err(SignDraftError::Unsupported);
             }
-        } else if let Noun::Atom(_) = head {
-            let spends_ok = if tail == arena.atom0() {
-                true
-            } else if let Some((node, _left, _right)) = decompose_map(tail, &arena) {
-                if let Some((_key, spend)) = decompose_pair(node, &arena) {
-                    if let Some((spend_ver, _body)) = tuple2(spend, &arena) {
-                        noun_atom_u64(spend_ver, &arena) == Some(1)
+        } else if matches!(head, Noun::Atom(_)) {
+            let is_tag_v1 = noun_atom_u64(head, &arena) == Some(1);
+            if is_tag_v1 {
+                let (_name, spends, display, witness_data) =
+                    tuple4(tail, &arena).ok_or(SignDraftError::Malformed)?;
+                let spends_ok = if spends == arena.atom0() {
+                    true
+                } else if let Some((node, _left, _right)) = decompose_map(spends, &arena) {
+                    if let Some((_key, spend)) = decompose_pair(node, &arena) {
+                        if let Some((spend_ver, _body)) = tuple2(spend, &arena) {
+                            noun_atom_u64(spend_ver, &arena) == Some(1)
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }
                 } else {
                     false
+                };
+                if spends_ok {
+                    Outer::WalletTxV1 {
+                        tag: head,
+                        spends,
+                        display,
+                        witness_data,
+                    }
+                } else {
+                    return Err(SignDraftError::Malformed);
                 }
             } else {
-                false
-            };
+                let spends_ok = if tail == arena.atom0() {
+                    true
+                } else if let Some((node, _left, _right)) = decompose_map(tail, &arena) {
+                    if let Some((_key, spend)) = decompose_pair(node, &arena) {
+                        if let Some((spend_ver, _body)) = tuple2(spend, &arena) {
+                            noun_atom_u64(spend_ver, &arena) == Some(1)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
 
-            if spends_ok {
-                Outer::WalletV1 { spends: tail }
-            } else {
-                return Err(SignDraftError::Malformed);
+                if spends_ok {
+                    Outer::WalletV1 { spends: tail }
+                } else {
+                    return Err(SignDraftError::Malformed);
+                }
             }
         } else {
             return Err(SignDraftError::Malformed);
@@ -975,6 +1191,7 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
                 spends,
                 pk_noun,
                 pkh_key_noun,
+                pkh_digest,
                 cfg,
                 pk_coords,
             )?;
@@ -983,6 +1200,26 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
             let name_noun = arena.alloc_atom_bytes(name_b58.as_bytes());
             build_tuple(&mut arena, &[name_noun, new_spends])
         }
+        Outer::WalletTxV1 {
+            tag,
+            spends,
+            display,
+            witness_data,
+        } => {
+            let new_spends = sign_spends_map(
+                &mut arena,
+                spends,
+                pk_noun,
+                pkh_key_noun,
+                pkh_digest,
+                cfg,
+                pk_coords,
+            )?;
+            let tx_id = compute_tx_id_v1(new_spends, &arena, &txid_ctx)?;
+            let name_b58 = digest_to_b58(tx_id);
+            let name_noun = arena.alloc_atom_bytes(name_b58.as_bytes());
+            build_tuple(&mut arena, &[tag, name_noun, new_spends, display, witness_data])
+        }
         Outer::RawTx { raw } => {
             let (ver, _id, spends) = tuple3(raw, &arena).ok_or(SignDraftError::Malformed)?;
             let new_spends = sign_spends_map(
@@ -990,6 +1227,7 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
                 spends,
                 pk_noun,
                 pkh_key_noun,
+                pkh_digest,
                 cfg,
                 pk_coords,
             )?;
@@ -1004,6 +1242,7 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
                 spends,
                 pk_noun,
                 pkh_key_noun,
+                pkh_digest,
                 cfg,
                 pk_coords,
             )?;

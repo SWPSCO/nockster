@@ -52,6 +52,22 @@ fn is_printable_ascii(bytes: &[u8]) -> bool {
 pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
+    if let Ok(cell) = noun.as_cell() {
+        if let Ok(tag) = cell.head().as_atom() {
+            if tag.as_u64() == Ok(1) {
+                if let Ok(rest) = cell.tail().as_cell() {
+                    if let Ok(name_atom) = rest.head().as_atom() {
+                        if let Ok(bytes) = name_atom.to_bytes_until_nul() {
+                            if !bytes.is_empty() && is_printable_ascii(&bytes) {
+                                return Ok(String::from_utf8_lossy(&bytes).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Try RawTransaction first (works for both V0 and V1) - wrap in catch_unwind
     if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(noun))) {
         let id = match &raw {

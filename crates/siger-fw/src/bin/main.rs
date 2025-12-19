@@ -73,6 +73,8 @@ const BIP39_PBKDF2_ROUNDS: u32 = 2048;
 // lock state (locked by default)
 static mut DEVICE_LOCKED: bool = true;
 static mut DEVICE_BUSY: bool = false;
+static mut PENDING_USB_UNLOCK_ID: Option<u32> = None;
+static mut PENDING_USB_INITPIN_ID: Option<u32> = None;
 static mut MASTER_KEY: [u8; 32] = [0; 32];
 static mut MASTER_KEY_SET: bool = false;
 static mut APP_CORE_STACK: Stack<8192> = Stack::new();
@@ -247,10 +249,31 @@ struct UnlockRequest {
     pin: HString<16>,
 }
 
+struct InitPinRequest {
+    pin: HString<16>,
+    seed64: [u8; 64],
+}
+
+enum InitPinOutcome {
+    Success {
+        seed64: [u8; 64],
+        master_key: [u8; 32],
+    },
+    AlreadyInitialized,
+    Flash,
+    Crypto,
+    Failed,
+}
+
 #[allow(clippy::declare_interior_mutable_const)]
 static UNLOCK_REQUEST: Mutex<RefCell<Option<UnlockRequest>>> = Mutex::new(RefCell::new(None));
 #[allow(clippy::declare_interior_mutable_const)]
 static UNLOCK_RESULT: Mutex<RefCell<Option<UnlockOutcome>>> = Mutex::new(RefCell::new(None));
+
+#[allow(clippy::declare_interior_mutable_const)]
+static INITPIN_REQUEST: Mutex<RefCell<Option<InitPinRequest>>> = Mutex::new(RefCell::new(None));
+#[allow(clippy::declare_interior_mutable_const)]
+static INITPIN_RESULT: Mutex<RefCell<Option<InitPinOutcome>>> = Mutex::new(RefCell::new(None));
 
 struct UnlockController {
     awaiting_result: bool,
@@ -258,6 +281,8 @@ struct UnlockController {
     last_pin: Option<HString<16>>,
     ignore_next_result: bool,
 }
+
+struct InitPinController;
 
 struct PendingConfirmation {
     msg_id: u32,
@@ -289,13 +314,13 @@ impl UnlockController {
         }
     }
 
-    fn submit(&mut self, pin: &HString<16>) -> Result<(), ()> {
+    fn submit(&mut self, pin: &str) -> Result<(), ()> {
         if self.awaiting_result {
             return Err(());
         }
 
         let mut pin_buf = HString::<16>::new();
-        pin_buf.push_str(pin.as_str()).map_err(|_| ())?;
+        pin_buf.push_str(pin).map_err(|_| ())?;
         let stored_pin = pin_buf.clone();
 
         critical_section::with(|cs| {
@@ -357,6 +382,35 @@ impl UnlockController {
     }
 }
 
+impl InitPinController {
+    fn new() -> Self {
+        Self
+    }
+
+    fn submit(&self, pin: &str, seed64: &[u8; 64]) -> Result<(), ()> {
+        let mut pin_buf = HString::<16>::new();
+        pin_buf.push_str(pin).map_err(|_| ())?;
+        critical_section::with(|cs| {
+            let mut pending = INITPIN_REQUEST.borrow_ref_mut(cs);
+            if pending.is_some() || INITPIN_RESULT.borrow_ref(cs).is_some() {
+                return Err(());
+            }
+            *pending = Some(InitPinRequest {
+                pin: pin_buf,
+                seed64: *seed64,
+            });
+            Ok(())
+        })
+    }
+
+    fn poll(&mut self) -> Option<InitPinOutcome> {
+        critical_section::with(|cs| {
+            let mut slot = INITPIN_RESULT.borrow_ref_mut(cs);
+            slot.take()
+        })
+    }
+}
+
 fn take_unlock_request() -> Option<UnlockRequest> {
     critical_section::with(|cs| {
         let mut slot = UNLOCK_REQUEST.borrow_ref_mut(cs);
@@ -371,10 +425,55 @@ fn store_unlock_result(outcome: UnlockOutcome) {
     });
 }
 
+fn take_initpin_request() -> Option<InitPinRequest> {
+    critical_section::with(|cs| {
+        let mut slot = INITPIN_REQUEST.borrow_ref_mut(cs);
+        slot.take()
+    })
+}
+
+fn store_initpin_result(outcome: InitPinOutcome) {
+    critical_section::with(|cs| {
+        let mut slot = INITPIN_RESULT.borrow_ref_mut(cs);
+        *slot = Some(outcome);
+    });
+}
+
+fn compute_initpin_outcome(request: InitPinRequest) -> InitPinOutcome {
+    let InitPinRequest { pin, mut seed64 } = request;
+    let mut nvs = NvsStore::new();
+    let pub_xy = root_pub_from_seed(&seed64);
+    match nvs.initialize_pin(pin.as_str(), &seed64, pub_xy) {
+        Ok((master_key, _slot)) => InitPinOutcome::Success {
+            seed64,
+            master_key,
+        },
+        Err(NvsError::AlreadyInitialized) => {
+            seed64.zeroize();
+            InitPinOutcome::AlreadyInitialized
+        }
+        Err(NvsError::Flash) => {
+            seed64.zeroize();
+            InitPinOutcome::Flash
+        }
+        Err(NvsError::Crypto) => {
+            seed64.zeroize();
+            InitPinOutcome::Crypto
+        }
+        Err(_) => {
+            seed64.zeroize();
+            InitPinOutcome::Failed
+        }
+    }
+}
+
 fn unlock_worker_loop() -> ! {
     let mut delay = Delay::new();
     loop {
-        if let Some(request) = take_unlock_request() {
+        if let Some(request) = take_initpin_request() {
+            let outcome = compute_initpin_outcome(request);
+            store_initpin_result(outcome);
+        } else if let Some(request) = take_unlock_request() {
             let outcome = compute_unlock_outcome(request.pin.as_str());
             store_unlock_result(outcome);
         } else {
@@ -561,6 +660,7 @@ fn main() -> ! {
         .expect("failed to start app core");
 
     let mut unlock_controller = UnlockController::new();
+    let mut initpin_controller = InitPinController::new();
     let mut pending_seed_setup: Option<[u8; 64]> = None;
 
     // USB-OTG + HID (WebHID-friendly).
@@ -723,7 +823,7 @@ fn main() -> ! {
 
                             seed64.zeroize();
                         } else {
-                            match unlock_controller.submit(&pin) {
+                            match unlock_controller.submit(pin.as_str()) {
                                 Ok(()) => {
                                     ui.show_unlocking();
                                 }
@@ -770,10 +870,25 @@ fn main() -> ! {
         }
 
         if let Some(outcome) = unlock_controller.poll() {
-            if let Some(ui_ref) = ui.as_mut() {
-                handle_unlock_outcome(outcome, Some(ui_ref), &mut hid);
+            let resp = if let Some(ui_ref) = ui.as_mut() {
+                handle_unlock_outcome(outcome, Some(ui_ref), &mut hid)
             } else {
-                handle_unlock_outcome(outcome, None, &mut hid);
+                handle_unlock_outcome(outcome, None, &mut hid)
+            };
+            if let Some(id) = unsafe { PENDING_USB_UNLOCK_ID.take() } {
+                send_response(&mut hid, id, resp, &mut plain, &mut enc);
+                unsafe { DEVICE_BUSY = false; }
+            }
+        }
+        if let Some(outcome) = initpin_controller.poll() {
+            let resp = if let Some(ui_ref) = ui.as_mut() {
+                handle_initpin_outcome(outcome, Some(ui_ref), &mut hid)
+            } else {
+                handle_initpin_outcome(outcome, None, &mut hid)
+            };
+            if let Some(id) = unsafe { PENDING_USB_INITPIN_ID.take() } {
+                send_response(&mut hid, id, resp, &mut plain, &mut enc);
+                unsafe { DEVICE_BUSY = false; }
             }
         }
         // 1) Proactive outbound frag, if any
@@ -844,21 +959,43 @@ fn main() -> ! {
                                             id: m.id,
                                             msg: Response::Err { code: ERR_BUSY },
                                         })
+                                    } else if let Frame::One(Request::Unlock { pin }) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            ui.show_unlocking();
+                                        }
+                                        match unlock_controller.submit(pin.as_str()) {
+                                            Ok(()) => {
+                                                unsafe {
+                                                    DEVICE_BUSY = true;
+                                                    PENDING_USB_UNLOCK_ID = Some(m.id);
+                                                }
+                                                None
+                                            }
+                                            Err(()) => Some(Msg {
+                                                v: PROTO_V1,
+                                                id: m.id,
+                                                msg: Response::Err { code: ERR_BUSY },
+                                            }),
+                                        }
+                                    } else if let Frame::One(Request::InitializePIN { pin, seed64 }) = &m.msg {
+                                        if let Some(ui) = ui.as_mut() {
+                                            ui.show_unlocking();
+                                        }
+                                        match initpin_controller.submit(pin.as_str(), seed64) {
+                                            Ok(()) => {
+                                                unsafe {
+                                                    DEVICE_BUSY = true;
+                                                    PENDING_USB_INITPIN_ID = Some(m.id);
+                                                }
+                                                None
+                                            }
+                                            Err(()) => Some(Msg {
+                                                v: PROTO_V1,
+                                                id: m.id,
+                                                msg: Response::Err { code: ERR_BUSY },
+                                            }),
+                                        }
                                     } else {
-                                        // Show GUI unlock animation if unlock request comes over USB
-                                        if let Frame::One(Request::Unlock { .. }) = &m.msg {
-                                            if let Some(ui) = ui.as_mut() {
-                                                ui.show_unlocking();
-                                            }
-                                        }
-
-                                        // Show GUI busy animation while initializing the seed/PIN over USB
-                                        if let Frame::One(Request::InitializePIN { .. }) = &m.msg {
-                                            if let Some(ui) = ui.as_mut() {
-                                                ui.show_unlocking();
-                                            }
-                                        }
-
                                         // Show GUI lock screen if lock request comes over USB
                                         if let Frame::One(Request::Lock) = &m.msg {
                                             if let Some(ui) = ui.as_mut() {
@@ -1580,7 +1717,7 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
     outcome: UnlockOutcome,
     ui: Option<&mut Gui<'_>>,
     hid: &mut HIDClass<'_, B>,
-) {
+) -> Response {
     match outcome {
         UnlockOutcome::Success { seeds, master_key } => {
             apply_unlock_success(seeds.as_slice(), &master_key);
@@ -1588,30 +1725,97 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
                 ui.show_unlock_success();
             }
             usb_debug(hid, b"unlock success\r\n");
+            Response::Ok
         }
         UnlockOutcome::WrongPin { attempts_remaining } => {
             if let Some(ui) = ui {
                 ui.show_pin_failure(Some(attempts_remaining));
             }
             usb_debug(hid, b"wrong pin\r\n");
+            Response::Err {
+                code: ERR_WRONG_PIN,
+            }
         }
         UnlockOutcome::LockedOut => {
             if let Some(ui) = ui {
                 ui.show_pin_locked_out();
             }
             usb_debug(hid, b"pin locked out\r\n");
+            Response::Err {
+                code: ERR_PIN_LOCKED_OUT,
+            }
         }
         UnlockOutcome::NotInitialized => {
             if let Some(ui) = ui {
                 ui.show_pin_not_initialized();
             }
             usb_debug(hid, b"pin not set\r\n");
+            Response::Err { code: ERR_NO_SEED }
         }
         UnlockOutcome::Failed => {
             if let Some(ui) = ui {
                 ui.show_pin_failure(None);
             }
             usb_debug(hid, b"unlock failed\r\n");
+            Response::Err { code: ERR_NO_SEED }
+        }
+    }
+}
+
+fn handle_initpin_outcome<B: usb_device::bus::UsbBus>(
+    outcome: InitPinOutcome,
+    ui: Option<&mut Gui<'_>>,
+    hid: &mut HIDClass<'_, B>,
+) -> Response {
+    match outcome {
+        InitPinOutcome::Success {
+            seed64,
+            master_key,
+        } => {
+            let mut seed64 = seed64;
+            let mut master_key = master_key;
+            store_master_key(&master_key);
+            set_seed(&seed64);
+            unsafe {
+                DEVICE_LOCKED = false;
+            }
+            if let Some(ui) = ui {
+                ui.show_unlock_success();
+            }
+            usb_debug(hid, b"seed+pin initialized\r\n");
+            master_key.zeroize();
+            seed64.zeroize();
+            Response::Ok
+        }
+        InitPinOutcome::AlreadyInitialized => {
+            if let Some(ui) = ui {
+                ui.begin_unlock(None);
+            }
+            usb_debug(hid, b"already initialized\r\n");
+            Response::Err {
+                code: ERR_ALREADY_INITIALIZED,
+            }
+        }
+        InitPinOutcome::Flash => {
+            if let Some(ui) = ui {
+                ui.show_seed_setup();
+            }
+            usb_debug(hid, b"pin init failed\r\n");
+            Response::Err { code: ERR_FLASH }
+        }
+        InitPinOutcome::Crypto => {
+            if let Some(ui) = ui {
+                ui.show_seed_setup();
+            }
+            usb_debug(hid, b"pin init failed\r\n");
+            Response::Err { code: ERR_CRYPTO }
+        }
+        InitPinOutcome::Failed => {
+            if let Some(ui) = ui {
+                ui.show_seed_setup();
+            }
+            usb_debug(hid, b"pin init failed\r\n");
+            Response::Err { code: ERR_NO_SEED }
         }
     }
 }
@@ -1641,6 +1845,27 @@ fn send_err<B: usb_device::bus::UsbBus>(hid: &mut HIDClass<'_, B>, code: u16, en
         let n = cobs::encode(used, enc);
         enc[n] = 0;
         let _ = usb_write(hid, &enc[..n + 1]);
+    }
+}
+
+fn send_response<B: usb_device::bus::UsbBus>(
+    hid: &mut HIDClass<'_, B>,
+    msg_id: u32,
+    resp: Response,
+    plain: &mut [u8],
+    enc: &mut [u8],
+) {
+    let msg = Msg {
+        v: PROTO_V1,
+        id: msg_id,
+        msg: resp,
+    };
+    if let Ok(used) = postcard::to_slice(&msg, plain) {
+        let n = encode(used, enc);
+        enc[n] = 0;
+        let _ = usb_write(hid, &enc[..n + 1]);
+    } else {
+        send_err(hid, ERR_ENCODE_TOO_BIG, enc);
     }
 }
 

@@ -4,6 +4,7 @@ TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
 WASM_TOOLCHAIN := nightly
 WASM_TARGET := wasm32-unknown-unknown
+FLASH_PORT ?=
 WIPE_PORT ?=
 .PHONY: all build flash test clean fw cli core wasm js web tauri tauri-dev tauri-build
 
@@ -16,17 +17,39 @@ fw:
 	cargo +esp -Zbuild-std=core,alloc build -p siger-fw --release --target $(TARGET_ESP)
 
 flash: fw
-	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
+	@if [[ -n "$(FLASH_PORT)" ]]; then \
+		DEV="$(FLASH_PORT)"; \
+	elif [[ "$$OSTYPE" == "darwin"* ]]; then \
 		DEV=$$(ls /dev/cu.usbmodem* | head -1 | xargs basename); \
 		if [[ -z "$$DEV" ]]; then \
 			echo "No USB serial device found"; \
 			exit 1; \
 		fi; \
 	else \
-		DEV="ttyACM0"; \
-		fuser -k /dev/ttyACM0 2>/dev/null || true; \
+		if ls /dev/ttyACM* >/dev/null 2>&1; then \
+			DEV=$$(ls /dev/ttyACM* | head -1 | xargs basename); \
+		elif ls /dev/ttyUSB* >/dev/null 2>&1; then \
+			DEV=$$(ls /dev/ttyUSB* | head -1 | xargs basename); \
+		elif ls /dev/hidraw* >/dev/null 2>&1; then \
+			DEV="hid"; \
+		else \
+			echo "No USB serial or HID device found"; \
+			exit 1; \
+		fi; \
 	fi; \
-	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY); #\
+	if [[ "$$DEV" == hid* ]]; then \
+		echo "Device is in HID mode; espflash needs a USB-serial/CDC port."; \
+		echo "Put the device in bootloader mode and rerun with FLASH_PORT=/dev/ttyACM0."; \
+		exit 1; \
+	fi; \
+	PORT_PATH="/dev/$$DEV"; \
+	if [[ "$$DEV" == /dev/* ]]; then \
+		PORT_PATH="$$DEV"; \
+	fi; \
+	if [[ "$$OSTYPE" != "darwin"* ]]; then \
+		fuser -k "$$PORT_PATH" 2>/dev/null || true; \
+	fi; \
+	espflash flash --port "$$PORT_PATH" --partition-table partitions.csv $(FW_BINARY); #\
 	#pyserial-miniterm --dtr 0 --rts 0 /dev/$$DEV 115200
 
 wipe:
@@ -165,7 +188,7 @@ tauri: tauri-build
 
 help:
 	@echo "Available targets:"
-	@echo "  make flash      - Build and flash firmware (preserves keys)"
+	@echo "  make flash      - Build and flash firmware (preserves keys; FLASH_PORT=/dev/ttyACM0)"
 	@echo "    make fw         - Build firmware"
 	@echo "    make wipe       - Wipe NVS (serial or HID via WIPE_PORT=hid)"
 	@echo "  make test       - Run CLI tests against device"

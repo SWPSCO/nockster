@@ -4,6 +4,7 @@ TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/siger-fw
 WASM_TOOLCHAIN := nightly
 WASM_TARGET := wasm32-unknown-unknown
+WIPE_PORT ?=
 .PHONY: all build flash test clean fw cli core wasm js web tauri tauri-dev tauri-build
 
 all: build
@@ -28,18 +29,38 @@ flash: fw
 	espflash flash --port /dev/$$DEV --partition-table partitions.csv $(FW_BINARY); #\
 	#pyserial-miniterm --dtr 0 --rts 0 /dev/$$DEV 115200
 
-wipe: fw
-	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
+wipe:
+	@if [[ -n "$(WIPE_PORT)" ]]; then \
+		DEV="$(WIPE_PORT)"; \
+	elif [[ "$$OSTYPE" == "darwin"* ]]; then \
 		DEV=$$(ls /dev/cu.usbmodem* | head -1 | xargs basename); \
 		if [[ -z "$$DEV" ]]; then \
 			echo "No USB serial device found"; \
 			exit 1; \
 		fi; \
 	else \
-		DEV="ttyACM0"; \
-		fuser -k /dev/ttyACM0 2>/dev/null || true; \
+		if ls /dev/ttyACM* >/dev/null 2>&1; then \
+			DEV=$$(ls /dev/ttyACM* | head -1 | xargs basename); \
+		elif ls /dev/hidraw* >/dev/null 2>&1; then \
+			DEV="hid"; \
+		else \
+			echo "No USB serial or HID device found"; \
+			exit 1; \
+		fi; \
 	fi; \
-	espflash flash --port /dev/$$DEV --partition-table partitions.csv --erase-parts nvs $(FW_BINARY)
+	if [[ "$$DEV" == hid* ]]; then \
+		cargo run -p siger-cli --bin siger-cli -- reset --port "$$DEV"; \
+	else \
+		PORT_PATH="/dev/$$DEV"; \
+		if [[ "$$DEV" == /dev/* ]]; then \
+			PORT_PATH="$$DEV"; \
+		fi; \
+		if [[ "$$OSTYPE" != "darwin"* ]]; then \
+			fuser -k "$$PORT_PATH" 2>/dev/null || true; \
+		fi; \
+		$(MAKE) fw; \
+		espflash flash --port "$$PORT_PATH" --partition-table partitions.csv --erase-parts nvs $(FW_BINARY); \
+	fi
 
 test:
 	@fuser -k /dev/ttyACM0 2>/dev/null || true; \
@@ -146,7 +167,7 @@ help:
 	@echo "Available targets:"
 	@echo "  make flash      - Build and flash firmware (preserves keys)"
 	@echo "    make fw         - Build firmware"
-	@echo "    make wipe       - Build and flash firmware (erases keys)"
+	@echo "    make wipe       - Wipe NVS (serial or HID via WIPE_PORT=hid)"
 	@echo "  make test       - Run CLI tests against device"
 	@echo "  make cli        - Build siger-cli tool"
 	@echo "  make serve      - Build and serve web UI and dependencies"

@@ -1,3 +1,4 @@
+/// <reference path="./types.d.ts" />
 /**
  * siger-js - TypeScript library for communicating with Siger hardware wallet
  *

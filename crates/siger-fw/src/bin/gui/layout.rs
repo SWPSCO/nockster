@@ -1,4 +1,7 @@
-use embedded_graphics::{prelude::{Point, Size}, primitives::Rectangle};
+use embedded_graphics::{
+    prelude::{Point, Size},
+    primitives::Rectangle,
+};
 
 use super::constants::{BOOT_LOGO_HEIGHT, SCREEN_HEIGHT, SCREEN_WIDTH};
 
@@ -95,8 +98,8 @@ pub(crate) fn button_from_point_confirm(point: Point) -> Option<ButtonHit> {
     for hit in confirm_buttons() {
         let within_x =
             point.x >= hit.top_left.x && point.x < hit.top_left.x + hit.size.width as i32;
-        let bottom = (hit.top_left.y + hit.size.height as i32 + bottom_slack)
-            .min(SCREEN_HEIGHT as i32);
+        let bottom =
+            (hit.top_left.y + hit.size.height as i32 + bottom_slack).min(SCREEN_HEIGHT as i32);
         let within_y = point.y >= hit.top_left.y && point.y < bottom;
         if within_x && within_y {
             return Some(hit);
@@ -166,8 +169,8 @@ pub(crate) fn button_from_point_tx_review(point: Point) -> Option<ButtonHit> {
     for hit in tx_review_buttons() {
         let within_x =
             point.x >= hit.top_left.x && point.x < hit.top_left.x + hit.size.width as i32;
-        let bottom = (hit.top_left.y + hit.size.height as i32 + bottom_slack)
-            .min(SCREEN_HEIGHT as i32);
+        let bottom =
+            (hit.top_left.y + hit.size.height as i32 + bottom_slack).min(SCREEN_HEIGHT as i32);
         let within_y = point.y >= hit.top_left.y && point.y < bottom;
         if within_x && within_y {
             return Some(hit);

@@ -99,10 +99,7 @@ impl HidLink {
 
     fn refill(&mut self) -> io::Result<()> {
         let mut report = [0u8; HID_REPORT_LEN];
-        let timeout_ms: i32 = self
-            .timeout
-            .as_millis()
-            .min(i32::MAX as u128) as i32;
+        let timeout_ms: i32 = self.timeout.as_millis().min(i32::MAX as u128) as i32;
         let n = self
             .dev
             .read_timeout(&mut report, timeout_ms)
@@ -215,11 +212,7 @@ pub fn open(port: &str, baud: u32) -> Result<Box<dyn Link>> {
     Ok(Box::new(SerialLink::open(port, baud)?))
 }
 
-pub fn send_call(
-    sp: &mut dyn Link,
-    id: u32,
-    req: Request,
-) -> anyhow::Result<Response> {
+pub fn send_call(sp: &mut dyn Link, id: u32, req: Request) -> anyhow::Result<Response> {
     let req = Msg {
         v: PROTO_V1,
         id,

@@ -1,4 +1,4 @@
-# siger-js
+# @swps/nockster-js
 
 TypeScript/JavaScript library for communicating with Siger hardware wallet.
 
@@ -89,7 +89,7 @@ export {
 ## Usage
 
 ```typescript
-import { SigerDevice } from 'siger-js';
+import { SigerDevice } from '@swps/nockster-js';
 
 const device = new SigerDevice({ debug: false });
 
@@ -115,7 +115,7 @@ if (response.type === 'Info') {
   console.log('Has seed:', response.has_seed);
 
   if (response.has_seed) {
-    import { formatCheetahPubkey } from 'siger-js';
+    import { formatCheetahPubkey } from '@swps/nockster-js';
     const first = response.cheetah_pubs[0];
     if (first) {
       const pubkey = formatCheetahPubkey(first.x, first.y);
@@ -155,7 +155,7 @@ await device.deleteSeed(1);
 
 ```typescript
 // initialize with pin
-import { SigerDevice } from 'siger-js';
+import { SigerDevice } from '@swps/nockster-js';
 
 const device = new SigerDevice();
 await device.connect({ baudRate: 115200 });
@@ -174,7 +174,7 @@ if (response.type === 'Ok') {
 
 ```typescript
 // errors
-import { getErrorMessage, ERR_DEVICE_LOCKED, ERR_WRONG_PIN } from 'siger-js';
+import { getErrorMessage, ERR_DEVICE_LOCKED, ERR_WRONG_PIN } from '@swps/nockster-js';
 
 const response = await device.call({ type: 'GetInfo' });
 
@@ -201,7 +201,7 @@ import {
   serializeMsg,
   deserializeMsg,
   PROTO_V1
-} from 'siger-js';
+} from '@swps/nockster-js';
 
 // serialize a message
 const msg = {
@@ -269,7 +269,7 @@ type Response =
 Cheetah public keys are elliptic curve points represented as (x, y) coordinates, each consisting of 6 u64 limbs. The library provides utilities to serialize these to the 97-byte format used by nockchain and encode them as base58 strings.
 
 ```typescript
-import { serializeCheetahPublicKey, base58Encode, formatCheetahPubkey } from 'siger-js';
+import { serializeCheetahPublicKey, base58Encode, formatCheetahPubkey } from '@swps/nockster-js';
 
 // from device info response (first pubkey)
 const [{ x, y }] = response.cheetah_pubs;

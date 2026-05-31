@@ -15,8 +15,8 @@ use tx_types::transaction_types_v0::{InputV0, InputsV0, RawTransactionV0, SeedV0
 #[allow(unused_imports)]
 use tx_types::RawTransaction;
 
-mod tip5;
 mod compose_v1;
+mod tip5;
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -756,7 +756,8 @@ mod v1_draft {
                 return Some(value);
             }
         }
-        map_get_atom_key(left, arena, key_bytes).or_else(|| map_get_atom_key(right, arena, key_bytes))
+        map_get_atom_key(left, arena, key_bytes)
+            .or_else(|| map_get_atom_key(right, arena, key_bytes))
     }
 
     fn seed_recipient_pkh(note_data: Noun, arena: &Arena) -> Option<[u64; 5]> {
@@ -815,8 +816,13 @@ mod v1_draft {
 
             let mut seeds_out: Vec<serde_json::Value> = Vec::new();
             zset_for_each(seeds, arena, &mut |seed| {
-                let Some((_output_source, lock_root_noun, note_data_noun, gift_noun, parent_hash_noun)) =
-                    tuple5(seed, arena)
+                let Some((
+                    _output_source,
+                    lock_root_noun,
+                    note_data_noun,
+                    gift_noun,
+                    parent_hash_noun,
+                )) = tuple5(seed, arena)
                 else {
                     return;
                 };
@@ -841,11 +847,7 @@ mod v1_draft {
             }));
         };
 
-        fn walk_map(
-            map: Noun,
-            arena: &Arena,
-            f: &mut impl FnMut(Noun, Noun, Noun),
-        ) {
+        fn walk_map(map: Noun, arena: &Arena, f: &mut impl FnMut(Noun, Noun, Noun)) {
             if map == arena.atom0() {
                 return;
             }
@@ -1189,7 +1191,9 @@ impl ParsedTransaction {
                 match serde_wasm_bindgen::to_value(&details) {
                     Ok(result) => result,
                     Err(e) => {
-                        web_sys::console::error_1(&format!("WASM: serialization failed: {}", e).into());
+                        web_sys::console::error_1(
+                            &format!("WASM: serialization failed: {}", e).into(),
+                        );
                         JsValue::from_str("{\"error\": \"serialization failed\"}")
                     }
                 }
@@ -1199,7 +1203,9 @@ impl ParsedTransaction {
                 match serde_wasm_bindgen::to_value(&details) {
                     Ok(result) => result,
                     Err(e) => {
-                        web_sys::console::error_1(&format!("WASM: serialization failed: {}", e).into());
+                        web_sys::console::error_1(
+                            &format!("WASM: serialization failed: {}", e).into(),
+                        );
                         JsValue::from_str("{\"error\": \"serialization failed\"}")
                     }
                 }
@@ -1307,7 +1313,9 @@ impl ParsedTransaction {
     */
     pub fn apply_signatures(&mut self, signatures: JsValue) -> Result<(), JsValue> {
         let ParsedTxInner::V0(v0) = &mut self.inner else {
-            return Err(JsValue::from_str("apply_signatures: unsupported for v1 transactions"));
+            return Err(JsValue::from_str(
+                "apply_signatures: unsupported for v1 transactions",
+            ));
         };
         use tx_types::collections::ZMap;
 
@@ -1386,7 +1394,9 @@ impl ParsedTransaction {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, JsValue> {
         let ParsedTxInner::V0(v0) = &self.inner else {
-            return Err(JsValue::from_str("to_bytes: unsupported for v1 transactions"));
+            return Err(JsValue::from_str(
+                "to_bytes: unsupported for v1 transactions",
+            ));
         };
         // Native builds keep using a transient stack allocation. In wasm we skip this
         // entirely to avoid hitting the allocator again (hashing already exercised the

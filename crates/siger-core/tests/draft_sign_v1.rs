@@ -21,6 +21,28 @@ fn jam_single(noun: nockvm::noun::Noun) -> Vec<u8> {
     slab.jam().to_vec()
 }
 
+fn empty_stub_lock_merkle_proof(spend_condition: SpendCondition) -> LockMerkleProof {
+    LockMerkleProof::new_stub(
+        spend_condition,
+        0,
+        MerkleProof {
+            root: Hash { values: [0; 5] },
+            path: Vec::new(),
+        },
+    )
+}
+
+fn empty_full_lock_merkle_proof(spend_condition: SpendCondition) -> LockMerkleProof {
+    LockMerkleProof::new_full(
+        spend_condition,
+        0,
+        MerkleProof {
+            root: Hash { values: [0; 5] },
+            path: Vec::new(),
+        },
+    )
+}
+
 #[test]
 fn sign_draft_v1_inserts_expected_signature() {
     // Sign using the on-device style signer (deterministic).
@@ -47,14 +69,7 @@ fn sign_draft_v1_inserts_expected_signature() {
         }],
     };
     let witness = Witness {
-        lmp: LockMerkleProof {
-            spend_condition,
-            axis: 0,
-            merkle_proof: MerkleProof {
-                root: Hash { values: [0; 5] },
-                path: Vec::new(),
-            },
-        },
+        lmp: empty_full_lock_merkle_proof(spend_condition),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -159,14 +174,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
         }],
     };
     let witness = Witness {
-        lmp: LockMerkleProof {
-            spend_condition,
-            axis: 0,
-            merkle_proof: MerkleProof {
-                root: Hash { values: [0; 5] },
-                path: Vec::new(),
-            },
-        },
+        lmp: empty_stub_lock_merkle_proof(spend_condition),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -318,14 +326,7 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
     };
 
     let witness = Witness {
-        lmp: LockMerkleProof {
-            spend_condition,
-            axis: 0,
-            merkle_proof: MerkleProof {
-                root: Hash { values: [0; 5] },
-                path: Vec::new(),
-            },
-        },
+        lmp: empty_stub_lock_merkle_proof(spend_condition),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -410,14 +411,7 @@ struct WalletTransactionV1 {
 #[test]
 fn sign_draft_v1_wallet_wrapper_updates_name() {
     let witness = Witness {
-        lmp: LockMerkleProof {
-            spend_condition: SpendCondition { p: Vec::new() },
-            axis: 0,
-            merkle_proof: MerkleProof {
-                root: Hash { values: [0; 5] },
-                path: Vec::new(),
-            },
-        },
+        lmp: empty_stub_lock_merkle_proof(SpendCondition { p: Vec::new() }),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -501,14 +495,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
 #[test]
 fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
     let witness = Witness {
-        lmp: LockMerkleProof {
-            spend_condition: SpendCondition { p: Vec::new() },
-            axis: 0,
-            merkle_proof: MerkleProof {
-                root: Hash { values: [0; 5] },
-                path: Vec::new(),
-            },
-        },
+        lmp: empty_stub_lock_merkle_proof(SpendCondition { p: Vec::new() }),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -648,14 +635,7 @@ fn sign_draft_v1_replaces_placeholder_when_map_full() {
     );
 
     let witness = Witness {
-        lmp: LockMerkleProof {
-            spend_condition,
-            axis: 0,
-            merkle_proof: MerkleProof {
-                root: Hash { values: [0; 5] },
-                path: Vec::new(),
-            },
-        },
+        lmp: empty_stub_lock_merkle_proof(spend_condition),
         pkh: PkhSignature { map: placeholder_map },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,

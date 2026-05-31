@@ -62,17 +62,27 @@ fn reproduce_test_signed_signature() {
     };
     let our_pkh = pubkey.to_hash();
 
-    println!("Our PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        our_pkh.values[0], our_pkh.values[1], our_pkh.values[2], our_pkh.values[3], our_pkh.values[4]);
-    println!("Expected PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        expected_pkh[0], expected_pkh[1], expected_pkh[2], expected_pkh[3], expected_pkh[4]);
+    println!(
+        "Our PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        our_pkh.values[0],
+        our_pkh.values[1],
+        our_pkh.values[2],
+        our_pkh.values[3],
+        our_pkh.values[4]
+    );
+    println!(
+        "Expected PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        expected_pkh[0], expected_pkh[1], expected_pkh[2], expected_pkh[3], expected_pkh[4]
+    );
 
     assert_eq!(our_pkh.values, expected_pkh, "PKH mismatch - wrong key!");
     println!("✓ PKH matches - we have the correct key");
 
     // Sign the sig_hash
-    println!("\nSigning sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        sig_hash[0], sig_hash[1], sig_hash[2], sig_hash[3], sig_hash[4]);
+    println!(
+        "\nSigning sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        sig_hash[0], sig_hash[1], sig_hash[2], sig_hash[3], sig_hash[4]
+    );
 
     let (chal_t8, sig_t8) = siger_core::cheetah::schnorr_sign_tx(sk_be, (pk[0], pk[1]), sig_hash);
 
@@ -83,28 +93,36 @@ fn reproduce_test_signed_signature() {
     println!("\nOur Challenge (T8 as u64):");
     for (i, v) in our_chal.iter().enumerate() {
         print!("{:016x}", v);
-        if i < 7 { print!("_"); }
+        if i < 7 {
+            print!("_");
+        }
     }
     println!();
 
     println!("Expected Challenge:");
     for (i, v) in expected_chal_t8.iter().enumerate() {
         print!("{:016x}", v);
-        if i < 7 { print!("_"); }
+        if i < 7 {
+            print!("_");
+        }
     }
     println!();
 
     println!("\nOur Signature (T8 as u64):");
     for (i, v) in our_sig.iter().enumerate() {
         print!("{:016x}", v);
-        if i < 7 { print!("_"); }
+        if i < 7 {
+            print!("_");
+        }
     }
     println!();
 
     println!("Expected Signature:");
     for (i, v) in expected_sig_t8.iter().enumerate() {
         print!("{:016x}", v);
-        if i < 7 { print!("_"); }
+        if i < 7 {
+            print!("_");
+        }
     }
     println!();
 
@@ -113,8 +131,14 @@ fn reproduce_test_signed_signature() {
     println!("Our Signature (raw u32): {:08x?}", sig_t8.values);
 
     // Check if they match
-    let chal_matches = our_chal.iter().zip(expected_chal_t8.iter()).all(|(a, b)| a == b);
-    let sig_matches = our_sig.iter().zip(expected_sig_t8.iter()).all(|(a, b)| a == b);
+    let chal_matches = our_chal
+        .iter()
+        .zip(expected_chal_t8.iter())
+        .all(|(a, b)| a == b);
+    let sig_matches = our_sig
+        .iter()
+        .zip(expected_sig_t8.iter())
+        .all(|(a, b)| a == b);
 
     if chal_matches {
         println!("\n✓ Challenge MATCHES!");

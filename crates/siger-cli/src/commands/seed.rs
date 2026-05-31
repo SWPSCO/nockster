@@ -9,9 +9,6 @@ use siger_core::{
 use std::fmt::Write as _;
 
 pub fn run(args: SeedArgs) -> anyhow::Result<()> {
-    let mut did_seed_device = false;
-    let mut seeded_len = 0usize;
-
     // open serial eagerly, but only used when we actually seed the device.
     let mut sp = open(&args.port, args.baud)?;
 
@@ -88,13 +85,10 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
         } else {
             send_blob(&mut *sp, 0x42, FragKind::SetSeed, &seed64)?;
         }
-        did_seed_device = true;
-        seeded_len = seed64.len();
-
         // optional file outputs
         if let Some(out) = args.out.as_ref() {
-            let (key, blob) =
-                keys::import_from_seed(&seed64, &args.path, args.version).map_err(|e| anyhow::anyhow!(e))?;
+            let (key, blob) = keys::import_from_seed(&seed64, &args.path, args.version)
+                .map_err(|e| anyhow::anyhow!(e))?;
             let (json_path, bin_path) =
                 keys::write_key_files(out, &key, &blob).map_err(|e| anyhow::anyhow!(e))?;
             println!("wrote key JSON to {}", json_path.display());
@@ -172,12 +166,9 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
         } else {
             anyhow::bail!("must provide a pin (--pin)");
         }
-        did_seed_device = true;
-        seeded_len = seed64.len();
-
         if let Some(out) = args.out.as_ref() {
-            let (key, blob) =
-                keys::import_from_seed(&seed64, &args.path, args.version).map_err(|e| anyhow::anyhow!(e))?;
+            let (key, blob) = keys::import_from_seed(&seed64, &args.path, args.version)
+                .map_err(|e| anyhow::anyhow!(e))?;
             let (json_path, bin_path) =
                 keys::write_key_files(out, &key, &blob).map_err(|e| anyhow::anyhow!(e))?;
             println!("pubkey (b58, v{}): {}", args.version, key.pk_b58);
@@ -193,30 +184,28 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     }
 
     // Print device info after seeding
-    if did_seed_device {
-        // Give firmware time to finish NVS writes and display updates
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        if let Response::Info {
-            has_seed,
-            cheetah_pubs,
-            ..
-        } = send_call(&mut *sp, 0x100, Request::GetInfo)?
-        {
-            if has_seed {
-                if cheetah_pubs.is_empty() {
-                    println!("(device locked; pubkeys withheld)");
-                } else {
-                    for pubinfo in cheetah_pubs.iter() {
-                        let pk_xy = (pubinfo.x, pubinfo.y);
-                        let b58 = keys::pubkey_to_b58(&pk_xy, args.version);
-                        println!(
-                            "slot[{}] path={} pubkey(v{})={}",
-                            pubinfo.slot,
-                            format_path(pubinfo.path.as_slice()),
-                            args.version,
-                            b58
-                        );
-                    }
+    // Give firmware time to finish NVS writes and display updates.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if let Response::Info {
+        has_seed,
+        cheetah_pubs,
+        ..
+    } = send_call(&mut *sp, 0x100, Request::GetInfo)?
+    {
+        if has_seed {
+            if cheetah_pubs.is_empty() {
+                println!("(device locked; pubkeys withheld)");
+            } else {
+                for pubinfo in cheetah_pubs.iter() {
+                    let pk_xy = (pubinfo.x, pubinfo.y);
+                    let b58 = keys::pubkey_to_b58(&pk_xy, args.version);
+                    println!(
+                        "slot[{}] path={} pubkey(v{})={}",
+                        pubinfo.slot,
+                        format_path(pubinfo.path.as_slice()),
+                        args.version,
+                        b58
+                    );
                 }
             }
         }

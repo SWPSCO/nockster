@@ -25,8 +25,13 @@ export async function connectSerial(): Promise<SerialPort | string> {
     await invoke('connect_serial', { port: ports[0], baudRate: 115200 });
     return ports[0];
   }
-  
-  const port = await navigator.serial.requestPort();
+
+  const serial = navigator.serial;
+  if (!serial) {
+    throw new Error('Web Serial API not available in this browser.');
+  }
+
+  const port = await serial.requestPort();
   await port.open({ baudRate: 115200 });
   return port;
 }

@@ -41,9 +41,14 @@ fn decode_known_good_draft_as_wallet_tx() {
             if let SpendBody::V1(sb) = &spend.body {
                 let sig_hash = sb.compute_sig_hash();
                 println!("    Fee: {}", sb.fee.value);
-                println!("    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                    sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                    sig_hash.values[3], sig_hash.values[4]);
+                println!(
+                    "    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                    sig_hash.values[0],
+                    sig_hash.values[1],
+                    sig_hash.values[2],
+                    sig_hash.values[3],
+                    sig_hash.values[4]
+                );
 
                 // Check if sig_hash matches known-good message
                 let known_good = [
@@ -58,8 +63,10 @@ fn decode_known_good_draft_as_wallet_tx() {
                     println!("    ✓ sig_hash MATCHES known-good message!");
                 } else {
                     println!("    ✗ sig_hash differs from known-good message");
-                    println!("    Expected: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        known_good[0], known_good[1], known_good[2], known_good[3], known_good[4]);
+                    println!(
+                        "    Expected: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        known_good[0], known_good[1], known_good[2], known_good[3], known_good[4]
+                    );
                 }
             }
         }

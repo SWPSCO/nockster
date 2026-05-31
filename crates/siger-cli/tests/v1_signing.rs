@@ -22,7 +22,9 @@ fn decode_raw_tx(noun: &Noun) -> Result<RawTransaction, String> {
 
     // Try [raw-tx tail] format (tx:transact)
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head()))) {
+        if let Ok(Ok(raw)) =
+            catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head())))
+        {
             return Ok(raw);
         }
     }
@@ -100,7 +102,8 @@ fn test_diagnose_signed_format() {
 
     // Try InputsV1 directly on the tail
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV1::from_noun(&cell.tail()))) {
+        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV1::from_noun(&cell.tail())))
+        {
             println!("\nDecoded tail as InputsV1!");
             println!("  inputs count: {}", inputs.map.wyt());
             for (name, input) in inputs.map.tap() {
@@ -108,18 +111,32 @@ fn test_diagnose_signed_format() {
                 println!("    Fee: {}", input.spend.fee.value);
                 println!("    PKH sigs: {}", input.spend.witness.pkh.map.wyt());
                 for (pkh, sig_val) in input.spend.witness.pkh.map.tap() {
-                    println!("    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        pkh.values[0], pkh.values[1], pkh.values[2], pkh.values[3], pkh.values[4]);
-                    println!("    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        sig_val.sig.chal.values.values[0], sig_val.sig.chal.values.values[1],
-                        sig_val.sig.chal.values.values[2], sig_val.sig.chal.values.values[3],
-                        sig_val.sig.chal.values.values[4], sig_val.sig.chal.values.values[5],
-                        sig_val.sig.chal.values.values[6], sig_val.sig.chal.values.values[7]);
-                    println!("    Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        sig_val.sig.sig.values.values[0], sig_val.sig.sig.values.values[1],
-                        sig_val.sig.sig.values.values[2], sig_val.sig.sig.values.values[3],
-                        sig_val.sig.sig.values.values[4], sig_val.sig.sig.values.values[5],
-                        sig_val.sig.sig.values.values[6], sig_val.sig.sig.values.values[7]);
+                    println!(
+                        "    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        pkh.values[0], pkh.values[1], pkh.values[2], pkh.values[3], pkh.values[4]
+                    );
+                    println!(
+                        "    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        sig_val.sig.chal.values.values[0],
+                        sig_val.sig.chal.values.values[1],
+                        sig_val.sig.chal.values.values[2],
+                        sig_val.sig.chal.values.values[3],
+                        sig_val.sig.chal.values.values[4],
+                        sig_val.sig.chal.values.values[5],
+                        sig_val.sig.chal.values.values[6],
+                        sig_val.sig.chal.values.values[7]
+                    );
+                    println!(
+                        "    Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        sig_val.sig.sig.values.values[0],
+                        sig_val.sig.sig.values.values[1],
+                        sig_val.sig.sig.values.values[2],
+                        sig_val.sig.sig.values.values[3],
+                        sig_val.sig.sig.values.values[4],
+                        sig_val.sig.sig.values.values[5],
+                        sig_val.sig.sig.values.values[6],
+                        sig_val.sig.sig.values.values[7]
+                    );
                 }
             }
         } else {
@@ -149,8 +166,14 @@ fn test_diagnose_signed_format() {
                     println!("    Fee: {}", input.spend.fee.value);
                     println!("    PKH sigs: {}", input.spend.witness.pkh.map.wyt());
                     for (pkh, sig_val) in input.spend.witness.pkh.map.tap() {
-                        println!("    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            pkh.values[0], pkh.values[1], pkh.values[2], pkh.values[3], pkh.values[4]);
+                        println!(
+                            "    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                            pkh.values[0],
+                            pkh.values[1],
+                            pkh.values[2],
+                            pkh.values[3],
+                            pkh.values[4]
+                        );
                         println!("    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
                             sig_val.sig.chal.values.values[0], sig_val.sig.chal.values.values[1],
                             sig_val.sig.chal.values.values[2], sig_val.sig.chal.values.values[3],
@@ -195,18 +218,32 @@ fn test_diagnose_signed_format() {
                 println!("    PKH sigs: {}", sb.witness.pkh.map.wyt());
 
                 for (pkh, sig_val) in sb.witness.pkh.map.tap() {
-                    println!("    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        pkh.values[0], pkh.values[1], pkh.values[2], pkh.values[3], pkh.values[4]);
-                    println!("    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        sig_val.sig.chal.values.values[0], sig_val.sig.chal.values.values[1],
-                        sig_val.sig.chal.values.values[2], sig_val.sig.chal.values.values[3],
-                        sig_val.sig.chal.values.values[4], sig_val.sig.chal.values.values[5],
-                        sig_val.sig.chal.values.values[6], sig_val.sig.chal.values.values[7]);
-                    println!("    Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        sig_val.sig.sig.values.values[0], sig_val.sig.sig.values.values[1],
-                        sig_val.sig.sig.values.values[2], sig_val.sig.sig.values.values[3],
-                        sig_val.sig.sig.values.values[4], sig_val.sig.sig.values.values[5],
-                        sig_val.sig.sig.values.values[6], sig_val.sig.sig.values.values[7]);
+                    println!(
+                        "    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        pkh.values[0], pkh.values[1], pkh.values[2], pkh.values[3], pkh.values[4]
+                    );
+                    println!(
+                        "    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        sig_val.sig.chal.values.values[0],
+                        sig_val.sig.chal.values.values[1],
+                        sig_val.sig.chal.values.values[2],
+                        sig_val.sig.chal.values.values[3],
+                        sig_val.sig.chal.values.values[4],
+                        sig_val.sig.chal.values.values[5],
+                        sig_val.sig.chal.values.values[6],
+                        sig_val.sig.chal.values.values[7]
+                    );
+                    println!(
+                        "    Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        sig_val.sig.sig.values.values[0],
+                        sig_val.sig.sig.values.values[1],
+                        sig_val.sig.sig.values.values[2],
+                        sig_val.sig.sig.values.values[3],
+                        sig_val.sig.sig.values.values[4],
+                        sig_val.sig.sig.values.values[5],
+                        sig_val.sig.sig.values.values[6],
+                        sig_val.sig.sig.values.values[7]
+                    );
                 }
             }
         }
@@ -214,7 +251,9 @@ fn test_diagnose_signed_format() {
 
     // Try as cell and decode head as RawTransactionV1
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(v1)) = catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(&cell.head()))) {
+        if let Ok(Ok(v1)) = catch_unwind(AssertUnwindSafe(|| {
+            RawTransactionV1::from_noun(&cell.head())
+        })) {
             println!("\nDecoded head as RawTransactionV1!");
             println!("  id: {}", v1.id.to_b58());
             println!("  spends: {}", v1.spends.map.wyt());
@@ -227,8 +266,14 @@ fn test_diagnose_signed_format() {
                     println!("    PKH sigs: {}", sb.witness.pkh.map.wyt());
 
                     for (pkh, sig_val) in sb.witness.pkh.map.tap() {
-                        println!("    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            pkh.values[0], pkh.values[1], pkh.values[2], pkh.values[3], pkh.values[4]);
+                        println!(
+                            "    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                            pkh.values[0],
+                            pkh.values[1],
+                            pkh.values[2],
+                            pkh.values[3],
+                            pkh.values[4]
+                        );
                         println!("    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
                             sig_val.sig.chal.values.values[0], sig_val.sig.chal.values.values[1],
                             sig_val.sig.chal.values.values[2], sig_val.sig.chal.values.values[3],
@@ -259,10 +304,14 @@ fn test_derive_key_from_seed() {
 
     // Get public key
     let pk = tx_types::crypto::cheetah_pub_from_sk(sk_be);
-    println!("\nPublic key X: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        pk[0][0], pk[0][1], pk[0][2], pk[0][3], pk[0][4], pk[0][5]);
-    println!("Public key Y: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        pk[1][0], pk[1][1], pk[1][2], pk[1][3], pk[1][4], pk[1][5]);
+    println!(
+        "\nPublic key X: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        pk[0][0], pk[0][1], pk[0][2], pk[0][3], pk[0][4], pk[0][5]
+    );
+    println!(
+        "Public key Y: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        pk[1][0], pk[1][1], pk[1][2], pk[1][3], pk[1][4], pk[1][5]
+    );
 
     // Compute pubkey hash
     let pubkey = SchnorrPubkey {
@@ -271,8 +320,14 @@ fn test_derive_key_from_seed() {
         inf: false,
     };
     let pk_hash = pubkey.to_hash();
-    println!("\nPubkey hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        pk_hash.values[0], pk_hash.values[1], pk_hash.values[2], pk_hash.values[3], pk_hash.values[4]);
+    println!(
+        "\nPubkey hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        pk_hash.values[0],
+        pk_hash.values[1],
+        pk_hash.values[2],
+        pk_hash.values[3],
+        pk_hash.values[4]
+    );
 }
 
 #[test]
@@ -294,9 +349,14 @@ fn test_v1_sig_hash_from_unsigned() {
 
             if let SpendBody::V1(sb) = &spend.body {
                 let sig_hash = sb.compute_sig_hash();
-                println!("  sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                    sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                    sig_hash.values[3], sig_hash.values[4]);
+                println!(
+                    "  sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                    sig_hash.values[0],
+                    sig_hash.values[1],
+                    sig_hash.values[2],
+                    sig_hash.values[3],
+                    sig_hash.values[4]
+                );
             }
         }
     } else if let Ok(cell) = noun.as_cell() {
@@ -310,9 +370,14 @@ fn test_v1_sig_hash_from_unsigned() {
 
                 if let SpendBody::V1(sb) = &spend.body {
                     let sig_hash = sb.compute_sig_hash();
-                    println!("  sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                        sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                        sig_hash.values[3], sig_hash.values[4]);
+                    println!(
+                        "  sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                        sig_hash.values[0],
+                        sig_hash.values[1],
+                        sig_hash.values[2],
+                        sig_hash.values[3],
+                        sig_hash.values[4]
+                    );
                 }
             }
         } else {
@@ -332,8 +397,7 @@ fn test_v1_signing_consistency() {
     let mut slab: NounSlab = NounSlab::new();
     let signed_noun = slab.cue_into(Bytes::from(signed_data)).expect("cue");
 
-    let v1_signed = RawTransactionV1::from_noun(&signed_noun)
-        .expect("decode V1");
+    let v1_signed = RawTransactionV1::from_noun(&signed_noun).expect("decode V1");
 
     println!("Transaction ID: {}", v1_signed.id.to_b58());
 
@@ -362,42 +426,70 @@ fn test_v1_signing_consistency() {
     };
     let our_pkh = pubkey.to_hash();
 
-    println!("Our PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        our_pkh.values[0], our_pkh.values[1], our_pkh.values[2],
-        our_pkh.values[3], our_pkh.values[4]);
-    println!("Expected PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        expected_pkh.values[0], expected_pkh.values[1], expected_pkh.values[2],
-        expected_pkh.values[3], expected_pkh.values[4]);
+    println!(
+        "Our PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        our_pkh.values[0],
+        our_pkh.values[1],
+        our_pkh.values[2],
+        our_pkh.values[3],
+        our_pkh.values[4]
+    );
+    println!(
+        "Expected PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        expected_pkh.values[0],
+        expected_pkh.values[1],
+        expected_pkh.values[2],
+        expected_pkh.values[3],
+        expected_pkh.values[4]
+    );
 
-    assert_eq!(our_pkh.values, expected_pkh.values, "PKH mismatch - wrong key?");
+    assert_eq!(
+        our_pkh.values, expected_pkh.values,
+        "PKH mismatch - wrong key?"
+    );
     println!("✓ PKH matches - we have the correct key\n");
 
     // 4. Compute sig_hash from the spend body
     let sig_hash = sb.compute_sig_hash();
-    println!("Sig hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-        sig_hash.values[3], sig_hash.values[4]);
+    println!(
+        "Sig hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        sig_hash.values[0],
+        sig_hash.values[1],
+        sig_hash.values[2],
+        sig_hash.values[3],
+        sig_hash.values[4]
+    );
 
     // 5. Sign multiple times and verify we get the same result (deterministic)
-    let (chal1, sig1) = siger_core::cheetah::schnorr_sign_tx(
-        sk_be,
-        (pk[0], pk[1]),
-        sig_hash.values
-    );
+    let (chal1, sig1) =
+        siger_core::cheetah::schnorr_sign_tx(sk_be, (pk[0], pk[1]), sig_hash.values);
 
-    let (chal2, sig2) = siger_core::cheetah::schnorr_sign_tx(
-        sk_be,
-        (pk[0], pk[1]),
-        sig_hash.values
-    );
+    let (chal2, sig2) =
+        siger_core::cheetah::schnorr_sign_tx(sk_be, (pk[0], pk[1]), sig_hash.values);
 
     println!("\nFirst signature:");
-    println!("  Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        chal1.values[0], chal1.values[1], chal1.values[2], chal1.values[3],
-        chal1.values[4], chal1.values[5], chal1.values[6], chal1.values[7]);
-    println!("  Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        sig1.values[0], sig1.values[1], sig1.values[2], sig1.values[3],
-        sig1.values[4], sig1.values[5], sig1.values[6], sig1.values[7]);
+    println!(
+        "  Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        chal1.values[0],
+        chal1.values[1],
+        chal1.values[2],
+        chal1.values[3],
+        chal1.values[4],
+        chal1.values[5],
+        chal1.values[6],
+        chal1.values[7]
+    );
+    println!(
+        "  Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        sig1.values[0],
+        sig1.values[1],
+        sig1.values[2],
+        sig1.values[3],
+        sig1.values[4],
+        sig1.values[5],
+        sig1.values[6],
+        sig1.values[7]
+    );
 
     // Verify determinism
     assert_eq!(chal1.values, chal2.values, "Challenge not deterministic!");

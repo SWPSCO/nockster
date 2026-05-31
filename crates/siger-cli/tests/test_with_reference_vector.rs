@@ -1,8 +1,8 @@
 use nockapp::noun::slab::NounSlab;
 use nockvm::noun::{Atom, Cell};
+use siger_core::cheetah::utils::t8_to_be32;
 /// Test with the exact vector from reference test
 use siger_core::cheetah::{cheetah_pub_from_sk, test_tip5_hash_words};
-use siger_core::cheetah::utils::t8_to_be32;
 use tx_types::hashing::tip5::Tip5Hasher;
 use tx_types::transaction_types::T8;
 

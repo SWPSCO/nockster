@@ -1,4 +1,4 @@
-use core::cmp::{max, min};
+use core::cmp::max;
 use core::fmt::Write;
 
 use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
@@ -214,7 +214,9 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
     render_header(display, "No seeds", COLOR_SURFACE_HIGH);
 
     let mut body = HString::<96>::new();
-    let _ = body.push_str("Enter your seedphrase. You can enter it from your computer too, via web or nockster-cli.");
+    let _ = body.push_str(
+        "Enter your seedphrase. You can enter it from your computer too, via web or nockster-cli.",
+    );
     let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
     let mut y = header_height() + 24;
     // Estimate character width for FONT_6X10 is 6 pixels
@@ -259,7 +261,12 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     } else if state.words.len() >= MAX_SEED_WORDS {
         let _ = write!(header_text, "Seed {}/{}", MAX_SEED_WORDS, MAX_SEED_WORDS);
     } else {
-        let _ = write!(header_text, "Word {}/{}", state.words.len() + 1, MAX_SEED_WORDS);
+        let _ = write!(
+            header_text,
+            "Word {}/{}",
+            state.words.len() + 1,
+            MAX_SEED_WORDS
+        );
     }
 
     render_header(display, header_text.as_str(), COLOR_SURFACE_HIGH);
@@ -342,7 +349,6 @@ fn draw_enter_seed_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: 
     let _ = Text::with_alignment(label, center, style, Alignment::Center).draw(display);
 }
 
-
 fn draw_keypad(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     let layout = keypad_layout();
     let geo = keypad_geometry();
@@ -373,7 +379,7 @@ fn draw_keypad_button(
     match button {
         SeedButton::Key(digit) => {
             let digit_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-            let letters_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);  // Bright, not subtle!
+            let letters_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT); // Bright, not subtle!
             let digit_label = char::from(b'0' + digit);
             let baseline_digit = center_y - 2;
             let mut digit_buf = [0u8; 4];
@@ -520,20 +526,12 @@ fn corner_buttons() -> [ButtonHit; 2] {
 
 fn keypad_layout() -> [[SeedButton; 3]; 3] {
     [
-        [
-            SeedButton::Key(2),
-            SeedButton::Key(3),
-            SeedButton::Key(4),
-        ],
-        [
-            SeedButton::Key(5),
-            SeedButton::Key(6),
-            SeedButton::Key(7),
-        ],
+        [SeedButton::Key(2), SeedButton::Key(3), SeedButton::Key(4)],
+        [SeedButton::Key(5), SeedButton::Key(6), SeedButton::Key(7)],
         [
             SeedButton::Key(8),
             SeedButton::Key(9),
-            SeedButton::NextSuggestion,  // Use > for cycling through suggestions
+            SeedButton::NextSuggestion, // Use > for cycling through suggestions
         ],
     ]
 }
@@ -548,14 +546,14 @@ fn keypad_geometry() -> KeypadGeometry {
     let top = header_height() + KEYPAD_MARGIN * 2;
     // Reserve space at bottom for corner buttons
     let bottom_button_height = 36i32;
-    let available_height = max(0, SCREEN_HEIGHT as i32 - top - bottom_button_height - KEYPAD_MARGIN * 2);
-    let button_width = max(
-        32,
-        (SCREEN_WIDTH as i32 - KEYPAD_MARGIN * 4) / 3,
+    let available_height = max(
+        0,
+        SCREEN_HEIGHT as i32 - top - bottom_button_height - KEYPAD_MARGIN * 2,
     );
+    let button_width = max(32, (SCREEN_WIDTH as i32 - KEYPAD_MARGIN * 4) / 3);
     let button_height = max(
         28,
-        (available_height - KEYPAD_MARGIN * 2) / 3,  // 3 rows
+        (available_height - KEYPAD_MARGIN * 2) / 3, // 3 rows
     );
     KeypadGeometry {
         top,
@@ -572,10 +570,7 @@ fn keypad_button_hit(row: usize, col: usize, geo: &KeypadGeometry) -> ButtonHit 
     ButtonHit {
         button: Button::Seed(button),
         top_left: Point::new(x, y),
-        size: Size::new(
-            geo.button_width as u32,
-            geo.button_height as u32,
-        ),
+        size: Size::new(geo.button_width as u32, geo.button_height as u32),
     }
 }
 
@@ -602,12 +597,7 @@ fn draw_left_aligned_text(
     line: usize,
 ) {
     let baseline = base_top + line as i32 * ((FONT_6X10.character_size.height as i32) + 4);
-    let _ = Text::new(
-        text.as_str(),
-        Point::new(left, baseline),
-        style,
-    )
-    .draw(display);
+    let _ = Text::new(text.as_str(), Point::new(left, baseline), style).draw(display);
 }
 
 fn split_text<'a>(text: &'a str, max_width: usize) -> impl Iterator<Item = &'a str> {
@@ -709,12 +699,7 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
         let mut line_buf = HString::<24>::new();
         let _ = write!(line_buf, "{:2}. {}", idx + 1, word.as_str());
 
-        let _ = Text::new(
-            line_buf.as_str(),
-            Point::new(8, y),
-            text_style,
-        )
-        .draw(display);
+        let _ = Text::new(line_buf.as_str(), Point::new(8, y), text_style).draw(display);
 
         y += line_height;
 

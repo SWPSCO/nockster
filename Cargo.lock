@@ -2743,7 +2743,7 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "cfg-if",
  "num-traits",
@@ -3464,7 +3464,7 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.5.2"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 
 [[package]]
 name = "nb"
@@ -3544,7 +3544,7 @@ dependencies = [
 [[package]]
 name = "nockapp"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "bincode",
  "bitvec",
@@ -3559,10 +3559,10 @@ dependencies = [
 [[package]]
 name = "nockchain-libp2p-io"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "bs58",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983)",
  "nockapp",
  "nockvm",
  "noun-serde",
@@ -3571,14 +3571,14 @@ dependencies = [
 [[package]]
 name = "nockchain-math"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "arrayref",
  "bs58",
  "bytes",
  "either",
  "hex-literal 1.1.0",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983)",
  "nockapp",
  "nockvm",
  "nockvm_macros",
@@ -3609,13 +3609,13 @@ dependencies = [
 [[package]]
 name = "nockvm"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "autotools",
  "bitvec",
  "cc",
  "either",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983)",
  "intmap",
  "json",
  "lazy_static",
@@ -3635,7 +3635,7 @@ dependencies = [
 [[package]]
 name = "nockvm_macros"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "quote",
  "syn 2.0.111",
@@ -3650,7 +3650,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "nockapp",
  "nockvm",
@@ -3662,7 +3662,7 @@ dependencies = [
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "nockvm",
  "proc-macro2",
@@ -4345,7 +4345,7 @@ dependencies = [
 [[package]]
 name = "pokenoun"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 
 [[package]]
 name = "polyval"
@@ -6525,7 +6525,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tx-types"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "anyhow",
  "bip39",
@@ -6534,11 +6534,12 @@ dependencies = [
  "chrono",
  "either",
  "hmac",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983)",
  "nockapp",
  "nockchain-libp2p-io",
  "nockchain-math",
  "nockvm",
+ "nockvm_macros",
  "noun-serde",
  "num-bigint",
  "num-traits",
@@ -7898,14 +7899,14 @@ dependencies = [
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f#900b91fbab93b2bad317413bd2dedd76b0ef470f"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983#fede30fa63ad555d1125cf2131dadc2e8e62e983"
 dependencies = [
  "bitvec",
  "bs58",
  "bytes",
  "either",
  "hex-literal 1.1.0",
- "ibig 0.3.6 (git+https://github.com/swpsco/tx-types?rev=900b91fbab93b2bad317413bd2dedd76b0ef470f)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=fede30fa63ad555d1125cf2131dadc2e8e62e983)",
  "nockapp",
  "nockchain-math",
  "nockvm",

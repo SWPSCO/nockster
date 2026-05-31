@@ -11,16 +11,16 @@ use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
 use cobs::encode;
 use core::cell::RefCell;
 use critical_section::Mutex;
-use esp_hal::system::{CpuControl, Stack};
-use esp_hal::time::{Duration, Instant};
 use esp_hal::otg_fs::{Usb, UsbBus as OtgUsbBus};
+use esp_hal::system::{CpuControl, Stack};
+use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{Gui, GuiInteraction, SeedInteraction};
 use heapless::{String as HString, Vec as HVec};
 use hmac::Hmac;
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
-use ripemd::Ripemd160;
 use pbkdf2::pbkdf2;
+use ripemd::Ripemd160;
 use sha2::{Digest, Sha256, Sha512};
 use siger_core::alloc_path as pathmod;
 use siger_core::{CheetahPub, *};
@@ -47,24 +47,39 @@ const HID_REPORT_ID: u8 = 1;
 const HID_REPORT_TOTAL_LEN: usize = 64; // includes report-id prefix
 const HID_REPORT_DATA_LEN: usize = HID_REPORT_TOTAL_LEN - 1; // excluding report-id
 const HID_PAYLOAD_MAX: usize = HID_REPORT_DATA_LEN - 1; // first byte is payload length
+const MAX_RX_REPORTS_PER_TICK: usize = 8;
 
 // Vendor-defined HID report:
 // report = [report_id=1][len][data...]
 // - len is the number of valid bytes in data (0..=HID_PAYLOAD_MAX)
 // - data is a byte-stream containing postcard+COBS frames delimited by 0x00
 const HID_REPORT_DESCRIPTOR: &[u8] = &[
-    0x06, 0x00, 0xFF, // USAGE_PAGE (Vendor Defined 0xFF00)
-    0x09, 0x01, // USAGE (0x01)
-    0xA1, 0x01, // COLLECTION (Application)
-    0x85, HID_REPORT_ID, // REPORT_ID (1)
-    0x15, 0x00, // LOGICAL_MINIMUM (0)
-    0x26, 0xFF, 0x00, // LOGICAL_MAXIMUM (255)
-    0x75, 0x08, // REPORT_SIZE (8)
-    0x95, HID_REPORT_DATA_LEN as u8, // REPORT_COUNT (63)
-    0x09, 0x01, // USAGE (0x01)
-    0x81, 0x02, // INPUT (Data,Var,Abs)
-    0x09, 0x01, // USAGE (0x01)
-    0x91, 0x02, // OUTPUT (Data,Var,Abs)
+    0x06,
+    0x00,
+    0xFF, // USAGE_PAGE (Vendor Defined 0xFF00)
+    0x09,
+    0x01, // USAGE (0x01)
+    0xA1,
+    0x01, // COLLECTION (Application)
+    0x85,
+    HID_REPORT_ID, // REPORT_ID (1)
+    0x15,
+    0x00, // LOGICAL_MINIMUM (0)
+    0x26,
+    0xFF,
+    0x00, // LOGICAL_MAXIMUM (255)
+    0x75,
+    0x08, // REPORT_SIZE (8)
+    0x95,
+    HID_REPORT_DATA_LEN as u8, // REPORT_COUNT (63)
+    0x09,
+    0x01, // USAGE (0x01)
+    0x81,
+    0x02, // INPUT (Data,Var,Abs)
+    0x09,
+    0x01, // USAGE (0x01)
+    0x91,
+    0x02, // OUTPUT (Data,Var,Abs)
     0xC0, // END_COLLECTION
 ];
 
@@ -144,9 +159,9 @@ fn usb_tx_queue_compact(queue: &mut UsbTxQueue) {
 }
 
 #[inline]
-fn usb_write<B: usb_device::bus::UsbBus>(hid: &mut HIDClass<'_, B>, buf: &[u8]) {
+fn usb_write<B: usb_device::bus::UsbBus>(hid: &mut HIDClass<'_, B>, buf: &[u8]) -> bool {
     if buf.len() > TX_QUEUE_LEN {
-        return;
+        return false;
     }
 
     // Drain any already-queued bytes first. This keeps the queue small while a
@@ -170,11 +185,12 @@ fn usb_write<B: usb_device::bus::UsbBus>(hid: &mut HIDClass<'_, B>, buf: &[u8]) 
     }
     if enqueued {
         usb_service_tx(hid);
-        return;
+        return true;
     }
 
     // Second try: give the USB peripheral another chance to flush, then retry.
     usb_service_tx(hid);
+    let mut enqueued = false;
     unsafe {
         let queue = USB_TX_QUEUE.get_or_insert_with(|| UsbTxQueue {
             buf: HVec::new(),
@@ -183,9 +199,11 @@ fn usb_write<B: usb_device::bus::UsbBus>(hid: &mut HIDClass<'_, B>, buf: &[u8]) 
         usb_tx_queue_compact(queue);
         if queue.buf.len().saturating_add(buf.len()) <= TX_QUEUE_LEN {
             let _ = queue.buf.extend_from_slice(buf);
+            enqueued = true;
         }
     }
     usb_service_tx(hid);
+    enqueued
 }
 
 #[inline]
@@ -219,7 +237,6 @@ static mut FRAG: Option<FragState> = None;
 struct OutFrag {
     msg_id: u32,
     id: u16,
-    kind: FragKind,
     off: u32,
     data: Vec<u8>,
 }
@@ -277,9 +294,6 @@ static INITPIN_RESULT: Mutex<RefCell<Option<InitPinOutcome>>> = Mutex::new(RefCe
 
 struct UnlockController {
     awaiting_result: bool,
-    submitted_at: Option<Instant>,
-    last_pin: Option<HString<16>>,
-    ignore_next_result: bool,
 }
 
 struct InitPinController;
@@ -287,7 +301,6 @@ struct InitPinController;
 struct PendingConfirmation {
     msg_id: u32,
     frame: Frame,
-    prompt: &'static str,
 }
 
 struct PendingSignDraft {
@@ -302,15 +315,13 @@ static PENDING_CONFIRMATION: Mutex<RefCell<Option<PendingConfirmation>>> =
     Mutex::new(RefCell::new(None));
 
 #[allow(clippy::declare_interior_mutable_const)]
-static PENDING_SIGN_DRAFT: Mutex<RefCell<Option<PendingSignDraft>>> = Mutex::new(RefCell::new(None));
+static PENDING_SIGN_DRAFT: Mutex<RefCell<Option<PendingSignDraft>>> =
+    Mutex::new(RefCell::new(None));
 
 impl UnlockController {
     fn new() -> Self {
         Self {
             awaiting_result: false,
-            submitted_at: None,
-            last_pin: None,
-            ignore_next_result: false,
         }
     }
 
@@ -321,7 +332,6 @@ impl UnlockController {
 
         let mut pin_buf = HString::<16>::new();
         pin_buf.push_str(pin).map_err(|_| ())?;
-        let stored_pin = pin_buf.clone();
 
         critical_section::with(|cs| {
             let mut pending = UNLOCK_REQUEST.borrow_ref_mut(cs);
@@ -336,9 +346,6 @@ impl UnlockController {
         })?;
 
         self.awaiting_result = true;
-        self.submitted_at = Some(Instant::now());
-        self.last_pin = Some(stored_pin);
-        self.ignore_next_result = false;
         Ok(())
     }
 
@@ -348,34 +355,12 @@ impl UnlockController {
             let outcome = slot.take();
             if outcome.is_some() {
                 self.awaiting_result = false;
-                self.submitted_at = None;
-                self.last_pin = None;
             }
             outcome
         });
 
         if let Some(result) = outcome {
-            if self.ignore_next_result {
-                self.ignore_next_result = false;
-                return None;
-            }
             return Some(result);
-        }
-
-        if self.awaiting_result {
-            if let Some(start) = self.submitted_at {
-                if Instant::now() - start >= Duration::from_millis(2000) {
-                    if let Some(pin) = self.last_pin.clone() {
-                        let outcome = compute_unlock_outcome(pin.as_str());
-                        self.awaiting_result = false;
-                        self.submitted_at = None;
-                        self.last_pin = None;
-                        self.ignore_next_result = true;
-                        return Some(outcome);
-                    }
-                    self.submitted_at = Some(Instant::now());
-                }
-            }
         }
 
         None
@@ -444,10 +429,7 @@ fn compute_initpin_outcome(request: InitPinRequest) -> InitPinOutcome {
     let mut nvs = NvsStore::new();
     let pub_xy = root_pub_from_seed(&seed64);
     match nvs.initialize_pin(pin.as_str(), &seed64, pub_xy) {
-        Ok((master_key, _slot)) => InitPinOutcome::Success {
-            seed64,
-            master_key,
-        },
+        Ok((master_key, _slot)) => InitPinOutcome::Success { seed64, master_key },
         Err(NvsError::AlreadyInitialized) => {
             seed64.zeroize();
             InitPinOutcome::AlreadyInitialized
@@ -468,7 +450,7 @@ fn compute_initpin_outcome(request: InitPinRequest) -> InitPinOutcome {
 }
 
 fn unlock_worker_loop() -> ! {
-    let mut delay = Delay::new();
+    let delay = Delay::new();
     loop {
         if let Some(request) = take_initpin_request() {
             let outcome = compute_initpin_outcome(request);
@@ -490,8 +472,12 @@ fn begin_confirmation(
 ) -> Result<(), ()> {
     let mut spend_outputs: HVec<(u64, HString<64>), 24> = HVec::new();
     let show_spend_outputs = match &frame {
-        Frame::One(Request::SignSpendHash { meta: Some(meta), .. })
-        | Frame::One(Request::SignSpendHashFor { meta: Some(meta), .. }) => {
+        Frame::One(Request::SignSpendHash {
+            meta: Some(meta), ..
+        })
+        | Frame::One(Request::SignSpendHashFor {
+            meta: Some(meta), ..
+        }) => {
             for out in meta.outputs.iter() {
                 if out.gift == 0 || out.is_refund {
                     continue;
@@ -529,11 +515,7 @@ fn begin_confirmation(
         if pending.is_some() {
             false
         } else {
-            pending.replace(PendingConfirmation {
-                msg_id,
-                frame,
-                prompt,
-            });
+            pending.replace(PendingConfirmation { msg_id, frame });
             true
         }
     });
@@ -643,7 +625,6 @@ fn main() -> ! {
         let mut nvs = NvsStore::new();
         nvs.is_initialized()
     };
-    delay.delay_millis(2_000);
     if pin_required {
         if let Some(ui) = ui.as_mut() {
             ui.begin_unlock(None);
@@ -669,8 +650,8 @@ fn main() -> ! {
     let mut hid = HIDClass::new(&usb_bus, HID_REPORT_DESCRIPTOR, 10);
     let strings = [StringDescriptors::new(LangID::EN_US)
         .manufacturer("SWPSCo")
-        .product("Siger")
-        .serial_number("siger-001")];
+        .product("Nockster")
+        .serial_number("nock001")];
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x303a, 0x2001))
         .strings(&strings)
         .expect("usb strings")
@@ -683,145 +664,132 @@ fn main() -> ! {
     'main: loop {
         usb_dev.poll(&mut [&mut hid]);
         usb_service_tx(&mut hid);
-    if let Some(ui) = ui.as_mut() {
-        let event = ui.tick();
-        if let Some(decision) = ui.poll_confirmation_result() {
-            if let Some(pending) = take_pending_confirmation() {
-                let resp_msg = if decision {
-                    let approved_label = match &pending.frame {
-                        Frame::One(Request::SignDigest { .. })
-                        | Frame::One(Request::SignSpendHash { .. })
-                        | Frame::One(Request::SignSpendHashFor { .. }) => "Signing...",
-                        _ => "Approved",
-                    };
-                    ui.show_idle_message_timed(approved_label, Duration::from_millis(3_000));
+        if let Some(ui) = ui.as_mut() {
+            let event = ui.tick();
+            if let Some(decision) = ui.poll_confirmation_result() {
+                if let Some(pending) = take_pending_confirmation() {
+                    let resp_msg = if decision {
+                        let approved_label = match &pending.frame {
+                            Frame::One(Request::SignDigest { .. })
+                            | Frame::One(Request::SignSpendHash { .. })
+                            | Frame::One(Request::SignSpendHashFor { .. }) => "Signing...",
+                            _ => "Approved",
+                        };
+                        ui.show_idle_message_timed(approved_label, Duration::from_millis(3_000));
                         let body = handle_frame_v1(pending.msg_id, &pending.frame, None);
                         Msg {
                             v: PROTO_V1,
                             id: pending.msg_id,
                             msg: body,
                         }
-                } else {
-                    ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
-                    Msg {
-                        v: PROTO_V1,
-                        id: pending.msg_id,
-                        msg: Response::Err {
-                            code: ERR_REJECTED_BY_USER,
-                        },
+                    } else {
+                        ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
+                        Msg {
+                            v: PROTO_V1,
+                            id: pending.msg_id,
+                            msg: Response::Err {
+                                code: ERR_REJECTED_BY_USER,
+                            },
+                        }
+                    };
+                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                        let n = encode(used, &mut enc);
+                        enc[n] = 0;
+                        let _ = usb_write(&mut hid, &enc[..n + 1]);
+                    } else {
+                        send_err(&mut hid, ERR_ENCODE_TOO_BIG, &mut enc);
                     }
-                };
-                if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
-                    let n = encode(used, &mut enc);
-                    enc[n] = 0;
-                    let _ = usb_write(&mut hid, &enc[..n + 1]);
-                } else {
-                    send_err(&mut hid, ERR_ENCODE_TOO_BIG, &mut enc);
-                }
-                if decision {
-                    usb_debug(&mut hid, b"confirm accepted\r\n");
-                } else {
-                    usb_debug(&mut hid, b"confirm rejected\r\n");
-                }
-            } else if let Some(mut pending) = take_pending_sign_draft() {
-                let resp_msg = if decision {
-                    ui.show_idle_message_timed("Signing...", Duration::from_millis(3_000));
-                    let cfg = siger_core::draft_sign::SignerConfig { sk_be: pending.sk_be };
-                    match siger_core::draft_sign::sign_draft_v1(pending.draft.as_slice(), &cfg) {
-                        Ok(out) => {
-                            let total = out.len() as u32;
-                            unsafe {
-                                OUT_FRAG = Some(OutFrag {
-                                    msg_id: pending.msg_id,
-                                    id: pending.frag_id,
-                                    kind: FragKind::SignDraft,
-                                    off: 0,
-                                    data: out,
-                                });
+                    if decision {
+                        usb_debug(&mut hid, b"confirm accepted\r\n");
+                    } else {
+                        usb_debug(&mut hid, b"confirm rejected\r\n");
+                    }
+                } else if let Some(mut pending) = take_pending_sign_draft() {
+                    let resp_msg = if decision {
+                        ui.show_idle_message_timed("Signing...", Duration::from_millis(3_000));
+                        let cfg = siger_core::draft_sign::SignerConfig {
+                            sk_be: pending.sk_be,
+                        };
+                        match siger_core::draft_sign::sign_draft_v1(pending.draft.as_slice(), &cfg)
+                        {
+                            Ok(out) => {
+                                let total = out.len() as u32;
+                                unsafe {
+                                    OUT_FRAG = Some(OutFrag {
+                                        msg_id: pending.msg_id,
+                                        id: pending.frag_id,
+                                        off: 0,
+                                        data: out,
+                                    });
+                                }
+                                Msg {
+                                    v: PROTO_V1,
+                                    id: pending.msg_id,
+                                    msg: Response::FragBegin {
+                                        id: pending.frag_id,
+                                        total_len: total,
+                                        kind: FragKind::SignDraft,
+                                    },
+                                }
                             }
-                            Msg {
+                            Err(siger_core::draft_sign::SignDraftError::Unsupported) => Msg {
                                 v: PROTO_V1,
                                 id: pending.msg_id,
-                                msg: Response::FragBegin {
-                                    id: pending.frag_id,
-                                    total_len: total,
-                                    kind: FragKind::SignDraft,
+                                msg: Response::Err {
+                                    code: ERR_UNSUPPORTED_VERSION,
                                 },
-                            }
+                            },
+                            Err(_) => Msg {
+                                v: PROTO_V1,
+                                id: pending.msg_id,
+                                msg: Response::Err {
+                                    code: ERR_BAD_COBS_OR_POSTCARD,
+                                },
+                            },
                         }
-                        Err(siger_core::draft_sign::SignDraftError::Unsupported) => Msg {
+                    } else {
+                        ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
+                        Msg {
                             v: PROTO_V1,
                             id: pending.msg_id,
                             msg: Response::Err {
-                                code: ERR_UNSUPPORTED_VERSION,
+                                code: ERR_REJECTED_BY_USER,
                             },
-                        },
-                        Err(_) => Msg {
-                            v: PROTO_V1,
-                            id: pending.msg_id,
-                            msg: Response::Err {
-                                code: ERR_BAD_COBS_OR_POSTCARD,
-                            },
-                        },
+                        }
+                    };
+                    pending.sk_be.zeroize();
+                    if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
+                        let n = encode(used, &mut enc);
+                        enc[n] = 0;
+                        let _ = usb_write(&mut hid, &enc[..n + 1]);
+                    } else {
+                        send_err(&mut hid, ERR_ENCODE_TOO_BIG, &mut enc);
                     }
-                } else {
-                    ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
-                    Msg {
-                        v: PROTO_V1,
-                        id: pending.msg_id,
-                        msg: Response::Err {
-                            code: ERR_REJECTED_BY_USER,
-                        },
-                    }
-                };
-                pending.sk_be.zeroize();
-                if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
-                    let n = encode(used, &mut enc);
-                    enc[n] = 0;
-                    let _ = usb_write(&mut hid, &enc[..n + 1]);
-                } else {
-                    send_err(&mut hid, ERR_ENCODE_TOO_BIG, &mut enc);
                 }
             }
-        }
-        if let Some(event) = event {
-            match event {
-                GuiInteraction::PinComplete(digits) => {
+            if let Some(event) = event {
+                match event {
+                    GuiInteraction::PinComplete(digits) => {
                         let mut pin = HString::<16>::new();
                         for digit in digits.iter() {
                             let ch = char::from(b'0' + *digit);
                             let _ = pin.push(ch);
                         }
                         if let Some(mut seed64) = pending_seed_setup.take() {
-                            ui.show_unlocking();
-
-                            unsafe { DEVICE_BUSY = true; }
-                            let mut nvs = NvsStore::new();
-                            let pub_xy = root_pub_from_seed(&seed64);
-                            let outcome = nvs.initialize_pin(pin.as_str(), &seed64, pub_xy);
-                            unsafe { DEVICE_BUSY = false; }
-
-                            match outcome {
-                                Ok((master_key, _slot)) => {
-                                    store_master_key(&master_key);
-                                    set_seed(&seed64);
+                            match initpin_controller.submit(pin.as_str(), &seed64) {
+                                Ok(()) => {
                                     unsafe {
-                                        DEVICE_LOCKED = false;
+                                        DEVICE_BUSY = true;
                                     }
-                                    ui.show_unlock_success();
-                                    usb_debug(&mut hid, b"seed+pin initialized\r\n");
+                                    ui.show_unlocking();
+                                    seed64.zeroize();
                                 }
-                                Err(NvsError::AlreadyInitialized) => {
+                                Err(()) => {
+                                    pending_seed_setup = Some(seed64);
                                     ui.show_pin_failure(None);
-                                    usb_debug(&mut hid, b"already initialized\r\n");
-                                }
-                                Err(_) => {
-                                    ui.show_pin_failure(None);
-                                    usb_debug(&mut hid, b"pin init failed\r\n");
+                                    usb_debug(&mut hid, b"init queue busy\r\n");
                                 }
                             }
-
-                            seed64.zeroize();
                         } else {
                             match unlock_controller.submit(pin.as_str()) {
                                 Ok(()) => {
@@ -849,6 +817,9 @@ fn main() -> ! {
                         SeedInteraction::EntryCompleted(phrase) => {
                             match bip39_seed_from_phrase(&phrase) {
                                 Ok(seed64) => {
+                                    if let Some(mut old_seed) = pending_seed_setup.take() {
+                                        old_seed.zeroize();
+                                    }
                                     pending_seed_setup = Some(seed64);
                                     ui.clear_seed_entry_state();
                                     ui.begin_unlock(Some(4));
@@ -860,10 +831,12 @@ fn main() -> ! {
                             }
                         }
                         SeedInteraction::EntryCancelled => {
-                            pending_seed_setup = None;
+                            if let Some(mut seed64) = pending_seed_setup.take() {
+                                seed64.zeroize();
+                            }
                         }
                         _ => {}
-                    }
+                    },
                     GuiInteraction::RawTouch(_coord) => {}
                 }
             }
@@ -877,7 +850,9 @@ fn main() -> ! {
             };
             if let Some(id) = unsafe { PENDING_USB_UNLOCK_ID.take() } {
                 send_response(&mut hid, id, resp, &mut plain, &mut enc);
-                unsafe { DEVICE_BUSY = false; }
+                unsafe {
+                    DEVICE_BUSY = false;
+                }
             }
         }
         if let Some(outcome) = initpin_controller.poll() {
@@ -888,7 +863,9 @@ fn main() -> ! {
             };
             if let Some(id) = unsafe { PENDING_USB_INITPIN_ID.take() } {
                 send_response(&mut hid, id, resp, &mut plain, &mut enc);
-                unsafe { DEVICE_BUSY = false; }
+            }
+            unsafe {
+                DEVICE_BUSY = false;
             }
         }
         // 1) Proactive outbound frag, if any
@@ -911,7 +888,9 @@ fn main() -> ! {
                 if let Ok(used) = postcard::to_slice(&resp, &mut plain) {
                     let n = encode(used, &mut enc);
                     enc[n] = 0;
-                    let _ = usb_write(&mut hid, &enc[..n + 1]);
+                    if !usb_write(&mut hid, &enc[..n + 1]) {
+                        continue;
+                    }
                 }
                 of.off = end as u32;
                 if last {
@@ -922,10 +901,15 @@ fn main() -> ! {
             }
         }
         // 2) RX path
+        let mut rx_reports_this_tick = 0usize;
         loop {
+            if rx_reports_this_tick >= MAX_RX_REPORTS_PER_TICK {
+                break;
+            }
             let mut report = [0u8; HID_REPORT_TOTAL_LEN];
             match hid.pull_raw_output(&mut report) {
                 Ok(n) => {
+                    rx_reports_this_tick += 1;
                     if n < 2 {
                         continue;
                     }
@@ -933,7 +917,8 @@ fn main() -> ! {
                         continue;
                     }
                     let payload_len = report[1] as usize;
-                    let available = core::cmp::min(payload_len, n.saturating_sub(2)).min(HID_PAYLOAD_MAX);
+                    let available =
+                        core::cmp::min(payload_len, n.saturating_sub(2)).min(HID_PAYLOAD_MAX);
                     for &b in report[2..2 + available].iter() {
                         if b == 0 && rx.is_empty() {
                             continue 'main;
@@ -945,77 +930,58 @@ fn main() -> ! {
                         }
                         if b == 0 {
                             // decode Msg<Frame>
-                            let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
-                                Ok(m) if m.v == PROTO_V1 => {
-                                    // Check if device is busy with a long operation (PBKDF2, etc.)
-                                    // Reject all requests except Ping/GetInfo to prevent queue buildup
-                                    let is_blocking_request = unsafe { DEVICE_BUSY };
-                                    let is_ping_or_info = matches!(&m.msg,
-                                        Frame::One(Request::Ping) | Frame::One(Request::GetInfo));
+                            let resp_msg =
+                                match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
+                                    Ok(m) if m.v == PROTO_V1 => {
+                                        // Check if device is busy with a long operation (PBKDF2, etc.)
+                                        // Reject all requests except Ping/GetInfo to prevent queue buildup
+                                        let is_blocking_request = unsafe { DEVICE_BUSY };
+                                        let is_ping_or_info = matches!(
+                                            &m.msg,
+                                            Frame::One(Request::Ping)
+                                                | Frame::One(Request::GetInfo)
+                                        );
 
-                                    if is_blocking_request && !is_ping_or_info {
-                                        Some(Msg {
-                                            v: PROTO_V1,
-                                            id: m.id,
-                                            msg: Response::Err { code: ERR_BUSY },
-                                        })
-                                    } else if let Frame::One(Request::Unlock { pin }) = &m.msg {
-                                        if let Some(ui) = ui.as_mut() {
-                                            ui.show_unlocking();
-                                        }
-                                        match unlock_controller.submit(pin.as_str()) {
-                                            Ok(()) => {
-                                                unsafe {
-                                                    DEVICE_BUSY = true;
-                                                    PENDING_USB_UNLOCK_ID = Some(m.id);
-                                                }
-                                                None
-                                            }
-                                            Err(()) => Some(Msg {
+                                        if is_blocking_request && !is_ping_or_info {
+                                            Some(Msg {
                                                 v: PROTO_V1,
                                                 id: m.id,
                                                 msg: Response::Err { code: ERR_BUSY },
-                                            }),
-                                        }
-                                    } else if let Frame::One(Request::InitializePIN { pin, seed64 }) = &m.msg {
-                                        if let Some(ui) = ui.as_mut() {
-                                            ui.show_unlocking();
-                                        }
-                                        match initpin_controller.submit(pin.as_str(), seed64) {
-                                            Ok(()) => {
-                                                unsafe {
-                                                    DEVICE_BUSY = true;
-                                                    PENDING_USB_INITPIN_ID = Some(m.id);
-                                                }
-                                                None
-                                            }
-                                            Err(()) => Some(Msg {
-                                                v: PROTO_V1,
-                                                id: m.id,
-                                                msg: Response::Err { code: ERR_BUSY },
-                                            }),
-                                        }
-                                    } else {
-                                        // Show GUI lock screen if lock request comes over USB
-                                        if let Frame::One(Request::Lock) = &m.msg {
+                                            })
+                                        } else if let Frame::One(Request::Unlock { pin }) = &m.msg {
                                             if let Some(ui) = ui.as_mut() {
-                                                ui.begin_unlock(None);
+                                                ui.show_unlocking();
                                             }
-                                        }
-
-                                        if let Some(prompt) = frame_confirmation_prompt(&m.msg) {
-                                            let frame_clone = m.msg.clone();
-                                            let begin_result = {
-                                                let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
-                                                begin_confirmation(
-                                                    m.id,
-                                                    frame_clone,
-                                                    prompt,
-                                                    ui_ref,
-                                                )
-                                            };
-                                            match begin_result {
-                                                Ok(()) => None,
+                                            match unlock_controller.submit(pin.as_str()) {
+                                                Ok(()) => {
+                                                    unsafe {
+                                                        DEVICE_BUSY = true;
+                                                        PENDING_USB_UNLOCK_ID = Some(m.id);
+                                                    }
+                                                    None
+                                                }
+                                                Err(()) => Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err { code: ERR_BUSY },
+                                                }),
+                                            }
+                                        } else if let Frame::One(Request::InitializePIN {
+                                            pin,
+                                            seed64,
+                                        }) = &m.msg
+                                        {
+                                            if let Some(ui) = ui.as_mut() {
+                                                ui.show_unlocking();
+                                            }
+                                            match initpin_controller.submit(pin.as_str(), seed64) {
+                                                Ok(()) => {
+                                                    unsafe {
+                                                        DEVICE_BUSY = true;
+                                                        PENDING_USB_INITPIN_ID = Some(m.id);
+                                                    }
+                                                    None
+                                                }
                                                 Err(()) => Some(Msg {
                                                     v: PROTO_V1,
                                                     id: m.id,
@@ -1023,74 +989,113 @@ fn main() -> ! {
                                                 }),
                                             }
                                         } else {
-                                            let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
-                                            let body = handle_frame_v1(m.id, &m.msg, ui_ref);
-
-                                            // Show result on GUI after unlock completes
-                                            if let Frame::One(Request::Unlock { .. }) = &m.msg {
+                                            // Show GUI lock screen if lock request comes over USB
+                                            if let Frame::One(Request::Lock) = &m.msg {
                                                 if let Some(ui) = ui.as_mut() {
-                                                    match &body {
-                                                        Response::Ok => ui.show_unlock_success(),
-                                                        Response::Err { code }
-                                                            if *code == ERR_WRONG_PIN =>
-                                                        {
-                                                            // Get attempts remaining from lock status
-                                                            let mut nvs = NvsStore::new();
-                                                            let remaining = nvs.get_attempts_remaining();
-                                                            ui.show_pin_failure(if remaining > 0 {
-                                                                Some(remaining)
-                                                            } else {
-                                                                None
-                                                            });
-                                                        }
-                                                        Response::Err { code }
-                                                            if *code == ERR_PIN_LOCKED_OUT =>
-                                                        {
-                                                            ui.show_pin_locked_out();
-                                                        }
-                                                        _ => {}
-                                                    }
+                                                    ui.begin_unlock(None);
                                                 }
                                             }
 
-                                            // Show result on GUI after seeding completes
-                                            if let Frame::One(Request::InitializePIN { .. }) = &m.msg {
-                                                if let Some(ui) = ui.as_mut() {
-                                                    match &body {
-                                                        Response::Ok => ui.show_unlock_success(),
-                                                        Response::Err { code }
-                                                            if *code == ERR_ALREADY_INITIALIZED =>
-                                                        {
-                                                            ui.begin_unlock(None);
+                                            if let Some(prompt) = frame_confirmation_prompt(&m.msg)
+                                            {
+                                                let frame_clone = m.msg.clone();
+                                                let begin_result = {
+                                                    let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                                    begin_confirmation(
+                                                        m.id,
+                                                        frame_clone,
+                                                        prompt,
+                                                        ui_ref,
+                                                    )
+                                                };
+                                                match begin_result {
+                                                    Ok(()) => None,
+                                                    Err(()) => Some(Msg {
+                                                        v: PROTO_V1,
+                                                        id: m.id,
+                                                        msg: Response::Err { code: ERR_BUSY },
+                                                    }),
+                                                }
+                                            } else {
+                                                let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                                let body = handle_frame_v1(m.id, &m.msg, ui_ref);
+
+                                                // Show result on GUI after unlock completes
+                                                if let Frame::One(Request::Unlock { .. }) = &m.msg {
+                                                    if let Some(ui) = ui.as_mut() {
+                                                        match &body {
+                                                            Response::Ok => {
+                                                                ui.show_unlock_success()
+                                                            }
+                                                            Response::Err { code }
+                                                                if *code == ERR_WRONG_PIN =>
+                                                            {
+                                                                // Get attempts remaining from lock status
+                                                                let mut nvs = NvsStore::new();
+                                                                let remaining =
+                                                                    nvs.get_attempts_remaining();
+                                                                ui.show_pin_failure(
+                                                                    if remaining > 0 {
+                                                                        Some(remaining)
+                                                                    } else {
+                                                                        None
+                                                                    },
+                                                                );
+                                                            }
+                                                            Response::Err { code }
+                                                                if *code == ERR_PIN_LOCKED_OUT =>
+                                                            {
+                                                                ui.show_pin_locked_out();
+                                                            }
+                                                            _ => {}
                                                         }
-                                                        _ => ui.show_seed_setup(),
                                                     }
                                                 }
-                                            }
 
-                                            Some(Msg {
-                                                v: PROTO_V1,
-                                                id: m.id,
-                                                msg: body,
-                                            })
+                                                // Show result on GUI after seeding completes
+                                                if let Frame::One(Request::InitializePIN {
+                                                    ..
+                                                }) = &m.msg
+                                                {
+                                                    if let Some(ui) = ui.as_mut() {
+                                                        match &body {
+                                                            Response::Ok => {
+                                                                ui.show_unlock_success()
+                                                            }
+                                                            Response::Err { code }
+                                                                if *code
+                                                                    == ERR_ALREADY_INITIALIZED =>
+                                                            {
+                                                                ui.begin_unlock(None);
+                                                            }
+                                                            _ => ui.show_seed_setup(),
+                                                        }
+                                                    }
+                                                }
+
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: body,
+                                                })
+                                            }
                                         }
                                     }
-                                }
-                                Ok(_) => Some(Msg {
-                                    v: PROTO_V1,
-                                    id: 0,
-                                    msg: Response::Err {
-                                        code: ERR_UNSUPPORTED_VERSION,
-                                    },
-                                }),
-                                Err(_) => Some(Msg {
-                                    v: PROTO_V1,
-                                    id: 0,
-                                    msg: Response::Err {
-                                        code: ERR_BAD_COBS_OR_POSTCARD,
-                                    },
-                                }),
-                            };
+                                    Ok(_) => Some(Msg {
+                                        v: PROTO_V1,
+                                        id: 0,
+                                        msg: Response::Err {
+                                            code: ERR_UNSUPPORTED_VERSION,
+                                        },
+                                    }),
+                                    Err(_) => Some(Msg {
+                                        v: PROTO_V1,
+                                        id: 0,
+                                        msg: Response::Err {
+                                            code: ERR_BAD_COBS_OR_POSTCARD,
+                                        },
+                                    }),
+                                };
                             if let Some(resp_msg) = resp_msg {
                                 if let Ok(used) = postcard::to_slice(&resp_msg, &mut plain) {
                                     let n = encode(used, &mut enc);
@@ -1251,29 +1256,29 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                                 FRAG = None;
                                 Response::Ok
                             } else {
-                                let out =
-                                    match siger_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg)
-                                    {
-                                        Ok(v) => v,
-                                        Err(siger_core::draft_sign::SignDraftError::Unsupported) => {
-                                            FRAG = None;
-                                            return Response::Err {
-                                                code: ERR_UNSUPPORTED_VERSION,
-                                            };
-                                        }
-                                        Err(_) => {
-                                            FRAG = None;
-                                            return Response::Err {
-                                                code: ERR_BAD_COBS_OR_POSTCARD,
-                                            };
-                                        }
-                                    };
+                                let out = match siger_core::draft_sign::sign_draft_v1(
+                                    st.buf.as_slice(),
+                                    &cfg,
+                                ) {
+                                    Ok(v) => v,
+                                    Err(siger_core::draft_sign::SignDraftError::Unsupported) => {
+                                        FRAG = None;
+                                        return Response::Err {
+                                            code: ERR_UNSUPPORTED_VERSION,
+                                        };
+                                    }
+                                    Err(_) => {
+                                        FRAG = None;
+                                        return Response::Err {
+                                            code: ERR_BAD_COBS_OR_POSTCARD,
+                                        };
+                                    }
+                                };
 
                                 let total = out.len() as u32;
                                 OUT_FRAG = Some(OutFrag {
                                     msg_id: req_id,
                                     id: st.id,
-                                    kind: FragKind::SignDraft,
                                     off: 0,
                                     data: out,
                                 });
@@ -1380,10 +1385,7 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
         Request::SignSpendHash {
-            slot,
-            path,
-            msg5,
-            ..
+            slot, path, msg5, ..
         } => {
             if is_device_locked() {
                 return Response::Err {
@@ -1457,7 +1459,9 @@ fn handle_request_v1(req: &Request) -> Response {
             }
         }
         Request::InitializePIN { pin, seed64 } => {
-            unsafe { DEVICE_BUSY = true; }
+            unsafe {
+                DEVICE_BUSY = true;
+            }
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
             let result = match nvs.initialize_pin(pin.as_str(), seed64, pub_xy) {
@@ -1478,7 +1482,9 @@ fn handle_request_v1(req: &Request) -> Response {
                 Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             };
-            unsafe { DEVICE_BUSY = false; }
+            unsafe {
+                DEVICE_BUSY = false;
+            }
             result
         }
         Request::AddSeed { seed64 } => {
@@ -1551,7 +1557,9 @@ fn handle_request_v1(req: &Request) -> Response {
             // WARNING: This blocks main thread for ~5s during PBKDF2
             // GUI unlock animation will freeze during this time (only for serial unlock)
             // GUI-initiated unlock uses APP_CORE worker and doesn't have this issue
-            unsafe { DEVICE_BUSY = true; }
+            unsafe {
+                DEVICE_BUSY = true;
+            }
             let result = match unlock_device_with_pin(pin.as_str()) {
                 UnlockAttempt::Success => Response::Ok,
                 UnlockAttempt::WrongPin { .. } => Response::Err {
@@ -1563,9 +1571,11 @@ fn handle_request_v1(req: &Request) -> Response {
                 UnlockAttempt::NotInitialized => Response::Err { code: ERR_NO_SEED },
                 UnlockAttempt::Failed => Response::Err { code: ERR_NO_SEED },
             };
-            unsafe { DEVICE_BUSY = false; }
+            unsafe {
+                DEVICE_BUSY = false;
+            }
             result
-        },
+        }
         Request::Lock => {
             wipe_seed();
             clear_master_key();
@@ -1768,10 +1778,7 @@ fn handle_initpin_outcome<B: usb_device::bus::UsbBus>(
     hid: &mut HIDClass<'_, B>,
 ) -> Response {
     match outcome {
-        InitPinOutcome::Success {
-            seed64,
-            master_key,
-        } => {
+        InitPinOutcome::Success { seed64, master_key } => {
             let mut seed64 = seed64;
             let mut master_key = master_key;
             store_master_key(&master_key);
@@ -1884,8 +1891,13 @@ fn bip39_seed_from_phrase(phrase: &gui::SeedPhrase) -> Result<[u8; 64], ()> {
     }
 
     let mut out = [0u8; 64];
-    pbkdf2::<Hmac<Sha512>>(sentence.as_str().as_bytes(), b"mnemonic", BIP39_PBKDF2_ROUNDS, &mut out)
-        .map_err(|_| ())?;
+    pbkdf2::<Hmac<Sha512>>(
+        sentence.as_str().as_bytes(),
+        b"mnemonic",
+        BIP39_PBKDF2_ROUNDS,
+        &mut out,
+    )
+    .map_err(|_| ())?;
     Ok(out)
 }
 

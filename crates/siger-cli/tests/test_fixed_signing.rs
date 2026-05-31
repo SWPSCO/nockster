@@ -4,11 +4,13 @@ use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
 use noun_serde::NounDecode;
 use std::fs;
-use tx_types::transaction_types::{SpendBody, Hash, T8};
-use tx_types::transaction_types_v1::*;
 use tx_types::crypto::cheetah::point::cheetah_pub_from_sk;
-use tx_types::crypto::utils::{add_mod_n, mul_mod_n, trunc_g_order_to_be32, be32_atom_to_t8_le, t8_to_be32};
+use tx_types::crypto::utils::{
+    add_mod_n, be32_atom_to_t8_le, mul_mod_n, t8_to_be32, trunc_g_order_to_be32,
+};
 use tx_types::hashing::hasher::hash_transcript_list;
+use tx_types::transaction_types::{Hash, SpendBody, T8};
+use tx_types::transaction_types_v1::*;
 
 const TEST_MNEMONIC: &str = "fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float";
 
@@ -20,11 +22,12 @@ fn schnorr_sign_fixed(sk_t8: T8, pk: ([u64; 6], [u64; 6]), message: [u64; 5]) ->
     // FIXED: Include secret key in nonce transcript
     // Hoon: [(f6lt-to-list x.pubkey) (f6lt-to-list y.pubkey) m-list sk-as-32-bit-belts ~]
     let nonce_digest = hash_transcript_list(&[
-        &pk.0[..],              // pubkey.x (6 elements)
-        &pk.1[..],              // pubkey.y (6 elements)
-        &message[..],           // message (5 elements)
-        &sk_t8.values[..],      // secret key (8 elements) - THIS WAS MISSING!
-    ]).expect("hash");
+        &pk.0[..],         // pubkey.x (6 elements)
+        &pk.1[..],         // pubkey.y (6 elements)
+        &message[..],      // message (5 elements)
+        &sk_t8.values[..], // secret key (8 elements) - THIS WAS MISSING!
+    ])
+    .expect("hash");
 
     let nonce_be = trunc_g_order_to_be32(nonce_digest.values);
 
@@ -33,12 +36,13 @@ fn schnorr_sign_fixed(sk_t8: T8, pk: ([u64; 6], [u64; 6]), message: [u64; 5]) ->
 
     // Challenge transcript: [R.x, R.y, pk.x, pk.y, message]
     let chal_digest = hash_transcript_list(&[
-        &r_pt[0],               // R.x (6 elements)
-        &r_pt[1],               // R.y (6 elements)
-        &pk.0[..],              // pubkey.x (6 elements)
-        &pk.1[..],              // pubkey.y (6 elements)
-        &message[..],           // message (5 elements)
-    ]).expect("hash");
+        &r_pt[0],     // R.x (6 elements)
+        &r_pt[1],     // R.y (6 elements)
+        &pk.0[..],    // pubkey.x (6 elements)
+        &pk.1[..],    // pubkey.y (6 elements)
+        &message[..], // message (5 elements)
+    ])
+    .expect("hash");
     let chal_be = trunc_g_order_to_be32(chal_digest.values);
 
     // Compute signature: s = (nonce + chal * sk) mod n
@@ -63,7 +67,8 @@ fn be32_to_t8(be: &[u8; 32]) -> T8 {
     // Pack into 8x u32 values stored in u64
     let mut values = [0u64; 8];
     for i in 0..8 {
-        values[i] = u32::from_le_bytes([le[i * 4], le[i * 4 + 1], le[i * 4 + 2], le[i * 4 + 3]]) as u64;
+        values[i] =
+            u32::from_le_bytes([le[i * 4], le[i * 4 + 1], le[i * 4 + 2], le[i * 4 + 3]]) as u64;
     }
     T8 { values }
 }
@@ -92,26 +97,44 @@ fn test_fixed_signing_matches_test_signed() {
                 let expected_chal = &sig_val.sig.chal.values;
                 let expected_sig = &sig_val.sig.sig.values;
 
-                println!("sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                    sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                    sig_hash.values[3], sig_hash.values[4]);
-
-                // Sign with FIXED implementation
-                let (our_chal, our_sig) = schnorr_sign_fixed(
-                    sk_t8.clone(),
-                    (pk[0], pk[1]),
-                    sig_hash.values,
+                println!(
+                    "sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                    sig_hash.values[0],
+                    sig_hash.values[1],
+                    sig_hash.values[2],
+                    sig_hash.values[3],
+                    sig_hash.values[4]
                 );
 
+                // Sign with FIXED implementation
+                let (our_chal, our_sig) =
+                    schnorr_sign_fixed(sk_t8.clone(), (pk[0], pk[1]), sig_hash.values);
+
                 println!("\nExpected challenge:");
-                println!("  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                    expected_chal.values[0], expected_chal.values[1], expected_chal.values[2], expected_chal.values[3],
-                    expected_chal.values[4], expected_chal.values[5], expected_chal.values[6], expected_chal.values[7]);
+                println!(
+                    "  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                    expected_chal.values[0],
+                    expected_chal.values[1],
+                    expected_chal.values[2],
+                    expected_chal.values[3],
+                    expected_chal.values[4],
+                    expected_chal.values[5],
+                    expected_chal.values[6],
+                    expected_chal.values[7]
+                );
 
                 println!("\nOur challenge (fixed):");
-                println!("  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                    our_chal.values[0], our_chal.values[1], our_chal.values[2], our_chal.values[3],
-                    our_chal.values[4], our_chal.values[5], our_chal.values[6], our_chal.values[7]);
+                println!(
+                    "  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                    our_chal.values[0],
+                    our_chal.values[1],
+                    our_chal.values[2],
+                    our_chal.values[3],
+                    our_chal.values[4],
+                    our_chal.values[5],
+                    our_chal.values[6],
+                    our_chal.values[7]
+                );
 
                 if our_chal.values == expected_chal.values {
                     println!("\n✓ Challenge MATCHES!");

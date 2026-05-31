@@ -195,9 +195,13 @@ pub struct UnlockArgs {
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Test(args) => {
-            commands::test::run(&args.port, args.baud, args.seed_hex.as_deref(), &args.path, args.version)
-        }
+        Cmd::Test(args) => commands::test::run(
+            &args.port,
+            args.baud,
+            args.seed_hex.as_deref(),
+            &args.path,
+            args.version,
+        ),
         Cmd::Info(args) => commands::info::run(&args.port, args.baud, args.version),
         Cmd::Health(args) => commands::health::run(&args.port, args.baud),
         Cmd::Seed(args) => commands::seed::run(args),

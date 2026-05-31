@@ -18,7 +18,13 @@ const TEST_EXPECT_B58: &str =
     "32bePYRuJ3heGVEbznc6xSCaTymgz9bGFREaZ2dtJdnepjc6RX7cMSP8ATeT8bHTfxFmS7StDTmFHfvt9GP1PUq99pN7DcEFat9SDBpQwJbnwmhn5JHcGpLsRKp4fxfHSRy5";
 const EXPECTED_TX_ID: &str = "8VKtRMuQRJNjCLgyGi2c6XtjDfinFKChfVENEZQiRPRfp5cVHPhVSSg";
 
-pub fn run(port: &str, baud: u32, _seed_hex: Option<&str>, _path_str: &str, version: u8) -> anyhow::Result<()> {
+pub fn run(
+    port: &str,
+    baud: u32,
+    _seed_hex: Option<&str>,
+    _path_str: &str,
+    version: u8,
+) -> anyhow::Result<()> {
     use siger_core::cheetah;
 
     let mut sp = open(port, baud)?;

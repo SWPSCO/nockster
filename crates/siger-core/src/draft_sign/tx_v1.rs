@@ -59,6 +59,7 @@ const LOCK_MERKLE_AXIS_HASH: [u64; 5] = [
     460329990575991155,
     8368574252173164961,
 ];
+const LOCK_MERKLE_PROOF_FULL_TAG: &[u8] = b"full";
 
 fn cheetah_pub_from_sk_tuple(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
     #[cfg(feature = "std")]
@@ -135,6 +136,22 @@ fn build_hash_noun(arena: &mut Arena, digest: [u64; 5]) -> Noun {
         arena.alloc_atom_u64(digest[4]),
     ];
     build_tuple(arena, &elems)
+}
+
+fn decompose_lock_merkle_proof(
+    lmp: Noun,
+    arena: &Arena,
+) -> Result<(Option<Noun>, Noun, Noun, Noun), SignDraftError> {
+    let (head, tail) = uncons(lmp, arena).ok_or(SignDraftError::Malformed)?;
+
+    if atom_eq_bytes(head, LOCK_MERKLE_PROOF_FULL_TAG, arena) {
+        let (spend_condition, axis, merkle_proof) =
+            tuple3(tail, arena).ok_or(SignDraftError::Malformed)?;
+        return Ok((Some(head), spend_condition, axis, merkle_proof));
+    }
+
+    let (axis, merkle_proof) = tuple2(tail, arena).ok_or(SignDraftError::Malformed)?;
+    Ok((None, head, axis, merkle_proof))
 }
 
 fn parse_hash(noun: Noun, arena: &Arena) -> Option<[u64; 5]> {
@@ -288,7 +305,7 @@ fn sign_spend_v1(
 
     // Only sign if the input lock actually authorizes our pkh, and only if doing so does not
     // exceed the lock's m-of-n signature count (tx-engine-1.hoon requires exactly m signatures).
-    let (spend_condition, _axis, _merk) = tuple3(lmp, arena).ok_or(SignDraftError::Malformed)?;
+    let (_version, spend_condition, _axis, _merk) = decompose_lock_merkle_proof(lmp, arena)?;
     let Some((m_required, allowed_hashes)) = spend_condition_pkh_lock(spend_condition, arena)? else {
         return Ok(spend);
     };
@@ -675,12 +692,24 @@ fn hash_hash_list_hashes(list: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u6
 }
 
 fn hash_lock_merkle_proof_hashable(lmp: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {
-    let (spend_condition, _axis, merk_proof) = tuple3(lmp, arena).ok_or(SignDraftError::Malformed)?;
+    let (version, spend_condition, axis, merk_proof) = decompose_lock_merkle_proof(lmp, arena)?;
     let spend_condition_hash = hash_lock_primitives_list(spend_condition, arena, ctx)?;
     let merk_digest = hash_merkle_proof_hashable(merk_proof, arena, ctx)?;
-    let axis_digest = LOCK_MERKLE_AXIS_HASH;
-    let inner = tip5::hash_ten_cell(axis_digest, merk_digest)?;
-    Ok(tip5::hash_ten_cell(spend_condition_hash, inner)?)
+
+    match version {
+        Some(version) => {
+            let version_digest = tip5::hash_noun_varlen(version, arena)?;
+            let axis_digest = tip5::hash_noun_varlen(axis, arena)?;
+            let inner = tip5::hash_ten_cell(axis_digest, merk_digest)?;
+            let inner = tip5::hash_ten_cell(spend_condition_hash, inner)?;
+            Ok(tip5::hash_ten_cell(version_digest, inner)?)
+        }
+        None => {
+            let axis_digest = LOCK_MERKLE_AXIS_HASH;
+            let inner = tip5::hash_ten_cell(axis_digest, merk_digest)?;
+            Ok(tip5::hash_ten_cell(spend_condition_hash, inner)?)
+        }
+    }
 }
 
 fn hash_hax_map_hashable(map: Noun, arena: &Arena, ctx: &TxIdCtx) -> Result<[u64; 5], SignDraftError> {

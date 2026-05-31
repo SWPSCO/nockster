@@ -1,11 +1,11 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use bytes::Bytes;
-use nockapp::AtomExt;
 use nockapp::noun::slab::NounSlab;
+use nockapp::AtomExt;
 use nockvm::noun::{Noun, T};
 use noun_serde::{NounDecode, NounEncode};
 
@@ -57,7 +57,8 @@ fn rewrite_txid_v1_host(bytes: &[u8]) -> Result<Vec<u8>> {
                             if let Ok(current_name) = std::str::from_utf8(&name_bytes) {
                                 if let Ok(t2) = t1.tail().as_cell() {
                                     let spends_noun = t2.head();
-                                    if let Some(spends) = decode_no_panic::<SpendsV1>(&spends_noun) {
+                                    if let Some(spends) = decode_no_panic::<SpendsV1>(&spends_noun)
+                                    {
                                         let computed_id = compute_tx_id_v1(&spends);
                                         let name = computed_id.to_b58();
                                         if current_name == name {
@@ -76,7 +77,13 @@ fn rewrite_txid_v1_host(bytes: &[u8]) -> Result<Vec<u8>> {
                                             let witness_out = slab_out.copy_into(witness_data_noun);
                                             let out_noun = T(
                                                 &mut slab_out,
-                                                &[tag_out, name_out, spends_out, display_out, witness_out],
+                                                &[
+                                                    tag_out,
+                                                    name_out,
+                                                    spends_out,
+                                                    display_out,
+                                                    witness_out,
+                                                ],
                                             );
                                             slab_out.set_root(out_noun);
                                             return Ok(slab_out.jam().to_vec());
@@ -162,8 +169,9 @@ pub fn run(
         other => return Err(anyhow!("unexpected SelectSeed response: {other:?}")),
     }
 
-    let mut out_bytes = send_blob_and_recv_outbound(&mut *sp, 0xD001, FragKind::SignDraft, &draft_bytes)
-        .context("device SignDraft")?;
+    let mut out_bytes =
+        send_blob_and_recv_outbound(&mut *sp, 0xD001, FragKind::SignDraft, &draft_bytes)
+            .context("device SignDraft")?;
 
     if host_txid {
         out_bytes = rewrite_txid_v1_host(&out_bytes)?;
@@ -175,10 +183,6 @@ pub fn run(
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
 
-    println!(
-        "wrote {} bytes to {}",
-        out_bytes.len(),
-        out_path.display()
-    );
+    println!("wrote {} bytes to {}", out_bytes.len(), out_path.display());
     Ok(())
 }

@@ -15,16 +15,16 @@ use siger_core::{
 };
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::{
-    Hash, NName, Spend, SpendBody, Chal, Sig, SchnorrPubkey, SchnorrSignature,
-    Signature, F6LT, Transaction, Tx,
+    Chal, Hash, NName, SchnorrPubkey, SchnorrSignature, Sig, Signature, Spend, SpendBody,
+    Transaction, Tx, F6LT,
 };
 use tx_types::transaction_types_v0::*;
+use tx_types::transaction_types_v1::LockPrimitiveBody;
 use tx_types::transaction_types_v1::{
     compute_tx_id_v1, PkhSignature, PkhSignatureValue, RawTransactionV1, SpendsV1, TxV1,
 };
-use tx_types::RawTransaction;
 use tx_types::tx_builder_v1::LockData;
-use tx_types::transaction_types_v1::LockPrimitiveBody;
+use tx_types::RawTransaction;
 
 use crate::keys;
 use crate::serial::{open, round_trip_frame, send_call, Link};
@@ -400,27 +400,16 @@ fn run_device(port: &str, baud: u32, draft_path: &str, out_opt: Option<&str>) ->
 
     // Sign based on version
     let (out_bytes, signed_count) = match raw {
-        RawTransaction::V0(v0) => sign_v0_transaction(
-            &mut *sp,
-            slot,
-            &dev_keys,
-            v0,
-            &outer,
-        )?,
-        RawTransaction::V1(v1) => sign_v1_transaction(
-            &mut *sp,
-            slot,
-            &dev_keys,
-            v1,
-            &outer,
-        )?,
+        RawTransaction::V0(v0) => sign_v0_transaction(&mut *sp, slot, &dev_keys, v0, &outer)?,
+        RawTransaction::V1(v1) => sign_v1_transaction(&mut *sp, slot, &dev_keys, v1, &outer)?,
     };
 
     // write output
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
 
-    let tx_name_after = transaction_name_from_bytes(&out_bytes).unwrap_or_else(|_| tx_name_before.clone());
+    let tx_name_after =
+        transaction_name_from_bytes(&out_bytes).unwrap_or_else(|_| tx_name_before.clone());
     if tx_name_after != tx_name_before {
         eprintln!(
             "note: tx-id changes after attaching valid signatures ({} -> {})",
@@ -674,7 +663,9 @@ fn sign_v1_transaction(
         }
         Outer::WalletTxV0(_) => {
             // V1 transactions shouldn't be in V0 wallet format
-            return Err(anyhow!("V1 transaction cannot be stored in V0 wallet format"));
+            return Err(anyhow!(
+                "V1 transaction cannot be stored in V0 wallet format"
+            ));
         }
         Outer::WalletTxV1 => {
             let wallet = WalletTransactionV1 {
@@ -695,7 +686,9 @@ fn sign_v1_transaction(
             out_slab.jam()
         }
         Outer::TxV0(_) => {
-            return Err(anyhow!("V1 transaction cannot be stored in a V0 Tx wrapper"));
+            return Err(anyhow!(
+                "V1 transaction cannot be stored in a V0 Tx wrapper"
+            ));
         }
     };
 
@@ -911,7 +904,10 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
                             };
 
                             let pk_hash = pk.to_hash();
-                            let sig_value = PkhSignatureValue { pk, sig: schnorr_sig };
+                            let sig_value = PkhSignatureValue {
+                                pk,
+                                sig: schnorr_sig,
+                            };
                             sig_map.put(pk_hash, sig_value);
                         }
                     }
@@ -941,7 +937,9 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
                     out_slab.jam()
                 }
                 Outer::WalletTxV0(_) => {
-                    return Err(anyhow!("V1 transaction cannot be stored in V0 wallet format"));
+                    return Err(anyhow!(
+                        "V1 transaction cannot be stored in V0 wallet format"
+                    ));
                 }
                 Outer::WalletTxV1 => {
                     let wallet = WalletTransactionV1 {
@@ -962,7 +960,9 @@ fn run_apply_signatures(draft_path: &str, out_opt: Option<&str>, sig_path: &str)
                     out_slab.jam()
                 }
                 Outer::TxV0(_) => {
-                    return Err(anyhow!("V1 transaction cannot be stored in a V0 Tx wrapper"));
+                    return Err(anyhow!(
+                        "V1 transaction cannot be stored in a V0 Tx wrapper"
+                    ));
                 }
             }
         }

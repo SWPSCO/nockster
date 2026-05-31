@@ -1,7 +1,7 @@
-/// Test full signature generation and compare with reference
-use siger_core::cheetah::{cheetah_pub_from_sk, schnorr_sign_tx, test_tip5_hash_words};
 use siger_core::cheetah::bip39_to_seed;
 use siger_core::cheetah::utils::trunc_g_order_to_be32;
+/// Test full signature generation and compare with reference
+use siger_core::cheetah::{cheetah_pub_from_sk, schnorr_sign_tx, test_tip5_hash_words};
 
 #[test]
 fn test_full_signature_known_values() {

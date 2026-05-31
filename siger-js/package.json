@@ -1,6 +1,6 @@
 {
-  "name": "siger-js",
-  "version": "0.1.0",
+  "name": "@swps/nockster-js",
+  "version": "0.2.2",
   "description": "TypeScript library for communicating with Siger hardware wallet",
   "type": "module",
   "main": "./dist/index.js",
@@ -15,8 +15,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"const fs=require('fs'); fs.copyFileSync('src/types.d.ts','dist/types.d.ts'); const index='dist/index.d.ts'; const ref='/// <reference path=\\\"./types.d.ts\\\" />\\\\n'; const content=fs.readFileSync(index,'utf8'); if (!content.startsWith(ref)) fs.writeFileSync(index, ref + content);\"",
     "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "bs58": "^6.0.0"

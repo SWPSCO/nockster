@@ -72,15 +72,13 @@ export class SigerDevice {
 
     if (navigator.hid) {
       const devices = await navigator.hid.requestDevice({
-        filters: [{ vendorId: SIGER_HID_VENDOR_ID, productId: SIGER_HID_PRODUCT_ID }],
+        filters: [{ vendorId: SIGER_HID_VENDOR_ID }],
       });
       if (!devices.length) {
         throw new Error('No HID device selected');
       }
       const device = devices[0];
-      this.hidDevice = device;
-      await device.open();
-      this.startHidReading();
+      await this.connectHidDevice(device);
       return;
     }
 
@@ -97,6 +95,20 @@ export class SigerDevice {
     this.port = port;
     await port.open({ baudRate: 115200 });
     this.startReading();
+  }
+
+  async connectHidDevice(device: HIDDevice): Promise<void> {
+    if (this.transport) {
+      throw new Error('Cannot use HID device with a custom transport');
+    }
+
+    if (this.hidDevice && this.hidDevice !== device) {
+      await this.disconnect();
+    }
+
+    this.hidDevice = device;
+    await device.open();
+    this.startHidReading();
   }
 
   async disconnect(): Promise<void> {

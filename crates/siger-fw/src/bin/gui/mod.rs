@@ -1,32 +1,21 @@
 use core::fmt::Write as _;
 
 mod constants;
+pub mod demo;
 mod layout;
 mod render;
 mod seed;
 mod state;
 mod touch;
-pub mod demo;
 
 pub use seed::{SeedInteraction, SeedPhrase, SeedWord};
 pub use state::{GuiInteraction, GuiMode};
 pub use touch::ScreenPoint;
 
 use constants::*;
+use display_interface_spi::SPIInterface;
 use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::{draw_target::DrawTarget, prelude::Point};
-use layout::{
-    button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review, header_height,
-    lock_button_rect, tx_review_detail_rect, tx_review_list_rect,
-};
-use render::{
-    blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message, draw_keypad,
-    draw_unlock_header, draw_unlock_spinner_frame, render_confirm_overlay, render_header,
-    render_idle_overlay, render_tx_review_overlay,
-};
-use state::{Button, ButtonHit, InteractionState, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS};
-use touch::transform_raw_touch;
-use display_interface_spi::SPIInterface;
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
 use esp_hal::{
     delay::Delay,
@@ -39,15 +28,26 @@ use esp_hal::{
         master::{Config as SpiConfig, ConfigError as SpiConfigError, Spi},
         Mode,
     },
-    time::{Instant, Duration},
+    time::{Duration, Instant},
     Blocking,
 };
 use heapless::{String as HString, Vec as HVec};
+use layout::{
+    button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review,
+    header_height, lock_button_rect, tx_review_detail_rect, tx_review_list_rect,
+};
 use mipidsi::{
     error::InitError as DisplayInitError, models::ST7789, options::Orientation,
     Builder as DisplayBuilder, Display,
 };
+use render::{
+    blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message, draw_keypad,
+    draw_unlock_header, draw_unlock_spinner_frame, render_confirm_overlay, render_header,
+    render_idle_overlay, render_tx_review_overlay,
+};
 use siger_fw::axs5106l::{Axs5106l, Rotation};
+use state::{Button, ButtonHit, InteractionState, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS};
+use touch::transform_raw_touch;
 
 const UNLOCK_DEMO_MAX_FRAMES: Option<u32> = None; // you can limit demo frames here eg Some(180)
 
@@ -143,7 +143,7 @@ impl<'d> Gui<'d> {
 
         backlight.set_high();
 
-        let i2c_cfg = I2cConfig::default().with_frequency(esp_hal::time::Rate::from_khz(10));
+        let i2c_cfg = I2cConfig::default().with_frequency(esp_hal::time::Rate::from_khz(100));
         let i2c = I2c::new(i2c, i2c_cfg)
             .map_err(GuiError::I2cConfig)?
             .with_scl(touch_scl)
@@ -223,7 +223,10 @@ impl<'d> Gui<'d> {
                 }
             }
         }
-        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview) {
+        if matches!(
+            self.mode,
+            GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview
+        ) {
             match self.auto_lock_deadline {
                 Some(deadline) => {
                     if now >= deadline {
@@ -343,8 +346,7 @@ impl<'d> Gui<'d> {
         self.render_current_overlay();
 
         if frame_complete {
-            self.unlock_demo_frames_rendered =
-                self.unlock_demo_frames_rendered.saturating_add(1);
+            self.unlock_demo_frames_rendered = self.unlock_demo_frames_rendered.saturating_add(1);
             if let Some(limit) = UNLOCK_DEMO_MAX_FRAMES {
                 if self.unlock_demo_frames_rendered >= limit {
                     self.stop_unlock_demo();
@@ -438,7 +440,10 @@ impl<'d> Gui<'d> {
     }
 
     fn refresh_auto_lock(&mut self, now: Instant) {
-        if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview) {
+        if matches!(
+            self.mode,
+            GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview
+        ) {
             self.auto_lock_deadline = Some(now + AUTO_LOCK_TIMEOUT);
         }
     }
@@ -484,8 +489,10 @@ impl<'d> Gui<'d> {
     }
 
     fn demo_render_range(&self) -> (u16, u16) {
-        let mut start: u16 =
-            if matches!(self.mode, GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview) {
+        let mut start: u16 = if matches!(
+            self.mode,
+            GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview
+        ) {
             header_height().max(0) as u16
         } else {
             0
@@ -664,12 +671,10 @@ impl<'d> Gui<'d> {
             let max = 64usize;
             let take = recipient_b58.len().min(max);
             let _ = recipient_buf.push_str(&recipient_b58[..take]);
-            let _ = self
-                .tx_review_outputs
-                .push(TxReviewOutput {
-                    gift,
-                    recipient_b58: recipient_buf,
-                });
+            let _ = self.tx_review_outputs.push(TxReviewOutput {
+                gift,
+                recipient_b58: recipient_buf,
+            });
         }
 
         self.tx_review_scroll_y = 0;
@@ -746,7 +751,8 @@ impl<'d> Gui<'d> {
                                 self.tx_review_scroll_y =
                                     self.tx_review_scroll_y.saturating_add(delta);
                                 let max_scroll = self.tx_review_max_scroll();
-                                self.tx_review_scroll_y = self.tx_review_scroll_y.clamp(0, max_scroll);
+                                self.tx_review_scroll_y =
+                                    self.tx_review_scroll_y.clamp(0, max_scroll);
                                 self.mark_overlay_dirty();
                                 self.render_current_overlay();
                             }
@@ -762,7 +768,8 @@ impl<'d> Gui<'d> {
                                 self.tx_review_scroll_y =
                                     self.tx_review_scroll_y.saturating_add(delta);
                                 let max_scroll = self.tx_review_max_scroll();
-                                self.tx_review_scroll_y = self.tx_review_scroll_y.clamp(0, max_scroll);
+                                self.tx_review_scroll_y =
+                                    self.tx_review_scroll_y.clamp(0, max_scroll);
                                 self.mark_overlay_dirty();
                                 self.render_current_overlay();
                             }
@@ -946,7 +953,9 @@ impl<'d> Gui<'d> {
                 return match self.mode {
                     GuiMode::Locked => self.handle_pin_button(hit.button),
                     GuiMode::Confirm | GuiMode::TxReview => self.handle_confirm_button(hit.button),
-                    GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => self.handle_seed_button(hit.button),
+                    GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
+                        self.handle_seed_button(hit.button)
+                    }
                     _ => None,
                 };
             }
@@ -969,7 +978,13 @@ impl<'d> Gui<'d> {
                 self.render_current_overlay();
             }
             GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
-                seed::draw_seed_button(&mut self.display, self.mode, hit, Some(&self.seed_entry_state), true);
+                seed::draw_seed_button(
+                    &mut self.display,
+                    self.mode,
+                    hit,
+                    Some(&self.seed_entry_state),
+                    true,
+                );
                 self.interaction.active_button = Some(hit);
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
@@ -991,7 +1006,13 @@ impl<'d> Gui<'d> {
                     self.render_current_overlay();
                 }
                 GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
-                    seed::draw_seed_button(&mut self.display, self.mode, old, Some(&self.seed_entry_state), false);
+                    seed::draw_seed_button(
+                        &mut self.display,
+                        self.mode,
+                        old,
+                        Some(&self.seed_entry_state),
+                        false,
+                    );
                 }
                 _ => draw_button(&mut self.display, self.mode, old, false),
             }

@@ -1,4 +1,6 @@
-use crate::util::{pretty_noun, raw_from_inputs_v0, transaction_name_from_noun, transaction_to_raw};
+use crate::util::{
+    pretty_noun, raw_from_inputs_v0, transaction_name_from_noun, transaction_to_raw,
+};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
@@ -6,7 +8,7 @@ use nockvm::noun::Noun;
 use noun_serde::NounDecode;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use tx_types::transaction_types::{Transaction, Inputs};
+use tx_types::transaction_types::{Inputs, Transaction};
 use tx_types::transaction_types_v0::InputsV0;
 use tx_types::RawTransaction;
 
@@ -48,7 +50,8 @@ pub fn run(
         _ => {
             // tx:transact — head is raw
             if let Ok(cell) = noun.as_cell() {
-                let head_raw = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head())));
+                let head_raw =
+                    catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head())));
                 if let Ok(Ok(r)) = head_raw {
                     r
                 } else {
@@ -58,7 +61,9 @@ pub fn run(
                     } else {
                         // bare [name inputs] - V0 only
                         if let Ok(cell2) = noun.as_cell() {
-                            let inputs_result = catch_unwind(AssertUnwindSafe(|| InputsV0::from_noun(&cell2.tail())));
+                            let inputs_result = catch_unwind(AssertUnwindSafe(|| {
+                                InputsV0::from_noun(&cell2.tail())
+                            }));
                             if let Ok(Ok(inputs)) = inputs_result {
                                 RawTransaction::V0(raw_from_inputs_v0(inputs))
                             } else {

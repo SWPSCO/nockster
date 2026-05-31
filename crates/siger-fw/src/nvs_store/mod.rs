@@ -367,14 +367,14 @@ impl NvsStore {
         header.set_initialized();
         getrandom::getrandom(&mut header.salt).map_err(|_| NvsError::Crypto)?;
 
-        let key = Self::derive_master_key(new_pin, &header.salt)?;
+        let mut key = Self::derive_master_key(new_pin, &header.salt)?;
 
         for (index, (seed, pubinfo)) in seeds.iter().zip(pubs.iter()).enumerate() {
             let record = self.encrypt_seed_record(&key, seed, (pubinfo.x, pubinfo.y))?;
             self.write_slot(index, &record)?;
         }
 
-        drop(key);
+        key.zeroize();
         header.attempts = 0;
         self.write_header(&header)?;
         Ok(())
@@ -403,7 +403,7 @@ impl NvsStore {
 
         for index in 0..header.slot_count as usize {
             if let Some(record) = self.read_slot(index)? {
-                let mut path = pathmod::Path::new();
+                let path = pathmod::Path::new();
                 let slot = index as u8;
                 // Keep path empty (root) for now.
                 pubs.push(CheetahPub {

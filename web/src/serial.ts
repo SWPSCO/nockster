@@ -29,7 +29,11 @@ class WebSerialTransport implements SerialTransport {
 
   async connect(): Promise<void> {
     console.log('WebSerialTransport.connect');
-    this.port = await navigator.serial.requestPort({
+    const serial = navigator.serial;
+    if (!serial) {
+      throw new Error('Web Serial API not available in this browser.');
+    }
+    this.port = await serial.requestPort({
       filters: [{ usbVendorId: 0x303a, usbProductId: 0x1001 }],
     });
     await this.port.open({ baudRate: 115200 });
@@ -141,4 +145,3 @@ export function createSerialTransport(): SerialTransport {
   console.log('createSerialTransport - isTauri:', isTauri);
   return isTauri ? new TauriSerialTransport() : new WebSerialTransport();
 }
-

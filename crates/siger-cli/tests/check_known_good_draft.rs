@@ -20,16 +20,23 @@ fn check_known_good_draft() {
         0x08351a9913062377_u64,
         0xcf9bbbba73a69824_u64,
     ];
-    println!("Known-good message from test: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-        known_good_message[0], known_good_message[1], known_good_message[2],
-        known_good_message[3], known_good_message[4]);
+    println!(
+        "Known-good message from test: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+        known_good_message[0],
+        known_good_message[1],
+        known_good_message[2],
+        known_good_message[3],
+        known_good_message[4]
+    );
 
     // Load known-good.draft
     let draft_data = fs::read("../../known-good.draft").expect("read known-good.draft");
     println!("known-good.draft size: {} bytes", draft_data.len());
 
     let mut slab: NounSlab = NounSlab::new();
-    let noun = slab.cue_into(Bytes::from(draft_data)).expect("cue known-good.draft");
+    let noun = slab
+        .cue_into(Bytes::from(draft_data))
+        .expect("cue known-good.draft");
 
     // Try to decode as RawTransactionV1
     if let Ok(v1) = RawTransactionV1::from_noun(&noun) {
@@ -40,9 +47,14 @@ fn check_known_good_draft() {
             if let SpendBody::V1(sb) = &spend.body {
                 let sig_hash = sb.compute_sig_hash();
                 println!("    Fee: {}", sb.fee.value);
-                println!("    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                    sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                    sig_hash.values[3], sig_hash.values[4]);
+                println!(
+                    "    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                    sig_hash.values[0],
+                    sig_hash.values[1],
+                    sig_hash.values[2],
+                    sig_hash.values[3],
+                    sig_hash.values[4]
+                );
 
                 if sig_hash.values == known_good_message {
                     println!("    ✓ sig_hash MATCHES known-good message!");
@@ -61,9 +73,14 @@ fn check_known_good_draft() {
                     if let SpendBody::V1(sb) = &spend.body {
                         let sig_hash = sb.compute_sig_hash();
                         println!("    Fee: {}", sb.fee.value);
-                        println!("    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                            sig_hash.values[3], sig_hash.values[4]);
+                        println!(
+                            "    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                            sig_hash.values[0],
+                            sig_hash.values[1],
+                            sig_hash.values[2],
+                            sig_hash.values[3],
+                            sig_hash.values[4]
+                        );
 
                         if sig_hash.values == known_good_message {
                             println!("    ✓ sig_hash MATCHES known-good message!");
@@ -91,9 +108,14 @@ fn check_known_good_draft() {
                         println!("    Spend: {:?}", name);
                         if let SpendBody::V1(sb) = &spend.body {
                             let sig_hash = sb.compute_sig_hash();
-                            println!("      sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                                sig_hash.values[0], sig_hash.values[1], sig_hash.values[2],
-                                sig_hash.values[3], sig_hash.values[4]);
+                            println!(
+                                "      sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
+                                sig_hash.values[0],
+                                sig_hash.values[1],
+                                sig_hash.values[2],
+                                sig_hash.values[3],
+                                sig_hash.values[4]
+                            );
                         }
                     }
                 }

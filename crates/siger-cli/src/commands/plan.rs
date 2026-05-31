@@ -1,8 +1,8 @@
 extern crate alloc;
 use crate::util::{enumerate_signing_plans, fmt_u64x5, load_draft_as_raw};
-use std::path::Path;
-use tx_types::{NName, SchnorrPubkey, RawTransaction};
 use anyhow::anyhow;
+use std::path::Path;
+use tx_types::{NName, RawTransaction, SchnorrPubkey};
 
 pub struct InputSigningPlan {
     pub name: NName,
@@ -16,7 +16,11 @@ pub fn run(_port: &str, _baud: u32, draft_path: &str) -> anyhow::Result<()> {
     // Only V0 transactions have the signing plan structure
     let v0 = match &raw {
         RawTransaction::V0(v0) => v0,
-        RawTransaction::V1(_) => return Err(anyhow!("signing plans are only supported for V0 transactions")),
+        RawTransaction::V1(_) => {
+            return Err(anyhow!(
+                "signing plans are only supported for V0 transactions"
+            ))
+        }
     };
 
     let id_str = fmt_u64x5(&v0.id.values);

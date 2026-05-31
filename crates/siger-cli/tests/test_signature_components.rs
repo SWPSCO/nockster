@@ -1,6 +1,6 @@
+use siger_core::cheetah::bip39_to_seed;
 /// Test signature generation step by step to find where we diverge from reference
 use siger_core::cheetah::{cheetah_pub_from_sk, test_tip5_hash_words};
-use siger_core::cheetah::bip39_to_seed;
 
 #[test]
 fn test_signature_step_by_step() {

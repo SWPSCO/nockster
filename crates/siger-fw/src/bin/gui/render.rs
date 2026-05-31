@@ -33,8 +33,7 @@ pub fn draw_keypad(display: &mut GuiDisplay<'_>) {
         Point::new(4, header_height()),
         Size::new(
             (BOOT_LOGO_WIDTH - 8) as u32,
-            (BOOT_LOGO_HEIGHT as i32 - header_height() - 8)
-                .max(0) as u32,
+            (BOOT_LOGO_HEIGHT as i32 - header_height() - 8).max(0) as u32,
         ),
     );
     let _ = frame
@@ -91,8 +90,7 @@ pub fn draw_button(display: &mut GuiDisplay<'_>, mode: GuiMode, hit: ButtonHit, 
 
         // Bottom shadow
         let shadow_height = hit.size.height / 3;
-        let shadow_top =
-            hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
+        let shadow_top = hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
         let shadow = Rectangle::new(
             Point::new(hit.top_left.x + 1, shadow_top),
             Size::new(hit.size.width.saturating_sub(2), shadow_height),
@@ -208,7 +206,7 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
                 .stroke_width(1)
                 .build(),
         )
-    .draw(display);
+        .draw(display);
 
     if size.width > 4 && size.height > 4 {
         let highlight_height = (size.height / 5).clamp(4, 12);
@@ -312,10 +310,17 @@ pub fn render_confirm_overlay(
     if header_h < SCREEN_HEIGHT as i32 {
         let body = Rectangle::new(
             Point::new(0, header_h),
-            Size::new(SCREEN_WIDTH.into(), (SCREEN_HEIGHT as i32 - header_h) as u32),
+            Size::new(
+                SCREEN_WIDTH.into(),
+                (SCREEN_HEIGHT as i32 - header_h) as u32,
+            ),
         );
         let _ = body
-            .into_styled(PrimitiveStyleBuilder::new().fill_color(COLOR_BACKGROUND).build())
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_BACKGROUND)
+                    .build(),
+            )
             .draw(display);
     }
 
@@ -347,7 +352,12 @@ pub fn render_confirm_overlay(
         let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
         let mut baseline = prompt_baseline + line_h + 6;
 
-        for (idx, line) in details.lines().filter(|l| !l.is_empty()).take(3).enumerate() {
+        for (idx, line) in details
+            .lines()
+            .filter(|l| !l.is_empty())
+            .take(3)
+            .enumerate()
+        {
             let line_style = if idx == 0 { style } else { subtle };
             let _ = Text::with_alignment(
                 line,
@@ -411,10 +421,17 @@ pub fn render_tx_review_overlay(
     if header_h < SCREEN_HEIGHT as i32 {
         let body = Rectangle::new(
             Point::new(0, header_h),
-            Size::new(SCREEN_WIDTH.into(), (SCREEN_HEIGHT as i32 - header_h) as u32),
+            Size::new(
+                SCREEN_WIDTH.into(),
+                (SCREEN_HEIGHT as i32 - header_h) as u32,
+            ),
         );
         let _ = body
-            .into_styled(PrimitiveStyleBuilder::new().fill_color(COLOR_BACKGROUND).build())
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_BACKGROUND)
+                    .build(),
+            )
             .draw(display);
     }
 
@@ -494,14 +511,14 @@ pub fn render_tx_review_overlay(
             let mut baseline = y + FONT_10X20.character_size.height as i32;
             let mut line1 = heapless::String::<32>::new();
             write_amount(&mut line1, out.gift);
-            let _ = Text::new(line1.as_str(), Point::new(inner_left, baseline), style)
-                .draw(display);
+            let _ =
+                Text::new(line1.as_str(), Point::new(inner_left, baseline), style).draw(display);
 
             baseline += line_h;
             let mut line2 = heapless::String::<32>::new();
             write_truncated_recipient(&mut line2, out.recipient_b58.as_str());
-            let _ = Text::new(line2.as_str(), Point::new(inner_left, baseline), subtle)
-                .draw(display);
+            let _ =
+                Text::new(line2.as_str(), Point::new(inner_left, baseline), subtle).draw(display);
 
             y = y.saturating_add(item_h);
         }
@@ -593,10 +610,7 @@ pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
         COLOR_SURFACE_HIGH
     };
 
-    let header_rect = Rectangle::new(
-        Point::new(0, 0),
-        Size::new(width as u32, header_h as u32),
-    );
+    let header_rect = Rectangle::new(Point::new(0, 0), Size::new(width as u32, header_h as u32));
     let _ = header_rect
         .into_styled(
             PrimitiveStyleBuilder::new()
@@ -658,7 +672,10 @@ fn draw_button_skeuo(
 ) {
     let shadow_offset = 2;
     let shadow_rect = Rectangle::new(
-        Point::new(hit.top_left.x + shadow_offset, hit.top_left.y + shadow_offset),
+        Point::new(
+            hit.top_left.x + shadow_offset,
+            hit.top_left.y + shadow_offset,
+        ),
         hit.size,
     );
     let _ = shadow_rect
@@ -697,8 +714,7 @@ fn draw_button_skeuo(
             .draw(display);
 
         let shadow_height = hit.size.height / 4;
-        let shadow_top =
-            hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
+        let shadow_top = hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
         let shadow = Rectangle::new(
             Point::new(hit.top_left.x + 1, shadow_top),
             Size::new(hit.size.width.saturating_sub(2), shadow_height),

@@ -22,8 +22,8 @@ use std::fs;
 use std::path::Path;
 use tx_types::collections::{ZMap, ZSet};
 use tx_types::transaction_types::{
-    Coins, Hash, NName, PageNumber, Spend, SpendBody, TimelockRange, Transaction, T8,
-    SchnorrPubkey, SchnorrSignature, Chal, Sig, Signature, F6LT,
+    Chal, Coins, Hash, NName, PageNumber, SchnorrPubkey, SchnorrSignature, Sig, Signature, Spend,
+    SpendBody, TimelockRange, Transaction, F6LT, T8,
 };
 use tx_types::transaction_types_v0::*;
 use tx_types::RawTransaction;
@@ -80,7 +80,9 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
     if let Ok(cell) = noun.as_cell() {
         let head = cell.head();
 
-        if let Ok(Ok(raw_head)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&head))) {
+        if let Ok(Ok(raw_head)) =
+            catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&head)))
+        {
             let id = match &raw_head {
                 RawTransaction::V0(v0) => &v0.id,
                 RawTransaction::V1(v1) => &v1.id,
@@ -410,7 +412,9 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
 
     // tx:transact — head is raw-tx
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head()))) {
+        if let Ok(Ok(raw)) =
+            catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head())))
+        {
             return Ok(raw);
         }
     }
@@ -422,7 +426,8 @@ pub fn load_draft_as_raw(path: &Path) -> anyhow::Result<RawTransaction> {
 
     // 4) Naked pair: [name inputs] - V0 only
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV0::from_noun(&cell.tail()))) {
+        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV0::from_noun(&cell.tail())))
+        {
             let raw = raw_from_inputs_v0(inputs);
             return Ok(RawTransaction::V0(raw));
         }
@@ -566,7 +571,11 @@ pub fn sign_draft_with_paths(
     // Only V0 signing supported in this function for now
     let mut v0 = match raw {
         RawTransaction::V0(v) => v,
-        RawTransaction::V1(_) => return Err(anyhow!("sign_draft_with_paths only supports V0 transactions")),
+        RawTransaction::V1(_) => {
+            return Err(anyhow!(
+                "sign_draft_with_paths only supports V0 transactions"
+            ))
+        }
     };
 
     let slot = signer_slot();

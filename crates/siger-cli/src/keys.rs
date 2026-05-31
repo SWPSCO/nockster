@@ -10,7 +10,7 @@ use unicode_normalization::UnicodeNormalization;
 use siger_core::cheetah::{
     cheetah_pub_from_sk, master_from_seed, ser_a_pt, ser_a_pt_rep104, xprv_derive_child, XKey,
 };
-use tx_types::transaction_types::{SchnorrPubkey, F6LT, Hash};
+use tx_types::transaction_types::{Hash, SchnorrPubkey, F6LT};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "origin", rename_all = "snake_case")]
@@ -120,7 +120,10 @@ fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
 }
 
 /// import from base58 32-byte scalar (raw), no chain-code/path.
-pub fn import_from_b58_priv(b58: &str, version: u8) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
+pub fn import_from_b58_priv(
+    b58: &str,
+    version: u8,
+) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
     let sk = sk_from_b58(b58)?;
     let cc = [0u8; 32];
     let pk_xy = cheetah_pub_from_sk(sk);

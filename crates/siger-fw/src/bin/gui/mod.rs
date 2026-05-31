@@ -143,7 +143,7 @@ impl<'d> Gui<'d> {
 
         backlight.set_high();
 
-        let i2c_cfg = I2cConfig::default().with_frequency(esp_hal::time::Rate::from_khz(100));
+        let i2c_cfg = I2cConfig::default().with_frequency(esp_hal::time::Rate::from_khz(10));
         let i2c = I2c::new(i2c, i2c_cfg)
             .map_err(GuiError::I2cConfig)?
             .with_scl(touch_scl)

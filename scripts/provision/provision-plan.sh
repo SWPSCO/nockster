@@ -80,8 +80,8 @@ hmac_up_plan() {
   cmd "make provision-summary PROVISION_PORT=${port}"
   cmd "make provision-hmac-up PROVISION_PORT=${port} HMAC_KEY_FILE=${hmac_key_file} CONFIRM_IRREVERSIBLE=burn-hmac-up"
   cmd "nockster-cli security --port hid --expect-chip-security --expect-hmac-up --expect-hmac-up-read-protected"
-  note "After initializing or unlocking existing storage, migrate schema v1 to v2 explicitly."
-  cmd "nockster-cli security --port hid --migrate-nvs-v2 --current-pin <pin> --expect-nvs-v2"
+  note "After wiping and initializing storage, validate schema v2."
+  cmd "nockster-cli security --port hid --expect-nvs-v2"
 }
 
 secure_boot_plan() {
@@ -113,11 +113,11 @@ flash_encryption_plan() {
 
 release_preflight_plan() {
   step "4. Strict release preflight"
-  cmd "make release-preflight FW_PROFILE=production RELEASE_PREFLIGHT_STRICT=1 NOCKSTER_AUTO_MIGRATE_NVS_V2=0 NOCKSTER_RELEASE_VERSION=${release_version} NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=${trust_hash} HMAC_KEY_FILE=${hmac_key_file} UPDATE_SIGNING_KEY_FILE=${update_key_file} SECURE_BOOT_KEY_FILE=${secure_boot_key_file} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware}"
+  cmd "make release-preflight FW_PROFILE=production RELEASE_PREFLIGHT_STRICT=1 NOCKSTER_RELEASE_VERSION=${release_version} NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=${trust_hash} HMAC_KEY_FILE=${hmac_key_file} UPDATE_SIGNING_KEY_FILE=${update_key_file} SECURE_BOOT_KEY_FILE=${secure_boot_key_file} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware}"
   note "Generate the browser updater index from the verified signed bundle and firmware."
   cmd "make update-index UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware} UPDATE_INDEX=${update_index}"
   note "Validate the browser updater index immediately before publishing."
-  cmd "make release-preflight FW_PROFILE=production RELEASE_PREFLIGHT_STRICT=1 NOCKSTER_AUTO_MIGRATE_NVS_V2=0 NOCKSTER_RELEASE_VERSION=${release_version} NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=${trust_hash} HMAC_KEY_FILE=${hmac_key_file} UPDATE_SIGNING_KEY_FILE=${update_key_file} SECURE_BOOT_KEY_FILE=${secure_boot_key_file} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware} UPDATE_INDEX=${update_index}"
+  cmd "make release-preflight FW_PROFILE=production RELEASE_PREFLIGHT_STRICT=1 NOCKSTER_RELEASE_VERSION=${release_version} NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=${trust_hash} HMAC_KEY_FILE=${hmac_key_file} UPDATE_SIGNING_KEY_FILE=${update_key_file} SECURE_BOOT_KEY_FILE=${secure_boot_key_file} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware} UPDATE_INDEX=${update_index}"
   note "Publish ${update_index}, ${update_bundle}, and ${update_firmware} under the web updater release path."
 }
 

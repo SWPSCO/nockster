@@ -1806,12 +1806,8 @@ fn is_device_locked() -> bool {
 
 fn compute_unlock_outcome(state: &mut AppCoreState<'_>, pin: &str) -> UnlockOutcome {
     let mut nvs = NvsStore::new();
-    match nvs.unlock_with_optional_v2_migration(
-        pin,
-        &mut state.nvs_pepper,
-        auto_migrate_nvs_v2_enabled(),
-    ) {
-        Ok((seeds, master_key, _migrated)) => UnlockOutcome::Success { seeds, master_key },
+    match nvs.unlock_with_pepper(pin, &mut state.nvs_pepper) {
+        Ok((seeds, master_key)) => UnlockOutcome::Success { seeds, master_key },
         Err(NvsError::WrongPin) => {
             let remaining = nvs.get_attempts_remaining();
             if remaining == 0 {
@@ -1826,10 +1822,6 @@ fn compute_unlock_outcome(state: &mut AppCoreState<'_>, pin: &str) -> UnlockOutc
         Err(NvsError::NotInitialized) => UnlockOutcome::NotInitialized,
         Err(_) => UnlockOutcome::Failed,
     }
-}
-
-fn auto_migrate_nvs_v2_enabled() -> bool {
-    option_env!("NOCKSTER_AUTO_MIGRATE_NVS_V2") == Some("1")
 }
 
 fn apply_unlock_success(seeds: &[[u8; 64]], master_key: &[u8; 32]) {
@@ -2033,7 +2025,11 @@ fn handle_seed_op_outcome<B: usb_device::bus::UsbBus>(
                 ui.show_idle_message_timed("Seed added", Duration::from_millis(3_000));
             }
             SeedOpUiEffect::Deleted => {
-                ui.show_idle_message_timed("Seed deleted", Duration::from_millis(3_000));
+                if session::has_seed() {
+                    ui.show_idle_message_timed("Seed deleted", Duration::from_millis(3_000));
+                } else {
+                    ui.show_seed_setup();
+                }
             }
             SeedOpUiEffect::Reset => {
                 ui.show_seed_setup();

@@ -4,19 +4,11 @@ use nockster_core::{
     Request, Response, SecurityStatus, HMAC_KEY_PURPOSE_DOWN_ALL, HMAC_KEY_PURPOSE_DOWN_DS,
     HMAC_KEY_PURPOSE_DOWN_JTAG, HMAC_KEY_PURPOSE_UP,
 };
-use zeroize::Zeroize;
 
 pub fn run(args: &SecurityArgs) -> anyhow::Result<()> {
     let mut sp = open(&args.port, args.baud)?;
-    let mut status = read_security_status(&mut *sp)?;
+    let status = read_security_status(&mut *sp)?;
     print_status(&status);
-
-    if args.migrate_nvs_v2 {
-        migrate_nvs_v2(&mut *sp, args, &status)?;
-        status = read_security_status(&mut *sp)?;
-        println!("security after migration:");
-        print_status(&status);
-    }
 
     validate_expectations(&status, args)?;
     Ok(())
@@ -76,92 +68,6 @@ fn read_security_status(sp: &mut dyn crate::serial::Link) -> anyhow::Result<Secu
     match send_call(sp, 0x05, Request::GetSecurityStatus)? {
         Response::OkSecurityStatus(status) => Ok(status),
         other => anyhow::bail!("unexpected security response: {other:?}"),
-    }
-}
-
-fn migrate_nvs_v2(
-    sp: &mut dyn crate::serial::Link,
-    args: &SecurityArgs,
-    status: &SecurityStatus,
-) -> anyhow::Result<()> {
-    if !status.nvs_initialized {
-        anyhow::bail!("cannot migrate NVS: storage is not initialized");
-    }
-    if status.nvs_schema_version == 2 {
-        println!("NVS already uses schema v2; migration skipped");
-        return Ok(());
-    }
-    if !status.chip_security_available {
-        anyhow::bail!(
-            "cannot migrate NVS: firmware hides chip-security state; rebuild with FW_PROFILE=chip-security"
-        );
-    }
-    if status.hmac_user_key_slots == 0 {
-        anyhow::bail!("cannot migrate NVS: no HMAC_UP eFuse key slot is provisioned");
-    }
-    if status.hmac_user_key_slots & status.read_protected_key_slots == 0 {
-        eprintln!(
-            "warning: HMAC_UP is not read-protected; schema-v2 migration is suitable only for test hardware"
-        );
-    }
-
-    let mut current_pin = args
-        .current_pin
-        .clone()
-        .expect("clap requires --current-pin with --migrate-nvs-v2");
-    let was_locked = read_lock_status(sp)?;
-
-    match send_call(
-        sp,
-        0x06,
-        Request::Unlock {
-            pin: current_pin.clone(),
-        },
-    )? {
-        Response::Ok => {}
-        Response::Err { code } => {
-            current_pin.zeroize();
-            anyhow::bail!("unlock failed before NVS migration: device returned error code {code}");
-        }
-        other => {
-            current_pin.zeroize();
-            anyhow::bail!("unexpected unlock response before NVS migration: {other:?}");
-        }
-    }
-
-    let migration_result = send_call(
-        sp,
-        0x07,
-        Request::ResetPIN {
-            current_pin: current_pin.clone(),
-            new_pin: current_pin.clone(),
-        },
-    );
-
-    current_pin.zeroize();
-
-    if was_locked {
-        let _ = send_call(sp, 0x08, Request::Lock);
-    }
-
-    match migration_result? {
-        Response::Ok => {}
-        Response::Err { code } => {
-            anyhow::bail!("NVS migration rewrite failed: device returned error code {code}");
-        }
-        other => {
-            anyhow::bail!("unexpected NVS migration response: {other:?}");
-        }
-    }
-
-    println!("NVS migration rewrite accepted");
-    Ok(())
-}
-
-fn read_lock_status(sp: &mut dyn crate::serial::Link) -> anyhow::Result<bool> {
-    match send_call(sp, 0x09, Request::GetLockStatus)? {
-        Response::OkLockStatus { locked, .. } => Ok(locked),
-        other => anyhow::bail!("unexpected lock-status response before NVS migration: {other:?}"),
     }
 }
 
@@ -344,5 +250,4 @@ fn has_expectations(args: &SecurityArgs) -> bool {
         || args.expect_usb_rom_print_disabled
         || args.expect_power_glitch_protection
         || args.expect_production_lockdown
-        || args.migrate_nvs_v2
 }

@@ -545,42 +545,6 @@ export class NocksterDevice {
     return resp.status;
   }
 
-  async migrateNvsV2(currentPin: string): Promise<SecurityStatus> {
-    const before = await this.getSecurityStatus();
-    if (!before.nvs_initialized) {
-      throw new Error('NVS storage is not initialized');
-    }
-    if (before.nvs_schema_version === 2) {
-      return before;
-    }
-    if (!before.chip_security_available) {
-      throw new Error('firmware was not built with chip-security status');
-    }
-    if (before.hmac_user_key_slots === 0) {
-      throw new Error('no HMAC_UP eFuse key slot is provisioned');
-    }
-
-    const lockStatus = await this.getLockStatus();
-    await this.unlock(currentPin);
-    try {
-      await this.resetPIN(currentPin, currentPin);
-    } finally {
-      if (lockStatus.locked) {
-        try {
-          await this.lock();
-        } catch {
-          // Preserve the original rewrite result if relocking fails.
-        }
-      }
-    }
-
-    const after = await this.getSecurityStatus();
-    if (after.nvs_schema_version !== 2) {
-      throw new Error(`NVS migration did not reach schema v2; current schema is ${after.nvs_schema_version}`);
-    }
-    return after;
-  }
-
   async getUpdateBootStatus() {
     const resp = await this.call({ type: 'GetUpdateBootStatus' });
     if (resp.type === 'Err') {

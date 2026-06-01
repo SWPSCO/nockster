@@ -804,27 +804,6 @@ maybe_run_efuse_summary() {
   ok "read-only eFuse summary completed"
 }
 
-check_auto_migrate_flag() {
-  local value="${1:-0}"
-  local required="$2"
-
-  case "${value}" in
-    "" | 0 | false | FALSE | no | NO | off | OFF)
-      ok "NOCKSTER_AUTO_MIGRATE_NVS_V2 is disabled"
-      ;;
-    1 | true | TRUE | yes | YES | on | ON)
-      if [[ "${required}" == "required" ]]; then
-        fail "NOCKSTER_AUTO_MIGRATE_NVS_V2 must be disabled for strict/production release preflight"
-      else
-        warn "NOCKSTER_AUTO_MIGRATE_NVS_V2 is enabled; use this only on sacrificial chip-security test builds"
-      fi
-      ;;
-    *)
-      fail "NOCKSTER_AUTO_MIGRATE_NVS_V2 must be 0 or 1, got ${value}"
-      ;;
-  esac
-}
-
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 profile="${FW_PROFILE:-dev}"
 release_version="${NOCKSTER_RELEASE_VERSION:-0}"
@@ -845,10 +824,9 @@ case "${profile}" in
     ;;
   *)
     fail "unsupported FW_PROFILE: ${profile}"
-    ;;
+  ;;
 esac
 
-check_auto_migrate_flag "${NOCKSTER_AUTO_MIGRATE_NVS_V2:-0}" "${strict_required}"
 check_release_version "${release_version}" "${strict_required}"
 check_hex64 "${trusted_hash}" "NOCKSTER_UPDATE_PUBKEY_SHA256_HEX" "${strict_required}"
 check_tracked_secret_paths

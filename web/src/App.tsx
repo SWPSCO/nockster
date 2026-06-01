@@ -172,7 +172,6 @@ function App() {
   const [firmwareReleaseVersion, setFirmwareReleaseVersion] = useState<number | null>(null);
   const [firmwareBuildInfo, setFirmwareBuildInfo] = useState<BuildInfo | null>(null);
   const [securityStatus, setSecurityStatus] = useState<SecurityStatus | null>(null);
-  const [migratingNvs, setMigratingNvs] = useState(false);
   const [updateBootStatus, setUpdateBootStatus] = useState<UpdateBootStatus | null>(null);
   const [updatingFirmware, setUpdatingFirmware] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateStatus | null>(null);
@@ -253,13 +252,6 @@ function App() {
   const buildInfoAvailable = !!info && (info.features & FEATURE_BUILD_INFO) !== 0;
   const updateBootStatusAvailable = !!info && (info.features & FEATURE_UPDATE_BOOT_STATUS) !== 0;
   const deviceRebootAvailable = !!info && (info.features & FEATURE_DEVICE_REBOOT) !== 0;
-  const nvsMigrationReady =
-    securityStatusAvailable &&
-    !!securityStatus &&
-    securityStatus.nvs_initialized &&
-    securityStatus.nvs_schema_version !== 2 &&
-    securityStatus.chip_security_available &&
-    securityStatus.hmac_user_key_slots !== 0;
   const updateBlockReason = getUpdateBundleCompatibilityBlocker(updateBundle, {
     releaseVersion: firmwareReleaseVersion,
     buildInfo: firmwareBuildInfo,
@@ -664,43 +656,6 @@ function App() {
       setStatus(`PIN update failed: ${message}`);
     } finally {
       setResettingPin(false);
-      deviceBusyRef.current = false;
-      setDeviceBusy(false);
-    }
-  };
-
-  const migrateNvsV2 = async () => {
-    const current = pinResetCurrent.trim();
-
-    if (!current) {
-      setStatus('Enter the current PIN');
-      return;
-    }
-    if (!nvsMigrationReady) {
-      setStatus('NVS v2 migration is not available on this device');
-      return;
-    }
-    const confirmed = window.confirm('Rewrite encrypted seed storage to NVS schema v2?');
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      setMigratingNvs(true);
-      deviceBusyRef.current = true;
-      setDeviceBusy(true);
-      setStatus('Migrating NVS storage...');
-      const nextSecurity = await device.migrateNvsV2(current);
-      setSecurityStatus(nextSecurity);
-      setPinResetCurrent('');
-      await refreshStatus();
-      setStatus('NVS storage migrated to schema v2');
-    } catch (error: any) {
-      const message = error?.message ?? error?.toString() ?? 'unknown error';
-      setStatus(`NVS migration failed: ${message}`);
-      await refreshStatus();
-    } finally {
-      setMigratingNvs(false);
       deviceBusyRef.current = false;
       setDeviceBusy(false);
     }
@@ -1698,24 +1653,10 @@ function App() {
                   >
                     {resettingPin ? 'waiting...' : 'start PIN change'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={migrateNvsV2}
-                    disabled={
-                      deviceBusy ||
-                      migratingNvs ||
-                      !pinResetCurrent.trim() ||
-                      !nvsMigrationReady
-                    }
-                    className="btn btn-secondary btn-small"
-                  >
-                    {migratingNvs ? 'migrating...' : 'migrate nvs v2'}
-                  </button>
                 </div>
                 {securityStatus && securityStatus.nvs_initialized && (
                   <p className="reset-pin-note">
                     NVS schema v{securityStatus.nvs_schema_version}
-                    {nvsMigrationReady ? ' · migration available' : ''}
                   </p>
                 )}
               </div>

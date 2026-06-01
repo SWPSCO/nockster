@@ -19,6 +19,7 @@ const MAX_PIN_ATTEMPTS: u8 = 10;
 
 const NVS_BASE_ADDR: u32 = 0x9000;
 const NVS_SECTOR_SIZE: usize = FlashStorage::SECTOR_SIZE as usize;
+const NVS_WRITE_CHUNK_SIZE: usize = 256;
 const HEADER_SIZE: usize = 64;
 const SLOT_SIZE: usize = 192;
 const SEED_TOTAL_SIZE: usize = HEADER_SIZE + SLOT_SIZE * MAX_SEED_SLOTS;
@@ -38,10 +39,11 @@ const LABELS_MAGIC: [u8; 4] = *b"NCLB";
 const LEGACY_LABELS_MAGIC: [u8; 4] = [b'S', b'G', b'L', b'B'];
 const VERSION_V1: u8 = 1;
 const VERSION_V2: u8 = 2;
-const VERSION: u8 = VERSION_V1;
+const VERSION: u8 = VERSION_V2;
 pub const NVS_V2_PEPPER_DOMAIN: &[u8] = b"nockster-nvs-v2";
 pub const NVS_V2_MASTER_DOMAIN: &[u8] = b"nockster-nvs-master-v2";
 pub const NVS_V2_PEPPER_MESSAGE_LEN: usize = 15 + 32 + 6;
+const NVS_V2_SOFTWARE_PEPPER: [u8; 32] = *b"nockster-dev-nvs-v2-pepper-00000";
 const CALIBRATION_VERSION: u8 = 1;
 const LABELS_VERSION: u8 = 1;
 const FLAG_INITIALIZED: u8 = 0x01;
@@ -87,11 +89,11 @@ pub enum NvsInitStage {
     Complete,
 }
 
-pub struct NoNvsPepper;
+pub struct SoftwareNvsPepper;
 
-impl NvsPepperSource for NoNvsPepper {
+impl NvsPepperSource for SoftwareNvsPepper {
     fn nvs_v2_pepper(&mut self, _salt: &[u8; 32]) -> Result<Option<[u8; 32]>, NvsError> {
-        Ok(None)
+        Ok(Some(NVS_V2_SOFTWARE_PEPPER))
     }
 }
 
@@ -345,7 +347,7 @@ impl NvsStore {
         seed64: &[u8; 64],
         pub_xy: ([u64; 6], [u64; 6]),
     ) -> Result<([u8; 32], u8), NvsError> {
-        let mut pepper = NoNvsPepper;
+        let mut pepper = SoftwareNvsPepper;
         self.initialize_pin_with_pepper(pin, seed64, pub_xy, &mut pepper)
     }
 
@@ -377,7 +379,6 @@ impl NvsStore {
                 return Err(NvsError::AlreadyInitialized);
             }
             progress(NvsInitStage::WipePartial);
-            self.wipe_seed_storage()?;
         }
 
         let mut header = Header::new_uninitialized(VERSION);
@@ -394,20 +395,12 @@ impl NvsStore {
         progress(NvsInitStage::EncryptSeed);
         let slot_record = self.encrypt_seed_record(&key, seed64, pub_xy)?;
 
-        // Atomic-ish initialization: write the header without the initialized flag,
-        // then write the slot, then finally mark initialized.
-        //
-        // This prevents leaving the device in a "looks initialized" state if the
-        // slot write fails partway through.
         progress(NvsInitStage::WriteHeaderPending);
-        self.write_header(&header)?;
         progress(NvsInitStage::WriteSlot);
-        self.write_slot(0, &slot_record)?;
         header.set_initialized();
         progress(NvsInitStage::WriteHeaderFinal);
-        self.write_header(&header)?;
         progress(NvsInitStage::WriteLabels);
-        let _ = self.write_seed_label_records(&[]);
+        self.initialize_seed_storage_transaction(&header, &slot_record)?;
         progress(NvsInitStage::Complete);
         Ok((key, 0))
     }
@@ -437,15 +430,14 @@ impl NvsStore {
 
         let slot_record = self.encrypt_seed_record(master_key, seed64, pub_xy)?;
 
-        self.write_slot(slot_index, &slot_record)?;
         header.slot_count += 1;
         header.attempts = 0;
-        self.write_header(&header)?;
+        self.add_seed_record_transaction(&header, slot_index, &slot_record)?;
         Ok(slot_index as u8)
     }
 
     pub fn unlock(&mut self, pin: &str) -> Result<(Vec<[u8; 64]>, [u8; 32]), NvsError> {
-        let mut pepper = NoNvsPepper;
+        let mut pepper = SoftwareNvsPepper;
         self.unlock_with_pepper(pin, &mut pepper)
     }
 
@@ -454,16 +446,6 @@ impl NvsStore {
         pin: &str,
         pepper_source: &mut P,
     ) -> Result<(Vec<[u8; 64]>, [u8; 32]), NvsError> {
-        self.unlock_with_optional_v2_migration(pin, pepper_source, false)
-            .map(|(seeds, key, _migrated)| (seeds, key))
-    }
-
-    pub fn unlock_with_optional_v2_migration<P: NvsPepperSource>(
-        &mut self,
-        pin: &str,
-        pepper_source: &mut P,
-        migrate_v1_to_v2: bool,
-    ) -> Result<(Vec<[u8; 64]>, [u8; 32], bool), NvsError> {
         let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
         if !header.initialized() {
             return Err(NvsError::NotInitialized);
@@ -474,10 +456,7 @@ impl NvsStore {
 
         let mut key = Self::derive_master_key_with_source(pin, &header, pepper_source)?;
         let mut seeds = Vec::new();
-        let mut pubs = Vec::new();
-        if seeds.try_reserve_exact(header.slot_count as usize).is_err()
-            || pubs.try_reserve_exact(header.slot_count as usize).is_err()
-        {
+        if seeds.try_reserve_exact(header.slot_count as usize).is_err() {
             key.zeroize();
             return Err(NvsError::Crypto);
         }
@@ -490,12 +469,6 @@ impl NvsStore {
             match self.decrypt_seed(&key, &record) {
                 Ok(seed) => {
                     seeds.push(seed);
-                    pubs.push(CheetahPub {
-                        slot: index as u8,
-                        path: pathmod::Path::new(),
-                        x: record.pub_x,
-                        y: record.pub_y,
-                    });
                 }
                 Err(_) => {
                     self.increment_attempts(&mut header)?;
@@ -504,31 +477,12 @@ impl NvsStore {
             }
         }
 
-        if migrate_v1_to_v2
-            && header.version == VERSION_V1
-            && seeds.len() == header.slot_count as usize
-            && self.v2_pepper_available(&header, pepper_source)?
-        {
-            let labels = self.read_seed_labels().unwrap_or_default();
-            let calibration = self.read_touch_calibration().ok().flatten();
-            let new_key = self.rewrite_seed_storage(
-                pin,
-                seeds.as_slice(),
-                pubs.as_slice(),
-                labels.as_slice(),
-                calibration,
-                pepper_source,
-            )?;
-            key.zeroize();
-            return Ok((seeds, new_key, true));
-        }
-
         self.clear_attempts_if_needed(&mut header)?;
-        Ok((seeds, key, false))
+        Ok((seeds, key))
     }
 
     pub fn derive_master_key_for_pin(&mut self, pin: &str) -> Result<[u8; 32], NvsError> {
-        let mut pepper = NoNvsPepper;
+        let mut pepper = SoftwareNvsPepper;
         self.derive_master_key_for_pin_with_pepper(pin, &mut pepper)
     }
 
@@ -593,7 +547,7 @@ impl NvsStore {
     }
 
     pub fn change_pin(&mut self, old_pin: &str, new_pin: &str) -> Result<(), NvsError> {
-        let mut pepper = NoNvsPepper;
+        let mut pepper = SoftwareNvsPepper;
         self.change_pin_with_pepper(old_pin, new_pin, &mut pepper)
     }
 
@@ -666,25 +620,12 @@ impl NvsStore {
             records.push(record);
         }
 
-        if let Err(err) = self.wipe() {
-            key.zeroize();
-            return Err(err);
-        }
-        for (index, record) in records.iter().enumerate() {
-            if let Err(err) = self.write_slot(index, record) {
-                key.zeroize();
-                return Err(err);
-            }
-        }
-
         header.attempts = 0;
-        if let Err(err) = self.write_header(&header) {
+        if let Err(err) =
+            self.rewrite_seed_storage_transaction(&header, records.as_slice(), labels, calibration)
+        {
             key.zeroize();
             return Err(err);
-        }
-        let _ = self.write_seed_label_records(labels);
-        if let Some(calibration) = calibration {
-            let _ = self.write_touch_calibration(&calibration);
         }
         Ok(key)
     }
@@ -696,12 +637,6 @@ impl NvsStore {
             NVS_SECTOR_END,
         )
         .map_err(|_| NvsError::Flash)?;
-        Ok(())
-    }
-
-    fn wipe_seed_storage(&mut self) -> Result<(), NvsError> {
-        let zeros = vec![0xFFu8; SEED_TOTAL_SIZE];
-        self.write_nvs_bytes(NVS_BASE_ADDR, &zeros)?;
         Ok(())
     }
 
@@ -855,6 +790,13 @@ impl NvsStore {
         &mut self,
         calibration: &TouchCalibration,
     ) -> Result<(), NvsError> {
+        let buf = Self::touch_calibration_bytes(calibration)?;
+        self.write_nvs_bytes(CALIBRATION_ADDR, &buf)
+    }
+
+    fn touch_calibration_bytes(
+        calibration: &TouchCalibration,
+    ) -> Result<[u8; CALIBRATION_SIZE], NvsError> {
         if !touch_calibration_valid(calibration) {
             return Err(NvsError::InvalidCalibration);
         }
@@ -874,8 +816,7 @@ impl NvsStore {
         buf[10..12].copy_from_slice(&calibration.raw_x_max.to_le_bytes());
         buf[12..14].copy_from_slice(&calibration.raw_y_min.to_le_bytes());
         buf[14..16].copy_from_slice(&calibration.raw_y_max.to_le_bytes());
-
-        self.write_nvs_bytes(CALIBRATION_ADDR, &buf)
+        Ok(buf)
     }
 
     fn derive_master_key_v1(pin: &str, salt: &[u8; 32]) -> Result<[u8; 32], NvsError> {
@@ -924,7 +865,10 @@ impl NvsStore {
         pepper_source: &mut P,
     ) -> Result<[u8; 32], NvsError> {
         let mut maybe_pepper = if header.version == VERSION_V2 {
-            pepper_source.nvs_v2_pepper(&header.salt)?
+            Some(Self::nvs_v2_pepper_or_software(
+                &header.salt,
+                pepper_source,
+            )?)
         } else {
             None
         };
@@ -937,24 +881,23 @@ impl NvsStore {
         header: &mut Header,
         pepper_source: &mut P,
     ) -> Result<Option<[u8; 32]>, NvsError> {
-        let pepper = pepper_source.nvs_v2_pepper(&header.salt)?;
-        header.version = if pepper.is_some() {
-            VERSION_V2
-        } else {
-            VERSION_V1
-        };
-        Ok(pepper)
+        header.version = VERSION;
+        if header.version == VERSION_V2 {
+            return Ok(Some(Self::nvs_v2_pepper_or_software(
+                &header.salt,
+                pepper_source,
+            )?));
+        }
+        Ok(None)
     }
 
-    fn v2_pepper_available<P: NvsPepperSource>(
-        &mut self,
-        header: &Header,
+    fn nvs_v2_pepper_or_software<P: NvsPepperSource>(
+        salt: &[u8; 32],
         pepper_source: &mut P,
-    ) -> Result<bool, NvsError> {
-        let mut maybe_pepper = pepper_source.nvs_v2_pepper(&header.salt)?;
-        let available = maybe_pepper.is_some();
-        zeroize_optional_secret(&mut maybe_pepper);
-        Ok(available)
+    ) -> Result<[u8; 32], NvsError> {
+        Ok(pepper_source
+            .nvs_v2_pepper(salt)?
+            .unwrap_or(NVS_V2_SOFTWARE_PEPPER))
     }
 
     fn verify_master_key(&mut self, key: &[u8; 32], header: &Header) -> Result<(), NvsError> {
@@ -1040,15 +983,6 @@ impl NvsStore {
         Ok(SlotRecord::from_bytes(&buf))
     }
 
-    fn write_slot(&mut self, index: usize, record: &SlotRecord) -> Result<(), NvsError> {
-        if index >= MAX_SEED_SLOTS {
-            return Err(NvsError::Full);
-        }
-        let buf = record.to_bytes();
-        let offset = NVS_BASE_ADDR + HEADER_SIZE as u32 + (index * SLOT_SIZE) as u32;
-        self.write_nvs_bytes(offset, &buf)
-    }
-
     fn write_seed_label_records(&mut self, labels: &[SeedSlotLabel]) -> Result<(), NvsError> {
         let buf = Self::seed_label_records_bytes(labels)?;
         self.write_nvs_bytes(LABELS_ADDR, &buf)
@@ -1111,6 +1045,64 @@ impl NvsStore {
         Self::seed_label_records_bytes(&shifted)
     }
 
+    fn initialize_seed_storage_transaction(
+        &mut self,
+        header: &Header,
+        record: &SlotRecord,
+    ) -> Result<(), NvsError> {
+        let mut sector = self.read_nvs_sector()?;
+        sector[..SEED_TOTAL_SIZE].fill(0xFF);
+
+        let header_bytes = header.to_bytes();
+        sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
+
+        let slot = slot_sector_offset(0)?;
+        let slot_bytes = record.to_bytes();
+        sector[slot..slot + SLOT_SIZE].copy_from_slice(&slot_bytes);
+
+        let labels = Self::seed_label_records_bytes(&[])?;
+        let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
+        sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
+
+        self.write_nvs_sector(&sector)
+    }
+
+    fn rewrite_seed_storage_transaction(
+        &mut self,
+        header: &Header,
+        records: &[SlotRecord],
+        labels: &[SeedSlotLabel],
+        calibration: Option<TouchCalibration>,
+    ) -> Result<(), NvsError> {
+        if records.len() > MAX_SEED_SLOTS {
+            return Err(NvsError::Crypto);
+        }
+
+        let mut sector = vec![0xFFu8; NVS_SECTOR_SIZE];
+
+        let header_bytes = header.to_bytes();
+        sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
+
+        for (index, record) in records.iter().enumerate() {
+            let slot = slot_sector_offset(index)?;
+            let slot_bytes = record.to_bytes();
+            sector[slot..slot + SLOT_SIZE].copy_from_slice(&slot_bytes);
+        }
+
+        let labels = Self::seed_label_records_bytes(labels)?;
+        let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
+        sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
+
+        if let Some(calibration) = calibration {
+            let calibration = Self::touch_calibration_bytes(&calibration)?;
+            let calibration_start = relative_nvs_offset(CALIBRATION_ADDR, CALIBRATION_SIZE)?;
+            sector[calibration_start..calibration_start + CALIBRATION_SIZE]
+                .copy_from_slice(&calibration);
+        }
+
+        self.write_nvs_sector(&sector)
+    }
+
     fn delete_seed_records_transaction(
         &mut self,
         header: &Header,
@@ -1142,6 +1134,27 @@ impl NvsStore {
         )?;
         let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
         sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
+
+        self.write_nvs_sector(&sector)
+    }
+
+    fn add_seed_record_transaction(
+        &mut self,
+        header: &Header,
+        slot_index: usize,
+        record: &SlotRecord,
+    ) -> Result<(), NvsError> {
+        if slot_index >= MAX_SEED_SLOTS {
+            return Err(NvsError::Full);
+        }
+
+        let mut sector = self.read_nvs_sector()?;
+        let slot = slot_sector_offset(slot_index)?;
+        let slot_bytes = record.to_bytes();
+        sector[slot..slot + SLOT_SIZE].copy_from_slice(&slot_bytes);
+
+        let header_bytes = header.to_bytes();
+        sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
 
         self.write_nvs_sector(&sector)
     }
@@ -1185,13 +1198,31 @@ impl NvsStore {
         if sector.len() != NVS_SECTOR_SIZE {
             return Err(NvsError::Flash);
         }
+        if NVS_WRITE_CHUNK_SIZE == 0 || NVS_WRITE_CHUNK_SIZE % FlashStorage::WORD_SIZE as usize != 0
+        {
+            return Err(NvsError::Flash);
+        }
         embedded_storage::nor_flash::NorFlash::erase(
             &mut self.flash,
             NVS_BASE_ADDR,
             NVS_SECTOR_END,
         )
         .map_err(|_| NvsError::Flash)?;
-        embedded_storage::nor_flash::NorFlash::write(&mut self.flash, NVS_BASE_ADDR, &sector)
-            .map_err(|_| NvsError::Flash)
+
+        let mut offset = 0usize;
+        while offset < sector.len() {
+            let end = (offset + NVS_WRITE_CHUNK_SIZE).min(sector.len());
+            let chunk = &sector[offset..end];
+            if chunk.iter().any(|byte| *byte != 0xFF) {
+                embedded_storage::nor_flash::NorFlash::write(
+                    &mut self.flash,
+                    NVS_BASE_ADDR + offset as u32,
+                    chunk,
+                )
+                .map_err(|_| NvsError::Flash)?;
+            }
+            offset = end;
+        }
+        Ok(())
     }
 }

@@ -17,7 +17,6 @@ fn emit_build_info() {
     println!("cargo:rerun-if-env-changed=NOCKSTER_BUILD_PROFILE");
     println!("cargo:rerun-if-env-changed=NOCKSTER_RELEASE_VERSION");
     println!("cargo:rerun-if-env-changed=NOCKSTER_UPDATE_PUBKEY_SHA256_HEX");
-    println!("cargo:rerun-if-env-changed=NOCKSTER_AUTO_MIGRATE_NVS_V2");
 
     let git_commit = git_output(["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
     let git_dirty = git_dirty();
@@ -37,10 +36,6 @@ fn emit_build_info() {
     println!(
         "cargo:rustc-env=NOCKSTER_RELEASE_VERSION={}",
         release_version()
-    );
-    println!(
-        "cargo:rustc-env=NOCKSTER_AUTO_MIGRATE_NVS_V2={}",
-        auto_migrate_nvs_v2()
     );
     println!("cargo:rustc-env=NOCKSTER_TX_TYPES_REV={tx_types_rev}");
 
@@ -66,17 +61,6 @@ fn release_version() -> String {
         .parse()
         .unwrap_or_else(|_| panic!("NOCKSTER_RELEASE_VERSION must be a u32, got {value:?}"));
     parsed.to_string()
-}
-
-fn auto_migrate_nvs_v2() -> &'static str {
-    match std::env::var("NOCKSTER_AUTO_MIGRATE_NVS_V2") {
-        Ok(value) if value.trim().is_empty() || value.trim() == "0" => "0",
-        Ok(value) if value.trim() == "1" => "1",
-        Ok(value) => {
-            panic!("NOCKSTER_AUTO_MIGRATE_NVS_V2 must be 0 or 1, got {value:?}");
-        }
-        Err(_) => "0",
-    }
 }
 
 fn git_output<const N: usize>(args: [&str; N]) -> Option<String> {

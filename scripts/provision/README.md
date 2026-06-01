@@ -74,8 +74,6 @@ make release-preflight \
   UPDATE_FIRMWARE=target/xtensa-esp32s3-none-elf/release/nockster-fw.bin
 ```
 
-Strict/production preflight also requires `NOCKSTER_AUTO_MIGRATE_NVS_V2=0`.
-Automatic NVS migration is for sacrificial chip-security test builds only.
 It verifies the signed update bundle against the configured trust anchor and
 reports bundle-verification failures without running any provisioning action.
 If `UPDATE_INDEX` is provided, preflight also regenerates the expected browser

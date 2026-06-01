@@ -62,7 +62,7 @@ pub enum Cmd {
 #[derive(Args, Clone)]
 pub struct PortArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -74,7 +74,7 @@ pub struct PortArgs {
 #[derive(Args, Clone)]
 pub struct SecurityArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -114,18 +114,12 @@ pub struct SecurityArgs {
     /// Require the current production lockdown checklist except power-glitch protection
     #[arg(long)]
     pub expect_production_lockdown: bool,
-    /// Rewrite existing NVS storage to schema v2 using the current PIN and HMAC_UP pepper
-    #[arg(long, requires = "current_pin")]
-    pub migrate_nvs_v2: bool,
-    /// Current device PIN for explicit NVS schema migration
-    #[arg(long)]
-    pub current_pin: Option<String>,
 }
 
 #[derive(Args, Clone)]
 pub struct TestArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -143,7 +137,7 @@ pub struct TestArgs {
 #[derive(Args, Clone)]
 pub struct SignDraftArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -180,7 +174,7 @@ pub struct InspectArgs {
 pub struct SeedArgs {
     /// required for seeding the device (ignored for pure file export from sk);
     /// can be a serial port (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -238,7 +232,7 @@ pub struct SeedArgs {
 #[derive(Args, Clone)]
 pub struct TouchArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -390,7 +384,7 @@ pub struct UpdateVerifyArgs {
 #[derive(Args, Clone)]
 pub struct UpdateTrustArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -399,7 +393,7 @@ pub struct UpdateTrustArgs {
 #[derive(Args, Clone)]
 pub struct UpdateDeviceVerifyArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -411,7 +405,7 @@ pub struct UpdateDeviceVerifyArgs {
 #[derive(Args, Clone)]
 pub struct UpdateStatusArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -438,7 +432,7 @@ pub struct UpdateStatusArgs {
 #[derive(Args, Clone)]
 pub struct UpdateDeviceStreamVerifyArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -456,7 +450,7 @@ pub struct UpdateDeviceStreamVerifyArgs {
 #[derive(Args, Clone)]
 pub struct UpdateDeviceInstallArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -484,7 +478,7 @@ pub struct UpdatePubkeyArgs {
 #[derive(Args, Clone)]
 pub struct SmokeArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -508,7 +502,7 @@ pub struct SmokeArgs {
 #[derive(Args, Clone)]
 pub struct UnlockArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
@@ -520,7 +514,7 @@ pub struct UnlockArgs {
 #[derive(Args, Clone)]
 pub struct PinArgs {
     /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
-    #[arg(long, required = true)]
+    #[arg(long, default_value = "hid", visible_alias = "device")]
     pub port: String,
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,

@@ -1,0 +1,13 @@
+pub mod health;
+pub mod info;
+pub mod inspect;
+pub mod pin;
+pub mod reset;
+pub mod security;
+pub mod seed;
+pub mod sign_draft;
+pub mod smoke;
+pub mod test;
+pub mod touch;
+pub mod unlock;
+pub mod update;

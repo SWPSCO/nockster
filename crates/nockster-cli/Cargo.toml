@@ -1,0 +1,46 @@
+[package]
+name = "nockster-cli"
+authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+bytes = "1.10.1"
+clap = { workspace = true, features = ["derive"] }
+serialport = "4"
+hidapi = "2.6.3"
+postcard   = { workspace = true, features = ["use-std"] } # to_stdvec_cobs
+serde = { workspace = true, features = ["std", "derive"] }
+serde-big-array = "0.5"
+cobs = { version = "0.4",    default-features = false }
+k256 = { version = "0.13", features = ["ecdsa"] }
+hex = "0.4"
+bip39 = "2"
+sha2 = "0.10"
+rand = { workspace = true }
+num-bigint = "0.4"
+num-integer = "0.1.46"
+bech32 = "0.9"
+ripemd = "0.1"
+zeroize = "1"
+
+bs58 = "0.5"
+pbkdf2 = "0.12"
+unicode-normalization = "0.1"
+serde_json = { workspace = true }
+ibig = "0.3"
+num-traits = "0.2"
+hmac = "0.12"
+
+noun-serde = { workspace = true }
+nockapp = { workspace = true, default-features = false }
+nockvm = { workspace = true, features = ["mmap"] }
+nockvm_macros = { workspace = true }
+
+
+nockster-core = { path = "../nockster-core", features = ["std", "alloc-path"] }
+tx-types = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

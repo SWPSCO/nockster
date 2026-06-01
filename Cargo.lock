@@ -3592,6 +3592,110 @@ dependencies = [
 ]
 
 [[package]]
+name = "nockster-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bech32",
+ "bip39",
+ "bs58",
+ "bytes",
+ "clap",
+ "cobs 0.4.0",
+ "getrandom 0.2.16",
+ "hex",
+ "hidapi",
+ "hmac",
+ "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "k256",
+ "nockapp",
+ "nockster-core",
+ "nockvm",
+ "nockvm_macros",
+ "noun-serde",
+ "num-bigint",
+ "num-integer",
+ "num-traits",
+ "pbkdf2",
+ "postcard",
+ "rand 0.8.5",
+ "ripemd",
+ "serde",
+ "serde-big-array",
+ "serde_json",
+ "serialport",
+ "sha2",
+ "tx-types",
+ "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
+name = "nockster-core"
+version = "0.1.0"
+dependencies = [
+ "bip32",
+ "bip39",
+ "bs58",
+ "bytes",
+ "heapless",
+ "hex-literal 0.4.1",
+ "hmac",
+ "k256",
+ "nockapp",
+ "nockvm",
+ "noun-serde",
+ "pokenoun",
+ "postcard",
+ "serde",
+ "serde-big-array",
+ "serde_bytes",
+ "sha2",
+ "tx-types",
+ "zeroize",
+]
+
+[[package]]
+name = "nockster-fw"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "bip32",
+ "cobs 0.4.0",
+ "critical-section",
+ "display-interface-spi",
+ "embedded-graphics",
+ "embedded-graphics-core",
+ "embedded-hal 1.0.0",
+ "embedded-hal-bus",
+ "embedded-storage",
+ "esp-alloc",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-storage",
+ "getrandom 0.2.16",
+ "heapless",
+ "hmac",
+ "image",
+ "k256",
+ "micromath",
+ "mipidsi",
+ "nb 1.1.0",
+ "nockster-core",
+ "panic-halt",
+ "pbkdf2",
+ "postcard",
+ "ripemd",
+ "serde",
+ "serde-big-array",
+ "sha2",
+ "signature",
+ "usb-device",
+ "usbd-hid",
+ "zeroize",
+]
+
+[[package]]
 name = "nockster-pc"
 version = "0.1.0"
 dependencies = [
@@ -3604,6 +3708,24 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-shell",
  "tokio",
+]
+
+[[package]]
+name = "nockster-wasm"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "console_error_panic_hook",
+ "js-sys",
+ "nockapp",
+ "nockvm",
+ "noun-serde",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "tx-types",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -5372,126 +5494,6 @@ dependencies = [
  "libc",
  "os_pipe",
  "signal-hook",
-]
-
-[[package]]
-name = "siger-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bech32",
- "bip39",
- "bs58",
- "bytes",
- "clap",
- "cobs 0.4.0",
- "getrandom 0.2.16",
- "hex",
- "hidapi",
- "hmac",
- "ibig 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "k256",
- "nockapp",
- "nockvm",
- "nockvm_macros",
- "noun-serde",
- "num-bigint",
- "num-integer",
- "num-traits",
- "pbkdf2",
- "postcard",
- "ripemd",
- "serde",
- "serde-big-array",
- "serde_json",
- "serialport",
- "sha2",
- "siger-core",
- "tx-types",
- "unicode-normalization",
-]
-
-[[package]]
-name = "siger-core"
-version = "0.1.0"
-dependencies = [
- "bip32",
- "bip39",
- "bs58",
- "bytes",
- "heapless",
- "hex-literal 0.4.1",
- "hmac",
- "k256",
- "nockapp",
- "nockvm",
- "noun-serde",
- "pokenoun",
- "postcard",
- "serde",
- "serde-big-array",
- "serde_bytes",
- "sha2",
- "tx-types",
- "zeroize",
-]
-
-[[package]]
-name = "siger-fw"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "bip32",
- "cobs 0.4.0",
- "critical-section",
- "display-interface-spi",
- "embedded-graphics",
- "embedded-graphics-core",
- "embedded-hal 1.0.0",
- "embedded-hal-bus",
- "embedded-storage",
- "esp-alloc",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-storage",
- "getrandom 0.2.16",
- "heapless",
- "hmac",
- "image",
- "k256",
- "micromath",
- "mipidsi",
- "nb 1.1.0",
- "panic-halt",
- "pbkdf2",
- "postcard",
- "ripemd",
- "serde",
- "serde-big-array",
- "sha2",
- "siger-core",
- "signature",
- "usb-device",
- "usbd-hid",
- "zeroize",
-]
-
-[[package]]
-name = "siger-wasm"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "console_error_panic_hook",
- "js-sys",
- "nockapp",
- "nockvm",
- "noun-serde",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "tx-types",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]

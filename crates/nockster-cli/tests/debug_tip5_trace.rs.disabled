@@ -1,0 +1,61 @@
+use nockapp::noun::slab::NounSlab;
+use nockvm::noun::{Atom, Cell};
+/// Trace through TIP5 execution step by step
+use nockster_core::cheetah::test_tip5_hash_words_debug;
+use tx_types::hashing::tip5::Tip5Hasher;
+
+#[test]
+fn test_tip5_trace_simple() {
+    println!("\n{}", "=".repeat(80));
+    println!("TIP5 TRACE: Input [1, 2, 3]");
+    println!("{}\n", "=".repeat(80));
+
+    let input = [1u64, 2, 3];
+
+    println!("FLAT ARRAY HASHER:");
+    let hash_flat = test_tip5_hash_words_debug(&input);
+
+    println!("\nNOUN HASHER:");
+    let mut slab: NounSlab = NounSlab::new();
+    let mut list = Atom::new(&mut slab, 0).as_noun();
+    for &element in input.iter().rev() {
+        let atom = Atom::new(&mut slab, element).as_noun();
+        list = Cell::new(&mut slab, atom, list).as_noun();
+    }
+    let hash_noun = Tip5Hasher::hash_varlen(list).unwrap();
+    println!("  Final output: {:016x?}", hash_noun.values);
+
+    println!("\nCOMPARISON:");
+    println!("  Flat: {:016x?}", hash_flat);
+    println!("  Noun: {:016x?}", hash_noun.values);
+    println!("  Match: {}", hash_flat == hash_noun.values);
+
+    println!("\n{}", "=".repeat(80));
+}
+
+#[test]
+fn test_tip5_trace_single() {
+    println!("\n{}", "=".repeat(80));
+    println!("TIP5 TRACE: Input [1]");
+    println!("{}\n", "=".repeat(80));
+
+    let input = [1u64];
+
+    println!("FLAT ARRAY HASHER:");
+    let hash_flat = test_tip5_hash_words_debug(&input);
+
+    println!("\nNOUN HASHER:");
+    let mut slab: NounSlab = NounSlab::new();
+    let mut list = Atom::new(&mut slab, 0).as_noun();
+    let atom = Atom::new(&mut slab, 1).as_noun();
+    list = Cell::new(&mut slab, atom, list).as_noun();
+    let hash_noun = Tip5Hasher::hash_varlen(list).unwrap();
+    println!("  Final output: {:016x?}", hash_noun.values);
+
+    println!("\nCOMPARISON:");
+    println!("  Flat: {:016x?}", hash_flat);
+    println!("  Noun: {:016x?}", hash_noun.values);
+    println!("  Match: {}", hash_flat == hash_noun.values);
+
+    println!("\n{}", "=".repeat(80));
+}

@@ -20,7 +20,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-import { compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'siger-wasm';
+import { compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'nockster-wasm';
 import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1 } from './types';
 import { loadAddressBook, newId, saveAddressBook } from './storage';
 
@@ -274,7 +274,7 @@ function sumAssets(notes: NoteV1[]): number {
 export function Composer({ wasmReady }: { wasmReady: boolean }) {
   const [addressBook, setAddressBook] = useState<AddressBookEntry[]>(() => loadAddressBook());
 
-  const unitStorageKey = 'siger.composer.unit.v1';
+  const unitStorageKey = 'nockster.composer.unit.v1';
   const [unitModePinned, setUnitModePinned] = useState<boolean>(() => {
     const stored = localStorage.getItem(unitStorageKey);
     return stored === 'n' || stored === 'ℕ';
@@ -765,7 +765,7 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
       event.preventDefault();
       if (!rfInstance.current) return;
 
-      const raw = event.dataTransfer.getData('application/siger-node');
+      const raw = event.dataTransfer.getData('application/nockster-node');
       if (!raw) return;
       const parsed = JSON.parse(raw) as {
         kind: string;
@@ -1147,7 +1147,7 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                           draggable
                           onDragStart={(e) =>
                             e.dataTransfer.setData(
-                              'application/siger-node',
+                              'application/nockster-node',
                               dragData({ kind: 'address', entryId: entry.id })
                             )
                           }
@@ -1278,7 +1278,7 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                           draggable
                           onDragStart={(e) =>
                             e.dataTransfer.setData(
-                              'application/siger-node',
+                              'application/nockster-node',
                               dragData({ kind: 'note', entryId: selectedEntry.id, noteId: note.id })
                             )
                           }

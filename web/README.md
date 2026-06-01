@@ -1,6 +1,6 @@
-# siger-wasm/siger-js demo webui
+# nockster-wasm/nockster-js demo webui
 
-Browser-based interface for Siger hardware wallet using Web Serial API
+Browser-based interface for Nockster hardware wallet using Web Serial API
 
 ## features
 
@@ -13,7 +13,7 @@ Browser-based interface for Siger hardware wallet using Web Serial API
 ## requirements
 
 - Chrome, Edge, or Opera (Web Serial API support)
-- Siger hardware wallet (ESP32-S3)
+- Nockster hardware wallet (ESP32-S3)
 
 ## Quick Start
 

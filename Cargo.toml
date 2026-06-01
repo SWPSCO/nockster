@@ -1,9 +1,9 @@
 [workspace]
 members = [
-    "crates/siger-core",
-    "crates/siger-fw",
-    "crates/siger-cli", 
-    "crates/siger-wasm",
+    "crates/nockster-core",
+    "crates/nockster-fw",
+    "crates/nockster-cli",
+    "crates/nockster-wasm",
     "src-tauri",
 ]
 resolver = "2"

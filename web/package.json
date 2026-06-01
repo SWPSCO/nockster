@@ -1,5 +1,5 @@
 {
-  "name": "siger-web",
+  "name": "nockster-web",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -14,8 +14,8 @@
     "@xyflow/react": "^12.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "siger-js": "file:../siger-js",
-    "siger-wasm": "file:../crates/siger-wasm/pkg"
+    "nockster-js": "file:../nockster-js",
+    "nockster-wasm": "file:../crates/nockster-wasm/pkg"
   },
   "devDependencies": {
     "@types/react": "^18.3.12",

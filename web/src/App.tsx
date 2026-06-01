@@ -1629,7 +1629,7 @@ function App() {
                   }}
                 />
               )}
-              <div className="button-group" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+              <div className="button-group control-actions">
                 <button
                   onClick={unlock}
                   disabled={deviceBusy || !locked || !pin}

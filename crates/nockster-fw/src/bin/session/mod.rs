@@ -120,13 +120,16 @@ pub fn remove_seed_slot(index: usize) {
             state.slots[i] = state.slots[i + 1];
             i += 1;
         }
-        if let Some(mut removed) = state.slots.pop() {
-            removed.zeroize();
-        }
+        state.slots[len - 1].zeroize();
+        let _ = state.slots.pop();
         if state.active >= state.slots.len() {
             state.active = state.slots.len().saturating_sub(1);
         }
         state.locked = state.slots.is_empty();
+        if state.locked {
+            state.master_key.zeroize();
+            state.master_key_set = false;
+        }
     });
 }
 

@@ -259,6 +259,30 @@ fn matches_magic(buf: &[u8], current: &[u8; 4], legacy: &[u8; 4]) -> bool {
     stored == current.as_ref() || stored == legacy.as_ref()
 }
 
+fn relative_nvs_offset(address: u32, len: usize) -> Result<usize, NvsError> {
+    if address < NVS_BASE_ADDR {
+        return Err(NvsError::Flash);
+    }
+    let start = (address - NVS_BASE_ADDR) as usize;
+    let Some(end) = start.checked_add(len) else {
+        return Err(NvsError::Flash);
+    };
+    if end > NVS_TOTAL_SIZE {
+        return Err(NvsError::Flash);
+    }
+    Ok(start)
+}
+
+fn slot_sector_offset(index: usize) -> Result<usize, NvsError> {
+    if index >= MAX_SEED_SLOTS {
+        return Err(NvsError::InvalidSlot);
+    }
+    relative_nvs_offset(
+        NVS_BASE_ADDR + HEADER_SIZE as u32 + (index * SLOT_SIZE) as u32,
+        SLOT_SIZE,
+    )
+}
+
 pub fn nvs_v2_pepper_message(salt: &[u8; 32], mac: &[u8; 6]) -> [u8; NVS_V2_PEPPER_MESSAGE_LEN] {
     let mut out = [0u8; NVS_V2_PEPPER_MESSAGE_LEN];
     let mut offset = 0usize;
@@ -554,23 +578,17 @@ impl NvsStore {
 
         let labels_before_delete = self.read_seed_labels().unwrap_or_default();
         let last_index = header.slot_count.saturating_sub(1) as usize;
-        if slot_index < last_index {
-            for idx in slot_index..last_index {
-                match self.read_slot(idx + 1)? {
-                    Some(record) => self.write_slot(idx, &record)?,
-                    None => self.erase_slot(idx)?,
-                }
-            }
-        }
-
-        self.erase_slot(last_index)?;
         header.slot_count = header.slot_count.saturating_sub(1);
         if header.slot_count == 0 {
             header.flags &= !FLAG_INITIALIZED;
         }
         header.attempts = 0;
-        self.write_header(&header)?;
-        self.shift_seed_labels_after_delete(&labels_before_delete, slot_index, last_index);
+        self.delete_seed_records_transaction(
+            &header,
+            slot_index,
+            last_index,
+            labels_before_delete.as_slice(),
+        )?;
         Ok(())
     }
 
@@ -1031,16 +1049,12 @@ impl NvsStore {
         self.write_nvs_bytes(offset, &buf)
     }
 
-    fn erase_slot(&mut self, index: usize) -> Result<(), NvsError> {
-        if index >= MAX_SEED_SLOTS {
-            return Err(NvsError::InvalidSlot);
-        }
-        let buf = [0xFFu8; SLOT_SIZE];
-        let offset = NVS_BASE_ADDR + HEADER_SIZE as u32 + (index * SLOT_SIZE) as u32;
-        self.write_nvs_bytes(offset, &buf)
+    fn write_seed_label_records(&mut self, labels: &[SeedSlotLabel]) -> Result<(), NvsError> {
+        let buf = Self::seed_label_records_bytes(labels)?;
+        self.write_nvs_bytes(LABELS_ADDR, &buf)
     }
 
-    fn write_seed_label_records(&mut self, labels: &[SeedSlotLabel]) -> Result<(), NvsError> {
+    fn seed_label_records_bytes(labels: &[SeedSlotLabel]) -> Result<[u8; LABELS_SIZE], NvsError> {
         let mut buf = [0xFFu8; LABELS_SIZE];
         buf[..LABELS_MAGIC.len()].copy_from_slice(&LABELS_MAGIC);
         buf[4] = LABELS_VERSION;
@@ -1065,15 +1079,14 @@ impl NvsStore {
             }
         }
 
-        self.write_nvs_bytes(LABELS_ADDR, &buf)
+        Ok(buf)
     }
 
-    fn shift_seed_labels_after_delete(
-        &mut self,
+    fn shifted_seed_label_records_bytes(
         labels: &[SeedSlotLabel],
         deleted_slot: usize,
         old_last_slot: usize,
-    ) {
+    ) -> Result<[u8; LABELS_SIZE], NvsError> {
         let mut shifted = Vec::new();
         for entry in labels {
             let slot = entry.slot as usize;
@@ -1095,7 +1108,42 @@ impl NvsStore {
                 });
             }
         }
-        let _ = self.write_seed_label_records(&shifted);
+        Self::seed_label_records_bytes(&shifted)
+    }
+
+    fn delete_seed_records_transaction(
+        &mut self,
+        header: &Header,
+        deleted_slot: usize,
+        old_last_slot: usize,
+        labels_before_delete: &[SeedSlotLabel],
+    ) -> Result<(), NvsError> {
+        if deleted_slot > old_last_slot || old_last_slot >= MAX_SEED_SLOTS {
+            return Err(NvsError::InvalidSlot);
+        }
+
+        let mut sector = self.read_nvs_sector()?;
+        for index in deleted_slot..old_last_slot {
+            let dst = slot_sector_offset(index)?;
+            let src = slot_sector_offset(index + 1)?;
+            sector.copy_within(src..src + SLOT_SIZE, dst);
+        }
+
+        let last = slot_sector_offset(old_last_slot)?;
+        sector[last..last + SLOT_SIZE].fill(0xFF);
+
+        let header_bytes = header.to_bytes();
+        sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
+
+        let labels = Self::shifted_seed_label_records_bytes(
+            labels_before_delete,
+            deleted_slot,
+            old_last_slot,
+        )?;
+        let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
+        sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
+
+        self.write_nvs_sector(&sector)
     }
 
     fn increment_attempts(&mut self, header: &mut Header) -> Result<(), NvsError> {
@@ -1115,22 +1163,28 @@ impl NvsStore {
     }
 
     fn write_nvs_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), NvsError> {
-        if NVS_TOTAL_SIZE > NVS_SECTOR_SIZE || address < NVS_BASE_ADDR {
-            return Err(NvsError::Flash);
-        }
-        let start = (address - NVS_BASE_ADDR) as usize;
-        let Some(end) = start.checked_add(bytes.len()) else {
-            return Err(NvsError::Flash);
-        };
-        if end > NVS_TOTAL_SIZE {
-            return Err(NvsError::Flash);
-        }
+        let start = relative_nvs_offset(address, bytes.len())?;
+        let mut sector = self.read_nvs_sector()?;
+        let end = start + bytes.len();
+        sector[start..end].copy_from_slice(bytes);
+        self.write_nvs_sector(&sector)
+    }
 
+    fn read_nvs_sector(&mut self) -> Result<Vec<u8>, NvsError> {
+        if NVS_TOTAL_SIZE > NVS_SECTOR_SIZE {
+            return Err(NvsError::Flash);
+        }
         let mut sector = vec![0xFFu8; NVS_SECTOR_SIZE];
         self.flash
             .read(NVS_BASE_ADDR, &mut sector)
             .map_err(|_| NvsError::Flash)?;
-        sector[start..end].copy_from_slice(bytes);
+        Ok(sector)
+    }
+
+    fn write_nvs_sector(&mut self, sector: &[u8]) -> Result<(), NvsError> {
+        if sector.len() != NVS_SECTOR_SIZE {
+            return Err(NvsError::Flash);
+        }
         embedded_storage::nor_flash::NorFlash::erase(
             &mut self.flash,
             NVS_BASE_ADDR,

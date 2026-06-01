@@ -21,8 +21,6 @@ pub const MAX_SEED_WORDS: usize = 24;
 const MAX_WORD_LEN: usize = 12;
 const MAX_DIGITS: usize = 8;
 const SUGGESTION_CAP: usize = 6;
-const INFO_AREA_HEIGHT: i32 = 64;
-const INFO_PANEL_MARGIN: i32 = 2;
 const KEYPAD_MARGIN: i32 = 3;
 
 pub type SeedWord = HString<MAX_WORD_LEN>;
@@ -31,8 +29,8 @@ pub type SeedPhrase = HVec<SeedWord, MAX_SEED_WORDS>;
 #[derive(Clone, Debug)]
 pub enum SeedInteraction {
     EnterSeedRequested,
-    WordCommitted(SeedWord),
-    WordRemoved(Option<SeedWord>),
+    WordCommitted,
+    WordRemoved,
     EntryCompleted(SeedPhrase),
     EntryCancelled,
 }
@@ -43,7 +41,6 @@ pub enum SeedButton {
     Key(u8),
     Backspace,
     NextSuggestion,
-    PrevSuggestion,
     CommitWord,
     Finish,
     Cancel,
@@ -77,10 +74,6 @@ impl SeedEntryState {
         self.words.clear();
     }
 
-    pub fn words(&self) -> &SeedPhrase {
-        &self.words
-    }
-
     pub fn push_digit(&mut self, digit: u8) -> bool {
         if digit < 2 || digit > 9 || self.digits.len() >= MAX_DIGITS {
             return false;
@@ -107,18 +100,6 @@ impl SeedEntryState {
             return false;
         }
         self.suggestion_index = (self.suggestion_index + 1) % self.suggestions.len();
-        true
-    }
-
-    pub fn prev_suggestion(&mut self) -> bool {
-        if self.suggestions.is_empty() {
-            return false;
-        }
-        if self.suggestion_index == 0 {
-            self.suggestion_index = self.suggestions.len() - 1;
-        } else {
-            self.suggestion_index -= 1;
-        }
         true
     }
 
@@ -161,29 +142,6 @@ impl SeedEntryState {
         } else {
             self.suggestions.get(self.suggestion_index).copied()
         }
-    }
-
-    pub fn digits_as_string(&self) -> HString<MAX_DIGITS> {
-        let mut buf = HString::<MAX_DIGITS>::new();
-        for digit in self.digits.iter() {
-            let ch = (b'0' + *digit) as char;
-            let _ = buf.push(ch);
-        }
-        buf
-    }
-
-    pub fn typed_prefix(&self) -> Option<SeedWord> {
-        let suggestion = self.current_suggestion()?;
-        let mut prefix = SeedWord::new();
-        for (idx, ch) in suggestion.chars().enumerate() {
-            if idx >= self.digits.len() {
-                break;
-            }
-            if prefix.push(ch).is_err() {
-                break;
-            }
-        }
-        Some(prefix)
     }
 
     fn refresh_suggestions(&mut self) {
@@ -314,7 +272,9 @@ pub fn draw_seed_button(
     match hit.button {
         Button::Seed(SeedButton::EnterSeed) => draw_enter_seed_button(display, hit, active),
         Button::Seed(_) if mode == GuiMode::SeedEntry => {
-            draw_keypad_button(display, hit, state.expect("seed state required"), active)
+            if let Some(state) = state {
+                draw_keypad_button(display, hit, state, active);
+            }
         }
         Button::Seed(_) if mode == GuiMode::SeedConfirm => {
             draw_confirm_button(display, hit, active)
@@ -402,7 +362,6 @@ fn draw_keypad_button(
             )
             .draw(display);
         }
-        SeedButton::PrevSuggestion => draw_label(display, center_x, center_y, "<"),
         SeedButton::NextSuggestion => draw_label(display, center_x, center_y, ">"),
         SeedButton::Backspace => draw_label(display, center_x, center_y, "DEL"),
         SeedButton::CommitWord => {
@@ -586,18 +545,6 @@ fn within_hit(hit: &ButtonHit, point: Point, slack: i32) -> bool {
     let top = hit.top_left.y - slack;
     let bottom = hit.top_left.y + hit.size.height as i32 + slack;
     point.x >= left && point.x < right && point.y >= top && point.y < bottom
-}
-
-fn draw_left_aligned_text(
-    display: &mut GuiDisplay<'_>,
-    text: &HString<64>,
-    style: MonoTextStyle<'_, Rgb565>,
-    left: i32,
-    base_top: i32,
-    line: usize,
-) {
-    let baseline = base_top + line as i32 * ((FONT_6X10.character_size.height as i32) + 4);
-    let _ = Text::new(text.as_str(), Point::new(left, baseline), style).draw(display);
 }
 
 fn split_text<'a>(text: &'a str, max_width: usize) -> impl Iterator<Item = &'a str> {

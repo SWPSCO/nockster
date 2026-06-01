@@ -3,7 +3,7 @@
 //! This module intentionally handles only release/update authentication
 //! metadata. It is separate from transaction signing code.
 
-use crate::UpdateStatus;
+use crate::{UpdateStatus, UPDATE_OTA_STATE_NEW, UPDATE_OTA_STATE_PENDING_VERIFY};
 use heapless::String;
 use k256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -308,9 +308,20 @@ pub fn pubkey_sha256(pubkey_sec1: &[u8]) -> [u8; 32] {
     out
 }
 
+pub fn should_mark_ota_image_valid(current_state: u8) -> bool {
+    matches!(
+        current_state,
+        UPDATE_OTA_STATE_NEW | UPDATE_OTA_STATE_PENDING_VERIFY
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        UPDATE_OTA_STATE_ABORTED, UPDATE_OTA_STATE_INVALID, UPDATE_OTA_STATE_UNAVAILABLE,
+        UPDATE_OTA_STATE_UNDEFINED, UPDATE_OTA_STATE_UNKNOWN, UPDATE_OTA_STATE_VALID,
+    };
 
     fn test_manifest(pubkey_hash: [u8; 32]) -> UpdateManifest {
         UpdateManifest::new(
@@ -524,5 +535,26 @@ mod tests {
             Err(UpdateManifestPolicyError::UnsupportedManifest)
         );
         verify_update_manifest_policy(&production_manifest, &production_policy).unwrap();
+    }
+
+    #[test]
+    fn ota_valid_marking_only_blesses_first_boot_states() {
+        assert!(should_mark_ota_image_valid(UPDATE_OTA_STATE_NEW));
+        assert!(should_mark_ota_image_valid(UPDATE_OTA_STATE_PENDING_VERIFY));
+
+        for state in [
+            UPDATE_OTA_STATE_VALID,
+            UPDATE_OTA_STATE_INVALID,
+            UPDATE_OTA_STATE_ABORTED,
+            UPDATE_OTA_STATE_UNAVAILABLE,
+            UPDATE_OTA_STATE_UNKNOWN,
+            UPDATE_OTA_STATE_UNDEFINED,
+            0x7f,
+        ] {
+            assert!(
+                !should_mark_ota_image_valid(state),
+                "unexpectedly marked state {state:#x} as valid"
+            );
+        }
     }
 }

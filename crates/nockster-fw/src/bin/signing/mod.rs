@@ -1,8 +1,8 @@
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature};
 use nockster_core::alloc_path as pathmod;
 use nockster_core::{
-    cheetah, draft_sign::SignerConfig, Request, Response, ERR_DEVICE_LOCKED, ERR_NO_SEED,
-    ERR_WRONG_PUBKEY,
+    cheetah, draft_sign::SignerConfig, Request, Response, ERR_CRYPTO, ERR_DEVICE_LOCKED,
+    ERR_NO_SEED, ERR_WRONG_PUBKEY,
 };
 use zeroize::Zeroize;
 
@@ -65,7 +65,10 @@ pub fn handle_request(req: &Request, locked: bool) -> Option<Response> {
             }
             Some(match derive_signing_key_active(path) {
                 Ok(sk) => {
-                    let mut sig: Signature = PrehashSigner::sign_prehash(&sk, digest32).unwrap();
+                    let mut sig: Signature = match PrehashSigner::sign_prehash(&sk, digest32) {
+                        Ok(sig) => sig,
+                        Err(_) => return Some(Response::Err { code: ERR_CRYPTO }),
+                    };
                     if let Some(norm) = sig.normalize_s() {
                         sig = norm;
                     }

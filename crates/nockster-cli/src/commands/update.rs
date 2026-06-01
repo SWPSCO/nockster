@@ -1,8 +1,9 @@
 use crate::cli::{
     UpdateArgs, UpdateCmd, UpdateDeviceInstallArgs, UpdateDeviceStreamVerifyArgs,
-    UpdateDeviceVerifyArgs, UpdateKeygenArgs, UpdatePubkeyArgs, UpdateSignArgs, UpdateStatusArgs,
-    UpdateTrustArgs, UpdateVerifyArgs,
+    UpdateDeviceVerifyArgs, UpdateIndexArgs, UpdateKeygenArgs, UpdatePubkeyArgs, UpdateSignArgs,
+    UpdateStatusArgs, UpdateTrustArgs, UpdateVerifyArgs,
 };
+use crate::commands::reboot::request_device_reboot;
 use crate::serial::{open, send_call, Link};
 use anyhow::{anyhow, Context, Result};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
@@ -52,10 +53,26 @@ struct UpdateManifestJson {
     tx_types_rev: String,
 }
 
+#[derive(Debug, Serialize)]
+struct UpdateReleaseIndexJson {
+    format: &'static str,
+    bundle_url: String,
+    firmware_url: String,
+    release_version: u32,
+    image_size: u32,
+    image_sha256_hex: String,
+    hardware_target: String,
+    build_profile: String,
+    protocol_v: u8,
+    git_commit: String,
+    tx_types_rev: String,
+}
+
 pub fn run(args: &UpdateArgs) -> Result<()> {
     match &args.cmd {
         UpdateCmd::Keygen(args) => keygen(args),
         UpdateCmd::Sign(args) => sign(args),
+        UpdateCmd::Index(args) => index(args),
         UpdateCmd::Verify(args) => verify(args),
         UpdateCmd::Trust(args) => trust(args),
         UpdateCmd::DeviceVerify(args) => device_verify(args),
@@ -145,6 +162,23 @@ fn sign(args: &UpdateSignArgs) -> Result<()> {
     println!("trusted_pubkey_sha256: {}", hex::encode(trusted_hash));
     println!("git_commit: {}", release_metadata.git_commit);
     println!("tx_types_rev: {}", release_metadata.tx_types_rev);
+    Ok(())
+}
+
+fn index(args: &UpdateIndexArgs) -> Result<()> {
+    let (manifest, _, _) = read_bundle(&args.bundle)?;
+    verify_firmware_file_matches_manifest(&args.firmware, &manifest)?;
+    let bundle_url = resolve_artifact_url(args.bundle_url.as_deref(), &args.bundle, "bundle")?;
+    let firmware_url =
+        resolve_artifact_url(args.firmware_url.as_deref(), &args.firmware, "firmware")?;
+    let index = release_index_from_manifest(&manifest, bundle_url, firmware_url);
+    let json = serde_json::to_string_pretty(&index)?;
+    fs::write(&args.out, json).with_context(|| format!("write {}", args.out.display()))?;
+
+    println!("wrote release index: {}", args.out.display());
+    println!("release_version: {}", manifest.release_version);
+    println!("bundle_url: {}", index.bundle_url);
+    println!("firmware_url: {}", index.firmware_url);
     Ok(())
 }
 
@@ -246,6 +280,7 @@ fn device_stream_verify(args: &UpdateDeviceStreamVerifyArgs) -> Result<()> {
         &args.firmware,
         args.chunk_size,
         false,
+        false,
     )
 }
 
@@ -257,6 +292,7 @@ fn device_install(args: &UpdateDeviceInstallArgs) -> Result<()> {
         &args.firmware,
         args.chunk_size,
         true,
+        args.reboot,
     )
 }
 
@@ -267,6 +303,7 @@ fn stream_update_to_device(
     firmware: &Path,
     chunk_size: usize,
     write_flash: bool,
+    reboot_after_install: bool,
 ) -> Result<()> {
     if chunk_size == 0 || chunk_size > MAX_UPDATE_CHUNK_LEN {
         return Err(anyhow!(
@@ -347,13 +384,19 @@ fn stream_update_to_device(
     if write_flash {
         println!("device installed and activated streamed firmware image");
         confirm_install_activation(&mut *sp)?;
-        println!("reboot the device to boot the new OTA slot");
     } else {
         println!("device verified streamed firmware image");
     }
     println!("release_version: {}", finish.release_version);
     println!("image_size: {}", finish.image_size);
     println!("bytes_received: {}", finish.bytes_received);
+    if write_flash {
+        if reboot_after_install {
+            request_device_reboot(&mut *sp)?;
+        } else {
+            println!("reboot the device to boot the new OTA slot");
+        }
+    }
     Ok(())
 }
 
@@ -1006,6 +1049,124 @@ fn manifest_to_json(manifest: &UpdateManifest) -> UpdateManifestJson {
     }
 }
 
+fn release_index_from_manifest(
+    manifest: &UpdateManifest,
+    bundle_url: String,
+    firmware_url: String,
+) -> UpdateReleaseIndexJson {
+    UpdateReleaseIndexJson {
+        format: "nockster-release-index-v1",
+        bundle_url,
+        firmware_url,
+        release_version: manifest.release_version,
+        image_size: manifest.image_size,
+        image_sha256_hex: hex::encode(manifest.image_sha256),
+        hardware_target: manifest.hardware_target.as_str().to_string(),
+        build_profile: manifest.build_profile.as_str().to_string(),
+        protocol_v: manifest.protocol_v,
+        git_commit: manifest.git_commit.as_str().to_string(),
+        tx_types_rev: manifest.tx_types_rev.as_str().to_string(),
+    }
+}
+
+fn default_artifact_url(path: &Path, label: &str) -> Result<String> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("{label} path must include a UTF-8 file name"))?;
+    if name.trim().is_empty() {
+        anyhow::bail!("{label} path must include a non-empty file name");
+    }
+    Ok(name.to_string())
+}
+
+fn explicit_url_scheme(value: &str) -> Option<&str> {
+    let scheme_end = value.find(':')?;
+    let first_delim = value
+        .find(|c| matches!(c, '/' | '?' | '#'))
+        .unwrap_or(value.len());
+    if scheme_end > first_delim {
+        return None;
+    }
+    let scheme = &value[..scheme_end];
+    if scheme.is_empty()
+        || !scheme
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'-' | b'.'))
+    {
+        return None;
+    }
+    Some(scheme)
+}
+
+fn http_url_host(value: &str, label: &str) -> Result<String> {
+    let Some((_, rest)) = value.split_once("://") else {
+        anyhow::bail!("{label} URL must include // after the scheme");
+    };
+    let authority = rest
+        .split(|c| matches!(c, '/' | '?' | '#'))
+        .next()
+        .unwrap_or_default();
+    if authority.is_empty() {
+        anyhow::bail!("{label} URL must include a host");
+    }
+    if authority.contains('@') {
+        anyhow::bail!("{label} URL must not include credentials");
+    }
+    if let Some(rest) = authority.strip_prefix('[') {
+        let Some(end) = rest.find(']') else {
+            anyhow::bail!("{label} URL has an invalid IPv6 host");
+        };
+        return Ok(rest[..end].to_ascii_lowercase());
+    }
+    Ok(authority
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase())
+}
+
+fn is_local_update_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn validate_browser_artifact_url(value: &str, label: &str) -> Result<()> {
+    if value.starts_with("//") {
+        anyhow::bail!("{label} URL must not be protocol-relative; use an explicit https:// URL");
+    }
+
+    let Some(scheme) = explicit_url_scheme(value) else {
+        return Ok(());
+    };
+    match scheme.to_ascii_lowercase().as_str() {
+        "https" => {
+            http_url_host(value, label)?;
+            Ok(())
+        }
+        "http" => {
+            let host = http_url_host(value, label)?;
+            if is_local_update_host(&host) {
+                Ok(())
+            } else {
+                anyhow::bail!("{label} URL must use HTTPS, except for localhost testing");
+            }
+        }
+        _ => anyhow::bail!("{label} URL must use http or https"),
+    }
+}
+
+fn resolve_artifact_url(value: Option<&str>, path: &Path, label: &str) -> Result<String> {
+    match value {
+        Some(value) if !value.trim().is_empty() => {
+            let value = value.trim().to_string();
+            validate_browser_artifact_url(&value, label)?;
+            Ok(value)
+        }
+        Some(_) => Err(anyhow!("{label} URL must be non-empty")),
+        None => default_artifact_url(path, label),
+    }
+}
+
 fn manifest_from_json(json: &UpdateManifestJson) -> Result<UpdateManifest> {
     if json.manifest_version != UPDATE_MANIFEST_VERSION {
         return Err(anyhow!(
@@ -1051,7 +1212,8 @@ fn read_bundle(path: &Path) -> Result<(UpdateManifest, Vec<u8>, [u8; 64])> {
     }
 
     let manifest = manifest_from_json(&bundle.manifest)?;
-    let bundled_pubkey = parse_hex_bytes(&bundle.signing_pubkey_sec1_hex, "signing pubkey")?;
+    let bundled_pubkey =
+        parse_compressed_sec1_pubkey(&bundle.signing_pubkey_sec1_hex, "signing pubkey")?;
     let signature = parse_hex_64(&bundle.signature_hex, "signature")?;
     Ok((manifest, bundled_pubkey, signature))
 }
@@ -1309,6 +1471,17 @@ fn parse_hex_64(value: &str, label: &str) -> Result<[u8; 64]> {
     Ok(out)
 }
 
+fn parse_compressed_sec1_pubkey(value: &str, label: &str) -> Result<Vec<u8>> {
+    let bytes = parse_hex_bytes(value, label)?;
+    if bytes.len() != 33 {
+        return Err(anyhow!("{label} must be exactly 33 bytes"));
+    }
+    match bytes[0] {
+        0x02 | 0x03 => Ok(bytes),
+        _ => Err(anyhow!("{label} must be a compressed SEC1 public key")),
+    }
+}
+
 fn parse_hex_bytes(value: &str, label: &str) -> Result<Vec<u8>> {
     let trimmed = value.trim();
     let trimmed = trimmed.strip_prefix("0x").unwrap_or(trimmed);
@@ -1362,6 +1535,134 @@ mod tests {
         assert_eq!(manifest.protocol_v, json.protocol_v);
         assert_eq!(manifest.git_commit.as_str(), json.git_commit);
         assert_eq!(manifest.tx_types_rev.as_str(), json.tx_types_rev);
+    }
+
+    #[test]
+    fn release_index_exports_browser_update_urls_and_manifest_metadata() {
+        let manifest = manifest_from_json(&sample_manifest_json()).unwrap();
+        let index = release_index_from_manifest(
+            &manifest,
+            "nockster-fw.update.json".to_string(),
+            "nockster-fw.bin".to_string(),
+        );
+
+        assert_eq!(index.format, "nockster-release-index-v1");
+        assert_eq!(index.bundle_url, "nockster-fw.update.json");
+        assert_eq!(index.firmware_url, "nockster-fw.bin");
+        assert_eq!(index.release_version, manifest.release_version);
+        assert_eq!(index.image_size, manifest.image_size);
+        assert_eq!(index.image_sha256_hex, hex::encode(manifest.image_sha256));
+        assert_eq!(index.hardware_target, manifest.hardware_target.as_str());
+        assert_eq!(index.build_profile, manifest.build_profile.as_str());
+        assert_eq!(index.protocol_v, manifest.protocol_v);
+        assert_eq!(index.git_commit, manifest.git_commit.as_str());
+        assert_eq!(index.tx_types_rev, manifest.tx_types_rev.as_str());
+    }
+
+    #[test]
+    fn default_artifact_url_uses_file_name_only() {
+        assert_eq!(
+            default_artifact_url(Path::new("/tmp/releases/nockster-fw.bin"), "firmware").unwrap(),
+            "nockster-fw.bin"
+        );
+    }
+
+    #[test]
+    fn explicit_artifact_url_must_not_be_empty() {
+        let err =
+            resolve_artifact_url(Some("  "), Path::new("nockster-fw.bin"), "firmware").unwrap_err();
+        assert!(err.to_string().contains("must be non-empty"));
+
+        assert_eq!(
+            resolve_artifact_url(
+                Some(" updates/nockster-fw.bin "),
+                Path::new("ignored.bin"),
+                "firmware"
+            )
+            .unwrap(),
+            "updates/nockster-fw.bin"
+        );
+    }
+
+    #[test]
+    fn explicit_artifact_urls_follow_browser_publication_policy() {
+        assert_eq!(
+            resolve_artifact_url(
+                Some("https://updates.example.test/releases/nockster-fw.bin"),
+                Path::new("ignored.bin"),
+                "firmware"
+            )
+            .unwrap(),
+            "https://updates.example.test/releases/nockster-fw.bin"
+        );
+        assert_eq!(
+            resolve_artifact_url(
+                Some("http://localhost:3000/updates/nockster-fw.bin"),
+                Path::new("ignored.bin"),
+                "firmware"
+            )
+            .unwrap(),
+            "http://localhost:3000/updates/nockster-fw.bin"
+        );
+        assert_eq!(
+            resolve_artifact_url(
+                Some("http://[::1]:3000/updates/nockster-fw.bin"),
+                Path::new("ignored.bin"),
+                "firmware"
+            )
+            .unwrap(),
+            "http://[::1]:3000/updates/nockster-fw.bin"
+        );
+
+        let remote_http = resolve_artifact_url(
+            Some("http://updates.example.test/nockster-fw.bin"),
+            Path::new("ignored.bin"),
+            "firmware",
+        )
+        .unwrap_err();
+        assert!(remote_http.to_string().contains("must use HTTPS"));
+
+        let non_http = resolve_artifact_url(
+            Some("file:///tmp/nockster-fw.bin"),
+            Path::new("ignored.bin"),
+            "firmware",
+        )
+        .unwrap_err();
+        assert!(non_http.to_string().contains("must use http or https"));
+
+        let protocol_relative = resolve_artifact_url(
+            Some("//updates.example.test/nockster-fw.bin"),
+            Path::new("ignored.bin"),
+            "firmware",
+        )
+        .unwrap_err();
+        assert!(protocol_relative
+            .to_string()
+            .contains("must not be protocol-relative"));
+    }
+
+    #[test]
+    fn bundled_signing_pubkey_must_be_compressed_sec1() {
+        let valid_even =
+            parse_compressed_sec1_pubkey(&format!("02{}", "00".repeat(32)), "signing pubkey")
+                .unwrap();
+        assert_eq!(valid_even.len(), 33);
+
+        let valid_odd =
+            parse_compressed_sec1_pubkey(&format!("03{}", "11".repeat(32)), "signing pubkey")
+                .unwrap();
+        assert_eq!(valid_odd.len(), 33);
+
+        let short = parse_compressed_sec1_pubkey("02", "signing pubkey")
+            .unwrap_err()
+            .to_string();
+        assert!(short.contains("exactly 33 bytes"));
+
+        let uncompressed_prefix =
+            parse_compressed_sec1_pubkey(&format!("04{}", "00".repeat(32)), "signing pubkey")
+                .unwrap_err()
+                .to_string();
+        assert!(uncompressed_prefix.contains("compressed SEC1 public key"));
     }
 
     #[test]

@@ -52,6 +52,9 @@ pub enum Cmd {
     /// lock the device (clear ram)
     Lock(PortArgs),
 
+    /// reboot the device without clearing seed or PIN state
+    Reboot(PortArgs),
+
     /// factory reset (clears seed + persistent PIN state)
     Reset(PortArgs),
 }
@@ -293,6 +296,8 @@ pub enum UpdateCmd {
     Keygen(UpdateKeygenArgs),
     /// sign a firmware image and write a portable update bundle
     Sign(UpdateSignArgs),
+    /// write a browser latest-release index for one-click site updates
+    Index(UpdateIndexArgs),
     /// verify a bundle the same way firmware will before accepting it
     Verify(UpdateVerifyArgs),
     /// ask a connected device which release public key hash it trusts
@@ -348,6 +353,25 @@ pub struct UpdateSignArgs {
     /// tx-types revision included in the release manifest. Defaults to the workspace Cargo.toml pin.
     #[arg(long)]
     pub tx_types_rev: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct UpdateIndexArgs {
+    /// Bundle JSON produced by `nockster-cli update sign`
+    #[arg(long)]
+    pub bundle: PathBuf,
+    /// Firmware binary referenced by the bundle
+    #[arg(long)]
+    pub firmware: PathBuf,
+    /// Output latest-release index JSON path
+    #[arg(long)]
+    pub out: PathBuf,
+    /// URL written into the index for the bundle. Defaults to the bundle file name.
+    #[arg(long)]
+    pub bundle_url: Option<String>,
+    /// URL written into the index for the firmware. Defaults to the firmware file name.
+    #[arg(long)]
+    pub firmware_url: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -445,6 +469,9 @@ pub struct UpdateDeviceInstallArgs {
     /// Bytes per update chunk sent to the device
     #[arg(long, default_value_t = nockster_core::update::MAX_UPDATE_CHUNK_LEN)]
     pub chunk_size: usize,
+    /// Reboot after post-install OTA activation validation succeeds
+    #[arg(long)]
+    pub reboot: bool,
 }
 
 #[derive(Args, Clone)]
@@ -533,6 +560,7 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Unlock(args) => commands::unlock::unlock(&args.port, args.baud, &args.pin),
         Cmd::Pin(args) => commands::pin::run(&args.port, args.baud, &args.current_pin),
         Cmd::Lock(args) => commands::unlock::lock(&args.port, args.baud),
+        Cmd::Reboot(args) => commands::reboot::run(&args),
         Cmd::Reset(args) => commands::reset::run(&args),
     }
 }

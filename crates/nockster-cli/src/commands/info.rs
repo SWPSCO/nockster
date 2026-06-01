@@ -1,10 +1,11 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_call};
 use nockster_core::{
-    Request, Response, FEATURE_ALL_KNOWN, FEATURE_BUILD_INFO, FEATURE_CHEETAH, FEATURE_FRAG,
-    FEATURE_PIN_CHANGE_UI, FEATURE_RELEASE_INFO, FEATURE_SECURE_UPDATE, FEATURE_SECURITY_STATUS,
-    FEATURE_SEED_LABELS, FEATURE_TOUCH_CALIBRATION, FEATURE_TOUCH_CALIBRATION_UI,
-    FEATURE_TOUCH_DIAGNOSTICS, FEATURE_UPDATE_BOOT_STATUS, FEATURE_XPUB,
+    Request, Response, FEATURE_ALL_KNOWN, FEATURE_BUILD_INFO, FEATURE_CHEETAH,
+    FEATURE_DEVICE_REBOOT, FEATURE_FRAG, FEATURE_PIN_CHANGE_UI, FEATURE_RELEASE_INFO,
+    FEATURE_SECURE_UPDATE, FEATURE_SECURITY_STATUS, FEATURE_SEED_LABELS, FEATURE_TOUCH_CALIBRATION,
+    FEATURE_TOUCH_CALIBRATION_UI, FEATURE_TOUCH_DIAGNOSTICS, FEATURE_UPDATE_BOOT_STATUS,
+    FEATURE_XPUB,
 };
 use std::fmt::Write as _;
 
@@ -135,6 +136,9 @@ pub(crate) fn format_features(features: u32) -> String {
     if features & FEATURE_UPDATE_BOOT_STATUS != 0 {
         names.push("update-boot-status".to_string());
     }
+    if features & FEATURE_DEVICE_REBOOT != 0 {
+        names.push("device-reboot".to_string());
+    }
 
     let unknown = features & !FEATURE_ALL_KNOWN;
     if unknown != 0 {
@@ -145,6 +149,17 @@ pub(crate) fn format_features(features: u32) -> String {
         "none".to_string()
     } else {
         names.join(",")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feature_formatter_names_device_reboot() {
+        let names = format_features(FEATURE_DEVICE_REBOOT);
+        assert_eq!(names, "device-reboot");
     }
 }
 

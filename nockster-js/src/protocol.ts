@@ -132,6 +132,71 @@ export interface UpdateBundle {
   signature64: Uint8Array;
 }
 
+export interface UpdateReleaseIndexMetadata {
+  format?: string;
+  releaseVersion?: number;
+  imageSize?: number;
+  imageSha256Hex?: string;
+  hardwareTarget?: string;
+  buildProfile?: string;
+  protocolV?: number;
+  gitCommit?: string;
+  txTypesRev?: string;
+}
+
+export interface UpdateReleaseIndex {
+  bundleUrl: URL;
+  firmwareUrl: URL;
+  metadata: UpdateReleaseIndexMetadata;
+}
+
+export interface FetchedUpdateRelease {
+  bundle: UpdateBundle;
+  bundleUrl: URL;
+  bundleName: string;
+  firmware: Uint8Array;
+  firmwareUrl: URL;
+  firmwareName: string;
+  index?: UpdateReleaseIndex;
+}
+
+export interface UpdateCompatibilityOptions {
+  hardwareTarget?: string;
+  protocolV?: number;
+  releaseVersion?: number | null;
+  buildInfo?: BuildInfo | null;
+  currentBuildProfile?: string | null;
+}
+
+export interface UpdateStreamStatusExpectation {
+  expectedActive: boolean;
+  expectedManifestVerified: boolean;
+  expectedImageVerified: boolean;
+  expectedBytesReceived: number;
+}
+
+type UpdateFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<globalThis.Response>;
+
+export interface FetchUpdateReleaseArtifactsOptions {
+  fetchImpl?: UpdateFetch;
+  bundleInit?: RequestInit;
+  firmwareInit?: RequestInit;
+  bearerToken?: string;
+  indexMetadata?: UpdateReleaseIndexMetadata;
+  origin?: string | URL | null;
+  enforceHttpsOrLocal?: boolean;
+  validateBundle?: (bundle: UpdateBundle) => void;
+}
+
+export interface FetchLatestUpdateReleaseOptions extends Omit<
+  FetchUpdateReleaseArtifactsOptions,
+  'bundleInit' | 'firmwareInit' | 'indexMetadata'
+> {
+  indexInit?: RequestInit;
+  bundleInit?: RequestInit;
+  firmwareInit?: RequestInit;
+}
+
 export type Request =
   | { type: 'Hello' }
   | { type: 'GetInfo' }
@@ -179,7 +244,8 @@ export type Request =
   | { type: 'CancelUpdate' }
   | { type: 'GetUpdateStatus' }
   | { type: 'GetReleaseInfo' }
-  | { type: 'GetUpdateBootStatus' };
+  | { type: 'GetUpdateBootStatus' }
+  | { type: 'Reboot' };
 
 export interface CheetahPubInfo {
   slot: number;
@@ -242,8 +308,28 @@ export const FEATURE_BUILD_INFO = 1 << 4;
 export const FEATURE_SECURE_UPDATE = 1 << 10;
 export const FEATURE_RELEASE_INFO = 1 << 11;
 export const FEATURE_UPDATE_BOOT_STATUS = 1 << 12;
+export const FEATURE_DEVICE_REBOOT = 1 << 13;
+export const NOCKSTER_UPDATE_HARDWARE_TARGET = 'esp32s3-touch-lcd-1.47';
+export const UPDATE_BUILD_PROFILE_DEV = 'dev';
+export const UPDATE_BUILD_PROFILE_CHIP_SECURITY = 'chip-security';
+export const UPDATE_BUILD_PROFILE_PRODUCTION = 'production';
+export const UPDATE_SLOT_NONE = 0;
+export const UPDATE_SLOT_OTA0 = 1;
+export const UPDATE_SLOT_OTA1 = 2;
+export const UPDATE_SLOT_UNKNOWN = 0xff;
+export const UPDATE_OTA_STATE_NEW = 0;
+export const UPDATE_OTA_STATE_PENDING_VERIFY = 1;
+export const UPDATE_OTA_STATE_VALID = 2;
+export const UPDATE_OTA_STATE_INVALID = 3;
+export const UPDATE_OTA_STATE_ABORTED = 4;
+export const UPDATE_OTA_STATE_UNAVAILABLE = 0xfd;
+export const UPDATE_OTA_STATE_UNKNOWN = 0xfe;
+export const UPDATE_OTA_STATE_UNDEFINED = 0xff;
 export const UPDATE_BUNDLE_FORMAT = 'nockster-update-bundle-v1';
+export const UPDATE_RELEASE_INDEX_FORMAT = 'nockster-release-index-v1';
 export const UPDATE_SIGNATURE_SCHEME = 'secp256k1-ecdsa-sha256-prehash-v1';
+export const UPDATE_MANIFEST_VERSION = 1;
+export const MAX_UPDATE_RELEASE_VERSION = 0xffff_ffff;
 export const MAX_UPDATE_IMAGE_SIZE = 4 * 1024 * 1024;
 export const MAX_UPDATE_CHUNK_LEN = 512;
 
@@ -290,6 +376,36 @@ function expectBytes(value: Uint8Array, len: number, label: string): Uint8Array 
     throw new Error(`${label} must be ${len} bytes`);
   }
   return value;
+}
+
+function expectCompressedSec1Pubkey(value: Uint8Array, label: string): Uint8Array {
+  const bytes = expectBytes(value, 33, label);
+  if (bytes[0] !== 0x02 && bytes[0] !== 0x03) {
+    throw new Error(`${label} must be a compressed SEC1 public key`);
+  }
+  return bytes;
+}
+
+function expectString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function expectUint(value: unknown, label: string, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) {
+    throw new Error(`${label} must be an integer between 0 and ${max}`);
+  }
+  return value;
+}
+
+function expectUpdateManifestVersion(value: unknown): number {
+  const version = expectUint(value, 'manifest_version', 0xff);
+  if (version !== UPDATE_MANIFEST_VERSION) {
+    throw new Error(`unsupported update manifest version: ${version}`);
+  }
+  return version;
 }
 
 function serializeTouchCalibration(w: PostcardWriter, calibration: TouchCalibration) {
@@ -356,6 +472,27 @@ export function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
+function bufferSourceForDigest(bytes: Uint8Array): BufferSource {
+  if (bytes.buffer instanceof ArrayBuffer) {
+    return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+
 export function hexToBytes(value: string, label = 'hex'): Uint8Array {
   const cleaned = value
     .trim()
@@ -363,6 +500,9 @@ export function hexToBytes(value: string, label = 'hex'): Uint8Array {
     .replace(/[\s_:]/g, '');
   if (cleaned.length % 2 !== 0) {
     throw new Error(`${label} has an odd number of hex digits`);
+  }
+  if (!/^[0-9a-fA-F]*$/.test(cleaned)) {
+    throw new Error(`invalid ${label}`);
   }
   const out = new Uint8Array(cleaned.length / 2);
   for (let i = 0; i < out.length; i++) {
@@ -377,7 +517,7 @@ export function hexToBytes(value: string, label = 'hex'): Uint8Array {
 
 export function parseUpdateBundleJson(input: string | unknown): UpdateBundle {
   const raw = typeof input === 'string' ? JSON.parse(input) : input as any;
-  if (!raw || typeof raw !== 'object') {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('update bundle must be a JSON object');
   }
   if (raw.format !== UPDATE_BUNDLE_FORMAT) {
@@ -387,33 +527,596 @@ export function parseUpdateBundleJson(input: string | unknown): UpdateBundle {
     throw new Error(`unsupported update signature scheme: ${raw.signature_scheme ?? 'missing'}`);
   }
   const manifest = raw.manifest;
-  if (!manifest || typeof manifest !== 'object') {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new Error('update bundle is missing manifest');
   }
 
   const signature64 = hexToBytes(String(raw.signature_hex ?? ''), 'signature');
   const signing_pubkey_sec1 = hexToBytes(String(raw.signing_pubkey_sec1_hex ?? ''), 'signing pubkey');
+  const imageSize = expectUint(manifest.image_size, 'image_size', MAX_UPDATE_IMAGE_SIZE);
+  if (imageSize === 0) {
+    throw new Error('image_size must be nonzero');
+  }
   return {
     format: raw.format,
     signature_scheme: raw.signature_scheme,
     manifest: {
-      manifest_version: Number(manifest.manifest_version),
-      release_version: Number(manifest.release_version),
-      image_size: Number(manifest.image_size),
+      manifest_version: expectUpdateManifestVersion(manifest.manifest_version),
+      release_version: expectUint(manifest.release_version, 'release_version', MAX_UPDATE_RELEASE_VERSION),
+      image_size: imageSize,
       image_sha256: expectBytes(hexToBytes(String(manifest.image_sha256_hex ?? ''), 'image sha256'), 32, 'image_sha256'),
       signing_pubkey_sha256: expectBytes(
         hexToBytes(String(manifest.signing_pubkey_sha256_hex ?? ''), 'signing pubkey sha256'),
         32,
         'signing_pubkey_sha256',
       ),
-      hardware_target: String(manifest.hardware_target ?? ''),
-      build_profile: String(manifest.build_profile ?? ''),
-      protocol_v: Number(manifest.protocol_v),
-      git_commit: String(manifest.git_commit ?? ''),
-      tx_types_rev: String(manifest.tx_types_rev ?? ''),
+      hardware_target: expectString(manifest.hardware_target, 'hardware_target'),
+      build_profile: expectString(manifest.build_profile, 'build_profile'),
+      protocol_v: expectUint(manifest.protocol_v, 'protocol_v', 0xff),
+      git_commit: expectString(manifest.git_commit, 'git_commit'),
+      tx_types_rev: expectString(manifest.tx_types_rev, 'tx_types_rev'),
     },
-    signing_pubkey_sec1,
+    signing_pubkey_sec1: expectCompressedSec1Pubkey(signing_pubkey_sec1, 'signing_pubkey_sec1'),
     signature64: expectBytes(signature64, 64, 'signature64'),
+  };
+}
+
+function parseReleaseIndexObject(input: string | unknown): Record<string, unknown> {
+  const raw = typeof input === 'string' ? JSON.parse(input) : input;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('release index must be a JSON object');
+  }
+  return raw as Record<string, unknown>;
+}
+
+function parseReleaseIndexBaseUrl(value: string | URL): URL {
+  try {
+    const url = value instanceof URL ? new URL(value.href) : new URL(value);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error('release index URL must use http or https');
+    }
+    return url;
+  } catch (error: any) {
+    const message = error?.message ?? error?.toString() ?? 'invalid URL';
+    throw new Error(`release index URL: ${message}`);
+  }
+}
+
+function parseReleaseIndexArtifactUrl(value: string, base: URL, label: string): URL {
+  try {
+    const url = new URL(value, base);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error(`${label} must use http or https`);
+    }
+    return url;
+  } catch (error: any) {
+    const message = error?.message ?? error?.toString() ?? 'invalid URL';
+    throw new Error(`${label}: ${message}`);
+  }
+}
+
+function readReleaseIndexUrlField(value: Record<string, unknown>, snake: string, camel: string): string {
+  const raw = value[snake] ?? value[camel];
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new Error(`release index is missing ${snake}`);
+  }
+  return raw.trim();
+}
+
+function readOptionalIndexString(value: Record<string, unknown>, snake: string, camel: string): string | undefined {
+  const raw = value[snake] ?? value[camel];
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (typeof raw !== 'string' || !raw.trim()) {
+    throw new Error(`release index ${snake} must be a non-empty string`);
+  }
+  return raw.trim();
+}
+
+function readOptionalIndexHexBytes(
+  value: Record<string, unknown>,
+  snake: string,
+  camel: string,
+  byteLen: number,
+): string | undefined {
+  const raw = readOptionalIndexString(value, snake, camel);
+  if (raw === undefined) {
+    return undefined;
+  }
+  const label = `release index ${snake}`;
+  return bytesToHex(expectBytes(hexToBytes(raw, label), byteLen, label));
+}
+
+function readOptionalIndexNumber(value: Record<string, unknown>, snake: string, camel: string): number | undefined {
+  const raw = value[snake] ?? value[camel];
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+    throw new Error(`release index ${snake} must be a non-negative integer`);
+  }
+  return raw;
+}
+
+function readOptionalIndexUint(
+  value: Record<string, unknown>,
+  snake: string,
+  camel: string,
+  max: number,
+): number | undefined {
+  const raw = readOptionalIndexNumber(value, snake, camel);
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw > max) {
+    throw new Error(`release index ${snake} must be at most ${max}`);
+  }
+  return raw;
+}
+
+export function parseUpdateReleaseIndexJson(input: string | unknown, indexUrl: string | URL): UpdateReleaseIndex {
+  const raw = parseReleaseIndexObject(input);
+  const base = parseReleaseIndexBaseUrl(indexUrl);
+  const format = readOptionalIndexString(raw, 'format', 'format');
+  if (format !== undefined && format !== UPDATE_RELEASE_INDEX_FORMAT) {
+    throw new Error(`unsupported release index format: ${format}`);
+  }
+
+  return {
+    bundleUrl: parseReleaseIndexArtifactUrl(
+      readReleaseIndexUrlField(raw, 'bundle_url', 'bundleUrl'),
+      base,
+      'bundle URL',
+    ),
+    firmwareUrl: parseReleaseIndexArtifactUrl(
+      readReleaseIndexUrlField(raw, 'firmware_url', 'firmwareUrl'),
+      base,
+      'firmware URL',
+    ),
+    metadata: {
+      format,
+      releaseVersion: readOptionalIndexUint(raw, 'release_version', 'releaseVersion', MAX_UPDATE_RELEASE_VERSION),
+      imageSize: readOptionalIndexUint(raw, 'image_size', 'imageSize', MAX_UPDATE_IMAGE_SIZE),
+      imageSha256Hex: readOptionalIndexHexBytes(raw, 'image_sha256_hex', 'imageSha256Hex', 32),
+      hardwareTarget: readOptionalIndexString(raw, 'hardware_target', 'hardwareTarget'),
+      buildProfile: readOptionalIndexString(raw, 'build_profile', 'buildProfile'),
+      protocolV: readOptionalIndexUint(raw, 'protocol_v', 'protocolV', 0xff),
+      gitCommit: readOptionalIndexString(raw, 'git_commit', 'gitCommit'),
+      txTypesRev: readOptionalIndexString(raw, 'tx_types_rev', 'txTypesRev'),
+    },
+  };
+}
+
+export function assertUpdateReleaseIndexMatchesBundle(
+  index: UpdateReleaseIndexMetadata,
+  bundle: UpdateBundle,
+): void {
+  const mismatches: string[] = [];
+  const manifest = bundle.manifest;
+  const expectedSha = index.imageSha256Hex?.toLowerCase();
+  if (index.releaseVersion !== undefined && index.releaseVersion !== manifest.release_version) {
+    mismatches.push(`release_version ${index.releaseVersion} != bundle ${manifest.release_version}`);
+  }
+  if (index.imageSize !== undefined && index.imageSize !== manifest.image_size) {
+    mismatches.push(`image_size ${index.imageSize} != bundle ${manifest.image_size}`);
+  }
+  if (expectedSha !== undefined && expectedSha !== bytesToHex(manifest.image_sha256)) {
+    mismatches.push('image_sha256_hex does not match bundle manifest');
+  }
+  if (index.hardwareTarget !== undefined && index.hardwareTarget !== manifest.hardware_target) {
+    mismatches.push(`hardware_target ${index.hardwareTarget} != bundle ${manifest.hardware_target}`);
+  }
+  if (index.buildProfile !== undefined && index.buildProfile !== manifest.build_profile) {
+    mismatches.push(`build_profile ${index.buildProfile} != bundle ${manifest.build_profile}`);
+  }
+  if (index.protocolV !== undefined && index.protocolV !== manifest.protocol_v) {
+    mismatches.push(`protocol_v ${index.protocolV} != bundle ${manifest.protocol_v}`);
+  }
+  if (index.gitCommit !== undefined && index.gitCommit !== manifest.git_commit) {
+    mismatches.push('git_commit does not match bundle manifest');
+  }
+  if (index.txTypesRev !== undefined && index.txTypesRev !== manifest.tx_types_rev) {
+    mismatches.push('tx_types_rev does not match bundle manifest');
+  }
+  if (mismatches.length) {
+    throw new Error(`release index metadata mismatch: ${mismatches.join('; ')}`);
+  }
+}
+
+function updateBuildProfileAllowed(current: string, candidate: string): boolean {
+  const supported = [
+    UPDATE_BUILD_PROFILE_DEV,
+    UPDATE_BUILD_PROFILE_CHIP_SECURITY,
+    UPDATE_BUILD_PROFILE_PRODUCTION,
+  ];
+  if (!supported.includes(current) || !supported.includes(candidate)) {
+    return false;
+  }
+  return current !== UPDATE_BUILD_PROFILE_PRODUCTION || candidate === UPDATE_BUILD_PROFILE_PRODUCTION;
+}
+
+export function getUpdateBundleCompatibilityBlocker(
+  bundle: UpdateBundle | null,
+  options: UpdateCompatibilityOptions = {},
+): string | null {
+  if (!bundle) {
+    return null;
+  }
+  const manifest = bundle.manifest;
+  const hardwareTarget = options.hardwareTarget ?? NOCKSTER_UPDATE_HARDWARE_TARGET;
+  const protocol = options.protocolV ?? options.buildInfo?.protocol_v ?? PROTO_V1;
+  const releaseVersion = options.releaseVersion;
+  const currentBuildProfile = options.currentBuildProfile ?? options.buildInfo?.build_profile ?? null;
+
+  if (manifest.hardware_target !== hardwareTarget) {
+    return `Bundle target ${manifest.hardware_target} does not match this device target ${hardwareTarget}.`;
+  }
+  if (manifest.protocol_v !== protocol) {
+    return `Bundle protocol ${manifest.protocol_v} does not match device protocol ${protocol}.`;
+  }
+  if (manifest.image_size <= 0) {
+    return 'Bundle image size must be nonzero.';
+  }
+  if (manifest.image_size > MAX_UPDATE_IMAGE_SIZE) {
+    return `Bundle image size ${manifest.image_size} exceeds ${MAX_UPDATE_IMAGE_SIZE} bytes.`;
+  }
+  if (releaseVersion !== undefined && releaseVersion !== null && manifest.release_version <= releaseVersion) {
+    return `Bundle release ${manifest.release_version} is not newer than device release ${releaseVersion}.`;
+  }
+  if (currentBuildProfile !== null && !updateBuildProfileAllowed(currentBuildProfile, manifest.build_profile)) {
+    return `Bundle profile ${manifest.build_profile} is not accepted by device profile ${currentBuildProfile}.`;
+  }
+
+  return null;
+}
+
+export function assertUpdateBundleCompatible(
+  bundle: UpdateBundle,
+  options: UpdateCompatibilityOptions = {},
+): void {
+  const blocker = getUpdateBundleCompatibilityBlocker(bundle, options);
+  if (blocker) {
+    throw new Error(blocker);
+  }
+}
+
+export function updateSlotName(slot: number): string {
+  switch (slot) {
+    case UPDATE_SLOT_NONE:
+      return 'factory/none';
+    case UPDATE_SLOT_OTA0:
+      return 'ota_0';
+    case UPDATE_SLOT_OTA1:
+      return 'ota_1';
+    case UPDATE_SLOT_UNKNOWN:
+      return 'unknown';
+    default:
+      return 'invalid';
+  }
+}
+
+export function updateOtaStateName(state: number): string {
+  switch (state) {
+    case UPDATE_OTA_STATE_NEW:
+      return 'new';
+    case UPDATE_OTA_STATE_PENDING_VERIFY:
+      return 'pending-verify';
+    case UPDATE_OTA_STATE_VALID:
+      return 'valid';
+    case UPDATE_OTA_STATE_INVALID:
+      return 'invalid';
+    case UPDATE_OTA_STATE_ABORTED:
+      return 'aborted';
+    case UPDATE_OTA_STATE_UNAVAILABLE:
+      return 'unavailable';
+    case UPDATE_OTA_STATE_UNKNOWN:
+      return 'unknown';
+    case UPDATE_OTA_STATE_UNDEFINED:
+      return 'undefined';
+    default:
+      return 'invalid';
+  }
+}
+
+export function getPostInstallUpdateBootStatusFailures(status: UpdateBootStatus): string[] {
+  const failures: string[] = [];
+  if (!status.partition_table_ok) {
+    failures.push('partition table is not readable');
+  }
+  if (!status.ota_data_present) {
+    failures.push('otadata partition is missing');
+  }
+  if (!status.ota0_present || !status.ota1_present) {
+    failures.push('both OTA app slots must be present');
+  }
+  if (status.current_slot !== UPDATE_SLOT_OTA0 && status.current_slot !== UPDATE_SLOT_OTA1) {
+    failures.push(`selected boot slot is ${updateSlotName(status.current_slot)}, expected ota_0 or ota_1`);
+  }
+  if (status.ota_state !== UPDATE_OTA_STATE_NEW) {
+    failures.push(`selected OTA image state is ${updateOtaStateName(status.ota_state)}, expected new`);
+  }
+  return failures;
+}
+
+export function assertPostInstallUpdateBootStatus(status: UpdateBootStatus): void {
+  const failures = getPostInstallUpdateBootStatusFailures(status);
+  if (failures.length) {
+    throw new Error(`post-install activation validation failed: ${failures.join('; ')}`);
+  }
+}
+
+function yesNo(value: boolean): string {
+  return value ? 'yes' : 'no';
+}
+
+export function getUpdateStreamStatusFailures(
+  status: UpdateStatus,
+  bundle: UpdateBundle,
+  expectation: UpdateStreamStatusExpectation,
+): string[] {
+  const manifest = bundle.manifest;
+  const failures: string[] = [];
+  if (status.active !== expectation.expectedActive) {
+    failures.push(`active is ${yesNo(status.active)}, expected ${yesNo(expectation.expectedActive)}`);
+  }
+  if (status.manifest_verified !== expectation.expectedManifestVerified) {
+    failures.push(`manifest_verified is ${yesNo(status.manifest_verified)}, expected ${yesNo(expectation.expectedManifestVerified)}`);
+  }
+  if (status.image_verified !== expectation.expectedImageVerified) {
+    failures.push(`image_verified is ${yesNo(status.image_verified)}, expected ${yesNo(expectation.expectedImageVerified)}`);
+  }
+  if (status.release_version !== manifest.release_version) {
+    failures.push(`release_version is ${status.release_version}, expected ${manifest.release_version}`);
+  }
+  if (status.image_size !== manifest.image_size) {
+    failures.push(`image_size is ${status.image_size}, expected ${manifest.image_size}`);
+  }
+  if (status.bytes_received !== expectation.expectedBytesReceived) {
+    failures.push(`bytes_received is ${status.bytes_received}, expected ${expectation.expectedBytesReceived}`);
+  }
+  return failures;
+}
+
+export function assertUpdateStreamStatus(
+  status: UpdateStatus,
+  bundle: UpdateBundle,
+  phase: string,
+  expectation: UpdateStreamStatusExpectation,
+): void {
+  const failures = getUpdateStreamStatusFailures(status, bundle, expectation);
+  if (failures.length) {
+    throw new Error(`${phase}: invalid device update status: ${failures.join('; ')}`);
+  }
+}
+
+export async function assertUpdateFirmwareMatchesBundle(
+  bundle: UpdateBundle,
+  firmware: Uint8Array,
+): Promise<void> {
+  if (bundle.manifest.image_size <= 0) {
+    throw new Error('bundle image size must be nonzero');
+  }
+  if (bundle.manifest.image_size > MAX_UPDATE_IMAGE_SIZE) {
+    throw new Error(`bundle image size exceeds ${MAX_UPDATE_IMAGE_SIZE} bytes`);
+  }
+  if (firmware.length !== bundle.manifest.image_size) {
+    throw new Error(`firmware size mismatch: bundle expects ${bundle.manifest.image_size}, got ${firmware.length}`);
+  }
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('SHA-256 is unavailable in this browser context');
+  }
+
+  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bufferSourceForDigest(firmware)));
+  if (!bytesEqual(digest, bundle.manifest.image_sha256)) {
+    throw new Error(
+      `firmware sha256 mismatch: bundle expects ${bytesToHex(bundle.manifest.image_sha256)}, got ${bytesToHex(digest)}`
+    );
+  }
+}
+
+function resolveUpdateFetch(fetchImpl?: UpdateFetch): UpdateFetch {
+  if (fetchImpl) {
+    return fetchImpl;
+  }
+  if (!globalThis.fetch) {
+    throw new Error('fetch is unavailable in this browser context');
+  }
+  return globalThis.fetch.bind(globalThis);
+}
+
+function parseUpdateFetchUrl(value: string | URL, label: string): URL {
+  try {
+    const url = value instanceof URL ? new URL(value.href) : new URL(value);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error(`${label} must use http or https`);
+    }
+    return url;
+  } catch (error: any) {
+    const message = error?.message ?? error?.toString() ?? 'invalid URL';
+    throw new Error(`${label}: ${message}`);
+  }
+}
+
+function updateReleaseOrigin(value?: string | URL | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (value !== undefined) {
+    return new URL(value instanceof URL ? value.href : value).origin;
+  }
+  return typeof globalThis.location === 'undefined' ? null : globalThis.location.origin;
+}
+
+function updateFetchCredentialsForUrl(url: URL, origin: string | null, bearerToken?: string): RequestCredentials {
+  if (bearerToken?.trim()) {
+    return 'omit';
+  }
+  return origin !== null && url.origin === origin ? 'same-origin' : 'omit';
+}
+
+function updateFetchHeaders(init: RequestInit | undefined, bearerToken: string | undefined): Headers | undefined {
+  const trimmedToken = bearerToken?.trim() ?? '';
+  if (!trimmedToken) {
+    return init?.headers === undefined ? undefined : new Headers(init.headers);
+  }
+  const headers = new Headers(init?.headers);
+  headers.set('authorization', `Bearer ${trimmedToken}`);
+  return headers;
+}
+
+function updateFetchInit(
+  url: URL,
+  origin: string | null,
+  init?: RequestInit,
+  bearerToken?: string,
+): RequestInit {
+  return {
+    credentials: updateFetchCredentialsForUrl(url, origin, bearerToken),
+    ...init,
+    headers: updateFetchHeaders(init, bearerToken),
+    cache: 'no-store',
+  };
+}
+
+function isLocalUpdateReleaseHost(url: URL): boolean {
+  return url.hostname === 'localhost'
+    || url.hostname === '127.0.0.1'
+    || url.hostname === '::1'
+    || url.hostname === '[::1]';
+}
+
+function assertHttpsOrLocalUpdateReleaseUrl(url: URL, label: string): void {
+  if (url.protocol !== 'https:' && !isLocalUpdateReleaseHost(url)) {
+    throw new Error(`${label} must use HTTPS, except for localhost testing`);
+  }
+}
+
+export function assertPrivateUpdateReleaseUrls(
+  bundleUrlInput: string | URL,
+  firmwareUrlInput: string | URL,
+  bearerToken: string,
+): void {
+  if (!bearerToken.trim()) {
+    return;
+  }
+  const bundleUrl = parseUpdateFetchUrl(bundleUrlInput, 'bundle URL');
+  const firmwareUrl = parseUpdateFetchUrl(firmwareUrlInput, 'firmware URL');
+  if (bundleUrl.origin !== firmwareUrl.origin) {
+    throw new Error('bearer-token update fetch requires bundle and firmware URLs on the same origin');
+  }
+  if (
+    (bundleUrl.protocol !== 'https:' || firmwareUrl.protocol !== 'https:')
+    && (!isLocalUpdateReleaseHost(bundleUrl) || !isLocalUpdateReleaseHost(firmwareUrl))
+  ) {
+    throw new Error('bearer-token update fetch requires HTTPS, except for localhost testing');
+  }
+}
+
+function updateArtifactNameFromUrl(value: string, fallback: string): string {
+  try {
+    const path = new URL(value).pathname.split('/').filter(Boolean).pop();
+    return path ? decodeURIComponent(path) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function assertFirmwareContentLengthMatchesBundle(response: globalThis.Response, bundle: UpdateBundle): void {
+  const firmwareLength = response.headers.get('content-length');
+  if (firmwareLength === null) {
+    return;
+  }
+  const parsedLength = Number(firmwareLength);
+  if (!Number.isFinite(parsedLength) || parsedLength !== bundle.manifest.image_size) {
+    throw new Error(`firmware size mismatch: bundle expects ${bundle.manifest.image_size}, server reports ${firmwareLength}`);
+  }
+}
+
+export async function fetchUpdateReleaseArtifacts(
+  bundleUrlInput: string | URL,
+  firmwareUrlInput: string | URL,
+  options: FetchUpdateReleaseArtifactsOptions = {},
+): Promise<FetchedUpdateRelease> {
+  const fetchImpl = resolveUpdateFetch(options.fetchImpl);
+  const origin = updateReleaseOrigin(options.origin);
+  const enforceHttpsOrLocal = options.enforceHttpsOrLocal ?? true;
+  const bundleUrl = parseUpdateFetchUrl(bundleUrlInput, 'bundle URL');
+  const firmwareUrl = parseUpdateFetchUrl(firmwareUrlInput, 'firmware URL');
+  const bearerToken = options.bearerToken?.trim() ?? '';
+
+  if (enforceHttpsOrLocal) {
+    assertHttpsOrLocalUpdateReleaseUrl(bundleUrl, 'bundle URL');
+    assertHttpsOrLocalUpdateReleaseUrl(firmwareUrl, 'firmware URL');
+  }
+  assertPrivateUpdateReleaseUrls(bundleUrl, firmwareUrl, bearerToken);
+
+  const bundleResp = await fetchImpl(bundleUrl, updateFetchInit(bundleUrl, origin, options.bundleInit, bearerToken));
+  if (!bundleResp.ok) {
+    throw new Error(`bundle fetch failed: HTTP ${bundleResp.status}`);
+  }
+  const bundle = parseUpdateBundleJson(await bundleResp.text());
+  if (options.indexMetadata) {
+    assertUpdateReleaseIndexMatchesBundle(options.indexMetadata, bundle);
+  }
+  options.validateBundle?.(bundle);
+
+  const firmwareResp = await fetchImpl(firmwareUrl, updateFetchInit(firmwareUrl, origin, options.firmwareInit, bearerToken));
+  if (!firmwareResp.ok) {
+    throw new Error(`firmware fetch failed: HTTP ${firmwareResp.status}`);
+  }
+  assertFirmwareContentLengthMatchesBundle(firmwareResp, bundle);
+  const firmware = new Uint8Array(await firmwareResp.arrayBuffer());
+  await assertUpdateFirmwareMatchesBundle(bundle, firmware);
+
+  return {
+    bundle,
+    bundleUrl,
+    bundleName: updateArtifactNameFromUrl(bundleUrl.href, 'remote bundle'),
+    firmware,
+    firmwareUrl,
+    firmwareName: updateArtifactNameFromUrl(firmwareUrl.href, 'remote firmware'),
+  };
+}
+
+export async function fetchLatestUpdateRelease(
+  indexUrlInput: string | URL,
+  options: FetchLatestUpdateReleaseOptions = {},
+): Promise<FetchedUpdateRelease> {
+  const fetchImpl = resolveUpdateFetch(options.fetchImpl);
+  const origin = updateReleaseOrigin(options.origin);
+  const enforceHttpsOrLocal = options.enforceHttpsOrLocal ?? true;
+  const indexUrl = parseUpdateFetchUrl(indexUrlInput, 'release index URL');
+  const bearerToken = options.bearerToken?.trim() ?? '';
+
+  if (enforceHttpsOrLocal) {
+    assertHttpsOrLocalUpdateReleaseUrl(indexUrl, 'release index URL');
+  }
+
+  const indexResp = await fetchImpl(indexUrl, updateFetchInit(indexUrl, origin, options.indexInit, bearerToken));
+  if (!indexResp.ok) {
+    throw new Error(`release index fetch failed: HTTP ${indexResp.status}`);
+  }
+  const index = parseUpdateReleaseIndexJson(await indexResp.json(), indexUrl);
+  if (bearerToken && (index.bundleUrl.origin !== indexUrl.origin || index.firmwareUrl.origin !== indexUrl.origin)) {
+    throw new Error('bearer-token latest-release fetch requires index, bundle, and firmware URLs on the same origin');
+  }
+  const release = await fetchUpdateReleaseArtifacts(index.bundleUrl, index.firmwareUrl, {
+    fetchImpl,
+    bundleInit: options.bundleInit,
+    firmwareInit: options.firmwareInit,
+    bearerToken,
+    indexMetadata: index.metadata,
+    origin,
+    enforceHttpsOrLocal,
+    validateBundle: options.validateBundle,
+  });
+
+  return {
+    ...release,
+    bundleName: updateArtifactNameFromUrl(index.bundleUrl.href, 'latest bundle'),
+    firmwareName: updateArtifactNameFromUrl(index.firmwareUrl.href, 'latest firmware'),
+    index,
   };
 }
 
@@ -609,6 +1312,9 @@ export function serializeRequest(req: Request): Uint8Array {
       break;
     case 'GetUpdateBootStatus':
       w.writeVarint(39);
+      break;
+    case 'Reboot':
+      w.writeVarint(40);
       break;
   }
 

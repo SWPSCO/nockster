@@ -69,6 +69,7 @@ pub const FEATURE_TOUCH_CALIBRATION_UI: u32 = 1 << 9;
 pub const FEATURE_SECURE_UPDATE: u32 = 1 << 10;
 pub const FEATURE_RELEASE_INFO: u32 = 1 << 11;
 pub const FEATURE_UPDATE_BOOT_STATUS: u32 = 1 << 12;
+pub const FEATURE_DEVICE_REBOOT: u32 = 1 << 13;
 pub const FEATURE_ALL_KNOWN: u32 = FEATURE_CHEETAH
     | FEATURE_FRAG
     | FEATURE_XPUB
@@ -81,7 +82,8 @@ pub const FEATURE_ALL_KNOWN: u32 = FEATURE_CHEETAH
     | FEATURE_TOUCH_CALIBRATION_UI
     | FEATURE_SECURE_UPDATE
     | FEATURE_RELEASE_INFO
-    | FEATURE_UPDATE_BOOT_STATUS;
+    | FEATURE_UPDATE_BOOT_STATUS
+    | FEATURE_DEVICE_REBOOT;
 
 pub const HMAC_KEY_PURPOSE_DOWN_ALL: u8 = 5;
 pub const HMAC_KEY_PURPOSE_DOWN_JTAG: u8 = 6;
@@ -372,6 +374,7 @@ pub enum Request {
     GetUpdateStatus,
     GetReleaseInfo,
     GetUpdateBootStatus,
+    Reboot,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -587,6 +590,9 @@ mod tests {
             postcard::to_slice(&Request::GetUpdateBootStatus, &mut update_buf).unwrap();
         assert_eq!(update_boot_status, &[39]);
 
+        let reboot = postcard::to_slice(&Request::Reboot, &mut update_buf).unwrap();
+        assert_eq!(reboot, &[40]);
+
         let err = postcard::to_slice(&Response::Err { code: 0x1234 }, &mut buf).unwrap();
         assert_eq!(err[0], 14);
 
@@ -728,6 +734,14 @@ mod tests {
         assert_eq!(
             postcard::to_slice(&update_boot_request, &mut buf).unwrap(),
             update_boot_request_fixture
+        );
+
+        let reboot_request_fixture = [40];
+        let reboot_request: Request = postcard::from_bytes(&reboot_request_fixture).unwrap();
+        assert!(matches!(reboot_request, Request::Reboot));
+        assert_eq!(
+            postcard::to_slice(&reboot_request, &mut buf).unwrap(),
+            reboot_request_fixture
         );
 
         let update_status_response_fixture = [20, 1, 1, 0, 7, 3, 5];

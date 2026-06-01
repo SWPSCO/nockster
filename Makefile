@@ -26,6 +26,11 @@ NVS_PARTITION_ENCRYPTION_VALIDATED ?= 0
 UPDATE_SIGNING_KEY_FILE ?=
 UPDATE_BUNDLE ?=
 UPDATE_FIRMWARE ?=
+UPDATE_INDEX ?= latest.json
+UPDATE_BUNDLE_URL ?=
+UPDATE_FIRMWARE_URL ?=
+UPDATE_WEB_DIR ?= web/public/updates
+UPDATE_WEB_INDEX ?= $(UPDATE_WEB_DIR)/latest.json
 RUN_EFUSE_SUMMARY ?= 0
 RELEASE_PREFLIGHT_STRICT ?=
 NOCKSTER_CLI ?=
@@ -48,7 +53,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production cli core wasm js web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-lockdown-rom-print provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production cli core wasm js js-test web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-lockdown-rom-print provision-power-glitch-protection
 
 all: build
 
@@ -199,12 +204,22 @@ js:
 	npm install; \
 	npm run build
 
+js-test:
+	@cd nockster-js; \
+	npm install; \
+	npm test
+
 web: wasm js
 	@cd web; \
 	npm install; \
 	npm run build
 
 serve: web
+	@if [[ ! -f "web/public/updates/latest.json" ]]; then \
+		echo "No local update index at web/public/updates/latest.json"; \
+		echo "The web UI will still run, but update firmware will fail until you publish update assets."; \
+		echo "Run: make update-web-assets UPDATE_BUNDLE=/path/to/nockster-fw.update.json UPDATE_FIRMWARE=/path/to/nockster-fw.bin"; \
+	fi
 	@cd web; \
 	npm run dev
 
@@ -236,6 +251,9 @@ release-preflight:
 	FLASH_ENCRYPTION_KEY_FILE="$(FLASH_ENCRYPTION_KEY_FILE)" \
 	UPDATE_BUNDLE="$(UPDATE_BUNDLE)" \
 	UPDATE_FIRMWARE="$(UPDATE_FIRMWARE)" \
+	UPDATE_INDEX="$(if $(filter command line environment environment override,$(origin UPDATE_INDEX)),$(UPDATE_INDEX),)" \
+	UPDATE_BUNDLE_URL="$(UPDATE_BUNDLE_URL)" \
+	UPDATE_FIRMWARE_URL="$(UPDATE_FIRMWARE_URL)" \
 	PROVISION_PORT="$(PROVISION_PORT)" \
 	RUN_EFUSE_SUMMARY="$(RUN_EFUSE_SUMMARY)" \
 	RELEASE_PREFLIGHT_STRICT="$(RELEASE_PREFLIGHT_STRICT)" \
@@ -290,6 +308,56 @@ update-pubkey:
 	else \
 		cargo run -p nockster-cli --bin nockster-cli -- update pubkey --signing-key-file "$(UPDATE_SIGNING_KEY_FILE)"; \
 	fi
+
+update-index:
+	@if [[ -z "$(UPDATE_BUNDLE)" ]]; then \
+		echo "Set UPDATE_BUNDLE=/path/to/nockster-fw.update.json"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(UPDATE_FIRMWARE)" ]]; then \
+		echo "Set UPDATE_FIRMWARE=/path/to/nockster-fw.bin"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(UPDATE_INDEX)" ]]; then \
+		echo "Set UPDATE_INDEX=/path/to/latest.json"; \
+		exit 1; \
+	fi; \
+	args=(update index --bundle "$(UPDATE_BUNDLE)" --firmware "$(UPDATE_FIRMWARE)" --out "$(UPDATE_INDEX)"); \
+	if [[ -n "$(UPDATE_BUNDLE_URL)" ]]; then \
+		args+=(--bundle-url "$(UPDATE_BUNDLE_URL)"); \
+	fi; \
+	if [[ -n "$(UPDATE_FIRMWARE_URL)" ]]; then \
+		args+=(--firmware-url "$(UPDATE_FIRMWARE_URL)"); \
+	fi; \
+	if [[ -n "$(NOCKSTER_CLI)" ]]; then \
+		"$(NOCKSTER_CLI)" "$${args[@]}"; \
+	else \
+		cargo run -p nockster-cli --bin nockster-cli -- "$${args[@]}"; \
+	fi
+
+update-web-assets:
+	@set -e; \
+	if [[ -z "$(UPDATE_BUNDLE)" ]]; then \
+		echo "Set UPDATE_BUNDLE=/path/to/nockster-fw.update.json"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(UPDATE_FIRMWARE)" ]]; then \
+		echo "Set UPDATE_FIRMWARE=/path/to/nockster-fw.bin"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(UPDATE_WEB_DIR)"; \
+	bundle_name="$$(basename "$(UPDATE_BUNDLE)")"; \
+	firmware_name="$$(basename "$(UPDATE_FIRMWARE)")"; \
+	$(MAKE) update-index \
+		UPDATE_BUNDLE="$(UPDATE_BUNDLE)" \
+		UPDATE_FIRMWARE="$(UPDATE_FIRMWARE)" \
+		UPDATE_INDEX="$(UPDATE_WEB_INDEX)" \
+		UPDATE_BUNDLE_URL="$${bundle_name}" \
+		UPDATE_FIRMWARE_URL="$${firmware_name}" \
+		NOCKSTER_CLI="$(NOCKSTER_CLI)"; \
+	cp "$(UPDATE_BUNDLE)" "$(UPDATE_WEB_DIR)/$${bundle_name}"; \
+	cp "$(UPDATE_FIRMWARE)" "$(UPDATE_WEB_DIR)/$${firmware_name}"; \
+	echo "wrote local web update assets under $(UPDATE_WEB_DIR)"
 
 generate-hmac-up-key:
 	@if [[ -z "$(HMAC_KEY_FILE)" ]]; then \
@@ -506,6 +574,8 @@ help:
 	@echo "    make release-preflight - Non-destructive release/provisioning checks"
 	@echo "    make generate-update-signing-key - Generate a local update release signing key"
 	@echo "    make update-pubkey - Print update release public key and trust hash"
+	@echo "    make update-index - Generate latest.json for browser firmware updates"
+	@echo "    make update-web-assets - Publish local update files for make serve"
 	@echo "    make generate-hmac-up-key - Generate a local 32-byte HMAC_UP key file"
 	@echo "    make provision-hmac-up - Explicit HMAC_UP eFuse provisioning guard"
 	@echo "    make generate-secure-boot-v2-key - Generate a local secure boot v2 signing key"
@@ -524,6 +594,7 @@ help:
 	@echo "  make serve      - Build and serve web UI and dependencies"
 	@echo "    make wasm       - Build WASM package for web"
 	@echo "    make js         - Build nockster-js lib for web"
+	@echo "    make js-test    - Run nockster-js protocol/update parser tests"
 	@echo "    make web        - Build demo UI for web"
 	@echo "  make tauri-dev  - Run Tauri desktop app in dev mode"
 	@echo "  make tauri-build- Build Tauri desktop app for production"

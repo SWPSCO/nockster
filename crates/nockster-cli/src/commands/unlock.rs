@@ -56,29 +56,3 @@ pub fn lock(port: &str, baud: u32) -> anyhow::Result<()> {
         _ => anyhow::bail!("unexpected response"),
     }
 }
-
-pub fn status(port: &str, baud: u32) -> anyhow::Result<()> {
-    let mut sp = open(port, baud)?;
-
-    match send_call(&mut *sp, 0x46, Request::GetLockStatus)? {
-        Response::OkLockStatus {
-            locked,
-            attempts_remaining,
-        } => {
-            println!(
-                "device: {}",
-                if locked {
-                    "🔒 locked"
-                } else {
-                    "🔓 unlocked"
-                }
-            );
-            println!("attempts remaining: {}", attempts_remaining);
-            Ok(())
-        }
-        Response::Err { code } => {
-            anyhow::bail!("status failed with error code 0x{:04x}", code)
-        }
-        _ => anyhow::bail!("unexpected response"),
-    }
-}

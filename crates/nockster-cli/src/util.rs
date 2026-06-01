@@ -5,8 +5,8 @@ use hex;
 use nockapp::AtomExt;
 use nockvm::noun::{Atom, Noun};
 use noun_serde::NounDecode;
-use tx_types::transaction_types::{SpendBody, Transaction, T8};
-use tx_types::RawTransaction;
+use tx_types::transaction_types::SpendBody;
+use tx_types::transaction_types_v1::RawTransactionV1;
 
 fn is_printable_ascii(bytes: &[u8]) -> bool {
     bytes
@@ -34,31 +34,17 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
         }
     }
 
-    // Try RawTransaction first (works for both V0 and V1) - wrap in catch_unwind
-    if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(noun))) {
-        let id = match &raw {
-            RawTransaction::V0(v0) => &v0.id,
-            RawTransaction::V1(v1) => &v1.id,
-        };
-        return Ok(id.to_b58());
+    if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(noun))) {
+        return Ok(raw.id.to_b58());
     }
 
     if let Ok(cell) = noun.as_cell() {
         let head = cell.head();
 
         if let Ok(Ok(raw_head)) =
-            catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&head)))
+            catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(&head)))
         {
-            let id = match &raw_head {
-                RawTransaction::V0(v0) => &v0.id,
-                RawTransaction::V1(v1) => &v1.id,
-            };
-            return Ok(id.to_b58());
-        }
-
-        // Try wallet Transaction (V0 format) - may panic on invalid data
-        if let Ok(Ok(tx)) = catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(&head))) {
-            return Ok(tx.name);
+            return Ok(raw_head.id.to_b58());
         }
 
         if let Ok(atom) = head.as_atom() {
@@ -70,70 +56,29 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
         }
     }
 
-    // Try wallet Transaction at top level (may panic on invalid data)
-    if let Ok(Ok(tx)) = catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(noun))) {
-        return Ok(tx.name);
-    }
-
     Err(anyhow!("unable to extract transaction identifier"))
 }
 
-pub fn print_raw_details(raw: &RawTransaction) {
-    match raw {
-        RawTransaction::V0(_) => {
-            println!("raw-tx (V0): unsupported; pre-Bythos transaction paths are disabled");
+pub fn print_raw_v1_details(raw: &RawTransactionV1) {
+    println!("raw-tx (V1):");
+    println!("  version      = {}", raw.version);
+    println!("  id           = {}", raw.id.to_b58());
+    println!("  spends       = {}", raw.spends.map.wyt());
+    for (idx, (name, spend)) in raw.spends.map.tap().into_iter().enumerate() {
+        println!("  - spend[{}]:", idx);
+        if name.p.len() >= 2 {
+            println!(
+                "      name        = [{:?} {:?}]",
+                name.p[0].to_b58(),
+                name.p[1].to_b58()
+            );
         }
-        RawTransaction::V1(v1) => {
-            println!("raw-tx (V1):");
-            println!("  version      = {}", v1.version);
-            println!("  id           = {}", v1.id.to_b58());
-            println!("  spends       = {}", v1.spends.map.wyt());
-            for (idx, (name, spend)) in v1.spends.map.tap().into_iter().enumerate() {
-                println!("  - spend[{}]:", idx);
-                if name.p.len() >= 2 {
-                    println!(
-                        "      name        = [{:?} {:?}]",
-                        name.p[0].to_b58(),
-                        name.p[1].to_b58()
-                    );
-                }
-                // Get fee from the SpendBody
-                let fee = match &spend.body {
-                    SpendBody::V0(v0) => v0.fee.value,
-                    SpendBody::V0ToV1(v0tov1) => v0tov1.fee.value,
-                    SpendBody::V1(v1) => v1.fee.value,
-                };
-                println!("      fee         = {}", fee);
-            }
-        }
-    }
-}
-
-#[inline]
-pub fn t8_from_device(words: [u64; 8]) -> T8 {
-    // The ESP firmware returns T8 values which may be in two different formats:
-    // Case 1: 4x64-bit words (MSW..LSW) with upper 4 words zeroed
-    //         This happens when the device sends fewer than 8 limbs
-    // Case 2: 8x limbs, each containing a 32-bit value in the low bits
-    //         This is the standard T8 format from be32_atom_to_t8_le
-
-    // Case 1: device gave 4x64 (MSW..LSW) and left the top half zeroed
-    if words[4..].iter().all(|&w| w == 0) {
-        let mut v = [0u64; 8];
-        // words[3] is least-significant 64 bits if device sent MSW..LSW
-        for i in 0..4 {
-            let w = words[i];
-            v[i * 2 + 0] = (w & 0xffff_ffff) as u64; // low 32 bits
-            v[i * 2 + 1] = (w >> 32) as u64; // high 32 bits
-        }
-        T8 { values: v }
-    } else {
-        // Case 2: device already gave 8 limbs; ensure high halves are zero
-        let mut v = [0u64; 8];
-        for i in 0..8 {
-            v[i] = words[i] & 0xffff_ffff;
-        }
-        T8 { values: v }
+        let fee = match &spend.body {
+            SpendBody::V0(v0) => v0.fee.value,
+            SpendBody::V0ToV1(v0tov1) => v0tov1.fee.value,
+            SpendBody::V1(v1) => v1.fee.value,
+        };
+        println!("      fee         = {}", fee);
     }
 }
 
@@ -220,14 +165,6 @@ pub fn pretty_noun(n: &Noun, max_depth: usize, max_items: usize) -> String {
     }
 
     go(n.clone(), 0, max_depth, max_items, 0)
-}
-
-pub fn decode_cord_like(n: Noun) -> Option<String> {
-    // Try cord (bytes up to NUL) → UTF-8 string
-    n.as_atom()
-        .ok()
-        .and_then(|a| a.to_bytes_until_nul().ok())
-        .map(|b| String::from_utf8_lossy(&b).to_string())
 }
 
 // ---------- tiny utils -------------------------------------------------------

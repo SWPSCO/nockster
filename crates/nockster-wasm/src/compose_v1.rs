@@ -801,7 +801,6 @@ fn recipient_lock_and_display_address(
 struct SeedSpec {
     lock_root: [u64; 5],
     note_data: Noun,
-    note_data_entries: u64,
     gift: u64,
     recipient_b58: String,
 }
@@ -812,12 +811,8 @@ struct NoteSpec {
     name_last: [u64; 5],
     name_noun: Noun,
     origin_page: u64,
-    version: u64,
     assets: u64,
     lock: Noun,
-    lock_hash: [u64; 5],
-    note_data: Noun,
-    note_data_entries: u64,
     note_hash: [u64; 5],
     witness_unsigned: Noun,
     capacity: u64,
@@ -991,7 +986,7 @@ fn build_note_spec(
     };
 
     let lock_hash = hash_lock_primitives_list(lock, arena, ctx)?;
-    let (note_data, note_data_entries) = build_note_data_with_lock(arena, lock)?;
+    let (note_data, _) = build_note_data_with_lock(arena, lock)?;
     let note_data_hash = hash_note_data(note_data, arena)?;
     let name_hash = hash_nname_hashable(name_noun, arena)?;
 
@@ -1018,12 +1013,8 @@ fn build_note_spec(
         name_last,
         name_noun,
         origin_page: note.origin_page,
-        version: note.version,
         assets: note.assets,
         lock,
-        lock_hash,
-        note_data,
-        note_data_entries,
         note_hash,
         witness_unsigned,
         capacity: note.assets,
@@ -1039,11 +1030,10 @@ fn build_output_seed_spec(
     let (pkh, recipient_b58) = recipient_lock_and_display_address(arena, recipient, ctx)?;
     let lock = build_list(arena, &[pkh]);
     let lock_hash = hash_lock_primitives_list(lock, arena, ctx)?;
-    let (note_data, note_data_entries) = build_note_data_with_lock(arena, lock)?;
+    let (note_data, _) = build_note_data_with_lock(arena, lock)?;
     Ok(SeedSpec {
         lock_root: lock_hash,
         note_data,
-        note_data_entries,
         gift,
         recipient_b58,
     })
@@ -1156,7 +1146,6 @@ fn build_spend_from_plan(
     witness: Noun,
     refund_lock_root: [u64; 5],
     refund_note_data: Noun,
-    refund_note_data_entries: u64,
     refund_recipient_b58: &str,
 ) -> Result<BuiltSpend, JsValue> {
     let mut accepted = plan.accepted.clone();
@@ -1165,7 +1154,6 @@ fn build_spend_from_plan(
         let refund_seed = SeedSpec {
             lock_root: refund_lock_root,
             note_data: refund_note_data,
-            note_data_entries: refund_note_data_entries,
             gift: plan.refund_gift,
             recipient_b58: refund_recipient_b58.to_string(),
         };
@@ -1243,8 +1231,7 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
     let refund_pkh = build_pkh_lock(&mut arena, source_pkh)?;
     let refund_lock = build_list(&mut arena, &[refund_pkh]);
     let refund_lock_root = hash_lock_primitives_list(refund_lock, &arena, &ctx)?;
-    let (refund_note_data, refund_note_data_entries) =
-        build_note_data_with_lock(&mut arena, refund_lock)?;
+    let (refund_note_data, _) = build_note_data_with_lock(&mut arena, refund_lock)?;
 
     // Parse + normalize notes.
     let mut notes: Vec<NoteSpec> = input
@@ -1340,7 +1327,6 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
                 fee_witness,
                 refund_lock_root,
                 refund_note_data,
-                refund_note_data_entries,
                 &input.source_pkh,
             )?;
             fee_spends_map =
@@ -1410,7 +1396,6 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
             note.witness_unsigned,
             refund_lock_root,
             refund_note_data,
-            refund_note_data_entries,
             &input.source_pkh,
         )?;
 

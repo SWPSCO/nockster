@@ -22,6 +22,7 @@ Stages:
   smoke             non-destructive protocol/info/security/slot health smoke
   hmac-up           require chip-security, HMAC_UP, read-protection, and NVS v2
   update-ready      require idle update stream and OTA partition layout
+  reboot            request a non-destructive firmware reboot
   secure-boot       require secure boot enabled
   flash-encryption  require flash encryption enabled
   lockdown          require production-lockdown fuses except power-glitch
@@ -73,7 +74,7 @@ case "${stage}" in
     usage
     exit 0
     ;;
-  smoke|hmac-up|update-ready|secure-boot|flash-encryption|lockdown|power-glitch|production) ;;
+  smoke|hmac-up|update-ready|reboot|secure-boot|flash-encryption|lockdown|power-glitch|production) ;;
   *)
     echo "unsupported VALIDATE_STAGE: ${stage}" >&2
     usage >&2
@@ -108,6 +109,10 @@ validate_update_ready() {
     --expect-idle \
     --expect-ota-ready \
     --require-boot-status
+}
+
+validate_reboot() {
+  run_cmd "${cli}" reboot --port "${port}" --baud "${baud}"
 }
 
 validate_secure_boot() {
@@ -151,6 +156,9 @@ case "${stage}" in
     ;;
   update-ready)
     validate_update_ready
+    ;;
+  reboot)
+    validate_reboot
     ;;
   secure-boot)
     validate_secure_boot

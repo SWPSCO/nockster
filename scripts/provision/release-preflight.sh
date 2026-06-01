@@ -680,6 +680,84 @@ check_update_bundle() {
   fi
 }
 
+check_update_index() {
+  local index="$1"
+  local bundle="$2"
+  local firmware="$3"
+  local cli
+  local tmp
+  local output
+  local args
+
+  if [[ -z "${index}" ]]; then
+    info "UPDATE_INDEX is not set; skipping browser release-index publication check"
+    return
+  fi
+
+  if [[ -z "${bundle}" || -z "${firmware}" ]]; then
+    fail "UPDATE_INDEX validation requires UPDATE_BUNDLE and UPDATE_FIRMWARE"
+    return
+  fi
+
+  if [[ ! -f "${index}" ]]; then
+    fail "missing browser release index: ${index}"
+    return
+  fi
+
+  if [[ ! -f "${bundle}" ]]; then
+    fail "missing update bundle for release-index validation: ${bundle}"
+    return
+  fi
+
+  if [[ ! -f "${firmware}" ]]; then
+    fail "missing firmware image for release-index validation: ${firmware}"
+    return
+  fi
+
+  if ! cli="$(resolve_cli "${NOCKSTER_CLI:-}")"; then
+    fail "nockster-cli is required to validate UPDATE_INDEX"
+    return
+  fi
+
+  if ! tmp="$(mktemp "${TMPDIR:-/tmp}/nockster-release-index.XXXXXX.json")"; then
+    fail "could not create temporary release-index file"
+    return
+  fi
+
+  args=(update index --bundle "${bundle}" --firmware "${firmware}" --out "${tmp}")
+  if [[ -n "${UPDATE_BUNDLE_URL:-}" ]]; then
+    args+=(--bundle-url "${UPDATE_BUNDLE_URL}")
+  fi
+  if [[ -n "${UPDATE_FIRMWARE_URL:-}" ]]; then
+    args+=(--firmware-url "${UPDATE_FIRMWARE_URL}")
+  fi
+
+  info "validating browser release index with ${cli}"
+  if ! output="$("${cli}" "${args[@]}" 2>&1)"; then
+    fail "could not regenerate expected browser release index"
+    printf '%s\n' "${output}" >&2
+    rm -f "${tmp}"
+    return
+  fi
+
+  if cmp -s "${tmp}" "${index}"; then
+    ok "browser release index matches signed bundle and firmware"
+    rm -f "${tmp}"
+    return
+  fi
+
+  fail "browser release index does not match signed bundle, firmware, or configured artifact URLs"
+  if command -v diff >/dev/null 2>&1; then
+    diff -u "${tmp}" "${index}" >&2 || true
+  else
+    printf 'expected index was generated at: %s\n' "${tmp}" >&2
+    tmp=""
+  fi
+  if [[ -n "${tmp}" ]]; then
+    rm -f "${tmp}"
+  fi
+}
+
 check_tools() {
   local required="$1"
   local espsecure_cmd="${ESPSECURE:-espsecure}"
@@ -788,6 +866,7 @@ if [[ -n "${SECURE_BOOT_IMAGE:-}" ]]; then
 fi
 check_secure_boot_image_paths "${SECURE_BOOT_IMAGE:-}" "${SECURE_BOOT_SIGNED_IMAGE:-}"
 check_update_bundle "${UPDATE_BUNDLE:-}" "${UPDATE_FIRMWARE:-}" "${trusted_hash}" "${strict_required}"
+check_update_index "${UPDATE_INDEX:-}" "${UPDATE_BUNDLE:-}" "${UPDATE_FIRMWARE:-}"
 maybe_run_efuse_summary "${PROVISION_PORT:-}"
 
 if (( failures > 0 )); then

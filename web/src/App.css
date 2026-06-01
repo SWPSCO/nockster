@@ -512,6 +512,18 @@ input.input.passphrase-input {
   gap: 0.75rem;
 }
 
+.connect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.connect-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.7fr);
+  gap: 0.75rem;
+}
+
 .update-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -550,6 +562,11 @@ input.input.passphrase-input {
 
 .update-remote-fetch {
   min-height: 2.5rem;
+}
+
+.update-advanced {
+  border-top: 1px solid var(--color-border);
+  padding-top: 1rem;
 }
 
 .file-control {
@@ -673,7 +690,8 @@ input.input.passphrase-input {
 
   .update-files,
   .update-remote,
-  .update-actions {
+  .update-actions,
+  .connect-actions {
     grid-template-columns: 1fr;
   }
 }

@@ -40,7 +40,7 @@ zeroize = { version = "1", default-features = false, features = ["alloc"] }
 hmac = { version = "0.12", default-features = false }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 critical-section = "1.1"
-micromath = { version = "2.1.0", default_features = false }
+micromath = { version = "2.1.0", default-features = false }
 mipidsi = { version = "0.8", default-features = false }
 display-interface-spi = { version = "0.5", default-features = false }
 embedded-hal-bus = { version = "0.1", default-features = false }
@@ -51,16 +51,6 @@ usb-device = { version = "0.3.2", default-features = false }
 usbd-hid = { version = "0.8.2", default-features = false }
 
 nockster-core = { path = "../nockster-core", default-features = false }
-
-
-[profile.release]
-codegen-units    = 1
-debug            = 2
-debug-assertions = false
-incremental      = false
-lto              = 'fat'
-opt-level        = 's'
-overflow-checks  = false
 
 [build-dependencies]
 image = { version = "0.24" }

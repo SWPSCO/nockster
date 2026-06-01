@@ -78,9 +78,53 @@ Strict/production preflight also requires `NOCKSTER_AUTO_MIGRATE_NVS_V2=0`.
 Automatic NVS migration is for sacrificial chip-security test builds only.
 It verifies the signed update bundle against the configured trust anchor and
 reports bundle-verification failures without running any provisioning action.
+If `UPDATE_INDEX` is provided, preflight also regenerates the expected browser
+latest-release index from `UPDATE_BUNDLE` and `UPDATE_FIRMWARE` and compares it
+to that file. Pass `UPDATE_BUNDLE_URL` and `UPDATE_FIRMWARE_URL` too when the
+published index should contain hosted artifact URLs instead of default file
+names.
 The checked partition table must keep the custom `nvs` partition unflagged for
 partition-level encryption unless raw NVS read/write testing has passed on this
 board and `NVS_PARTITION_ENCRYPTION_VALIDATED=1` is set.
+
+After the bundle verifies, generate the browser updater index from the same
+public artifacts. Relative artifact URLs are preferred when the index, bundle,
+and firmware are published in the same `/updates/` directory; explicit absolute
+artifact URLs must be HTTPS, except localhost testing, so the generated index
+matches the browser updater's fetch policy.
+
+```sh
+make update-index \
+  UPDATE_BUNDLE=nockster-fw.update.json \
+  UPDATE_FIRMWARE=target/xtensa-esp32s3-none-elf/release/nockster-fw.bin \
+  UPDATE_INDEX=latest.json
+```
+
+Before publishing, validate that generated index against the signed bundle and
+firmware:
+
+```sh
+make release-preflight \
+  UPDATE_BUNDLE=nockster-fw.update.json \
+  UPDATE_FIRMWARE=target/xtensa-esp32s3-none-elf/release/nockster-fw.bin \
+  UPDATE_INDEX=latest.json
+```
+
+Publish `latest.json`, the bundle JSON, and the firmware image under the web
+updater's configured release path. The target calls `nockster-cli update index`,
+which hashes the firmware against the signed manifest before writing the index.
+End users should consume that hosted index through the browser updater's
+`update firmware` button; these CLI and Make commands are release-operator
+tooling, not the normal upgrade path. The intended release UX is a hosted page:
+plug in the device, click `update firmware`, approve the browser prompt, and
+let the device validate the signed firmware before activating it.
+
+For hardware-validation runs that need to exercise the same non-destructive
+reboot request used by the hosted updater:
+
+```sh
+make validate-device-state VALIDATE_STAGE=reboot VALIDATE_PORT=hid
+```
 
 HMAC_UP key provisioning guard:
 

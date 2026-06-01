@@ -46,10 +46,6 @@ impl AnimationState {
     pub fn is_frame_start(&self) -> bool {
         self.next_row == 0
     }
-
-    pub fn frame_index(&self) -> u32 {
-        self.frame
-    }
 }
 
 pub fn render_next_chunk(

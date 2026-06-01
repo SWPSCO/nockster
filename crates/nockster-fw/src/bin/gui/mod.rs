@@ -69,6 +69,7 @@ pub type GuiDisplay<'d> = Display<DisplayInterface<'d>, ST7789, Output<'d>>;
 type TouchDriver<'d> = Axs5106l<I2c<'d, Blocking>, Output<'d>>;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum GuiError {
     Spi(SpiConfigError),
     Display(DisplayInitError<core::convert::Infallible>),
@@ -78,7 +79,7 @@ pub enum GuiError {
 
 pub struct Gui<'d> {
     display: GuiDisplay<'d>,
-    backlight: Output<'d>,
+    _backlight: Output<'d>,
     touch: TouchDriver<'d>,
     touch_int: Input<'d>,
     touch_calibration: TouchCalibration,
@@ -190,7 +191,7 @@ impl<'d> Gui<'d> {
 
         let mut gui = Self {
             display,
-            backlight,
+            _backlight: backlight,
             touch,
             touch_int,
             touch_calibration,
@@ -235,10 +236,6 @@ impl<'d> Gui<'d> {
         blit_boot_logo(&mut gui.display);
 
         Ok(gui)
-    }
-
-    pub fn get_display_mut(&mut self) -> &mut GuiDisplay<'d> {
-        &mut self.display
     }
 
     pub fn set_touch_calibration(&mut self, calibration: TouchCalibration) {
@@ -620,10 +617,6 @@ impl<'d> Gui<'d> {
         (start, end)
     }
 
-    pub fn show_idle_message(&mut self, text: &str) {
-        self.show_idle_message_with_timeout(text, None);
-    }
-
     pub fn show_idle_message_timed(&mut self, text: &str, timeout: Duration) {
         self.show_idle_message_with_timeout(text, Some(timeout));
     }
@@ -702,10 +695,6 @@ impl<'d> Gui<'d> {
         self.confirm_result.take()
     }
 
-    pub fn request_confirmation(&mut self, prompt: &str) {
-        self.request_confirmation_with_details(prompt, None);
-    }
-
     pub fn request_confirmation_with_details(&mut self, prompt: &str, details: Option<&str>) {
         self.confirm_prompt.clear();
         let _ = self.confirm_prompt.push_str(prompt);
@@ -754,13 +743,6 @@ impl<'d> Gui<'d> {
             return None;
         }
         Some(idx)
-    }
-
-    pub fn request_tx_review<'a, I>(&mut self, outputs: I)
-    where
-        I: IntoIterator<Item = (u64, &'a str)>,
-    {
-        self.request_tx_review_with_header("Review Tx", outputs);
     }
 
     pub fn request_tx_review_with_header<'a, I>(&mut self, header: &str, outputs: I)
@@ -1221,9 +1203,9 @@ impl<'d> Gui<'d> {
                 return None;
             }
             SeedButton::Backspace => {
-                let removed = self.seed_entry_state.backspace();
+                let _ = self.seed_entry_state.backspace();
                 seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
-                SeedInteraction::WordRemoved(removed)
+                SeedInteraction::WordRemoved
             }
             SeedButton::NextSuggestion => {
                 if self.seed_entry_state.next_suggestion() {
@@ -1231,19 +1213,13 @@ impl<'d> Gui<'d> {
                 }
                 return None;
             }
-            SeedButton::PrevSuggestion => {
-                if self.seed_entry_state.prev_suggestion() {
-                    seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
-                }
-                return None;
-            }
             SeedButton::CommitWord => {
-                if let Some(word) = self.seed_entry_state.commit_current() {
+                if self.seed_entry_state.commit_current().is_some() {
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
                     if let Some(phrase) = self.seed_entry_state.finish() {
                         SeedInteraction::EntryCompleted(phrase)
                     } else {
-                        SeedInteraction::WordCommitted(word)
+                        SeedInteraction::WordCommitted
                     }
                 } else {
                     return None;

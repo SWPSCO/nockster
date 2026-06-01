@@ -124,10 +124,12 @@ impl<'a> NounAllocator for BumpAllocator<'a> {
 }
 
 // Helper functions
+#[allow(non_snake_case)]
 pub fn D(val: u64) -> Noun {
     Noun::Atom(val)
 }
 
+#[allow(non_snake_case)]
 pub fn T<A: NounAllocator>(allocator: &mut A, items: &[Noun]) -> Noun {
     if items.is_empty() {
         return D(0);

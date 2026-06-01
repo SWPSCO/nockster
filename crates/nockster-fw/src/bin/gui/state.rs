@@ -73,11 +73,6 @@ pub enum GuiInteraction {
     TouchCalibrationComplete(nockster_core::TouchCalibration),
 }
 
-pub struct TextBuffers {
-    pub status: HString<64>,
-    pub info: HString<64>,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchDiagnostics {
     pub touching: bool,
@@ -140,15 +135,6 @@ impl TouchDiagnostics {
 impl Default for TouchDiagnostics {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl TextBuffers {
-    pub fn new() -> Self {
-        Self {
-            status: HString::new(),
-            info: HString::new(),
-        }
     }
 }
 

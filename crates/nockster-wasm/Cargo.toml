@@ -7,9 +7,6 @@ version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[profile.release]
-opt-level = "z"
-
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 

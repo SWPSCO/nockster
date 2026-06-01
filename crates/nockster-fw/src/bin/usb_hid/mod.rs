@@ -76,6 +76,11 @@ pub fn service_tx<B: usb_device::bus::UsbBus>(hid: &mut HIDClass<'_, B>) {
 }
 
 #[inline]
+pub fn tx_idle() -> bool {
+    critical_section::with(|cs| TX_QUEUE.borrow_ref(cs).is_none())
+}
+
+#[inline]
 fn prepare_next_report(report: &mut [u8; REPORT_TOTAL_LEN]) -> Option<usize> {
     critical_section::with(|cs| {
         let mut slot = TX_QUEUE.borrow_ref_mut(cs);

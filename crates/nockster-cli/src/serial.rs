@@ -210,12 +210,21 @@ pub fn open(port: &str, baud: u32) -> Result<Box<dyn Link>> {
 }
 
 pub fn send_call(sp: &mut dyn Link, id: u32, req: Request) -> anyhow::Result<Response> {
+    send_call_with_deadline(sp, id, req, Duration::from_secs(120))
+}
+
+pub fn send_call_with_deadline(
+    sp: &mut dyn Link,
+    id: u32,
+    req: Request,
+    max_wait: Duration,
+) -> anyhow::Result<Response> {
     let req = Msg {
         v: PROTO_V1,
         id,
         msg: Frame::One(req),
     };
-    Ok(round_trip_frame(sp, &req)?.msg)
+    Ok(round_trip_frame_with_deadline(sp, &req, max_wait)?.msg)
 }
 
 pub fn send_blob(
@@ -409,9 +418,19 @@ pub fn round_trip_frame_with_deadline(
     req: &Msg<Frame>,
     max_wait: Duration,
 ) -> Result<Msg<Response>> {
+    let old_to = sp.timeout();
+    let result = round_trip_frame_with_deadline_inner(sp, req, max_wait);
+    sp.set_timeout(old_to).ok();
+    result
+}
+
+fn round_trip_frame_with_deadline_inner(
+    sp: &mut dyn Link,
+    req: &Msg<Frame>,
+    max_wait: Duration,
+) -> Result<Msg<Response>> {
     // (A) Clear any stale bytes that might be sitting in the RX buffer.
     // We do this by doing non-fatal reads with a tiny timeout for ~50ms.
-    let old_to = sp.timeout();
     sp.set_timeout(Duration::from_millis(20)).ok();
     let mut drain = [0u8; 256];
     for _ in 0..4 {
@@ -498,7 +517,5 @@ pub fn round_trip_frame_with_deadline(
         break resp;
     };
 
-    // best-effort restore
-    sp.set_timeout(old_to).ok();
     Ok(resp)
 }

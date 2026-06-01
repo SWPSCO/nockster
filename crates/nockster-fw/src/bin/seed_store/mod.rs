@@ -44,6 +44,10 @@ impl PendingSeedSetup {
         Some(out)
     }
 
+    pub fn has_seed(&self) -> bool {
+        self.seed64.is_some()
+    }
+
     pub fn clear(&mut self) {
         if let Some(seed64) = self.seed64.as_mut() {
             seed64.zeroize();
@@ -105,9 +109,16 @@ pub fn bip39_seed_from_words<'a>(words: impl IntoIterator<Item = &'a str>) -> Re
 }
 
 pub fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
-    let seed = get_active_seed_copy()?;
-    let dp = path_to_derivation(path);
-    let child = XPrv::derive_from_path(&seed, &dp).map_err(|_| ())?;
+    let mut seed = get_active_seed_copy()?;
+    let dp = path_to_derivation(path)?;
+    let child = match XPrv::derive_from_path(&seed, &dp) {
+        Ok(child) => child,
+        Err(_) => {
+            seed.zeroize();
+            return Err(());
+        }
+    };
+    seed.zeroize();
     let xpub = child.public_key();
     let attrs = child.attrs();
     let depth = attrs.depth;
@@ -348,30 +359,53 @@ pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
     out
 }
 
-fn path_to_derivation(path: &pathmod::Path) -> DerivationPath {
+fn path_to_derivation(path: &pathmod::Path) -> Result<DerivationPath, ()> {
     let mut dp = DerivationPath::default();
     for &p in path.iter() {
         let hardened = (p & 0x8000_0000) != 0;
         let idx = p & 0x7FFF_FFFF;
-        dp.push(ChildNumber::new(idx, hardened).unwrap());
+        let child = ChildNumber::new(idx, hardened).map_err(|_| ())?;
+        dp.push(child);
     }
-    dp
+    Ok(dp)
 }
 
 fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<SigningKey, ()> {
-    let seed = get_seed_for_slot(slot)?;
-    let mut key = XPrv::new(&seed).map_err(|_| ())?;
+    let mut seed = get_seed_for_slot(slot)?;
+    let mut key = match XPrv::new(&seed) {
+        Ok(key) => key,
+        Err(_) => {
+            seed.zeroize();
+            return Err(());
+        }
+    };
+    seed.zeroize();
     for index in path.iter() {
         let child_num = ChildNumber::from(*index);
         key = key.derive_child(child_num).map_err(|_| ())?;
     }
-    let sk_bytes = key.private_key().to_bytes();
-    SigningKey::from_bytes((&sk_bytes).into()).map_err(|_| ())
+    let mut sk_bytes = key.private_key().to_bytes();
+    let signing_key = match SigningKey::from_bytes((&sk_bytes).into()) {
+        Ok(signing_key) => signing_key,
+        Err(_) => {
+            sk_bytes.zeroize();
+            return Err(());
+        }
+    };
+    sk_bytes.zeroize();
+    Ok(signing_key)
 }
 
 pub fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
-    let seed = get_active_seed_copy()?;
-    let xprv = XPrv::new(&seed).map_err(|_| ())?;
+    let mut seed = get_active_seed_copy()?;
+    let xprv = match XPrv::new(&seed) {
+        Ok(xprv) => xprv,
+        Err(_) => {
+            seed.zeroize();
+            return Err(());
+        }
+    };
+    seed.zeroize();
     let xpub = xprv.public_key();
     let comp = xpub.public_key().to_bytes();
     let sha = Sha256::digest(&comp);
@@ -382,9 +416,12 @@ pub fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
 }
 
 pub fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32], ()> {
-    let seed = get_seed_for_slot(slot)?;
-    let (sk, cc) = cheetah::master_from_seed(&seed);
+    let mut seed = get_seed_for_slot(slot)?;
+    let (mut sk, mut cc) = cheetah::master_from_seed(&seed);
+    seed.zeroize();
     let mut xk = cheetah::XKey::from_master(sk, cc);
+    sk.zeroize();
+    cc.zeroize();
     for &i in path.iter() {
         xk = cheetah::xprv_derive_child(&xk, i);
     }

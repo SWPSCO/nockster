@@ -10,6 +10,7 @@ flash_key_file="${FLASH_ENCRYPTION_KEY_FILE:-${secret_dir}/flash-encryption-key.
 update_key_file="${UPDATE_SIGNING_KEY_FILE:-${secret_dir}/release-signing-key.hex}"
 update_bundle="${UPDATE_BUNDLE:-nockster-fw.update.json}"
 update_firmware="${UPDATE_FIRMWARE:-target/xtensa-esp32s3-none-elf/release/nockster-fw.bin}"
+update_index="${UPDATE_INDEX:-latest.json}"
 configured_release_version="${NOCKSTER_RELEASE_VERSION:-}"
 if [[ -z "${configured_release_version}" || "${configured_release_version}" == "0" ]]; then
   release_version="<release-version>"
@@ -113,6 +114,11 @@ flash_encryption_plan() {
 release_preflight_plan() {
   step "4. Strict release preflight"
   cmd "make release-preflight FW_PROFILE=production RELEASE_PREFLIGHT_STRICT=1 NOCKSTER_AUTO_MIGRATE_NVS_V2=0 NOCKSTER_RELEASE_VERSION=${release_version} NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=${trust_hash} HMAC_KEY_FILE=${hmac_key_file} UPDATE_SIGNING_KEY_FILE=${update_key_file} SECURE_BOOT_KEY_FILE=${secure_boot_key_file} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware}"
+  note "Generate the browser updater index from the verified signed bundle and firmware."
+  cmd "make update-index UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware} UPDATE_INDEX=${update_index}"
+  note "Validate the browser updater index immediately before publishing."
+  cmd "make release-preflight FW_PROFILE=production RELEASE_PREFLIGHT_STRICT=1 NOCKSTER_AUTO_MIGRATE_NVS_V2=0 NOCKSTER_RELEASE_VERSION=${release_version} NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=${trust_hash} HMAC_KEY_FILE=${hmac_key_file} UPDATE_SIGNING_KEY_FILE=${update_key_file} SECURE_BOOT_KEY_FILE=${secure_boot_key_file} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} UPDATE_BUNDLE=${update_bundle} UPDATE_FIRMWARE=${update_firmware} UPDATE_INDEX=${update_index}"
+  note "Publish ${update_index}, ${update_bundle}, and ${update_firmware} under the web updater release path."
 }
 
 lockdown_plan() {

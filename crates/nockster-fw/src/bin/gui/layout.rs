@@ -4,7 +4,7 @@ use embedded_graphics::{
     primitives::Rectangle,
 };
 
-use super::constants::{BOOT_LOGO_HEIGHT, SCREEN_HEIGHT, SCREEN_WIDTH};
+use super::constants::{SCREEN_HEIGHT, SCREEN_WIDTH};
 
 use super::state::{Button, ButtonHit};
 
@@ -210,7 +210,7 @@ pub(crate) fn header_height() -> i32 {
 }
 
 pub(crate) fn row_height() -> i32 {
-    BOOT_LOGO_HEIGHT as i32 / 5
+    SCREEN_HEIGHT as i32 / 5
 }
 
 pub(crate) fn lock_button_rect() -> Rectangle {

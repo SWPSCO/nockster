@@ -6,7 +6,6 @@ use noun_serde::NounDecode;
 use std::fs;
 use tx_types::transaction_types::SpendBody;
 use tx_types::transaction_types_v1::*;
-use tx_types::RawTransaction;
 
 const LOCAL_BYTHOS_V1_UNSIGNED_TX: &str = "../../test.tx";
 const LOCAL_BYTHOS_V1_SIGNED_TX: &str = "../../test.signed";
@@ -64,24 +63,6 @@ fn compare_local_bythos_v1_tx_files() {
                 }
             }
         }
-    } else if let Ok(raw) = RawTransaction::from_noun(&noun1) {
-        match raw {
-            RawTransaction::V1(v1) => {
-                println!("Decoded as RawTransaction::V1");
-                println!("  txid: {}", v1.id.to_b58());
-                for (name, spend) in v1.spends.map.tap() {
-                    println!("  Spend: {:?}", name);
-                    if let SpendBody::V1(sb) = &spend.body {
-                        println!("    Fee: {}", sb.fee.value);
-                        println!("    PKH sigs count: {}", sb.witness.pkh.map.wyt());
-                        if sb.witness.pkh.map.wyt() > 0 {
-                            println!("    (HAS SIGNATURES!)");
-                        }
-                    }
-                }
-            }
-            _ => println!("Decoded as non-V1 RawTransaction"),
-        }
     } else {
         println!("Could not decode local Bythos v1 unsigned tx");
     }
@@ -126,24 +107,6 @@ fn compare_local_bythos_v1_tx_files() {
                     }
                 }
             }
-        }
-    } else if let Ok(raw) = RawTransaction::from_noun(&noun2) {
-        match raw {
-            RawTransaction::V1(v1) => {
-                println!("Decoded as RawTransaction::V1");
-                println!("  txid: {}", v1.id.to_b58());
-                for (name, spend) in v1.spends.map.tap() {
-                    println!("  Spend: {:?}", name);
-                    if let SpendBody::V1(sb) = &spend.body {
-                        println!("    Fee: {}", sb.fee.value);
-                        println!("    PKH sigs count: {}", sb.witness.pkh.map.wyt());
-                        if sb.witness.pkh.map.wyt() > 0 {
-                            println!("    (HAS SIGNATURES!)");
-                        }
-                    }
-                }
-            }
-            _ => println!("Decoded as non-V1 RawTransaction"),
         }
     } else {
         println!("Could not decode local Bythos v1 signed tx");

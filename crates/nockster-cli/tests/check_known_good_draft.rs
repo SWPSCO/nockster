@@ -6,7 +6,6 @@ use noun_serde::NounDecode;
 use std::fs;
 use tx_types::transaction_types::SpendBody;
 use tx_types::transaction_types_v1::*;
-use tx_types::RawTransaction;
 
 const LOCAL_BYTHOS_V1_DRAFT: &str = "../../known-good.draft";
 
@@ -64,35 +63,6 @@ fn check_local_bythos_v1_draft_sig_hash() {
                     println!("    ✗ sig_hash DIFFERS from known-good message");
                 }
             }
-        }
-    } else if let Ok(raw) = RawTransaction::from_noun(&noun) {
-        match raw {
-            RawTransaction::V1(v1) => {
-                println!("Decoded as RawTransaction::V1");
-                println!("  txid: {}", v1.id.to_b58());
-                for (name, spend) in v1.spends.map.tap() {
-                    println!("  Spend: {:?}", name);
-                    if let SpendBody::V1(sb) = &spend.body {
-                        let sig_hash = sb.compute_sig_hash();
-                        println!("    Fee: {}", sb.fee.value);
-                        println!(
-                            "    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            sig_hash.values[0],
-                            sig_hash.values[1],
-                            sig_hash.values[2],
-                            sig_hash.values[3],
-                            sig_hash.values[4]
-                        );
-
-                        if sig_hash.values == known_good_message {
-                            println!("    ✓ sig_hash MATCHES known-good message!");
-                        } else {
-                            println!("    ✗ sig_hash DIFFERS from known-good message");
-                        }
-                    }
-                }
-            }
-            _ => println!("Decoded as non-V1 RawTransaction"),
         }
     } else {
         println!("Could not decode as V1");

@@ -25,7 +25,7 @@ use critical_section::Mutex;
 use dispatch::{frame_confirmation_prompt, update_mode_allows_frame};
 use esp_hal::otg_fs::{Usb, UsbBus as OtgUsbBus};
 use esp_hal::rng::Trng;
-use esp_hal::system::{CpuControl, Stack};
+use esp_hal::system::{software_reset, CpuControl, Stack};
 use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
@@ -52,7 +52,7 @@ use usbd_hid::hid_class::HIDClass;
 use zeroize::Zeroize;
 const FW_MAJOR: u16 = 0;
 const FW_MINOR: u16 = 1;
-const APP_CORE_STACK_SIZE: usize = 32 * 1024;
+const APP_CORE_STACK_SIZE: usize = 64 * 1024;
 const APP_HEAP_SIZE: usize = 96 * 1024;
 const BOOT_LOGO_HOLD_MS: u32 = 900;
 const FIRMWARE_UPDATE_FEATURES: u32 = if valid_update_anchor_env() {
@@ -72,6 +72,7 @@ const FIRMWARE_FEATURES: u32 = FEATURE_CHEETAH
     | FEATURE_TOUCH_CALIBRATION_UI
     | FEATURE_RELEASE_INFO
     | FEATURE_UPDATE_BOOT_STATUS
+    | FEATURE_DEVICE_REBOOT
     | FIRMWARE_UPDATE_FEATURES;
 
 const fn valid_update_anchor_env() -> bool {
@@ -111,6 +112,8 @@ static PENDING_USB_UNLOCK_ID: Mutex<RefCell<Option<u32>>> = Mutex::new(RefCell::
 static PENDING_USB_INITPIN_ID: Mutex<RefCell<Option<u32>>> = Mutex::new(RefCell::new(None));
 #[allow(clippy::declare_interior_mutable_const)]
 static INITPIN_PROGRESS: Mutex<RefCell<u8>> = Mutex::new(RefCell::new(InitPinProgress::Idle as u8));
+#[allow(clippy::declare_interior_mutable_const)]
+static PENDING_SOFT_REBOOT: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -191,6 +194,18 @@ fn set_initpin_progress(progress: InitPinProgress) {
 
 fn get_initpin_progress() -> InitPinProgress {
     critical_section::with(|cs| InitPinProgress::from_u8(*INITPIN_PROGRESS.borrow_ref(cs)))
+}
+
+#[inline]
+fn request_soft_reboot() {
+    critical_section::with(|cs| {
+        *PENDING_SOFT_REBOOT.borrow_ref_mut(cs) = true;
+    });
+}
+
+#[inline]
+fn soft_reboot_requested() -> bool {
+    critical_section::with(|cs| *PENDING_SOFT_REBOOT.borrow_ref(cs))
 }
 
 fn nvs_init_progress(stage: NvsInitStage) {
@@ -648,6 +663,7 @@ fn main() -> ! {
     let mut change_pin_controller = ChangePinController::new();
     let mut seed_op_controller = SeedOpController::new();
     let mut pending_seed_setup = PendingSeedSetup::new();
+    let mut pending_seed_pin: Option<HString<16>> = None;
     let mut pending_pin_change: Option<PendingPinChange> = None;
     let mut pending_touch_calibration_id: Option<u32> = None;
 
@@ -674,6 +690,10 @@ fn main() -> ! {
     'main: loop {
         usb_dev.poll(&mut [&mut hid]);
         usb_service_tx(&mut hid);
+        if soft_reboot_requested() && usb_hid::tx_idle() {
+            delay.delay_millis(150u32);
+            software_reset();
+        }
         if let Some(ui) = ui.as_mut() {
             let event = ui.tick();
             if let Some(decision) = ui.poll_confirmation_result() {
@@ -896,18 +916,27 @@ fn main() -> ! {
                                     }
                                 }
                             }
-                        } else if let Some(mut seed64) = pending_seed_setup.take() {
-                            match initpin_controller.submit(pin.as_str(), &seed64) {
-                                Ok(()) => {
-                                    set_device_busy(true);
-                                    ui.show_unlocking();
-                                    seed64.zeroize();
+                        } else if pending_seed_setup.has_seed() {
+                            if let Some(first_pin) = pending_seed_pin.take() {
+                                if first_pin.as_str() != pin.as_str() {
+                                    ui.begin_pin_entry("PIN mismatch", Some(4));
+                                } else if let Some(mut seed64) = pending_seed_setup.take() {
+                                    match initpin_controller.submit(pin.as_str(), &seed64) {
+                                        Ok(()) => {
+                                            set_device_busy(true);
+                                            ui.show_unlocking_stage("Seed: queued");
+                                            seed64.zeroize();
+                                        }
+                                        Err(()) => {
+                                            pending_seed_setup.store_from(&mut seed64);
+                                            ui.show_pin_failure(None);
+                                            usb_debug(&mut hid, b"init queue busy\r\n");
+                                        }
+                                    }
                                 }
-                                Err(()) => {
-                                    pending_seed_setup.store_from(&mut seed64);
-                                    ui.show_pin_failure(None);
-                                    usb_debug(&mut hid, b"init queue busy\r\n");
-                                }
+                            } else {
+                                pending_seed_pin = Some(pin);
+                                ui.begin_pin_entry("Repeat PIN", Some(4));
                             }
                         } else {
                             match unlock_controller.submit(pin.as_str()) {
@@ -939,9 +968,10 @@ fn main() -> ! {
                                 phrase.iter().map(|word| word.as_str()),
                             ) {
                                 Ok(mut seed64) => {
+                                    pending_seed_pin = None;
                                     pending_seed_setup.store_from(&mut seed64);
                                     ui.clear_seed_entry_state();
-                                    ui.begin_unlock(Some(4));
+                                    ui.begin_pin_entry("Set PIN", Some(4));
                                 }
                                 Err(()) => {
                                     ui.show_seed_setup();
@@ -950,6 +980,7 @@ fn main() -> ! {
                             }
                         }
                         SeedInteraction::EntryCancelled => {
+                            pending_seed_pin = None;
                             pending_seed_setup.clear();
                         }
                         _ => {}
@@ -1246,6 +1277,11 @@ fn main() -> ! {
                                                     match seed_op_controller.submit(request) {
                                                         Ok(()) => {
                                                             set_device_busy(true);
+                                                            if let Some(ui) = ui.as_mut() {
+                                                                ui.show_unlocking_stage(
+                                                                    "Seed: add",
+                                                                );
+                                                            }
                                                             None
                                                         }
                                                         Err(mut request) => {
@@ -1420,6 +1456,15 @@ fn main() -> ! {
                                                     let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
                                                     let body =
                                                         handle_frame_v1(m.id, &m.msg, ui_ref);
+
+                                                    if let Frame::One(Request::Reboot) = &m.msg {
+                                                        if let Some(ui) = ui.as_mut() {
+                                                            ui.show_idle_message_timed(
+                                                                "Rebooting...",
+                                                                Duration::from_millis(1_000),
+                                                            );
+                                                        }
+                                                    }
 
                                                     // Show result on GUI after unlock completes
                                                     if let Frame::One(Request::Unlock { .. }) =
@@ -1686,6 +1731,11 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
                     code: ERR_UNSUPPORTED_VERSION,
                 },
             )
+        }
+        Request::Reboot => {
+            set_device_busy(true);
+            request_soft_reboot();
+            Response::Ok
         }
         Request::SetSeed { .. } | Request::Wipe | Request::Lock | Request::SelectSeed { .. } => {
             seed_store::handle_session_request(req).unwrap_or(Response::Err {

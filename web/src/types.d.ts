@@ -11,3 +11,11 @@ interface Navigator {
     requestPort(options?: { filters?: Array<{ usbVendorId: number; usbProductId?: number }> }): Promise<SerialPort>;
   };
 }
+
+interface ImportMetaEnv {
+  readonly VITE_NOCKSTER_RELEASE_INDEX_URL?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}

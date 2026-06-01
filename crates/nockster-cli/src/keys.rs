@@ -16,13 +16,8 @@ use tx_types::transaction_types::{Hash, SchnorrPubkey, F6LT};
 #[serde(tag = "origin", rename_all = "snake_case")]
 pub enum KeyOrigin {
     Mnemonic { path: String, passphrase: String },
-    PrivateKeyB58,
-    PrivateKeyHex,
     SeedBytes,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LockKey(pub tx_types::transaction_types::Lock);
 
 /// persisted data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,57 +114,6 @@ fn derive_xprv_path(mut xk: XKey, path: &str) -> Result<XKey, String> {
     Ok(xk)
 }
 
-/// import from base58 32-byte scalar (raw), no chain-code/path.
-pub fn import_from_b58_priv(
-    b58: &str,
-    version: u8,
-) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
-    let sk = sk_from_b58(b58)?;
-    let cc = [0u8; 32];
-    let pk_xy = cheetah_pub_from_sk(sk);
-    // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
-    let pk_tuple = (pk_xy[0], pk_xy[1]);
-
-    let pk_b58 = pubkey_to_b58(&pk_tuple, version);
-    let key = ImportedKey {
-        sk_be32_hex: hex::encode(sk),
-        cc_hex: hex::encode(cc),
-        pk_b58,
-        path: None,
-        origin: KeyOrigin::PrivateKeyB58,
-    };
-    let blob = device_blob_v1(sk, cc, pk_tuple);
-    Ok((key, blob))
-}
-
-/// import from raw hex private key (32B)
-pub fn import_from_hex_priv(
-    hex_sk: &str,
-    version: u8,
-) -> Result<(ImportedKey, [u8; DEVICE_BLOB_V1_SIZE]), String> {
-    let mut sk = [0u8; 32];
-    let v = hex::decode(hex_sk).map_err(|e| format!("hex decode: {e}"))?;
-    if v.len() != 32 {
-        return Err(format!("expected 32 bytes, got {}", v.len()));
-    }
-    sk.copy_from_slice(&v);
-    let cc = [0u8; 32];
-    let pk_xy = cheetah_pub_from_sk(sk);
-    // Convert [[u64; 6]; 2] to ([u64; 6], [u64; 6])
-    let pk_tuple = (pk_xy[0], pk_xy[1]);
-
-    let pk_b58 = pubkey_to_b58(&pk_tuple, version);
-    let key = ImportedKey {
-        sk_be32_hex: hex::encode(sk),
-        cc_hex: hex::encode(cc),
-        pk_b58,
-        path: None,
-        origin: KeyOrigin::PrivateKeyHex,
-    };
-    let blob = device_blob_v1(sk, cc, pk_tuple);
-    Ok((key, blob))
-}
-
 /// import from 64-byte seed (PBKDF'd) and path (full private derivation)
 pub fn import_from_seed(
     seed64: &[u8; 64],
@@ -210,22 +154,6 @@ pub fn write_key_files(
     fs::write(&json_path, json).map_err(|e| format!("write {:?}: {e}", json_path))?;
     fs::write(&bin_path, blob).map_err(|e| format!("write {:?}: {e}", bin_path))?;
     Ok((json_path, bin_path))
-}
-
-/// base58 private key to 32-byte big-endian scalar
-fn sk_from_b58(s: &str) -> Result<[u8; 32], String> {
-    let v = bs58::decode(s)
-        .into_vec()
-        .map_err(|e| format!("base58 decode: {e}"))?;
-    if v.len() < 32 {
-        return Err(format!(
-            "base58 key too short: {} bytes (need >=32)",
-            v.len()
-        ));
-    }
-    let mut sk = [0u8; 32];
-    sk.copy_from_slice(&v[v.len() - 32..]);
-    Ok(sk)
 }
 
 /// pubkey (affine point) to base58 - v0 format (97-byte: 0x01 || Y || X)

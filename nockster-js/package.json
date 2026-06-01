@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "build": "tsc && node -e \"const fs=require('fs'); fs.copyFileSync('src/types.d.ts','dist/types.d.ts'); const index='dist/index.d.ts'; const ref='/// <reference path=\\\"./types.d.ts\\\" />\\\\n'; const content=fs.readFileSync(index,'utf8'); if (!content.startsWith(ref)) fs.writeFileSync(index, ref + content);\"",
+    "test": "npm run build && node --test test/*.test.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

@@ -9,6 +9,8 @@ TypeScript/JavaScript library for communicating with Nockster hardware wallet.
 - Browser will prompt user to select a device
 - Only one connection per device at a time
 - All integers (u16, u32, u64) use varint encoding in postcard
+- `npm test` builds the package and runs parser/validation checks for signed
+  firmware update bundles and latest-release indexes
 
 ```
 nockster-js/
@@ -35,6 +37,29 @@ nockster-js/
 - Type definitions for all Request and Response variants
 - `serializeMsg()` / `deserializeMsg()` - Message encoding/decoding
 - `getErrorMessage()` - Human-readable error messages
+- `parseUpdateBundleJson()` / `parseUpdateReleaseIndexJson()` - Strict signed
+  firmware update artifact parsing
+- `assertUpdateReleaseIndexMatchesBundle()` - Catches stale latest-release
+  index metadata before a firmware image is downloaded
+- `assertUpdateFirmwareMatchesBundle()` - Checks downloaded firmware bytes
+  against the signed manifest before streaming them to the device
+- `getUpdateBundleCompatibilityBlocker()` / `assertUpdateBundleCompatible()` -
+  Apply the browser update manifest policy for target hardware, protocol,
+  rollback release, build profile, and image size before image transfer
+- `getPostInstallUpdateBootStatusFailures()` /
+  `assertPostInstallUpdateBootStatus()` - Validate that an installed OTA image
+  is selected in a bootable `new` OTA slot before reporting success
+- `getUpdateStreamStatusFailures()` / `assertUpdateStreamStatus()` - Validate
+  begin/chunk/finish update progress against the signed manifest and expected
+  byte offset before continuing a stream
+- `fetchLatestUpdateRelease()` / `fetchUpdateReleaseArtifacts()` - Fetch
+  hosted update artifacts with HTTPS/localhost enforcement, no-store caching,
+  optional release-index metadata checks, firmware `Content-Length` checks, and
+  manifest hash preflight. Pass `bearerToken` to apply the private-release
+  origin/HTTPS policy, default tokened fetch credentials to `omit`, and attach
+  the bearer header to latest-index and release artifact fetches.
+- `assertPrivateUpdateReleaseUrls()` - Enforce the private bearer-token update
+  policy: one artifact origin and HTTPS, except localhost testing
 - All error code constants exported
 
 ### 4. **Cheetah Crypto** (`cheetah.ts`)
@@ -51,6 +76,12 @@ nockster-js/
 - `addSeed(seed)` - Append additional seed slots while unlocked
 - `deleteSeed(slot)` - Remove a specific seed slot without wiping others
 - `resetPIN(currentPin, newPin)` - Rotate the device PIN while unlocked
+- `changePinOnDevice(currentPin)` - Rotate the PIN while entering the new PIN
+  twice on-device
+- `verifyUpdateBundle(bundle)` / `streamUpdateBundle(bundle, firmware)` -
+  Exercise the signed firmware update path over WebHID/Web Serial
+- `reboot()` - Ask firmware to perform a non-destructive reboot when the
+  `FEATURE_DEVICE_REBOOT` bit is advertised
 
 
 ## Exports
@@ -65,10 +96,19 @@ export { COBSEncoder, COBSFrameReader } from './cobs';
 export { serializeRequest, deserializeResponse } from './protocol';
 export { serializeMsg, deserializeMsg } from './protocol';
 export { getErrorMessage } from './protocol';
+export { parseUpdateBundleJson, parseUpdateReleaseIndexJson } from './protocol';
+export { assertUpdateReleaseIndexMatchesBundle, assertUpdateFirmwareMatchesBundle } from './protocol';
+export { getUpdateBundleCompatibilityBlocker, assertUpdateBundleCompatible } from './protocol';
+export { getPostInstallUpdateBootStatusFailures, assertPostInstallUpdateBootStatus } from './protocol';
+export { getUpdateStreamStatusFailures, assertUpdateStreamStatus } from './protocol';
+export { updateSlotName, updateOtaStateName } from './protocol';
+export { assertPrivateUpdateReleaseUrls } from './protocol';
+export { fetchLatestUpdateRelease, fetchUpdateReleaseArtifacts } from './protocol';
 export { serializeCheetahPublicKey, base58Encode, formatCheetahPubkey } from './cheetah';
 
 // Types
 export type { Request, Response, Msg, Frame } from './protocol';
+export type { UpdateBundle, UpdateReleaseIndex, UpdateReleaseIndexMetadata, FetchedUpdateRelease, UpdateCompatibilityOptions } from './protocol';
 
 // Constants
 export {
@@ -83,6 +123,23 @@ export {
   ERR_PIN_LOCKED_OUT,
   ERR_ALREADY_INITIALIZED,
   PROTO_V1,
+  UPDATE_SLOT_NONE,
+  UPDATE_SLOT_OTA0,
+  UPDATE_SLOT_OTA1,
+  UPDATE_SLOT_UNKNOWN,
+  UPDATE_OTA_STATE_NEW,
+  UPDATE_OTA_STATE_PENDING_VERIFY,
+  UPDATE_OTA_STATE_VALID,
+  UPDATE_OTA_STATE_INVALID,
+  UPDATE_OTA_STATE_ABORTED,
+  UPDATE_OTA_STATE_UNAVAILABLE,
+  UPDATE_OTA_STATE_UNKNOWN,
+  UPDATE_OTA_STATE_UNDEFINED,
+  UPDATE_MANIFEST_VERSION,
+  UPDATE_RELEASE_INDEX_FORMAT,
+  MAX_UPDATE_RELEASE_VERSION,
+  MAX_UPDATE_IMAGE_SIZE,
+  MAX_UPDATE_CHUNK_LEN,
 } from './protocol';
 ```
 
@@ -158,7 +215,7 @@ await device.deleteSeed(1);
 import { NocksterDevice } from '@swps/nockster-js';
 
 const device = new NocksterDevice();
-await device.connect({ baudRate: 115200 });
+await device.connect();
 
 const seed = new Uint8Array(64); // bip39 seed
 const response = await device.call({
@@ -170,6 +227,21 @@ const response = await device.call({
 if (response.type === 'Ok') {
   console.log('Device initialized');
 }
+```
+
+```typescript
+// install a site-provided signed firmware update after fetching its artifacts
+import {
+  NocksterDevice,
+  fetchLatestUpdateRelease,
+} from '@swps/nockster-js';
+
+const device = new NocksterDevice();
+await device.connect();
+
+const release = await fetchLatestUpdateRelease(new URL('/updates/latest.json', window.location.href));
+await device.streamUpdateBundle(release.bundle, release.firmware, { writeFlash: true });
+await device.reboot();
 ```
 
 ```typescript

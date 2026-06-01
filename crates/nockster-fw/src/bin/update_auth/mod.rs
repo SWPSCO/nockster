@@ -8,10 +8,10 @@ use esp_bootloader_esp_idf::partitions::{
 };
 use esp_storage::FlashStorage;
 use nockster_core::update::{
-    verify_update_bundle_signature, verify_update_manifest_policy, UpdateImageStreamError,
-    UpdateImageVerifier, UpdateManifest, UpdateManifestPolicy, UpdateManifestPolicyError,
-    UpdateSignatureError, MAX_UPDATE_CHUNK_LEN, UPDATE_BUILD_PROFILE_DEV,
-    UPDATE_HARDWARE_TARGET_ESP32S3_TOUCH_LCD_1_47,
+    should_mark_ota_image_valid, verify_update_bundle_signature, verify_update_manifest_policy,
+    UpdateImageStreamError, UpdateImageVerifier, UpdateManifest, UpdateManifestPolicy,
+    UpdateManifestPolicyError, UpdateSignatureError, MAX_UPDATE_CHUNK_LEN,
+    UPDATE_BUILD_PROFILE_DEV, UPDATE_HARDWARE_TARGET_ESP32S3_TOUCH_LCD_1_47,
 };
 use nockster_core::{
     UpdateBootStatus, UpdateStatus, UPDATE_OTA_STATE_ABORTED, UPDATE_OTA_STATE_INVALID,
@@ -141,7 +141,9 @@ pub fn begin_stream(
             verifier: UpdateImageVerifier::new(manifest.clone()),
             writer,
         });
-        Ok(slot.as_ref().unwrap().verifier.status(false))
+        slot.as_ref()
+            .map(|session| session.verifier.status(false))
+            .ok_or(UpdateStreamError::Busy)
     })
 }
 
@@ -290,8 +292,16 @@ fn mark_running_image_valid_inner() -> Result<(), UpdateFlashError> {
     if ota
         .current_slot()
         .map_err(|_| UpdateFlashError::PartitionTable)?
-        != Slot::None
+        == Slot::None
     {
+        return Ok(());
+    }
+
+    let current_state = ota
+        .current_ota_state()
+        .map(ota_state_code)
+        .map_err(|_| UpdateFlashError::PartitionTable)?;
+    if should_mark_ota_image_valid(current_state) {
         ota.set_current_ota_state(OtaImageState::Valid)
             .map_err(|_| UpdateFlashError::Storage)?;
     }

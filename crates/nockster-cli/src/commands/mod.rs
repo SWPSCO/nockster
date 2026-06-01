@@ -2,6 +2,7 @@ pub mod health;
 pub mod info;
 pub mod inspect;
 pub mod pin;
+pub mod reboot;
 pub mod reset;
 pub mod security;
 pub mod seed;

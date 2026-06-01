@@ -2,35 +2,14 @@
 
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
-use nockvm::noun::Noun;
 use noun_serde::NounDecode;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use tx_types::transaction_types::*;
+use tx_types::transaction_types::SpendBody;
 use tx_types::transaction_types_v1::*;
-use tx_types::RawTransaction;
 
 const LOCAL_BYTHOS_V1_UNSIGNED_TX: &str = "../../test.tx";
 const LOCAL_BYTHOS_V1_SIGNED_TX: &str = "../../test.signed";
-
-/// Helper to decode RawTransaction from noun, trying different formats
-fn decode_raw_tx(noun: &Noun) -> Result<RawTransaction, String> {
-    // Try direct decode first
-    if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(noun))) {
-        return Ok(raw);
-    }
-
-    // Try [raw-tx tail] format (tx:transact)
-    if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(raw)) =
-            catch_unwind(AssertUnwindSafe(|| RawTransaction::from_noun(&cell.head())))
-        {
-            return Ok(raw);
-        }
-    }
-
-    Err("Could not decode as RawTransaction".into())
-}
 
 #[test]
 #[ignore = "requires local ignored Bythos v1 fixture artifacts"]
@@ -92,8 +71,6 @@ fn diagnose_local_bythos_v1_signed_format() {
             }
         }
 
-        // Check if it's [name spends] format like V0 Transaction
-        // V0 Transaction was [name inputs] where inputs is a ZMap
         if let Ok(head_cell) = cell.head().as_cell() {
             println!("Head.head is cell: {}", head_cell.head().as_cell().is_ok());
             println!("Head.head is atom: {}", head_cell.head().as_atom().is_ok());
@@ -142,66 +119,6 @@ fn diagnose_local_bythos_v1_signed_format() {
         } else {
             println!("\nInputsV1 decode from tail failed");
         }
-    }
-
-    // Try Transaction decode (name, inputs)
-    if let Ok(Ok(tx)) = catch_unwind(AssertUnwindSafe(|| Transaction::from_noun(&noun))) {
-        println!("\nDecoded as Transaction!");
-        println!("  name: {}", tx.name);
-
-        match tx.p {
-            Inputs::V0(inputs_v0) => {
-                println!("  V0 inputs count: {}", inputs_v0.p.wyt());
-                for (name, input) in inputs_v0.p.tap() {
-                    println!("\n  Input: {:?}", name);
-                    println!("    Fee: {}", input.spend.fee.value);
-                    // V0 has signature field
-                    println!("    Signature: {:?}", input.spend.signature);
-                }
-            }
-            Inputs::V1(inputs_v1) => {
-                println!("  V1 inputs count: {}", inputs_v1.map.wyt());
-                for (name, input) in inputs_v1.map.tap() {
-                    println!("\n  Input: {:?}", name);
-                    println!("    Fee: {}", input.spend.fee.value);
-                    println!("    PKH sigs: {}", input.spend.witness.pkh.map.wyt());
-                    for (pkh, sig_val) in input.spend.witness.pkh.map.tap() {
-                        println!(
-                            "    PKH: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            pkh.values[0],
-                            pkh.values[1],
-                            pkh.values[2],
-                            pkh.values[3],
-                            pkh.values[4]
-                        );
-                        println!("    Chal: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            sig_val.sig.chal.values.values[0], sig_val.sig.chal.values.values[1],
-                            sig_val.sig.chal.values.values[2], sig_val.sig.chal.values.values[3],
-                            sig_val.sig.chal.values.values[4], sig_val.sig.chal.values.values[5],
-                            sig_val.sig.chal.values.values[6], sig_val.sig.chal.values.values[7]);
-                        println!("    Sig:  {:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
-                            sig_val.sig.sig.values.values[0], sig_val.sig.sig.values.values[1],
-                            sig_val.sig.sig.values.values[2], sig_val.sig.sig.values.values[3],
-                            sig_val.sig.sig.values.values[4], sig_val.sig.sig.values.values[5],
-                            sig_val.sig.sig.values.values[6], sig_val.sig.sig.values.values[7]);
-                    }
-                }
-            }
-        }
-    } else {
-        println!("\nTransaction decode failed");
-    }
-
-    // Try RawTransaction decode
-    match decode_raw_tx(&noun) {
-        Ok(raw) => {
-            println!("\nDecoded as RawTransaction!");
-            match raw {
-                RawTransaction::V0(v0) => println!("  V0: id={}", v0.id.to_b58()),
-                RawTransaction::V1(v1) => println!("  V1: id={}", v1.id.to_b58()),
-            }
-        }
-        Err(e) => println!("\nRawTransaction decode failed: {}", e),
     }
 
     // Try RawTransactionV1 directly; local signed fixtures should use this form.

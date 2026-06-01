@@ -21,6 +21,15 @@ opt-level = "s"
 # For firmware, consider adding a separate profile if size matters
 panic = "unwind"
 
+[profile.release.package.nockster-fw]
+debug = 2
+debug-assertions = false
+opt-level = "s"
+overflow-checks = false
+
+[profile.release.package.nockster-wasm]
+opt-level = "z"
+
 [workspace.dependencies]
 cobs = { version = "0.4", default-features = false }
 heapless = { version = "0.8", features = ["serde"] }

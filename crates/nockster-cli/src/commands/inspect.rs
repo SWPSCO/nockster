@@ -1,4 +1,4 @@
-use crate::util::{pretty_noun, transaction_name_from_noun};
+use crate::util::{pretty_noun, print_raw_v1_details, transaction_name_from_noun};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
@@ -21,12 +21,12 @@ fn decode_no_panic<T: NounDecode>(noun: &Noun) -> Option<T> {
         .and_then(|r| r.ok())
 }
 
-fn raw_v1_from_spends(spends: SpendsV1) -> RawTransaction {
-    RawTransaction::V1(RawTransactionV1 {
+fn raw_v1_from_spends(spends: SpendsV1) -> RawTransactionV1 {
+    RawTransactionV1 {
         version: 1,
         id: compute_tx_id_v1(&spends),
         spends,
-    })
+    }
 }
 
 fn decode_tx_v1_wrapper(noun: &Noun) -> Option<SpendsV1> {
@@ -40,20 +40,28 @@ fn decode_tx_v1_wrapper(noun: &Noun) -> Option<SpendsV1> {
     decode_no_panic::<SpendsV1>(&t2.head())
 }
 
-fn bythos_raw_from_noun(noun: &Noun) -> anyhow::Result<RawTransaction> {
-    if let Some(raw) = decode_no_panic::<RawTransaction>(noun) {
-        return match raw {
-            RawTransaction::V1(_) => Ok(raw),
-            RawTransaction::V0(_) => Err(anyhow!("pre-Bythos V0 transactions are unsupported")),
-        };
+fn rejects_as_pre_bythos_v0(noun: &Noun) -> bool {
+    matches!(
+        decode_no_panic::<RawTransaction>(noun),
+        Some(RawTransaction::V0(_))
+    )
+}
+
+fn bythos_raw_from_noun(noun: &Noun) -> anyhow::Result<RawTransactionV1> {
+    if let Some(raw) = decode_no_panic::<RawTransactionV1>(noun) {
+        return Ok(raw);
+    }
+    if rejects_as_pre_bythos_v0(noun) {
+        return Err(anyhow!("pre-Bythos V0 transactions are unsupported"));
     }
 
     if let Ok(cell) = noun.as_cell() {
-        if let Some(raw) = decode_no_panic::<RawTransaction>(&cell.head()) {
-            return match raw {
-                RawTransaction::V1(_) => Ok(raw),
-                RawTransaction::V0(_) => Err(anyhow!("pre-Bythos V0 transactions are unsupported")),
-            };
+        let head = cell.head();
+        if let Some(raw) = decode_no_panic::<RawTransactionV1>(&head) {
+            return Ok(raw);
+        }
+        if rejects_as_pre_bythos_v0(&head) {
+            return Err(anyhow!("pre-Bythos V0 transactions are unsupported"));
         }
     }
 
@@ -105,7 +113,7 @@ pub fn run(
     let raw = bythos_raw_from_noun(&noun)?;
 
     // Typed summary
-    crate::util::print_raw_details(&raw);
+    print_raw_v1_details(&raw);
 
     Ok(())
 }

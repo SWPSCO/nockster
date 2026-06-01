@@ -11,9 +11,9 @@ import {
   UpdateBundle,
   UpdateStatus,
   SecurityStatus,
-  MAX_UPDATE_IMAGE_SIZE,
   MAX_UPDATE_CHUNK_LEN,
-  bytesToHex,
+  assertUpdateFirmwareMatchesBundle,
+  assertUpdateStreamStatus,
 } from './protocol.js';
 
 export interface SerialTransport {
@@ -44,77 +44,6 @@ function hidOpenError(error: unknown): Error {
       'Use a non-Snap/non-Flatpak Chrome or Edge build, close other tabs/CLI sessions using the device, then reconnect USB and try again.',
     ].join(' ')
   );
-}
-
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a[i] ^ b[i];
-  }
-  return diff === 0;
-}
-
-async function verifyFirmwareMatchesBundle(bundle: UpdateBundle, firmware: Uint8Array): Promise<void> {
-  if (bundle.manifest.image_size <= 0) {
-    throw new Error('bundle image size must be nonzero');
-  }
-  if (bundle.manifest.image_size > MAX_UPDATE_IMAGE_SIZE) {
-    throw new Error(`bundle image size exceeds ${MAX_UPDATE_IMAGE_SIZE} bytes`);
-  }
-  if (firmware.length !== bundle.manifest.image_size) {
-    throw new Error(`firmware size mismatch: bundle expects ${bundle.manifest.image_size}, got ${firmware.length}`);
-  }
-  if (!globalThis.crypto?.subtle) {
-    throw new Error('SHA-256 is unavailable in this browser context');
-  }
-
-  const digestInput = new ArrayBuffer(firmware.byteLength);
-  new Uint8Array(digestInput).set(firmware);
-  const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', digestInput));
-  if (!bytesEqual(digest, bundle.manifest.image_sha256)) {
-    throw new Error(
-      `firmware sha256 mismatch: bundle expects ${bytesToHex(bundle.manifest.image_sha256)}, got ${bytesToHex(digest)}`
-    );
-  }
-}
-
-function yesNo(value: boolean): string {
-  return value ? 'yes' : 'no';
-}
-
-function assertUpdateStreamStatus(
-  status: UpdateStatus,
-  bundle: UpdateBundle,
-  phase: string,
-  expectedActive: boolean,
-  expectedManifestVerified: boolean,
-  expectedImageVerified: boolean,
-  expectedBytesReceived: number,
-): void {
-  const manifest = bundle.manifest;
-  const failures: string[] = [];
-  if (status.active !== expectedActive) {
-    failures.push(`active is ${yesNo(status.active)}, expected ${yesNo(expectedActive)}`);
-  }
-  if (status.manifest_verified !== expectedManifestVerified) {
-    failures.push(`manifest_verified is ${yesNo(status.manifest_verified)}, expected ${yesNo(expectedManifestVerified)}`);
-  }
-  if (status.image_verified !== expectedImageVerified) {
-    failures.push(`image_verified is ${yesNo(status.image_verified)}, expected ${yesNo(expectedImageVerified)}`);
-  }
-  if (status.release_version !== manifest.release_version) {
-    failures.push(`release_version is ${status.release_version}, expected ${manifest.release_version}`);
-  }
-  if (status.image_size !== manifest.image_size) {
-    failures.push(`image_size is ${status.image_size}, expected ${manifest.image_size}`);
-  }
-  if (status.bytes_received !== expectedBytesReceived) {
-    failures.push(`bytes_received is ${status.bytes_received}, expected ${expectedBytesReceived}`);
-  }
-  if (failures.length) {
-    throw new Error(`${phase}: invalid device update status: ${failures.join('; ')}`);
-  }
 }
 
 export class NocksterDevice {
@@ -150,6 +79,24 @@ export class NocksterDevice {
 
   static isSupported(): boolean {
     return !!navigator.hid || !!navigator.serial || ('__TAURI__' in window);
+  }
+
+  private rejectWaitersForMessage(msgId: number, error: Error): void {
+    const waiters = this.pendingWaiters.get(msgId);
+    if (!waiters) {
+      return;
+    }
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(error);
+    }
+    this.pendingWaiters.delete(msgId);
+  }
+
+  private rejectAllWaiters(error: Error): void {
+    for (const [msgId] of this.pendingWaiters) {
+      this.rejectWaitersForMessage(msgId, error);
+    }
   }
 
   async connect(): Promise<void> {
@@ -210,13 +157,7 @@ export class NocksterDevice {
   }
 
   async disconnect(): Promise<void> {
-    for (const [, waiters] of this.pendingWaiters) {
-      for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        waiter.reject(new Error('Device disconnected'));
-      }
-    }
-    this.pendingWaiters.clear();
+    this.rejectAllWaiters(new Error('Device disconnected'));
     this.responseBacklog.clear();
 
     if (this.transport) {
@@ -389,7 +330,17 @@ export class NocksterDevice {
   async call(request: Request, timeoutMs: number = 30000): Promise<Response> {
     const msgId = this.nextMsgId++;
     const respP = this.waitForResponse(msgId, () => true, timeoutMs);
-    await this.sendFrame(msgId, { type: 'One', request });
+    try {
+      await this.sendFrame(msgId, { type: 'One', request });
+    } catch (error: any) {
+      this.rejectWaitersForMessage(msgId, error instanceof Error ? error : new Error(String(error)));
+      try {
+        await respP;
+      } catch {
+        // The original send error is more useful than the cancelled waiter.
+      }
+      throw error;
+    }
     return await respP;
   }
 
@@ -410,6 +361,38 @@ export class NocksterDevice {
       throw new Error(`unexpected response: ${resp.type}`);
     }
     return resp;
+  }
+
+  async reboot(): Promise<void> {
+    const msgId = this.nextMsgId++;
+    const respP = this.waitForResponse(msgId, () => true, 2000);
+    let requestDelivered = false;
+    try {
+      await this.sendFrame(msgId, { type: 'One', request: { type: 'Reboot' } });
+      requestDelivered = true;
+      const resp = await respP;
+      if (resp.type === 'Err') {
+        throw new Error(getErrorMessage(resp.code));
+      }
+      if (resp.type !== 'Ok') {
+        throw new Error(`unexpected response: ${resp.type}`);
+      }
+    } catch (error: any) {
+      if (!requestDelivered) {
+        this.rejectWaitersForMessage(msgId, error instanceof Error ? error : new Error(String(error)));
+        try {
+          await respP;
+        } catch {
+          // The original send error is more useful than the cancelled waiter.
+        }
+        throw error;
+      }
+      const message = error?.message ?? error?.toString() ?? '';
+      if (message.includes('Request timeout') || message.includes('Device disconnected')) {
+        return;
+      }
+      throw error;
+    }
   }
 
   async getLockStatus() {
@@ -644,7 +627,7 @@ export class NocksterDevice {
     if (chunkSize <= 0 || chunkSize > MAX_UPDATE_CHUNK_LEN) {
       throw new Error(`chunkSize must be between 1 and ${MAX_UPDATE_CHUNK_LEN}`);
     }
-    await verifyFirmwareMatchesBundle(bundle, firmware);
+    await assertUpdateFirmwareMatchesBundle(bundle, firmware);
 
     let begun = false;
     try {
@@ -661,7 +644,12 @@ export class NocksterDevice {
       if (beginResp.type !== 'OkUpdateStatus') {
         throw new Error(`unexpected response: ${beginResp.type}`);
       }
-      assertUpdateStreamStatus(beginResp.status, bundle, 'begin update stream', true, true, false, 0);
+      assertUpdateStreamStatus(beginResp.status, bundle, 'begin update stream', {
+        expectedActive: true,
+        expectedManifestVerified: true,
+        expectedImageVerified: false,
+        expectedBytesReceived: 0,
+      });
       begun = true;
       options.onBegin?.(beginResp.status);
       options.onProgress?.(beginResp.status);
@@ -677,7 +665,12 @@ export class NocksterDevice {
         if (chunkResp.type !== 'OkUpdateStatus') {
           throw new Error(`unexpected response: ${chunkResp.type}`);
         }
-        assertUpdateStreamStatus(chunkResp.status, bundle, 'stream update chunk', true, true, false, end);
+        assertUpdateStreamStatus(chunkResp.status, bundle, 'stream update chunk', {
+          expectedActive: true,
+          expectedManifestVerified: true,
+          expectedImageVerified: false,
+          expectedBytesReceived: end,
+        });
         options.onChunk?.(chunkResp.status, end);
         offset = chunkResp.status.bytes_received;
         options.onProgress?.(chunkResp.status);
@@ -694,10 +687,12 @@ export class NocksterDevice {
         finishResp.status,
         bundle,
         'finish update stream',
-        false,
-        true,
-        true,
-        bundle.manifest.image_size,
+        {
+          expectedActive: false,
+          expectedManifestVerified: true,
+          expectedImageVerified: true,
+          expectedBytesReceived: bundle.manifest.image_size,
+        },
       );
       options.onProgress?.(finishResp.status);
       return finishResp.status;

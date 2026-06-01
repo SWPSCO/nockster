@@ -41,6 +41,13 @@ pub struct NvsStore {
     flash: FlashStorage,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct NvsStorageStatus {
+    pub initialized: bool,
+    pub schema_version: u8,
+    pub slot_count: u8,
+}
+
 #[derive(Clone)]
 struct Header {
     flags: u8,
@@ -191,6 +198,25 @@ impl NvsStore {
                 MAX_PIN_ATTEMPTS.saturating_sub(header.attempts)
             }
             _ => MAX_PIN_ATTEMPTS,
+        }
+    }
+
+    pub fn storage_status(&mut self) -> NvsStorageStatus {
+        match self.read_header() {
+            Ok(Some(header)) => NvsStorageStatus {
+                initialized: header.initialized(),
+                schema_version: VERSION,
+                slot_count: if header.initialized() {
+                    header.slot_count
+                } else {
+                    0
+                },
+            },
+            _ => NvsStorageStatus {
+                initialized: false,
+                schema_version: 0,
+                slot_count: 0,
+            },
         }
     }
 

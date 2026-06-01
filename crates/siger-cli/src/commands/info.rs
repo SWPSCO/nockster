@@ -1,6 +1,9 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_call};
-use siger_core::{Request, Response};
+use siger_core::{
+    Request, Response, FEATURE_ALL_KNOWN, FEATURE_CHEETAH, FEATURE_FRAG, FEATURE_SECURITY_STATUS,
+    FEATURE_XPUB,
+};
 use std::fmt::Write as _;
 
 pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
@@ -20,6 +23,7 @@ pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
             println!(
                 "info: proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}"
             );
+            println!("features: {}", format_features(features));
             if has_seed {
                 if cheetah_pubs.is_empty() {
                     println!("  (device locked; pubkeys withheld)");
@@ -63,6 +67,33 @@ pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+pub(crate) fn format_features(features: u32) -> String {
+    let mut names = Vec::new();
+    if features & FEATURE_CHEETAH != 0 {
+        names.push("cheetah".to_string());
+    }
+    if features & FEATURE_FRAG != 0 {
+        names.push("frag".to_string());
+    }
+    if features & FEATURE_XPUB != 0 {
+        names.push("xpub".to_string());
+    }
+    if features & FEATURE_SECURITY_STATUS != 0 {
+        names.push("security-status".to_string());
+    }
+
+    let unknown = features & !FEATURE_ALL_KNOWN;
+    if unknown != 0 {
+        names.push(format!("unknown:0x{unknown:08x}"));
+    }
+
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join(",")
+    }
 }
 
 fn format_path(path: &[u32]) -> String {

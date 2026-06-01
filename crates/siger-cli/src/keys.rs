@@ -253,3 +253,22 @@ pub fn pubkey_to_b58(pk: &([u64; 6], [u64; 6]), version: u8) -> String {
         _ => pubkey_to_b58_v1(pk),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_MNEMONIC: &str =
+        "around squeeze nerve chronic trophy kiwi enroll identify depth bicycle radio \
+        gate critic child claim outer detect plug market visual stuff finish crime abuse";
+
+    #[test]
+    fn known_mnemonic_root_pkh_v1() {
+        let seed = bip39_seed_from_mnemonic(TEST_MNEMONIC, "");
+        let (key, _) = import_from_seed(&seed, "m", 1).unwrap();
+        assert_eq!(
+            key.pk_b58,
+            "2Ac7qc9iu44pWsmqFHKiBKG1FRWRupCgq3dnGtvWBvWuuZDmCLcJwoS"
+        );
+    }
+}

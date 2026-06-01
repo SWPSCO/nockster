@@ -22,6 +22,12 @@ pub enum Cmd {
     /// Device health (firmware's well-known test)
     Health(PortArgs),
 
+    /// report ESP32-S3 secure boot, flash encryption, eFuse, and NVS status
+    Security(PortArgs),
+
+    /// non-destructive hardware smoke check
+    Smoke(PortArgs),
+
     /// Seed management and optional key file export (replaces old Seed + Keys::Import)
     Seed(SeedArgs),
 
@@ -204,6 +210,8 @@ pub fn run() -> anyhow::Result<()> {
         ),
         Cmd::Info(args) => commands::info::run(&args.port, args.baud, args.version),
         Cmd::Health(args) => commands::health::run(&args.port, args.baud),
+        Cmd::Security(args) => commands::security::run(&args.port, args.baud),
+        Cmd::Smoke(args) => commands::smoke::run(&args.port, args.baud),
         Cmd::Seed(args) => commands::seed::run(args),
         Cmd::Plan(args) => commands::plan::run(&args.port, args.baud, &args.draft),
         Cmd::SignTx(args) => commands::sign_tx::run(

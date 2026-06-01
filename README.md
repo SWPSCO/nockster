@@ -3,7 +3,7 @@ Hardware wallet firmware, host tooling, and web front-end for signing Nockchain 
 
 The CLI/wasm app deserializes draft jams, sends the input values over the wire for signature, recomputes `tx_id`, jams the signed noun, and hands it back as a `.tx`.
 
-NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash without the PIN is useless.
+NVS data is AES-256-GCM encrypted with a key derived from the PIN and per-device salt. This protects normal firmware updates and casual flash reads, but low-entropy PINs should be paired with the ESP32-S3 eFuse/HMAC hardening described in `docs/security.md`.
 
 ## Components
 - `crates/siger-core` — library containing comms protocol and crypto wrappers shared between CLI, firmware and wasm (see also separate `tx-types` repo)
@@ -97,4 +97,5 @@ You probably just want to run one of these:
   - `make wipe` to re-flash and erase persistent data (keys)
 - `make serve` to build and serve the demo webui (includes wasm build)
 - `make cli` to build the CLI tool `siger-cli`
+- `target/x86_64-unknown-linux-gnu/release/siger-cli smoke --port hid` to run a non-destructive hardware smoke check
 - `make tauri` to build the desktop app

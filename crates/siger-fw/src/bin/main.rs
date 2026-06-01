@@ -5,6 +5,7 @@ mod gui;
 mod random;
 use panic_halt as _;
 use siger_fw::nvs_store::{NvsError, NvsStore};
+use siger_fw::security::read_security_status;
 extern crate alloc;
 use alloc::vec::Vec;
 use bip32::{ChildNumber, DerivationPath, PublicKey, XPrv};
@@ -12,6 +13,7 @@ use cobs::encode;
 use core::cell::RefCell;
 use critical_section::Mutex;
 use esp_hal::otg_fs::{Usb, UsbBus as OtgUsbBus};
+use esp_hal::rng::Trng;
 use esp_hal::system::{CpuControl, Stack};
 use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
@@ -30,10 +32,8 @@ use zeroize::Zeroize;
 const DEMO_SK: [u8; 32] = [0x11; 32];
 const FW_MAJOR: u16 = 0;
 const FW_MINOR: u16 = 1;
-// feature masks
-const FEAT_CHEETAH: u32 = 1 << 0;
-const FEAT_FRAG: u32 = 1 << 1;
-const FEAT_XPUB: u32 = 1 << 2;
+const FIRMWARE_FEATURES: u32 =
+    FEATURE_CHEETAH | FEATURE_FRAG | FEATURE_XPUB | FEATURE_SECURITY_STATUS;
 // Maximum total size for fragment-assembled payloads (e.g. SignDraft).
 // Keep this bounded to avoid unbounded heap growth on malformed hosts.
 const MAX_FRAG_TOTAL: usize = 64 * 1024;
@@ -615,6 +615,7 @@ fn main() -> ! {
     let cfg = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(cfg);
     esp_alloc::heap_allocator!(size: 64 * 1024);
+    let _trng = Trng::new(p.RNG, p.ADC1);
     let mut delay = Delay::new();
     let mut ui = Gui::new(
         p.SPI2, p.GPIO38, p.GPIO39, p.GPIO45, p.GPIO21, p.GPIO40, p.GPIO46, p.I2C0, p.GPIO41,
@@ -1319,7 +1320,7 @@ fn handle_request_v1(req: &Request) -> Response {
                 proto_v: PROTO_V1,
                 fw_major: FW_MAJOR,
                 fw_minor: FW_MINOR,
-                features: FEAT_CHEETAH | FEAT_FRAG | FEAT_XPUB,
+                features: FIRMWARE_FEATURES,
                 has_seed: has_seed_persisted || has_seed_ram,
                 cheetah_pubs,
             }
@@ -1643,6 +1644,10 @@ fn handle_request_v1(req: &Request) -> Response {
                 locked,
                 attempts_remaining,
             }
+        }
+        Request::GetSecurityStatus => {
+            let mut nvs = NvsStore::new();
+            Response::OkSecurityStatus(read_security_status(&mut nvs))
         }
     }
 }

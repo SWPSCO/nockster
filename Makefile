@@ -6,6 +6,8 @@ WASM_TOOLCHAIN := nightly
 WASM_TARGET := wasm32-unknown-unknown
 FLASH_PORT ?=
 WIPE_PORT ?=
+FW_FEATURES ?=
+FW_FEATURE_ARGS := $(if $(strip $(FW_FEATURES)),--features "$(FW_FEATURES)",)
 .PHONY: all build flash test clean fw cli core wasm js web tauri tauri-dev tauri-build
 
 all: build
@@ -14,7 +16,7 @@ build: fw cli web
 
 fw:
 	@. $(HOME)/export-esp.sh && \
-	cargo +esp -Zbuild-std=core,alloc build -p siger-fw --release --target $(TARGET_ESP)
+	cargo +esp -Zbuild-std=core,alloc build -p siger-fw --release --target $(TARGET_ESP) $(FW_FEATURE_ARGS)
 
 flash: fw
 	@if [[ -n "$(FLASH_PORT)" ]]; then \

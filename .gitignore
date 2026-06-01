@@ -22,6 +22,16 @@ target
 *.tx
 ./*.bin
 ./*.json
+
+# Local hardware test artifacts and secrets.
+/.envrc
+/.envrc.secret
+/flash-out*.txt
+/seed.txt
+/*.seed
+/*.signed
+/*.wallet
+/*.psnt
 dist
 node_modules
 pkg

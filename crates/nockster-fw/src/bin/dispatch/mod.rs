@@ -65,13 +65,12 @@ pub fn handle_metadata_request(
         })),
         Request::GetInfo => {
             let mut nvs = NvsStore::new();
-            let stored_pubs = nvs.list_seed_pubs().unwrap_or_default();
-            let has_seed_persisted = !stored_pubs.is_empty() || nvs.is_initialized();
+            let has_seed_persisted = nvs.is_initialized();
             let has_seed_ram = session::has_seed();
-            let cheetah_pubs = if stored_pubs.is_empty() && has_seed_ram {
+            let cheetah_pubs = if has_seed_ram {
                 seed_store::collect_info_pubs_from_ram()
             } else {
-                stored_pubs
+                alloc::vec::Vec::new()
             };
             Some(Response::Info {
                 proto_v: PROTO_V1,

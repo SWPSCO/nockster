@@ -238,19 +238,6 @@ pub fn compute_seed_op_outcome(mut request: SeedOpRequest) -> SeedOpOutcome {
     }
 }
 
-pub fn zeroize_seed_op_request(request: &mut SeedOpRequest) {
-    match &mut request.op {
-        SeedOp::Add { seed64, master_key } => {
-            seed64.zeroize();
-            master_key.zeroize();
-        }
-        SeedOp::Delete { master_key, .. } => {
-            master_key.zeroize();
-        }
-        SeedOp::Reset => {}
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeedOpUiEffect {
     None,

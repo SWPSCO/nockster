@@ -36,8 +36,8 @@ use heapless::{String as HString, Vec as HVec};
 use jobs::{
     ChangePinController, ChangePinOutcome, ChangePinRequest, DirectSignController,
     DirectSignOutcome, DirectSignRequest, InitPinController, InitPinOutcome, InitPinRequest,
-    SeedOp, SeedOpController, SeedOpOutcome, SeedOpRequest, SignDraftController, SignDraftOutcome,
-    SignDraftRequest, UnlockController, UnlockOutcome,
+    SeedOp, SeedOpOutcome, SeedOpRequest, SignDraftController, SignDraftOutcome, SignDraftRequest,
+    UnlockController, UnlockOutcome,
 };
 use nockster_core::*;
 use protocol::{send_err, send_msg, send_response};
@@ -328,16 +328,20 @@ fn compute_initpin_outcome(
 
     set_initpin_progress(InitPinProgress::RootPub);
     let pub_xy = root_pub_from_seed(&seed64);
-    match nvs.initialize_pin_with_pepper_and_progress(
+    match nvs.prepare_initialize_pin_with_pepper_and_progress(
         pin.as_str(),
         &seed64,
         pub_xy,
         &mut state.nvs_pepper,
         nvs_init_progress,
     ) {
-        Ok((master_key, _slot)) => {
-            set_initpin_progress(InitPinProgress::Complete);
-            InitPinOutcome::Success { seed64, master_key }
+        Ok((prepared, master_key, _slot)) => {
+            set_initpin_progress(InitPinProgress::NvsWriteFlash);
+            InitPinOutcome::Prepared {
+                seed64,
+                master_key,
+                prepared,
+            }
         }
         Err(NvsError::AlreadyInitialized) => {
             seed64.zeroize();
@@ -372,20 +376,16 @@ fn compute_change_pin_outcome(
         new_pin,
     } = request;
     let mut nvs = NvsStore::new();
-    match nvs.change_pin_with_pepper(
+    match nvs.prepare_change_pin_with_pepper(
         current_pin.as_str(),
         new_pin.as_str(),
         &mut state.nvs_pepper,
     ) {
-        Ok(()) => match nvs.unlock_with_pepper(new_pin.as_str(), &mut state.nvs_pepper) {
-            Ok((seeds, master_key)) => ChangePinOutcome::Success {
-                msg_id,
-                seeds,
-                master_key,
-            },
-            Err(NvsError::Flash) => ChangePinOutcome::Flash { msg_id },
-            Err(NvsError::Crypto) => ChangePinOutcome::Crypto { msg_id },
-            Err(_) => ChangePinOutcome::Failed { msg_id },
+        Ok((prepared, seeds, master_key)) => ChangePinOutcome::Prepared {
+            msg_id,
+            seeds,
+            master_key,
+            prepared,
         },
         Err(NvsError::WrongPin) => ChangePinOutcome::WrongPin { msg_id },
         Err(NvsError::LockedOut) => ChangePinOutcome::LockedOut { msg_id },
@@ -452,10 +452,6 @@ fn compute_direct_sign_outcome(
         msg_id: request.msg_id,
         response,
     }
-}
-
-fn compute_seed_op_outcome(_state: &mut AppCoreState<'_>, request: SeedOpRequest) -> SeedOpOutcome {
-    seed_store::compute_seed_op_outcome(request)
 }
 
 fn tx_review_summary_from_draft(
@@ -587,6 +583,69 @@ fn begin_confirmation(
     Ok(())
 }
 
+enum AddressBookFragmentResult {
+    NotAddressBook,
+    Immediate(Response),
+}
+
+fn maybe_handle_address_book_fragment(
+    frame: &Frame,
+    ui: Option<&mut Gui<'_>>,
+) -> AddressBookFragmentResult {
+    let Frame::FragPart {
+        id,
+        offset,
+        chunk,
+        last,
+    } = frame
+    else {
+        return AddressBookFragmentResult::NotAddressBook;
+    };
+
+    let Some(mut st) = fragments::take_inbound() else {
+        return AddressBookFragmentResult::NotAddressBook;
+    };
+    if st.kind != FragKind::AddressBook {
+        fragments::put_inbound(st);
+        return AddressBookFragmentResult::NotAddressBook;
+    }
+    if st.id != *id || st.next_off != *offset {
+        fragments::put_inbound(st);
+        return AddressBookFragmentResult::Immediate(Response::Err {
+            code: ERR_BAD_COBS_OR_POSTCARD,
+        });
+    }
+    if st.buf.len() + chunk.len() > (st.total_len as usize) {
+        fragments::put_inbound(st);
+        return AddressBookFragmentResult::Immediate(Response::Err { code: ERR_OVERFLOW });
+    }
+
+    st.buf.extend_from_slice(chunk.as_slice());
+    st.next_off += chunk.len() as u32;
+    if !*last {
+        fragments::put_inbound(st);
+        return AddressBookFragmentResult::Immediate(Response::Ok);
+    }
+    if st.next_off != st.total_len {
+        return AddressBookFragmentResult::Immediate(Response::Err {
+            code: ERR_BAD_COBS_OR_POSTCARD,
+        });
+    }
+    if is_device_locked() {
+        return AddressBookFragmentResult::Immediate(Response::Err {
+            code: ERR_DEVICE_LOCKED,
+        });
+    }
+
+    if let Some(ui) = ui {
+        ui.show_idle_message_timed("Saving address", Duration::from_millis(1_500));
+    }
+    AddressBookFragmentResult::Immediate(dispatch::write_address_book_payload(
+        st.buf.as_slice(),
+        is_device_locked(),
+    ))
+}
+
 fn take_pending_confirmation() -> Option<PendingConfirmation> {
     critical_section::with(|cs| {
         let mut slot = PENDING_CONFIRMATION.borrow_ref_mut(cs);
@@ -653,7 +712,6 @@ fn main() -> ! {
                 compute_sign_draft_outcome,
                 compute_direct_sign_outcome,
                 compute_change_pin_outcome,
-                compute_seed_op_outcome,
             )
         })
         .expect("failed to start app core");
@@ -663,7 +721,6 @@ fn main() -> ! {
     let mut sign_draft_controller = SignDraftController::new();
     let mut direct_sign_controller = DirectSignController::new();
     let mut change_pin_controller = ChangePinController::new();
-    let mut seed_op_controller = SeedOpController::new();
     let mut pending_seed_setup = PendingSeedSetup::new();
     let mut pending_seed_pin: Option<HString<16>> = None;
     let mut pending_pin_change: Option<PendingPinChange> = None;
@@ -717,20 +774,10 @@ fn main() -> ! {
                                         master_key,
                                     },
                                 };
-                                match seed_op_controller.submit(request) {
-                                    Ok(()) => {
-                                        set_device_busy(true);
-                                        None
-                                    }
-                                    Err(mut request) => {
-                                        seed_store::zeroize_seed_op_request(&mut request);
-                                        set_device_busy(false);
-                                        return_response_msg(
-                                            request.msg_id,
-                                            Response::Err { code: ERR_BUSY },
-                                        )
-                                    }
-                                }
+                                let outcome = seed_store::compute_seed_op_outcome(request);
+                                let (msg_id, response) =
+                                    handle_seed_op_outcome(outcome, Some(&mut *ui), &mut hid);
+                                return_response_msg(msg_id, response)
                             } else {
                                 return_response_msg(
                                     pending.msg_id,
@@ -744,21 +791,12 @@ fn main() -> ! {
                                 msg_id: pending.msg_id,
                                 op: SeedOp::Reset,
                             };
-                            match seed_op_controller.submit(request) {
-                                Ok(()) => {
-                                    wipe_seed();
-                                    clear_master_key();
-                                    set_device_busy(true);
-                                    None
-                                }
-                                Err(request) => {
-                                    set_device_busy(false);
-                                    return_response_msg(
-                                        request.msg_id,
-                                        Response::Err { code: ERR_BUSY },
-                                    )
-                                }
-                            }
+                            let outcome = seed_store::compute_seed_op_outcome(request);
+                            wipe_seed();
+                            clear_master_key();
+                            let (msg_id, response) =
+                                handle_seed_op_outcome(outcome, Some(&mut *ui), &mut hid);
+                            return_response_msg(msg_id, response)
                         } else if is_direct_sign_frame(&pending.frame) {
                             let request = DirectSignRequest {
                                 msg_id: pending.msg_id,
@@ -1110,15 +1148,6 @@ fn main() -> ! {
             send_response(&mut hid, msg_id, response, &mut plain, &mut enc);
             set_device_busy(false);
         }
-        if let Some(outcome) = seed_op_controller.poll() {
-            let (msg_id, response) = if let Some(ui_ref) = ui.as_mut() {
-                handle_seed_op_outcome(outcome, Some(ui_ref), &mut hid)
-            } else {
-                handle_seed_op_outcome(outcome, None, &mut hid)
-            };
-            send_response(&mut hid, msg_id, response, &mut plain, &mut enc);
-            set_device_busy(false);
-        }
         // 1) Proactive outbound frag, if any
         if let Some(mut of) = fragments::take_outbound() {
             let start = of.off as usize;
@@ -1187,237 +1216,249 @@ fn main() -> ! {
                         }
                         if b == 0 {
                             // decode Msg<Frame>
-                            let resp_msg =
-                                match postcard::from_bytes_cobs::<Msg<Frame>>(rx.as_mut()) {
-                                    Ok(m) if m.v == PROTO_V1 => {
-                                        if update_auth::stream_active()
-                                            && !update_mode_allows_frame(&m.msg)
-                                        {
+                            let resp_msg = match postcard::from_bytes_cobs::<Msg<Frame>>(
+                                rx.as_mut(),
+                            ) {
+                                Ok(m) if m.v == PROTO_V1 => {
+                                    if update_auth::stream_active()
+                                        && !update_mode_allows_frame(&m.msg)
+                                    {
+                                        Some(Msg {
+                                            v: PROTO_V1,
+                                            id: m.id,
+                                            msg: Response::Err { code: ERR_BUSY },
+                                        })
+                                    } else {
+                                        // Check if device is busy with a long operation (PBKDF2, etc.)
+                                        // Reject all requests except Ping/GetInfo to prevent queue buildup
+                                        let is_blocking_request = device_busy();
+                                        let is_ping_or_info = matches!(
+                                            &m.msg,
+                                            Frame::One(Request::Ping)
+                                                | Frame::One(Request::GetInfo)
+                                        );
+
+                                        if is_blocking_request && !is_ping_or_info {
                                             Some(Msg {
                                                 v: PROTO_V1,
                                                 id: m.id,
                                                 msg: Response::Err { code: ERR_BUSY },
                                             })
-                                        } else {
-                                            // Check if device is busy with a long operation (PBKDF2, etc.)
-                                            // Reject all requests except Ping/GetInfo to prevent queue buildup
-                                            let is_blocking_request = device_busy();
-                                            let is_ping_or_info = matches!(
-                                                &m.msg,
-                                                Frame::One(Request::Ping)
-                                                    | Frame::One(Request::GetInfo)
-                                            );
-
-                                            if is_blocking_request && !is_ping_or_info {
+                                        } else if let Frame::One(Request::Unlock { pin }) = &m.msg {
+                                            if let Some(ui) = ui.as_mut() {
+                                                ui.show_unlocking();
+                                            }
+                                            match unlock_controller.submit(pin.as_str()) {
+                                                Ok(()) => {
+                                                    set_device_busy(true);
+                                                    set_pending_usb_unlock_id(m.id);
+                                                    None
+                                                }
+                                                Err(()) => Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err { code: ERR_BUSY },
+                                                }),
+                                            }
+                                        } else if let Frame::One(Request::InitializePIN {
+                                            pin,
+                                            seed64,
+                                        }) = &m.msg
+                                        {
+                                            if let Some(ui) = ui.as_mut() {
+                                                ui.show_unlocking();
+                                            }
+                                            match initpin_controller.submit(pin.as_str(), seed64) {
+                                                Ok(()) => {
+                                                    set_initpin_progress(InitPinProgress::Queued);
+                                                    set_device_busy(true);
+                                                    set_pending_usb_initpin_id(m.id);
+                                                    None
+                                                }
+                                                Err(()) => Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err { code: ERR_BUSY },
+                                                }),
+                                            }
+                                        } else if let Frame::One(Request::AddSeed { seed64 }) =
+                                            &m.msg
+                                        {
+                                            if is_device_locked() {
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err {
+                                                        code: ERR_DEVICE_LOCKED,
+                                                    },
+                                                })
+                                            } else if let Some(master_key) = master_key_copy() {
+                                                let request = SeedOpRequest {
+                                                    msg_id: m.id,
+                                                    op: SeedOp::Add {
+                                                        seed64: *seed64,
+                                                        master_key,
+                                                    },
+                                                };
+                                                if let Some(ui) = ui.as_mut() {
+                                                    ui.show_unlocking_stage("Seed: add");
+                                                }
+                                                let outcome =
+                                                    seed_store::compute_seed_op_outcome(request);
+                                                let (msg_id, body) = {
+                                                    let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                                    handle_seed_op_outcome(
+                                                        outcome, ui_ref, &mut hid,
+                                                    )
+                                                };
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: msg_id,
+                                                    msg: body,
+                                                })
+                                            } else {
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err {
+                                                        code: ERR_DEVICE_LOCKED,
+                                                    },
+                                                })
+                                            }
+                                        } else if let Frame::One(Request::ResetPIN {
+                                            current_pin,
+                                            new_pin,
+                                        }) = &m.msg
+                                        {
+                                            if is_device_locked() {
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err {
+                                                        code: ERR_DEVICE_LOCKED,
+                                                    },
+                                                })
+                                            } else {
+                                                let mut current_pin_buf = HString::<16>::new();
+                                                let mut new_pin_buf = HString::<16>::new();
+                                                if current_pin_buf
+                                                    .push_str(current_pin.as_str())
+                                                    .is_err()
+                                                    || new_pin_buf
+                                                        .push_str(new_pin.as_str())
+                                                        .is_err()
+                                                {
+                                                    Some(Msg {
+                                                        v: PROTO_V1,
+                                                        id: m.id,
+                                                        msg: Response::Err {
+                                                            code: ERR_BAD_COBS_OR_POSTCARD,
+                                                        },
+                                                    })
+                                                } else {
+                                                    let request = ChangePinRequest {
+                                                        msg_id: m.id,
+                                                        current_pin: current_pin_buf,
+                                                        new_pin: new_pin_buf,
+                                                    };
+                                                    match change_pin_controller.submit(request) {
+                                                        Ok(()) => {
+                                                            set_device_busy(true);
+                                                            None
+                                                        }
+                                                        Err(_) => Some(Msg {
+                                                            v: PROTO_V1,
+                                                            id: m.id,
+                                                            msg: Response::Err { code: ERR_BUSY },
+                                                        }),
+                                                    }
+                                                }
+                                            }
+                                        } else if let Frame::One(Request::ChangePinOnDevice {
+                                            current_pin,
+                                        }) = &m.msg
+                                        {
+                                            if ui.is_none() {
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err {
+                                                        code: ERR_UNSUPPORTED_VERSION,
+                                                    },
+                                                })
+                                            } else if pending_pin_change.is_some() {
                                                 Some(Msg {
                                                     v: PROTO_V1,
                                                     id: m.id,
                                                     msg: Response::Err { code: ERR_BUSY },
                                                 })
-                                            } else if let Frame::One(Request::Unlock { pin }) =
-                                                &m.msg
-                                            {
-                                                if let Some(ui) = ui.as_mut() {
-                                                    ui.show_unlocking();
-                                                }
-                                                match unlock_controller.submit(pin.as_str()) {
-                                                    Ok(()) => {
-                                                        set_device_busy(true);
-                                                        set_pending_usb_unlock_id(m.id);
-                                                        None
-                                                    }
-                                                    Err(()) => Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: Response::Err { code: ERR_BUSY },
-                                                    }),
-                                                }
-                                            } else if let Frame::One(Request::InitializePIN {
-                                                pin,
-                                                seed64,
-                                            }) = &m.msg
-                                            {
-                                                if let Some(ui) = ui.as_mut() {
-                                                    ui.show_unlocking();
-                                                }
-                                                match initpin_controller
-                                                    .submit(pin.as_str(), seed64)
+                                            } else {
+                                                let mut current_pin_buf = HString::<16>::new();
+                                                if current_pin_buf
+                                                    .push_str(current_pin.as_str())
+                                                    .is_err()
                                                 {
-                                                    Ok(()) => {
-                                                        set_initpin_progress(
-                                                            InitPinProgress::Queued,
-                                                        );
-                                                        set_device_busy(true);
-                                                        set_pending_usb_initpin_id(m.id);
-                                                        None
-                                                    }
-                                                    Err(()) => Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: Response::Err { code: ERR_BUSY },
-                                                    }),
-                                                }
-                                            } else if let Frame::One(Request::AddSeed { seed64 }) =
-                                                &m.msg
-                                            {
-                                                if is_device_locked() {
                                                     Some(Msg {
                                                         v: PROTO_V1,
                                                         id: m.id,
                                                         msg: Response::Err {
-                                                            code: ERR_DEVICE_LOCKED,
-                                                        },
-                                                    })
-                                                } else if let Some(master_key) = master_key_copy() {
-                                                    let request = SeedOpRequest {
-                                                        msg_id: m.id,
-                                                        op: SeedOp::Add {
-                                                            seed64: *seed64,
-                                                            master_key,
-                                                        },
-                                                    };
-                                                    match seed_op_controller.submit(request) {
-                                                        Ok(()) => {
-                                                            set_device_busy(true);
-                                                            if let Some(ui) = ui.as_mut() {
-                                                                ui.show_unlocking_stage(
-                                                                    "Seed: add",
-                                                                );
-                                                            }
-                                                            None
-                                                        }
-                                                        Err(mut request) => {
-                                                            seed_store::zeroize_seed_op_request(
-                                                                &mut request,
-                                                            );
-                                                            Some(Msg {
-                                                                v: PROTO_V1,
-                                                                id: request.msg_id,
-                                                                msg: Response::Err {
-                                                                    code: ERR_BUSY,
-                                                                },
-                                                            })
-                                                        }
-                                                    }
-                                                } else {
-                                                    Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: Response::Err {
-                                                            code: ERR_DEVICE_LOCKED,
-                                                        },
-                                                    })
-                                                }
-                                            } else if let Frame::One(Request::ResetPIN {
-                                                current_pin,
-                                                new_pin,
-                                            }) = &m.msg
-                                            {
-                                                if is_device_locked() {
-                                                    Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: Response::Err {
-                                                            code: ERR_DEVICE_LOCKED,
+                                                            code: ERR_BAD_COBS_OR_POSTCARD,
                                                         },
                                                     })
                                                 } else {
-                                                    let mut current_pin_buf = HString::<16>::new();
-                                                    let mut new_pin_buf = HString::<16>::new();
-                                                    if current_pin_buf
-                                                        .push_str(current_pin.as_str())
-                                                        .is_err()
-                                                        || new_pin_buf
-                                                            .push_str(new_pin.as_str())
-                                                            .is_err()
-                                                    {
-                                                        Some(Msg {
-                                                            v: PROTO_V1,
-                                                            id: m.id,
-                                                            msg: Response::Err {
-                                                                code: ERR_BAD_COBS_OR_POSTCARD,
-                                                            },
-                                                        })
-                                                    } else {
-                                                        let request = ChangePinRequest {
+                                                    pending_pin_change =
+                                                        Some(PendingPinChange::New {
                                                             msg_id: m.id,
                                                             current_pin: current_pin_buf,
-                                                            new_pin: new_pin_buf,
-                                                        };
-                                                        match change_pin_controller.submit(request)
-                                                        {
-                                                            Ok(()) => {
-                                                                set_device_busy(true);
-                                                                None
-                                                            }
-                                                            Err(_) => Some(Msg {
-                                                                v: PROTO_V1,
-                                                                id: m.id,
-                                                                msg: Response::Err {
-                                                                    code: ERR_BUSY,
-                                                                },
-                                                            }),
-                                                        }
+                                                        });
+                                                    set_device_busy(true);
+                                                    if let Some(ui) = ui.as_mut() {
+                                                        ui.begin_pin_entry("New PIN", None);
                                                     }
+                                                    None
                                                 }
-                                            } else if let Frame::One(Request::ChangePinOnDevice {
-                                                current_pin,
-                                            }) = &m.msg
-                                            {
-                                                if ui.is_none() {
-                                                    Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: Response::Err {
-                                                            code: ERR_UNSUPPORTED_VERSION,
-                                                        },
-                                                    })
-                                                } else if pending_pin_change.is_some() {
-                                                    Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: Response::Err { code: ERR_BUSY },
-                                                    })
-                                                } else {
-                                                    let mut current_pin_buf = HString::<16>::new();
-                                                    if current_pin_buf
-                                                        .push_str(current_pin.as_str())
-                                                        .is_err()
-                                                    {
-                                                        Some(Msg {
-                                                            v: PROTO_V1,
-                                                            id: m.id,
-                                                            msg: Response::Err {
-                                                                code: ERR_BAD_COBS_OR_POSTCARD,
-                                                            },
-                                                        })
-                                                    } else {
-                                                        pending_pin_change =
-                                                            Some(PendingPinChange::New {
-                                                                msg_id: m.id,
-                                                                current_pin: current_pin_buf,
-                                                            });
-                                                        set_device_busy(true);
-                                                        if let Some(ui) = ui.as_mut() {
-                                                            ui.begin_pin_entry("New PIN", None);
-                                                        }
-                                                        None
-                                                    }
+                                            }
+                                        } else if let Frame::One(Request::StartTouchCalibration) =
+                                            &m.msg
+                                        {
+                                            let begin_result = {
+                                                let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                                dispatch::begin_touch_calibration(ui_ref)
+                                            };
+                                            match begin_result {
+                                                Ok(()) => {
+                                                    pending_touch_calibration_id = Some(m.id);
+                                                    set_device_busy(true);
+                                                    None
                                                 }
-                                            } else if let Frame::One(
-                                                Request::StartTouchCalibration,
-                                            ) = &m.msg
+                                                Err(code) => Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err { code },
+                                                }),
+                                            }
+                                        } else {
+                                            // Show GUI lock screen if lock request comes over USB
+                                            if let Frame::One(Request::Lock) = &m.msg {
+                                                if let Some(ui) = ui.as_mut() {
+                                                    ui.begin_unlock(None);
+                                                }
+                                            }
+
+                                            if let Some(prompt) = frame_confirmation_prompt(&m.msg)
                                             {
+                                                let frame_clone = m.msg.clone();
                                                 let begin_result = {
                                                     let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
-                                                    dispatch::begin_touch_calibration(ui_ref)
+                                                    begin_confirmation(
+                                                        m.id,
+                                                        frame_clone,
+                                                        prompt,
+                                                        ui_ref,
+                                                    )
                                                 };
                                                 match begin_result {
-                                                    Ok(()) => {
-                                                        pending_touch_calibration_id = Some(m.id);
-                                                        set_device_busy(true);
-                                                        None
-                                                    }
+                                                    Ok(()) => None,
                                                     Err(code) => Some(Msg {
                                                         v: PROTO_V1,
                                                         id: m.id,
@@ -1425,129 +1466,119 @@ fn main() -> ! {
                                                     }),
                                                 }
                                             } else {
-                                                // Show GUI lock screen if lock request comes over USB
-                                                if let Frame::One(Request::Lock) = &m.msg {
-                                                    if let Some(ui) = ui.as_mut() {
-                                                        ui.begin_unlock(None);
-                                                    }
-                                                }
-
-                                                if let Some(prompt) =
-                                                    frame_confirmation_prompt(&m.msg)
-                                                {
-                                                    let frame_clone = m.msg.clone();
-                                                    let begin_result = {
-                                                        let ui_ref =
-                                                            ui.as_mut().map(|u| u as &mut Gui);
-                                                        begin_confirmation(
-                                                            m.id,
-                                                            frame_clone,
-                                                            prompt,
-                                                            ui_ref,
-                                                        )
-                                                    };
-                                                    match begin_result {
-                                                        Ok(()) => None,
-                                                        Err(code) => Some(Msg {
+                                                let address_book_result = {
+                                                    let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                                    maybe_handle_address_book_fragment(
+                                                        &m.msg, ui_ref,
+                                                    )
+                                                };
+                                                match address_book_result {
+                                                    AddressBookFragmentResult::Immediate(body) => {
+                                                        Some(Msg {
                                                             v: PROTO_V1,
                                                             id: m.id,
-                                                            msg: Response::Err { code },
-                                                        }),
+                                                            msg: body,
+                                                        })
                                                     }
-                                                } else {
-                                                    let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
-                                                    let body =
-                                                        handle_frame_v1(m.id, &m.msg, ui_ref);
+                                                    AddressBookFragmentResult::NotAddressBook => {
+                                                        let ui_ref =
+                                                            ui.as_mut().map(|u| u as &mut Gui);
+                                                        let body =
+                                                            handle_frame_v1(m.id, &m.msg, ui_ref);
 
-                                                    if let Frame::One(Request::Reboot) = &m.msg {
-                                                        if let Some(ui) = ui.as_mut() {
-                                                            ui.show_idle_message_timed(
-                                                                "Rebooting...",
-                                                                Duration::from_millis(1_000),
-                                                            );
-                                                        }
-                                                    }
-
-                                                    // Show result on GUI after unlock completes
-                                                    if let Frame::One(Request::Unlock { .. }) =
-                                                        &m.msg
-                                                    {
-                                                        if let Some(ui) = ui.as_mut() {
-                                                            match &body {
-                                                                Response::Ok => {
-                                                                    ui.show_unlock_success()
-                                                                }
-                                                                Response::Err { code }
-                                                                    if *code == ERR_WRONG_PIN =>
-                                                                {
-                                                                    // Get attempts remaining from lock status
-                                                                    let mut nvs = NvsStore::new();
-                                                                    let remaining = nvs
-                                                                        .get_attempts_remaining();
-                                                                    ui.show_pin_failure(
-                                                                        if remaining > 0 {
-                                                                            Some(remaining)
-                                                                        } else {
-                                                                            None
-                                                                        },
-                                                                    );
-                                                                }
-                                                                Response::Err { code }
-                                                                    if *code
-                                                                        == ERR_PIN_LOCKED_OUT =>
-                                                                {
-                                                                    ui.show_pin_locked_out();
-                                                                }
-                                                                _ => {}
+                                                        if let Frame::One(Request::Reboot) = &m.msg
+                                                        {
+                                                            if let Some(ui) = ui.as_mut() {
+                                                                ui.show_idle_message_timed(
+                                                                    "Rebooting...",
+                                                                    Duration::from_millis(1_000),
+                                                                );
                                                             }
                                                         }
-                                                    }
 
-                                                    // Show result on GUI after seeding completes
-                                                    if let Frame::One(Request::InitializePIN {
-                                                        ..
-                                                    }) = &m.msg
-                                                    {
-                                                        if let Some(ui) = ui.as_mut() {
-                                                            match &body {
-                                                            Response::Ok => {
-                                                                ui.show_unlock_success()
+                                                        // Show result on GUI after unlock completes
+                                                        if let Frame::One(Request::Unlock {
+                                                            ..
+                                                        }) = &m.msg
+                                                        {
+                                                            if let Some(ui) = ui.as_mut() {
+                                                                match &body {
+                                                                        Response::Ok => ui
+                                                                            .show_unlock_success(),
+                                                                        Response::Err { code }
+                                                                            if *code
+                                                                                == ERR_WRONG_PIN =>
+                                                                        {
+                                                                            // Get attempts remaining from lock status
+                                                                            let mut nvs =
+                                                                                NvsStore::new();
+                                                                            let remaining = nvs
+                                                                                .get_attempts_remaining();
+                                                                            ui.show_pin_failure(
+                                                                                if remaining > 0 {
+                                                                                    Some(remaining)
+                                                                                } else {
+                                                                                    None
+                                                                                },
+                                                                            );
+                                                                        }
+                                                                        Response::Err { code }
+                                                                            if *code
+                                                                                == ERR_PIN_LOCKED_OUT =>
+                                                                        {
+                                                                            ui.show_pin_locked_out();
+                                                                        }
+                                                                        _ => {}
+                                                                    }
                                                             }
-                                                            Response::Err { code }
-                                                                if *code
-                                                                    == ERR_ALREADY_INITIALIZED =>
-                                                            {
-                                                                ui.begin_unlock(None);
-                                                            }
-                                                            _ => ui.show_seed_setup(),
                                                         }
-                                                        }
-                                                    }
 
-                                                    Some(Msg {
-                                                        v: PROTO_V1,
-                                                        id: m.id,
-                                                        msg: body,
-                                                    })
+                                                        // Show result on GUI after seeding completes
+                                                        if let Frame::One(
+                                                            Request::InitializePIN { .. },
+                                                        ) = &m.msg
+                                                        {
+                                                            if let Some(ui) = ui.as_mut() {
+                                                                match &body {
+                                                                        Response::Ok => ui
+                                                                            .show_unlock_success(),
+                                                                        Response::Err { code }
+                                                                            if *code
+                                                                                == ERR_ALREADY_INITIALIZED =>
+                                                                        {
+                                                                            ui.begin_unlock(None);
+                                                                        }
+                                                                        _ => ui.show_seed_setup(),
+                                                                    }
+                                                            }
+                                                        }
+
+                                                        Some(Msg {
+                                                            v: PROTO_V1,
+                                                            id: m.id,
+                                                            msg: body,
+                                                        })
+                                                    }
                                                 }
                                             }
                                         }
                                     }
-                                    Ok(_) => Some(Msg {
-                                        v: PROTO_V1,
-                                        id: 0,
-                                        msg: Response::Err {
-                                            code: ERR_UNSUPPORTED_VERSION,
-                                        },
-                                    }),
-                                    Err(_) => Some(Msg {
-                                        v: PROTO_V1,
-                                        id: 0,
-                                        msg: Response::Err {
-                                            code: ERR_BAD_COBS_OR_POSTCARD,
-                                        },
-                                    }),
-                                };
+                                }
+                                Ok(_) => Some(Msg {
+                                    v: PROTO_V1,
+                                    id: 0,
+                                    msg: Response::Err {
+                                        code: ERR_UNSUPPORTED_VERSION,
+                                    },
+                                }),
+                                Err(_) => Some(Msg {
+                                    v: PROTO_V1,
+                                    id: 0,
+                                    msg: Response::Err {
+                                        code: ERR_BAD_COBS_OR_POSTCARD,
+                                    },
+                                }),
+                            };
                             if let Some(resp_msg) = resp_msg {
                                 if send_msg(&mut hid, &resp_msg, &mut plain, &mut enc).is_err() {
                                     send_err(&mut hid, ERR_ENCODE_TOO_BIG, &mut enc);
@@ -1829,20 +1860,16 @@ fn is_device_locked() -> bool {
 
 fn compute_unlock_outcome(state: &mut AppCoreState<'_>, pin: &str) -> UnlockOutcome {
     let mut nvs = NvsStore::new();
-    match nvs.unlock_with_pepper(pin, &mut state.nvs_pepper) {
-        Ok((seeds, master_key)) => UnlockOutcome::Success { seeds, master_key },
-        Err(NvsError::WrongPin) => {
-            let remaining = nvs.get_attempts_remaining();
-            if remaining == 0 {
-                UnlockOutcome::LockedOut
-            } else {
-                UnlockOutcome::WrongPin {
-                    attempts_remaining: remaining,
-                }
-            }
-        }
+    match nvs.unlock_with_pepper_readonly(pin, &mut state.nvs_pepper) {
+        Ok((seeds, master_key, clear_attempts)) => UnlockOutcome::Success {
+            seeds,
+            master_key,
+            clear_attempts,
+        },
+        Err(NvsError::WrongPin) => UnlockOutcome::WrongPin,
         Err(NvsError::LockedOut) => UnlockOutcome::LockedOut,
         Err(NvsError::NotInitialized) => UnlockOutcome::NotInitialized,
+        Err(NvsError::Flash) => UnlockOutcome::Flash,
         Err(_) => UnlockOutcome::Failed,
     }
 }
@@ -1853,22 +1880,60 @@ fn apply_unlock_success(seeds: &[[u8; 64]], master_key: &[u8; 32]) {
     session::set_locked(false);
 }
 
+fn zeroize_seed_vec_runtime(seeds: &mut [[u8; 64]]) {
+    for seed in seeds {
+        seed.zeroize();
+    }
+}
+
 fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
     outcome: UnlockOutcome,
-    ui: Option<&mut Gui<'_>>,
+    mut ui: Option<&mut Gui<'_>>,
     hid: &mut HIDClass<'_, B>,
 ) -> Response {
     match outcome {
-        UnlockOutcome::Success { seeds, master_key } => {
+        UnlockOutcome::Success {
+            seeds,
+            master_key,
+            clear_attempts,
+        } => {
+            if clear_attempts {
+                if NvsStore::new().clear_pin_attempts().is_err() {
+                    if let Some(ui) = ui.as_mut() {
+                        ui.show_pin_failure(None);
+                    }
+                    usb_debug(hid, b"unlock clear attempts failed\r\n");
+                    return Response::Err { code: ERR_FLASH };
+                }
+            }
             apply_unlock_success(seeds.as_slice(), &master_key);
-            if let Some(ui) = ui {
+            if let Some(ui) = ui.as_mut() {
                 ui.show_unlock_success();
             }
             usb_debug(hid, b"unlock success\r\n");
             Response::Ok
         }
-        UnlockOutcome::WrongPin { attempts_remaining } => {
-            if let Some(ui) = ui {
+        UnlockOutcome::WrongPin => {
+            let attempts_remaining = match NvsStore::new().record_wrong_pin_attempt() {
+                Ok(remaining) => remaining,
+                Err(_) => {
+                    if let Some(ui) = ui.as_mut() {
+                        ui.show_pin_failure(None);
+                    }
+                    usb_debug(hid, b"wrong pin attempt record failed\r\n");
+                    return Response::Err { code: ERR_FLASH };
+                }
+            };
+            if attempts_remaining == 0 {
+                if let Some(ui) = ui.as_mut() {
+                    ui.show_pin_locked_out();
+                }
+                usb_debug(hid, b"pin locked out\r\n");
+                return Response::Err {
+                    code: ERR_PIN_LOCKED_OUT,
+                };
+            }
+            if let Some(ui) = ui.as_mut() {
                 ui.show_pin_failure(Some(attempts_remaining));
             }
             usb_debug(hid, b"wrong pin\r\n");
@@ -1877,7 +1942,7 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
             }
         }
         UnlockOutcome::LockedOut => {
-            if let Some(ui) = ui {
+            if let Some(ui) = ui.as_mut() {
                 ui.show_pin_locked_out();
             }
             usb_debug(hid, b"pin locked out\r\n");
@@ -1886,14 +1951,21 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
             }
         }
         UnlockOutcome::NotInitialized => {
-            if let Some(ui) = ui {
+            if let Some(ui) = ui.as_mut() {
                 ui.show_pin_not_initialized();
             }
             usb_debug(hid, b"pin not set\r\n");
             Response::Err { code: ERR_NO_SEED }
         }
+        UnlockOutcome::Flash => {
+            if let Some(ui) = ui.as_mut() {
+                ui.show_pin_failure(None);
+            }
+            usb_debug(hid, b"unlock flash error\r\n");
+            Response::Err { code: ERR_FLASH }
+        }
         UnlockOutcome::Failed => {
-            if let Some(ui) = ui {
+            if let Some(ui) = ui.as_mut() {
                 ui.show_pin_failure(None);
             }
             usb_debug(hid, b"unlock failed\r\n");
@@ -1904,17 +1976,41 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
 
 fn handle_initpin_outcome<B: usb_device::bus::UsbBus>(
     outcome: InitPinOutcome,
-    ui: Option<&mut Gui<'_>>,
+    mut ui: Option<&mut Gui<'_>>,
     hid: &mut HIDClass<'_, B>,
 ) -> Response {
     match outcome {
-        InitPinOutcome::Success { seed64, master_key } => {
+        InitPinOutcome::Prepared {
+            seed64,
+            master_key,
+            prepared,
+        } => {
             let mut seed64 = seed64;
             let mut master_key = master_key;
+            set_initpin_progress(InitPinProgress::NvsWriteFlash);
+            if let Some(ui) = ui.as_mut() {
+                ui.show_unlocking_stage("Seed: flash");
+            }
+            let commit = NvsStore::new().commit_prepared_initialize_pin(prepared);
+            if let Err(err) = commit {
+                master_key.zeroize();
+                seed64.zeroize();
+                set_initpin_progress(InitPinProgress::Error);
+                if let Some(ui) = ui.as_mut() {
+                    ui.show_seed_setup();
+                }
+                usb_debug(hid, b"pin init flash failed\r\n");
+                return match err {
+                    NvsError::Flash => Response::Err { code: ERR_FLASH },
+                    NvsError::Crypto => Response::Err { code: ERR_CRYPTO },
+                    _ => Response::Err { code: ERR_NO_SEED },
+                };
+            }
+            set_initpin_progress(InitPinProgress::Complete);
             store_master_key(&master_key);
             set_seed(&seed64);
             session::set_locked(false);
-            if let Some(ui) = ui {
+            if let Some(ui) = ui.as_mut() {
                 ui.show_unlock_success();
             }
             usb_debug(hid, b"seed+pin initialized\r\n");
@@ -1965,28 +2061,63 @@ fn show_pin_change_failure(ui: &mut Gui<'_>, message: &str) {
 
 fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
     outcome: ChangePinOutcome,
-    ui: Option<&mut Gui<'_>>,
+    mut ui: Option<&mut Gui<'_>>,
     hid: &mut HIDClass<'_, B>,
 ) -> (u32, Response) {
     match outcome {
-        ChangePinOutcome::Success {
+        ChangePinOutcome::Prepared {
             msg_id,
-            seeds,
-            master_key,
+            mut seeds,
+            mut master_key,
+            prepared,
         } => {
+            if NvsStore::new()
+                .commit_prepared_seed_rewrite(prepared)
+                .is_err()
+            {
+                zeroize_seed_vec_runtime(seeds.as_mut_slice());
+                master_key.zeroize();
+                if let Some(ui) = ui.as_mut() {
+                    show_pin_change_failure(ui, "Flash error");
+                }
+                usb_debug(hid, b"pin change flash error\r\n");
+                return (msg_id, Response::Err { code: ERR_FLASH });
+            }
             apply_unlock_success(seeds.as_slice(), &master_key);
-            if let Some(ui) = ui {
+            zeroize_seed_vec_runtime(seeds.as_mut_slice());
+            master_key.zeroize();
+            if let Some(ui) = ui.as_mut() {
                 ui.show_unlock_success();
             }
             usb_debug(hid, b"pin changed\r\n");
             (msg_id, Response::Ok)
         }
         ChangePinOutcome::WrongPin { msg_id } => {
-            if let Some(ui) = ui {
+            let attempts_remaining = match NvsStore::new().record_wrong_pin_attempt() {
+                Ok(remaining) => remaining,
+                Err(_) => {
+                    if let Some(ui) = ui.as_mut() {
+                        show_pin_change_failure(ui, "Flash error");
+                    }
+                    usb_debug(hid, b"pin change wrong pin record failed\r\n");
+                    return (msg_id, Response::Err { code: ERR_FLASH });
+                }
+            };
+            if attempts_remaining == 0 {
+                if let Some(ui) = ui.as_mut() {
+                    ui.show_pin_locked_out();
+                }
+                usb_debug(hid, b"pin change locked out\r\n");
+                return (
+                    msg_id,
+                    Response::Err {
+                        code: ERR_PIN_LOCKED_OUT,
+                    },
+                );
+            }
+            if let Some(ui) = ui.as_mut() {
                 if session::is_locked() {
-                    let mut nvs = NvsStore::new();
-                    let remaining = nvs.get_attempts_remaining();
-                    ui.show_pin_failure(if remaining > 0 { Some(remaining) } else { None });
+                    ui.show_pin_failure(Some(attempts_remaining));
                 } else {
                     ui.show_idle_message_timed("Bad PIN", Duration::from_millis(3_000));
                 }

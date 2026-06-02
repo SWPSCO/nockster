@@ -256,6 +256,7 @@ function App() {
   const [addressBookPkh, setAddressBookPkh] = useState('');
   const [addressBookStatus, setAddressBookStatus] = useState('');
   const [syncingAddressBook, setSyncingAddressBook] = useState(false);
+  const [walletPanelView, setWalletPanelView] = useState<'slots' | 'addresses'>('slots');
   const [slotBalances, setSlotBalances] = useState<Record<number, SlotBalance>>({});
   const [balanceStatus, setBalanceStatus] = useState('');
   const [syncingBalances, setSyncingBalances] = useState(false);
@@ -1671,6 +1672,7 @@ function App() {
       const reloaded = await device.getAddressBook();
       setDeviceAddressBook(reloaded);
       setAddressBookStatus(successMessage);
+      setWalletPanelView('addresses');
     } catch (error: any) {
       setAddressBookStatus(`Address book save failed: ${error?.message ?? String(error)}`);
     } finally {
@@ -1848,245 +1850,269 @@ function App() {
               <span className="device-pill">{firmwareSummaryLabel}</span>
             </div>
           </div>
-          {deviceKeys.length > 0 && (
+          {(deviceKeys.length > 0 || info?.has_seed) && (
             <div className="section device-panel device-wallet-panel">
               <div className="device-panel-header">
-                <h2>Wallet slots</h2>
-                <div className="device-panel-actions">
-                  {showSeedForm && !isInitialSeed && (
+                <div>
+                  <h2>Wallet</h2>
+                  <div className="wallet-panel-tabs" role="tablist" aria-label="Wallet panel">
                     <button
                       type="button"
-                      onClick={() => setAddSeedExpanded((prev) => !prev)}
-                      className="btn btn-small btn-secondary"
+                      role="tab"
+                      aria-selected={walletPanelView === 'slots'}
+                      className={`wallet-panel-tab ${walletPanelView === 'slots' ? 'active' : ''}`}
+                      onClick={() => setWalletPanelView('slots')}
                     >
-                      {addSeedExpanded ? 'hide seed form' : 'add seed'}
+                      slots
                     </button>
-                  )}
-                  {deviceNockblocksKey.trim() && (
                     <button
                       type="button"
-                      onClick={() => void refreshWalletBalances(false)}
-                      disabled={syncingBalances}
-                      className="btn btn-small btn-secondary"
+                      role="tab"
+                      aria-selected={walletPanelView === 'addresses'}
+                      className={`wallet-panel-tab ${walletPanelView === 'addresses' ? 'active' : ''}`}
+                      onClick={() => setWalletPanelView('addresses')}
                     >
-                      {syncingBalances ? 'balances...' : 'refresh balances'}
+                      addresses{deviceAddressBook.length ? ` ${deviceAddressBook.length}` : ''}
                     </button>
-                  )}
-                </div>
-              </div>
-              <div className="wallet-slot-grid">
-                {slotSummary.map((pub) => {
-                  const storedLabel = seedLabelMap.get(pub.slot) ?? '';
-                  const draftLabel = labelDrafts[pub.slot] ?? storedLabel;
-                  const wallet = walletBySlot.get(pub.slot);
-                  const walletAddress = wallet?.address ?? deriveDevicePkh(pub);
-                  const displayAddress = walletAddress ?? formatDeviceAddress(pub);
-                  const balance = slotBalances[pub.slot];
-                  const balanceText = !deviceNockblocksKey.trim()
-                    ? ''
-                    : balance?.status === 'ok'
-                      ? `${formatNicksCompact(balance.nicks ?? 0)} · ${balance.notes ?? 0} notes`
-                      : balance?.status === 'error'
-                        ? 'balance unavailable'
-                        : syncingBalances ? 'loading balance...' : 'balance not loaded';
-                  return (
-                    <div
-                      key={pub.slot}
-                      className={`wallet-slot-card ${selectedSlot === pub.slot ? 'active' : ''}`}
-                    >
-                      <div className="wallet-slot-head">
-                        <div>
-                          <div className="wallet-slot-title">
-                            {storedLabel || `slot ${pub.slot}`}
-                          </div>
-                          <div className="path-tag">{formatDerivationPath(pub.path)}</div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleSlotChange(pub.slot)}
-                          disabled={deviceBusy || locked !== false || selectedSlot === pub.slot}
-                          className="btn btn-small btn-secondary"
-                        >
-                          {selectedSlot === pub.slot ? 'active' : 'select'}
-                        </button>
-                      </div>
-                      <div className="wallet-slot-label-row">
-                        <input
-                          className="input wallet-label-input"
-                          value={draftLabel}
-                          placeholder="nickname"
-                          maxLength={MAX_SEED_LABEL_LEN}
-                          disabled={!seedLabelsAvailable || locked !== false || savingLabelSlot === pub.slot}
-                          onChange={(event) => {
-                            const next = event.target.value;
-                            setLabelDrafts((current) => ({ ...current, [pub.slot]: next }));
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter') {
-                              void saveSeedLabel(pub.slot);
-                            }
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="btn btn-small btn-secondary"
-                          disabled={
-                            !seedLabelsAvailable ||
-                            locked !== false ||
-                            savingLabelSlot === pub.slot ||
-                            draftLabel.trim() === storedLabel
-                          }
-                          onClick={() => void saveSeedLabel(pub.slot)}
-                        >
-                          {savingLabelSlot === pub.slot ? 'saving...' : 'save'}
-                        </button>
-                      </div>
-                      <div className="wallet-slot-address">
-                        <span className="pubkey-text">{displayAddress}</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigator.clipboard.writeText(displayAddress);
-                            setStatus(`Copied slot ${pub.slot} address to clipboard`);
-                          }}
-                          className="btn btn-small copy-btn"
-                        >
-                          copy
-                        </button>
-                      </div>
-                      {balanceText && (
-                        <div className={`wallet-slot-balance ${balance?.status === 'error' ? 'error' : ''}`}>
-                          {balanceText}
-                          {balance?.status === 'error' && balance.error ? `: ${balance.error}` : ''}
-                        </div>
-                      )}
-                      <div className="wallet-slot-actions">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!walletAddress) {
-                              setAddressBookStatus('Wallet PKH is not ready yet');
-                              return;
-                            }
-                            void saveWalletAddressToDeviceBook(wallet ?? {
-                              slot: pub.slot,
-                              path: pub.path,
-                              pathLabel: formatDerivationPath(pub.path),
-                              address: walletAddress,
-                              alias: storedLabel || `wallet slot ${pub.slot}`,
-                            });
-                          }}
-                          className="btn btn-small btn-secondary"
-                          disabled={
-                            !deviceAddressBookAvailable ||
-                            locked !== false ||
-                            syncingAddressBook ||
-                            !walletAddress
-                          }
-                        >
-                          save to book
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteSeedSlot(pub.slot)}
-                          className="btn btn-small btn-danger"
-                          disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
-                        >
-                          {deletingSlot === pub.slot ? 'removing...' : 'remove'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {balanceStatus && <div className="device-inline-status">{balanceStatus}</div>}
-            </div>
-          )}
-
-          {info?.has_seed && deviceKeys.length === 0 && (
-            <div className="section device-panel device-wallet-panel">
-              <div className="device-panel-header">
-                <h2>Wallet slots</h2>
-              </div>
-              <div className="device-empty-state">Unlock to view wallet slots.</div>
-            </div>
-          )}
-
-          <div className="section device-panel device-address-book-panel">
-            <div className="device-panel-header">
-              <h2>Address book</h2>
-              <div className="device-panel-actions">
-                <button
-                  type="button"
-                  onClick={() => void refreshDeviceAddressBook()}
-                  className="btn btn-small btn-secondary"
-                  disabled={!deviceAddressBookAvailable || locked !== false || syncingAddressBook}
-                >
-                  {syncingAddressBook ? 'loading...' : 'refresh'}
-                </button>
-              </div>
-            </div>
-            {!deviceAddressBookAvailable ? (
-              <div className="device-empty-state">
-                {info ? 'Update firmware to use the on-device address book.' : 'Reading device status...'}
-              </div>
-            ) : locked !== false ? (
-              <div className="device-empty-state">Unlock to edit addresses stored on the device.</div>
-            ) : (
-              <>
-                <div className="device-address-form">
-                  <input
-                    className="input"
-                    value={addressBookLabel}
-                    maxLength={MAX_ADDRESS_BOOK_LABEL_LEN}
-                    placeholder="short label"
-                    disabled={syncingAddressBook}
-                    onChange={(event) => setAddressBookLabel(event.target.value)}
-                  />
-                  <input
-                    className="input"
-                    value={addressBookPkh}
-                    maxLength={MAX_ADDRESS_BOOK_PKH_LEN}
-                    placeholder="recipient pkh"
-                    disabled={syncingAddressBook}
-                    spellCheck={false}
-                    onChange={(event) => setAddressBookPkh(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-small btn-primary"
-                    onClick={() => void addDeviceAddressBookEntry()}
-                    disabled={syncingAddressBook}
-                  >
-                    save address
-                  </button>
-                </div>
-                {deviceAddressBook.length === 0 ? (
-                  <div className="device-empty-state">No saved addresses.</div>
-                ) : (
-                  <div className="device-address-list">
-                    {deviceAddressBook.map((entry, index) => (
-                      <div className="device-address-row" key={`${entry.label}:${entry.pkh}:${index}`}>
-                        <div className="device-address-main">
-                          <strong>{entry.label}</strong>
-                          <span className="pubkey-text">{entry.pkh}</span>
-                        </div>
-                        <button
-                          type="button"
-                          className="btn btn-small btn-danger"
-                          onClick={() => void removeDeviceAddressBookEntry(index)}
-                          disabled={syncingAddressBook}
-                        >
-                          remove
-                        </button>
-                      </div>
-                    ))}
                   </div>
-                )}
-              </>
-            )}
-            {addressBookStatus && <div className="device-inline-status">{addressBookStatus}</div>}
-          </div>
+                </div>
+                <div className="device-panel-actions">
+                  {walletPanelView === 'slots' ? (
+                    <>
+                      {showSeedForm && !isInitialSeed && (
+                        <button
+                          type="button"
+                          onClick={() => setAddSeedExpanded((prev) => !prev)}
+                          className="btn btn-small btn-secondary"
+                        >
+                          {addSeedExpanded ? 'hide seed' : 'add seed'}
+                        </button>
+                      )}
+                      {deviceNockblocksKey.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => void refreshWalletBalances(false)}
+                          disabled={syncingBalances}
+                          className="btn btn-small btn-secondary"
+                        >
+                          {syncingBalances ? 'balances...' : 'balances'}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void refreshDeviceAddressBook()}
+                      className="btn btn-small btn-secondary"
+                      disabled={!deviceAddressBookAvailable || locked !== false || syncingAddressBook}
+                    >
+                      {syncingAddressBook ? 'loading...' : 'refresh'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              {deviceKeys.length === 0 ? (
+                <div className="device-empty-state">Unlock to view wallet slots.</div>
+              ) : walletPanelView === 'slots' ? (
+                <>
+                  <div className="wallet-slot-grid">
+                    {slotSummary.map((pub) => {
+                      const storedLabel = seedLabelMap.get(pub.slot) ?? '';
+                      const draftLabel = labelDrafts[pub.slot] ?? storedLabel;
+                      const wallet = walletBySlot.get(pub.slot);
+                      const walletAddress = wallet?.address ?? deriveDevicePkh(pub);
+                      const displayAddress = walletAddress ?? formatDeviceAddress(pub);
+                      const balance = slotBalances[pub.slot];
+                      const balanceText = !deviceNockblocksKey.trim()
+                        ? ''
+                        : balance?.status === 'ok'
+                          ? `${formatNicksCompact(balance.nicks ?? 0)} · ${balance.notes ?? 0} notes`
+                          : balance?.status === 'error'
+                            ? 'balance unavailable'
+                            : syncingBalances ? 'loading balance...' : 'balance not loaded';
+                      return (
+                        <div
+                          key={pub.slot}
+                          className={`wallet-slot-card ${selectedSlot === pub.slot ? 'active' : ''}`}
+                        >
+                          <div className="wallet-slot-head">
+                            <div>
+                              <div className="wallet-slot-title">
+                                {storedLabel || `slot ${pub.slot}`}
+                              </div>
+                              <div className="path-tag">{formatDerivationPath(pub.path)}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleSlotChange(pub.slot)}
+                              disabled={deviceBusy || locked !== false || selectedSlot === pub.slot}
+                              className="btn btn-small btn-secondary"
+                            >
+                              {selectedSlot === pub.slot ? 'active' : 'select'}
+                            </button>
+                          </div>
+                          <div className="wallet-slot-label-row">
+                            <input
+                              className="input wallet-label-input"
+                              value={draftLabel}
+                              placeholder="nickname"
+                              maxLength={MAX_SEED_LABEL_LEN}
+                              disabled={!seedLabelsAvailable || locked !== false || savingLabelSlot === pub.slot}
+                              onChange={(event) => {
+                                const next = event.target.value;
+                                setLabelDrafts((current) => ({ ...current, [pub.slot]: next }));
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  void saveSeedLabel(pub.slot);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className="btn btn-small btn-secondary"
+                              disabled={
+                                !seedLabelsAvailable ||
+                                locked !== false ||
+                                savingLabelSlot === pub.slot ||
+                                draftLabel.trim() === storedLabel
+                              }
+                              onClick={() => void saveSeedLabel(pub.slot)}
+                            >
+                              {savingLabelSlot === pub.slot ? 'saving...' : 'save'}
+                            </button>
+                          </div>
+                          <div className="wallet-slot-address">
+                            <span className="pubkey-text">{displayAddress}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(displayAddress);
+                                setStatus(`Copied slot ${pub.slot} address to clipboard`);
+                              }}
+                              className="btn btn-small copy-btn"
+                            >
+                              copy
+                            </button>
+                          </div>
+                          {balanceText && (
+                            <div className={`wallet-slot-balance ${balance?.status === 'error' ? 'error' : ''}`}>
+                              {balanceText}
+                              {balance?.status === 'error' && balance.error ? `: ${balance.error}` : ''}
+                            </div>
+                          )}
+                          <div className="wallet-slot-actions">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!walletAddress) {
+                                  setAddressBookStatus('Wallet PKH is not ready yet');
+                                  return;
+                                }
+                                void saveWalletAddressToDeviceBook(wallet ?? {
+                                  slot: pub.slot,
+                                  path: pub.path,
+                                  pathLabel: formatDerivationPath(pub.path),
+                                  address: walletAddress,
+                                  alias: storedLabel || `wallet slot ${pub.slot}`,
+                                });
+                              }}
+                              className="btn btn-small btn-secondary"
+                              disabled={
+                                !deviceAddressBookAvailable ||
+                                locked !== false ||
+                                syncingAddressBook ||
+                                !walletAddress
+                              }
+                            >
+                              save to book
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteSeedSlot(pub.slot)}
+                              className="btn btn-small btn-danger"
+                              disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
+                            >
+                              {deletingSlot === pub.slot ? 'removing...' : 'remove'}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {balanceStatus && <div className="device-inline-status">{balanceStatus}</div>}
+                </>
+              ) : !deviceAddressBookAvailable ? (
+                <div className="device-empty-state">
+                  {info ? 'Address book unavailable on this firmware.' : 'Reading device status...'}
+                </div>
+              ) : locked !== false ? (
+                <div className="device-empty-state">Unlock to edit device addresses.</div>
+              ) : (
+                <>
+                  <div className="device-address-form device-address-form-compact">
+                    <input
+                      className="input"
+                      value={addressBookLabel}
+                      maxLength={MAX_ADDRESS_BOOK_LABEL_LEN}
+                      placeholder="label"
+                      disabled={syncingAddressBook}
+                      onChange={(event) => setAddressBookLabel(event.target.value)}
+                    />
+                    <input
+                      className="input"
+                      value={addressBookPkh}
+                      maxLength={MAX_ADDRESS_BOOK_PKH_LEN}
+                      placeholder="pkh"
+                      disabled={syncingAddressBook}
+                      spellCheck={false}
+                      onChange={(event) => setAddressBookPkh(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-small btn-primary"
+                      onClick={() => void addDeviceAddressBookEntry()}
+                      disabled={syncingAddressBook}
+                    >
+                      save
+                    </button>
+                  </div>
+                  {deviceAddressBook.length === 0 ? (
+                    <div className="device-empty-state">No saved addresses.</div>
+                  ) : (
+                    <div className="device-address-list device-address-list-compact">
+                      {deviceAddressBook.map((entry, index) => (
+                        <div className="device-address-row" key={`${entry.label}:${entry.pkh}:${index}`}>
+                          <div className="device-address-main">
+                            <strong>{entry.label}</strong>
+                            <button
+                              type="button"
+                              className="pubkey-text pubkey-copy"
+                              onClick={() => {
+                                navigator.clipboard.writeText(entry.pkh);
+                                setStatus(`Copied ${entry.label} address`);
+                              }}
+                            >
+                              {entry.pkh}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-small btn-danger"
+                            onClick={() => void removeDeviceAddressBookEntry(index)}
+                            disabled={syncingAddressBook}
+                          >
+                            remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+              {addressBookStatus && <div className="device-inline-status">{addressBookStatus}</div>}
+            </div>
+          )}
 
           {showSeedForm && (isInitialSeed || addSeedExpanded) && (
             <div className="section device-panel device-seed-panel">

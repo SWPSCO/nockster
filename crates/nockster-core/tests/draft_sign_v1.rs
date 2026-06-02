@@ -436,6 +436,7 @@ fn draft_review_v1_reports_totals_and_refund() {
     assert_eq!(review.external_total, 9);
     assert_eq!(review.refund_total, 4);
     assert_eq!(review.fee_total, 10);
+    assert!(review.minimum_fee > 0);
     assert_eq!(
         nockster_core::draft_sign::draft_outputs_v1(&draft_jam, &cfg).expect("draft outputs"),
         review.outputs

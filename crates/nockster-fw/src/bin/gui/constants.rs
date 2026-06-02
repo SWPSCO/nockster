@@ -5,9 +5,9 @@ pub const SCREEN_WIDTH: u16 = 172;
 pub const SCREEN_HEIGHT: u16 = 320;
 pub const DISPLAY_X_OFFSET: u16 = 34;
 pub const RAW_X_MIN: u16 = 0;
-pub const RAW_X_MAX: u16 = 0x0075;
+pub const RAW_X_MAX: u16 = 151;
 pub const RAW_Y_MIN: u16 = 0;
-pub const RAW_Y_MAX: u16 = 0x0120;
+pub const RAW_Y_MAX: u16 = 331;
 pub const MIRROR_X: bool = true;
 
 pub const COLOR_BACKGROUND: Rgb565 = Rgb565::new(2, 4, 8);

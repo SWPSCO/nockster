@@ -11,9 +11,13 @@ import {
   UpdateBundle,
   UpdateStatus,
   SecurityStatus,
+  SeedSlotLabel,
+  DeviceAddressBookEntry,
   MAX_UPDATE_CHUNK_LEN,
   assertUpdateFirmwareMatchesBundle,
   assertUpdateStreamStatus,
+  serializeDeviceAddressBookEntries,
+  deserializeDeviceAddressBookEntries,
 } from './protocol.js';
 
 export interface SerialTransport {
@@ -487,6 +491,70 @@ export class NocksterDevice {
     return resp;
   }
 
+  async getSeedLabels(): Promise<SeedSlotLabel[]> {
+    const resp = await this.call({ type: 'GetSeedLabels' });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkSeedLabels') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp.labels;
+  }
+
+  async setSeedLabel(slot: number, label: string) {
+    const resp = await this.call({ type: 'SetSeedLabel', slot, label });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
+  async getAddressBook(timeoutMs: number = 30000): Promise<DeviceAddressBookEntry[]> {
+    const msgId = this.nextMsgId++;
+    const respP = this.waitForResponse(msgId, () => true, timeoutMs);
+    try {
+      await this.sendFrame(msgId, { type: 'One', request: { type: 'GetAddressBook' } });
+    } catch (error: any) {
+      this.rejectWaitersForMessage(msgId, error instanceof Error ? error : new Error(String(error)));
+      try {
+        await respP;
+      } catch {
+        // Preserve original send error.
+      }
+      throw error;
+    }
+
+    const resp = await respP;
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type === 'OkAddressBook') {
+      return resp.entries;
+    }
+    if (resp.type !== 'FragBegin' || resp.kind !== 'AddressBook') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+
+    const payload = await this.receiveFragBlob(msgId, resp.id, resp.total_len, timeoutMs);
+    return deserializeDeviceAddressBookEntries(payload);
+  }
+
+  async setAddressBook(entries: DeviceAddressBookEntry[], timeoutMs: number = 30000) {
+    const payload = serializeDeviceAddressBookEntries(entries);
+    const resp = await this.sendAddressBookPayload(payload, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
   async setSeed(seed64: Uint8Array) {
     if (seed64.length !== 64) {
       throw new Error('seed must be 64 bytes');
@@ -749,6 +817,46 @@ export class NocksterDevice {
       throw new Error('unexpected FragBegin (id/kind mismatch)');
     }
     return await this.receiveFragBlob(msgId, fragId, ready.total_len, timeoutMs);
+  }
+
+  private async sendAddressBookPayload(payload: Uint8Array, timeoutMs: number): Promise<Response> {
+    const msgId = this.nextMsgId++;
+    const fragId = (this.nextFragId++ & 0xffff) || 1;
+
+    const beginRespP = this.waitForResponse(msgId, () => true, timeoutMs);
+    await this.sendFrame(msgId, {
+      type: 'FragBegin',
+      id: fragId,
+      total_len: payload.length,
+      kind: 'AddressBook',
+    });
+    const beginResp = await beginRespP;
+    if (beginResp.type === 'Err') return beginResp;
+    if (beginResp.type !== 'Ok') {
+      throw new Error(`unexpected response to FragBegin: ${beginResp.type}`);
+    }
+
+    let offset = 0;
+    const maxChunk = 180;
+    let lastResp: Response = beginResp;
+    while (offset < payload.length) {
+      const end = Math.min(payload.length, offset + maxChunk);
+      const chunk = payload.subarray(offset, end);
+      const last = end === payload.length;
+
+      const partRespP = this.waitForResponse(msgId, () => true, timeoutMs);
+      await this.sendFrame(msgId, { type: 'FragPart', id: fragId, offset, chunk, last });
+      const partResp = await partRespP;
+      if (partResp.type === 'Err') return partResp;
+      if (partResp.type !== 'Ok') {
+        throw new Error(`unexpected response to FragPart: ${partResp.type}`);
+      }
+
+      lastResp = partResp;
+      offset = end;
+    }
+
+    return lastResp;
   }
 
   private async receiveFragBlob(

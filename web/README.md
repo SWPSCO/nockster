@@ -11,6 +11,9 @@ and the site streams the signed release.
 - Loads or adds BIP-39 seed phrases through the device protocol.
 - Locks, unlocks, lists seed slots, signs Bythos/V1 drafts, and downloads
   signed transactions.
+- Builds unsigned V1 drafts in the composer, imports wallet pkhs from the
+  connected device, and can sync spendable notes from Nockblocks using an API
+  key saved in browser local storage.
 - Fetches the configured latest firmware release index and installs the signed
   image into the inactive OTA slot.
 - Automatically requests an in-browser reboot after a hosted OTA install when
@@ -38,6 +41,16 @@ hosted build at a different index:
 ```bash
 VITE_NOCKSTER_RELEASE_INDEX_URL=https://example.com/updates/latest.json npm run build
 ```
+
+The composer stores the Nockblocks API key in browser local storage from the
+Nockblocks panel. During `make serve` or `npm run dev`, the panel can also
+prefill from repo-root `nockblocks.key` or `NOCKBLOCKS_API_KEY`; use `save key`
+in the UI to persist it for the browser.
+
+Local development sends Nockblocks RPC through Vite's same-origin
+`/__nockblocks/rpc` proxy to avoid browser CORS restrictions. A hosted composer
+needs the same kind of same-origin proxy unless the upstream RPC enables browser
+CORS for the site.
 
 For local update testing through `make serve`, publish update artifacts into
 Vite's public directory first:

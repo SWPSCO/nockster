@@ -1,8 +1,9 @@
 .composer-layout {
   display: grid;
-  grid-template-columns: clamp(260px, 23vw, 340px) minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: clamp(300px, 21vw, 390px) minmax(640px, 1fr);
+  gap: 8px;
   align-items: stretch;
+  min-height: calc(100vh - 138px);
 }
 
 .composer-layout.sidebar-collapsed {
@@ -24,14 +25,15 @@
 
 .composer-sidebar,
 .composer-inspector {
-  max-height: 78vh;
+  max-height: calc(100vh - 138px);
   overflow: auto;
-  padding: 10px;
+  padding: 8px;
 }
 
 .composer-canvas {
   position: relative;
-  height: 78vh;
+  height: calc(100vh - 138px);
+  min-height: 650px;
   overflow: hidden;
 }
 
@@ -45,22 +47,23 @@
 .composer-subbody {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .composer-group {
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .composer-group h3 {
   font-size: 1rem;
   font-weight: 750;
+  margin: 0;
 }
 
 .composer-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
 }
 
 .composer-item,
@@ -74,7 +77,7 @@
 }
 
 .composer-item {
-  padding: 10px;
+  padding: 8px;
   cursor: default;
   transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
 }
@@ -103,7 +106,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 7px;
   font-weight: 750;
 }
 
@@ -125,8 +128,134 @@
   word-break: break-all;
 }
 
+.composer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.composer-field .node-input {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.composer-action-row .btn {
+  flex: 1 1 82px;
+}
+
+.composer-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.composer-sidebar-title {
+  font-size: 0.86rem;
+  font-weight: 850;
+}
+
+.composer-sidebar-tools {
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.composer-sidebar-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 4px;
+  background: var(--color-panel-soft);
+}
+
+.composer-sidebar-tab {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-muted);
+  font-family: var(--font-base);
+  font-size: 0.74rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.composer-sidebar-tab:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-soft);
+  background: var(--color-panel);
+}
+
+.composer-sidebar-tab.active {
+  border-color: var(--color-border);
+  background: var(--color-text);
+  color: var(--color-panel);
+}
+
+.composer-item-actions {
+  align-items: center;
+}
+
+.composer-item-actions .btn {
+  min-height: 26px;
+  padding: 0 8px;
+}
+
+.composer-api-status {
+  padding: 8px 9px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius);
+  background: var(--color-panel-soft);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.composer-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.composer-result-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 10px;
+  padding: 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius);
+  background: var(--color-panel-soft);
+  font-size: 0.76rem;
+}
+
+.composer-result-grid span {
+  color: var(--color-muted);
+}
+
+.composer-result-grid strong {
+  min-width: 0;
+  text-align: right;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.composer-warn-text {
+  color: #b00020;
+}
+
 .node-card {
-  min-width: 226px;
+  min-width: 230px;
   overflow: visible;
   border-color: var(--color-border);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.09);
@@ -137,7 +266,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 9px 11px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-panel);
   font-weight: 800;
@@ -146,13 +275,15 @@
 .node-header.address,
 .node-header.note,
 .node-header.recipient,
-.node-header.tx {
+.node-header.tx,
+.node-header.preview {
   background: var(--color-panel);
 }
 
 .node-header.address::after,
 .node-header.note::after,
-.node-header.tx::after {
+.node-header.tx::after,
+.node-header.preview::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -177,11 +308,26 @@
   content: "tx";
 }
 
+.node-header.preview::after {
+  content: "view";
+}
+
 .node-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 11px;
+  gap: 7px;
+  padding: 10px;
+}
+
+.preview-node-card {
+  min-width: 300px;
+  max-width: 380px;
+}
+
+.preview-node-mono {
+  max-width: 300px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .node-mono {
@@ -191,8 +337,8 @@
 
 .node-input {
   width: 100%;
-  min-height: 38px;
-  padding: 8px 9px;
+  min-height: 36px;
+  padding: 7px 8px;
   border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
   background: var(--color-panel);
@@ -207,17 +353,25 @@
 }
 
 .node-input-compact {
-  min-height: 34px;
-  padding: 7px 8px;
+  min-height: 32px;
+  padding: 6px 7px;
   font-size: 0.78rem;
 }
 
 .react-flow__handle {
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--color-border);
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--color-border);
   border-radius: 999px;
   background: var(--color-panel);
+}
+
+.react-flow__handle-left {
+  left: -11px;
+}
+
+.react-flow__handle-right {
+  right: -11px;
 }
 
 .react-flow__handle:hover,
@@ -227,8 +381,8 @@
 }
 
 .react-flow__handle.connectionindicator {
-  width: 14px;
-  height: 14px;
+  width: 24px;
+  height: 24px;
 }
 
 .node-actions {
@@ -258,7 +412,7 @@
 }
 
 .composer-drag-chip {
-  height: 24px;
+  height: 22px;
   min-width: 28px;
   padding: 0 7px;
   user-select: none;
@@ -278,11 +432,17 @@
 .inspector-pre {
   max-height: 42vh;
   overflow: auto;
-  padding: 11px;
+  padding: 10px;
   background: var(--color-panel-soft);
   font-size: 0.75rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.tx-preview-pre {
+  max-height: 260px;
+  margin-top: 8px;
+  font-size: 0.68rem;
 }
 
 .inspector-help {
@@ -292,8 +452,8 @@
 
 .composer-canvas-toolbar {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 10px;
+  left: 10px;
   z-index: 20;
   display: flex;
   flex-wrap: wrap;
@@ -312,7 +472,7 @@
 
 .composer-unit-btn {
   min-width: 36px;
-  min-height: 34px;
+  min-height: 30px;
   padding: 0 10px;
   border: 0;
   background: transparent;
@@ -336,7 +496,7 @@
 }
 
 .composer-details + .composer-details {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .composer-summary,
@@ -352,12 +512,12 @@
 }
 
 .composer-summary {
-  padding: 10px 11px;
+  padding: 7px 8px;
   background: var(--color-panel-soft);
 }
 
 .composer-subsummary {
-  padding: 9px 10px;
+  padding: 8px 9px;
   font-weight: 750;
 }
 
@@ -388,7 +548,7 @@ details[open] > .composer-summary::after {
 
 .composer-details-body,
 .composer-subbody {
-  padding: 10px;
+  padding: 8px;
   border-top: 1px solid var(--color-border-soft);
 }
 
@@ -425,7 +585,7 @@ details[open] > .composer-summary::after {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--color-border);
   cursor: move;
   user-select: none;
@@ -437,12 +597,13 @@ details[open] > .composer-summary::after {
 
 .composer-modal-body {
   overflow: auto;
-  padding: 14px;
+  padding: 12px;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1150px) {
   .composer-layout {
     grid-template-columns: 1fr;
+    min-height: 0;
   }
 
   .composer-sidebar,
@@ -451,6 +612,7 @@ details[open] > .composer-summary::after {
   }
 
   .composer-canvas {
-    height: 68vh;
+    height: 70vh;
+    min-height: 520px;
   }
 }

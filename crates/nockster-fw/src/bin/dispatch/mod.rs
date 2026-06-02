@@ -3,9 +3,10 @@ use core::fmt::Write as _;
 #[cfg(test)]
 use nockster_core::Msg;
 use nockster_core::{
-    BuildInfo, Caps, Frame, ReleaseInfo, Request, Response, TouchCalibration, UpdateTrust,
-    ERR_BAD_COBS_OR_POSTCARD, ERR_BUSY, ERR_CRYPTO, ERR_DEVICE_LOCKED, ERR_FLASH, ERR_NO_SEED,
-    ERR_OVERFLOW, ERR_UNSUPPORTED_VERSION, PROTO_V1,
+    BuildInfo, Caps, DeviceAddressBookEntry, Frame, ReleaseInfo, Request, Response,
+    TouchCalibration, UpdateTrust, ERR_BAD_COBS_OR_POSTCARD, ERR_BUSY, ERR_CRYPTO,
+    ERR_DEVICE_LOCKED, ERR_ENCODE_TOO_BIG, ERR_FLASH, ERR_NO_SEED, ERR_OVERFLOW,
+    ERR_UNSUPPORTED_VERSION, PROTO_V1,
 };
 
 use crate::gui::{
@@ -211,6 +212,53 @@ pub fn handle_seed_label_request(req: &Request, locked: bool) -> Option<Response
             })
         }
         _ => None,
+    }
+}
+
+pub fn read_address_book_payload(locked: bool) -> Result<alloc::vec::Vec<u8>, Response> {
+    if locked {
+        return Err(Response::Err {
+            code: ERR_DEVICE_LOCKED,
+        });
+    }
+
+    let mut nvs = NvsStore::new();
+    let entries = match nvs.read_device_address_book() {
+        Ok(entries) => entries,
+        Err(NvsError::Flash) => return Err(Response::Err { code: ERR_FLASH }),
+        Err(_) => alloc::vec::Vec::new(),
+    };
+    postcard::to_allocvec(&entries).map_err(|_| Response::Err {
+        code: ERR_ENCODE_TOO_BIG,
+    })
+}
+
+pub fn write_address_book_payload(payload: &[u8], locked: bool) -> Response {
+    if locked {
+        return Response::Err {
+            code: ERR_DEVICE_LOCKED,
+        };
+    }
+
+    let entries = match postcard::from_bytes::<alloc::vec::Vec<DeviceAddressBookEntry>>(payload) {
+        Ok(entries) => entries,
+        Err(_) => {
+            return Response::Err {
+                code: ERR_BAD_COBS_OR_POSTCARD,
+            };
+        }
+    };
+
+    let mut nvs = NvsStore::new();
+    match nvs.write_device_address_book(entries.as_slice()) {
+        Ok(()) => Response::Ok,
+        Err(NvsError::Full) | Err(NvsError::InvalidLabel) => Response::Err {
+            code: ERR_BAD_COBS_OR_POSTCARD,
+        },
+        Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+        Err(_) => Response::Err {
+            code: ERR_BAD_COBS_OR_POSTCARD,
+        },
     }
 }
 

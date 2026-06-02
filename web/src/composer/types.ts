@@ -22,3 +22,11 @@ export type AddressBookEntry = {
   multisig?: MultisigDescriptor;
   notes?: NoteV1[];
 };
+
+export type WalletAddress = {
+  slot: number;
+  path: number[];
+  pathLabel: string;
+  address: string;
+  alias: string;
+};

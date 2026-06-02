@@ -9,7 +9,7 @@ export type Frame =
   | { type: 'FragBegin'; id: number; total_len: number; kind: FragKind }
   | { type: 'FragPart'; id: number; offset: number; chunk: Uint8Array; last: boolean };
 
-export type FragKind = 'SetSeed' | 'SignDraft';
+export type FragKind = 'SetSeed' | 'SignDraft' | 'AddressBook';
 
 export interface SpendOutputMeta {
   gift: bigint;
@@ -81,6 +81,11 @@ export interface TouchCalibration {
 export interface SeedSlotLabel {
   slot: number;
   label: string;
+}
+
+export interface DeviceAddressBookEntry {
+  label: string;
+  pkh: string;
 }
 
 export interface UpdateTrust {
@@ -245,7 +250,8 @@ export type Request =
   | { type: 'GetUpdateStatus' }
   | { type: 'GetReleaseInfo' }
   | { type: 'GetUpdateBootStatus' }
-  | { type: 'Reboot' };
+  | { type: 'Reboot' }
+  | { type: 'GetAddressBook' };
 
 export interface CheetahPubInfo {
   slot: number;
@@ -277,6 +283,7 @@ export type Response =
   | { type: 'OkUpdateStatus'; status: UpdateStatus }
   | { type: 'OkReleaseInfo'; info: ReleaseInfo }
   | { type: 'OkUpdateBootStatus'; status: UpdateBootStatus }
+  | { type: 'OkAddressBook'; entries: DeviceAddressBookEntry[] }
   | { type: 'Err'; code: number };
 
 export interface Msg<T> {
@@ -303,12 +310,21 @@ export const ERR_FLASH = 140;
 export const ERR_CRYPTO = 141;
 
 export const PROTO_V1 = 1;
+export const FEATURE_CHEETAH = 1 << 0;
+export const FEATURE_FRAG = 1 << 1;
+export const FEATURE_XPUB = 1 << 2;
 export const FEATURE_SECURITY_STATUS = 1 << 3;
 export const FEATURE_BUILD_INFO = 1 << 4;
+export const FEATURE_TOUCH_CALIBRATION = 1 << 5;
+export const FEATURE_TOUCH_DIAGNOSTICS = 1 << 6;
+export const FEATURE_SEED_LABELS = 1 << 7;
+export const FEATURE_PIN_CHANGE_UI = 1 << 8;
+export const FEATURE_TOUCH_CALIBRATION_UI = 1 << 9;
 export const FEATURE_SECURE_UPDATE = 1 << 10;
 export const FEATURE_RELEASE_INFO = 1 << 11;
 export const FEATURE_UPDATE_BOOT_STATUS = 1 << 12;
 export const FEATURE_DEVICE_REBOOT = 1 << 13;
+export const FEATURE_DEVICE_ADDRESS_BOOK = 1 << 14;
 export const NOCKSTER_UPDATE_HARDWARE_TARGET = 'esp32s3-touch-lcd-1.47';
 export const UPDATE_BUILD_PROFILE_DEV = 'dev';
 export const UPDATE_BUILD_PROFILE_CHIP_SECURITY = 'chip-security';
@@ -332,15 +348,21 @@ export const UPDATE_MANIFEST_VERSION = 1;
 export const MAX_UPDATE_RELEASE_VERSION = 0xffff_ffff;
 export const MAX_UPDATE_IMAGE_SIZE = 4 * 1024 * 1024;
 export const MAX_UPDATE_CHUNK_LEN = 512;
+export const MAX_DEVICE_ADDRESS_BOOK_ENTRIES = 50;
+export const MAX_ADDRESS_BOOK_LABEL_LEN = 32;
+export const MAX_ADDRESS_BOOK_PKH_LEN = 64;
 
 function serializeFragKind(w: PostcardWriter, kind: FragKind) {
-  // nockster-core::FragKind: SetSeed=0, SignDraft=1
+  // nockster-core::FragKind: SetSeed=0, SignDraft=1, AddressBook=2
   switch (kind) {
     case 'SetSeed':
       w.writeVarint(0);
       break;
     case 'SignDraft':
       w.writeVarint(1);
+      break;
+    case 'AddressBook':
+      w.writeVarint(2);
       break;
   }
 }
@@ -351,9 +373,70 @@ function deserializeFragKind(kind: number): FragKind {
       return 'SetSeed';
     case 1:
       return 'SignDraft';
+    case 2:
+      return 'AddressBook';
     default:
       throw new Error(`Unknown frag kind: ${kind}`);
   }
+}
+
+function validateDeviceAddressBookEntry(entry: DeviceAddressBookEntry): DeviceAddressBookEntry {
+  const label = (entry.label ?? '').trim();
+  const pkh = (entry.pkh ?? '').trim();
+  if (!label) throw new Error('address label required');
+  if (label.length > MAX_ADDRESS_BOOK_LABEL_LEN) {
+    throw new Error(`address label max ${MAX_ADDRESS_BOOK_LABEL_LEN} chars`);
+  }
+  if (!/^[\x20-\x7e]+$/.test(label)) {
+    throw new Error('address label must be printable ASCII');
+  }
+  if (!pkh) throw new Error('address pkh required');
+  if (pkh.length > MAX_ADDRESS_BOOK_PKH_LEN) {
+    throw new Error(`address pkh max ${MAX_ADDRESS_BOOK_PKH_LEN} chars`);
+  }
+  if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(pkh)) {
+    throw new Error('address pkh must be base58');
+  }
+  return { label, pkh };
+}
+
+function serializeDeviceAddressBookEntry(w: PostcardWriter, entry: DeviceAddressBookEntry) {
+  const normalized = validateDeviceAddressBookEntry(entry);
+  w.writeString(normalized.label);
+  w.writeString(normalized.pkh);
+}
+
+function deserializeDeviceAddressBookEntriesFromReader(r: PostcardReader): DeviceAddressBookEntry[] {
+  const count = r.readVarint();
+  const entries: DeviceAddressBookEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    entries.push(validateDeviceAddressBookEntry({
+      label: r.readString(),
+      pkh: r.readString(),
+    }));
+  }
+  return entries;
+}
+
+export function serializeDeviceAddressBookEntries(entries: DeviceAddressBookEntry[]): Uint8Array {
+  if (entries.length > MAX_DEVICE_ADDRESS_BOOK_ENTRIES) {
+    throw new Error(`device address book max ${MAX_DEVICE_ADDRESS_BOOK_ENTRIES} entries`);
+  }
+  const w = new PostcardWriter();
+  w.writeVarint(entries.length);
+  for (const entry of entries) {
+    serializeDeviceAddressBookEntry(w, entry);
+  }
+  return w.toBytes();
+}
+
+export function deserializeDeviceAddressBookEntries(data: Uint8Array): DeviceAddressBookEntry[] {
+  const r = new PostcardReader(data);
+  const entries = deserializeDeviceAddressBookEntriesFromReader(r);
+  if (r.hasMore()) {
+    throw new Error('trailing bytes in address book payload');
+  }
+  return entries;
 }
 
 function serializeSpendMetaOptional(w: PostcardWriter, meta: SpendMeta | undefined) {
@@ -1316,6 +1399,9 @@ export function serializeRequest(req: Request): Uint8Array {
     case 'Reboot':
       w.writeVarint(40);
       break;
+    case 'GetAddressBook':
+      w.writeVarint(41);
+      break;
   }
 
   return w.toBytes();
@@ -1480,6 +1566,8 @@ export function deserializeResponse(data: Uint8Array): Response {
       return { type: 'OkReleaseInfo', info: { release_version: r.readVarint() } };
     case 22:
       return { type: 'OkUpdateBootStatus', status: deserializeUpdateBootStatus(r) };
+    case 23:
+      return { type: 'OkAddressBook', entries: deserializeDeviceAddressBookEntriesFromReader(r) };
     default:
       throw new Error(`Unknown response variant: ${variant}`);
   }

@@ -1125,12 +1125,19 @@ fn build_seed_noun(arena: &mut Arena, seed: &SeedSpec, parent_hash: [u64; 5]) ->
     )
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SpendPlan {
     note_index: usize,
     accepted: Vec<SeedSpec>,
     refund_gift: u64,
     fee: u64,
+}
+
+#[derive(Debug)]
+struct CandidatePlan {
+    plans: Vec<SpendPlan>,
+    fee_breakdown: FeeBreakdown,
+    selected_assets: u64,
 }
 
 #[derive(Debug)]
@@ -1194,6 +1201,337 @@ fn build_spend_from_plan(
     Ok(BuiltSpend { spend, witness })
 }
 
+fn build_initial_plans_for_order(
+    notes: &[NoteSpec],
+    note_order: &[usize],
+    seeds: &[SeedSpec],
+) -> Result<Option<Vec<SpendPlan>>, JsValue> {
+    if note_order.is_empty() {
+        return Ok(None);
+    }
+
+    let max_capacity = note_order
+        .iter()
+        .filter_map(|idx| notes.get(*idx).map(|note| note.capacity))
+        .max()
+        .unwrap_or(0);
+    if max_capacity == 0 {
+        return Ok(None);
+    }
+
+    let mut remaining_seeds = split_seeds_to_capacity(seeds.to_vec(), max_capacity)?;
+    remaining_seeds.sort_by(|a, b| b.gift.cmp(&a.gift));
+    let mut plans = Vec::<SpendPlan>::new();
+
+    for note_index in note_order {
+        if remaining_seeds.is_empty() {
+            break;
+        }
+        let Some(note) = notes.get(*note_index) else {
+            return Ok(None);
+        };
+        remaining_seeds = split_seeds_to_capacity(remaining_seeds, note.capacity)?;
+        remaining_seeds.sort_by(|a, b| b.gift.cmp(&a.gift));
+
+        let mut accepted = Vec::new();
+        let mut leftover = Vec::new();
+        let mut remaining_assets = note.assets;
+        for seed in remaining_seeds {
+            if remaining_assets >= seed.gift {
+                remaining_assets -= seed.gift;
+                accepted.push(seed);
+            } else {
+                leftover.push(seed);
+            }
+        }
+        remaining_seeds = leftover;
+        plans.push(SpendPlan {
+            note_index: *note_index,
+            accepted,
+            refund_gift: remaining_assets,
+            fee: 0,
+        });
+    }
+
+    if remaining_seeds.is_empty() {
+        Ok(Some(plans))
+    } else {
+        Ok(None)
+    }
+}
+
+fn settle_candidate_fees(
+    arena: &mut Arena,
+    notes: &[NoteSpec],
+    mut plans: Vec<SpendPlan>,
+    source_pkh: [u64; 5],
+    refund_lock_root: [u64; 5],
+    refund_note_data: Noun,
+    refund_recipient_b58: &str,
+    current_height: u64,
+    fee_policy: FeePolicy,
+) -> Result<Option<CandidatePlan>, JsValue> {
+    if plans.is_empty() {
+        return Ok(None);
+    }
+
+    let mut fee_spends_map = arena.atom0();
+    for plan in &plans {
+        let note = &notes[plan.note_index];
+        let placeholder_map = build_placeholder_pkh_map(arena, source_pkh)?;
+        let fee_witness = witness_with_placeholder(note.witness_unsigned, placeholder_map, arena)?;
+        let built = build_spend_from_plan(
+            arena,
+            note,
+            plan,
+            fee_witness,
+            refund_lock_root,
+            refund_note_data,
+            refund_recipient_b58,
+        )?;
+        fee_spends_map = canonical_zmap_put(arena, fee_spends_map, note.name_noun, built.spend)
+            .map_err(|e| js_err(format!("zmap: {e:?}")))?;
+    }
+
+    let fee_breakdown =
+        calculate_transaction_fee(arena, fee_spends_map, current_height, fee_policy)?;
+    let fee_capacity = plans
+        .iter()
+        .map(|plan| {
+            if plan.accepted.is_empty() {
+                plan.refund_gift.saturating_sub(1)
+            } else {
+                plan.refund_gift
+            }
+        })
+        .sum::<u64>();
+    if fee_capacity < fee_breakdown.minimum_fee {
+        return Ok(None);
+    }
+
+    let mut remaining_fee = fee_breakdown.minimum_fee;
+    for plan in plans.iter_mut().rev() {
+        if remaining_fee == 0 {
+            plan.fee = 0;
+            continue;
+        }
+        let available = if plan.accepted.is_empty() {
+            plan.refund_gift.saturating_sub(1)
+        } else {
+            plan.refund_gift
+        };
+        let take = available.min(remaining_fee);
+        plan.refund_gift -= take;
+        plan.fee = take;
+        remaining_fee -= take;
+    }
+    debug_assert_eq!(remaining_fee, 0);
+
+    let selected_assets = plans
+        .iter()
+        .map(|plan| notes[plan.note_index].assets)
+        .sum::<u64>();
+    Ok(Some(CandidatePlan {
+        plans,
+        fee_breakdown,
+        selected_assets,
+    }))
+}
+
+fn candidate_better(candidate: &CandidatePlan, best: Option<&CandidatePlan>) -> bool {
+    let Some(best) = best else {
+        return true;
+    };
+    candidate
+        .fee_breakdown
+        .minimum_fee
+        .cmp(&best.fee_breakdown.minimum_fee)
+        .then_with(|| candidate.plans.len().cmp(&best.plans.len()))
+        .then_with(|| candidate.selected_assets.cmp(&best.selected_assets))
+        == core::cmp::Ordering::Less
+}
+
+fn push_candidate_order(orders: &mut Vec<Vec<usize>>, order: Vec<usize>) {
+    if order.is_empty() {
+        return;
+    }
+    if orders.iter().any(|existing| existing == &order) {
+        return;
+    }
+    orders.push(order);
+}
+
+fn collect_combinations_for_count(
+    sorted_indices: &[usize],
+    notes: &[NoteSpec],
+    target: u64,
+    count: usize,
+    start: usize,
+    current: &mut Vec<usize>,
+    current_sum: u64,
+    out: &mut Vec<Vec<usize>>,
+    limit: usize,
+) {
+    if out.len() >= limit {
+        return;
+    }
+    if current.len() == count {
+        if current_sum >= target {
+            out.push(current.clone());
+        }
+        return;
+    }
+
+    let remaining_needed = count.saturating_sub(current.len());
+    if sorted_indices.len().saturating_sub(start) < remaining_needed {
+        return;
+    }
+
+    for pos in start..sorted_indices.len() {
+        if out.len() >= limit {
+            return;
+        }
+        let idx = sorted_indices[pos];
+        current.push(idx);
+        collect_combinations_for_count(
+            sorted_indices,
+            notes,
+            target,
+            count,
+            pos + 1,
+            current,
+            current_sum.saturating_add(notes[idx].assets),
+            out,
+            limit,
+        );
+        current.pop();
+    }
+}
+
+fn candidate_note_orders(
+    notes: &[NoteSpec],
+    target: u64,
+    fee_policy: FeePolicy,
+) -> Vec<Vec<usize>> {
+    const MAX_COMBINATION_COUNT: usize = 6;
+    const MAX_COMBINATIONS_PER_COUNT: usize = 160;
+
+    let mut asc: Vec<usize> = (0..notes.len()).collect();
+    asc.sort_by(|a, b| {
+        notes[*a]
+            .assets
+            .cmp(&notes[*b].assets)
+            .then_with(|| notes[*a].origin_page.cmp(&notes[*b].origin_page))
+    });
+    let mut desc = asc.clone();
+    desc.reverse();
+
+    let mut orders = Vec::<Vec<usize>>::new();
+    for idx in &asc {
+        push_candidate_order(&mut orders, vec![*idx]);
+    }
+
+    let mut sum = 0u64;
+    let mut order = Vec::new();
+    for idx in &asc {
+        order.push(*idx);
+        sum = sum.saturating_add(notes[*idx].assets);
+        if sum >= target {
+            push_candidate_order(&mut orders, order.clone());
+        }
+    }
+
+    sum = 0;
+    order.clear();
+    for idx in &desc {
+        order.push(*idx);
+        sum = sum.saturating_add(notes[*idx].assets);
+        if sum >= target {
+            push_candidate_order(&mut orders, order.clone());
+            break;
+        }
+    }
+
+    let combination_target = target.saturating_add(fee_policy.min_fee);
+    let max_count = notes.len().min(MAX_COMBINATION_COUNT);
+    for count in 2..=max_count {
+        let mut combos = Vec::new();
+        collect_combinations_for_count(
+            &asc,
+            notes,
+            combination_target,
+            count,
+            0,
+            &mut Vec::new(),
+            0,
+            &mut combos,
+            MAX_COMBINATIONS_PER_COUNT,
+        );
+        for combo in combos {
+            let mut by_large = combo.clone();
+            by_large.sort_by(|a, b| {
+                notes[*b]
+                    .capacity
+                    .cmp(&notes[*a].capacity)
+                    .then_with(|| notes[*a].origin_page.cmp(&notes[*b].origin_page))
+            });
+            push_candidate_order(&mut orders, by_large);
+
+            let mut by_small = combo;
+            by_small.sort_by(|a, b| {
+                notes[*a]
+                    .assets
+                    .cmp(&notes[*b].assets)
+                    .then_with(|| notes[*a].origin_page.cmp(&notes[*b].origin_page))
+            });
+            push_candidate_order(&mut orders, by_small);
+        }
+    }
+
+    push_candidate_order(&mut orders, desc);
+    orders
+}
+
+fn choose_best_candidate_plan(
+    arena: &mut Arena,
+    notes: &[NoteSpec],
+    seeds: &[SeedSpec],
+    output_total: u64,
+    source_pkh: [u64; 5],
+    refund_lock_root: [u64; 5],
+    refund_note_data: Noun,
+    refund_recipient_b58: &str,
+    current_height: u64,
+    fee_policy: FeePolicy,
+) -> Result<CandidatePlan, JsValue> {
+    let mut best: Option<CandidatePlan> = None;
+    for order in candidate_note_orders(notes, output_total, fee_policy) {
+        let Some(plans) = build_initial_plans_for_order(notes, &order, seeds)? else {
+            continue;
+        };
+        let Some(candidate) = settle_candidate_fees(
+            arena,
+            notes,
+            plans,
+            source_pkh,
+            refund_lock_root,
+            refund_note_data,
+            refund_recipient_b58,
+            current_height,
+            fee_policy,
+        )?
+        else {
+            continue;
+        };
+
+        if candidate_better(&candidate, best.as_ref()) {
+            best = Some(candidate);
+        }
+    }
+
+    best.ok_or_else(|| js_err("insufficient funds to cover requested outputs and fee"))
+}
+
 #[wasm_bindgen]
 pub fn compose_tx_v1_unsigned(input: JsValue) -> Result<ComposedTransactionV1, JsValue> {
     let input: ComposeTxV1Input =
@@ -1249,136 +1587,41 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
         })
         .collect::<Result<_, _>>()?;
 
-    // Sort notes: largest first, then smallest origin_page.
+    // Keep a deterministic base order. Candidate generation will choose and
+    // reorder subsets by fee score.
     notes.sort_by(|a, b| {
-        b.assets
-            .cmp(&a.assets)
+        a.assets
+            .cmp(&b.assets)
             .then_with(|| a.origin_page.cmp(&b.origin_page))
     });
 
     // Build output seeds (largest first).
     let mut seeds: Vec<SeedSpec> = Vec::new();
+    let mut output_total = 0u64;
     for output in &input.outputs {
         if output.amount == 0 {
             return Err(js_err("output amount must be > 0"));
         }
+        output_total = output_total.saturating_add(output.amount);
         let seed = build_output_seed_spec(&mut arena, &output.recipient, output.amount, &ctx)?;
         seeds.push(seed);
     }
     seeds.sort_by(|a, b| b.gift.cmp(&a.gift));
 
-    let max_capacity = notes.iter().map(|n| n.capacity).max().unwrap_or(0);
-    let mut processed: Vec<SeedSpec> = Vec::new();
-    for seed in seeds {
-        if seed.gift <= max_capacity {
-            processed.push(seed);
-        } else {
-            // Split large seed across multiple notes.
-            processed.extend(split_seeds_to_capacity(vec![seed], max_capacity)?);
-        }
-    }
-    processed.sort_by(|a, b| b.gift.cmp(&a.gift));
-
-    let mut remaining_seeds = processed;
-    let mut plans = Vec::<SpendPlan>::new();
-
-    for (note_index, note) in notes.iter().enumerate() {
-        if remaining_seeds.is_empty() {
-            break;
-        }
-        remaining_seeds = split_seeds_to_capacity(remaining_seeds, note.capacity)?;
-        remaining_seeds.sort_by(|a, b| b.gift.cmp(&a.gift));
-
-        let mut accepted = Vec::new();
-        let mut leftover = Vec::new();
-        let mut remaining_assets = note.assets;
-        for seed in remaining_seeds {
-            if remaining_assets >= seed.gift {
-                remaining_assets -= seed.gift;
-                accepted.push(seed);
-            } else {
-                leftover.push(seed);
-            }
-        }
-        remaining_seeds = leftover;
-        plans.push(SpendPlan {
-            note_index,
-            accepted,
-            refund_gift: remaining_assets,
-            fee: 0,
-        });
-    }
-
-    if !remaining_seeds.is_empty() {
-        return Err(js_err("insufficient funds to cover requested outputs"));
-    }
-
-    let final_fee_breakdown = loop {
-        let mut fee_spends_map = arena.atom0();
-        for plan in &plans {
-            let note = &notes[plan.note_index];
-            let placeholder_map = build_placeholder_pkh_map(&mut arena, source_pkh)?;
-            let fee_witness =
-                witness_with_placeholder(note.witness_unsigned, placeholder_map, &mut arena)?;
-            let built = build_spend_from_plan(
-                &mut arena,
-                note,
-                plan,
-                fee_witness,
-                refund_lock_root,
-                refund_note_data,
-                &input.source_pkh,
-            )?;
-            fee_spends_map =
-                canonical_zmap_put(&mut arena, fee_spends_map, note.name_noun, built.spend)
-                    .map_err(|e| js_err(format!("zmap: {e:?}")))?;
-        }
-
-        let fee_breakdown =
-            calculate_transaction_fee(&mut arena, fee_spends_map, current_height, fee_policy)?;
-        let fee_capacity = plans
-            .iter()
-            .map(|plan| {
-                if plan.accepted.is_empty() {
-                    plan.refund_gift.saturating_sub(1)
-                } else {
-                    plan.refund_gift
-                }
-            })
-            .sum::<u64>();
-
-        if fee_capacity >= fee_breakdown.minimum_fee {
-            let mut remaining_fee = fee_breakdown.minimum_fee;
-            for plan in plans.iter_mut().rev() {
-                if remaining_fee == 0 {
-                    plan.fee = 0;
-                    continue;
-                }
-                let available = if plan.accepted.is_empty() {
-                    plan.refund_gift.saturating_sub(1)
-                } else {
-                    plan.refund_gift
-                };
-                let take = available.min(remaining_fee);
-                plan.refund_gift -= take;
-                plan.fee = take;
-                remaining_fee -= take;
-            }
-            debug_assert_eq!(remaining_fee, 0);
-            break fee_breakdown;
-        }
-
-        let next_note_index = plans.len();
-        let Some(note) = notes.get(next_note_index) else {
-            return Err(js_err("insufficient funds to cover transaction fee"));
-        };
-        plans.push(SpendPlan {
-            note_index: next_note_index,
-            accepted: Vec::new(),
-            refund_gift: note.assets,
-            fee: 0,
-        });
-    };
+    let best_plan = choose_best_candidate_plan(
+        &mut arena,
+        notes.as_slice(),
+        seeds.as_slice(),
+        output_total,
+        source_pkh,
+        refund_lock_root,
+        refund_note_data,
+        &input.source_pkh,
+        current_height,
+        fee_policy,
+    )?;
+    let plans = best_plan.plans;
+    let final_fee_breakdown = best_plan.fee_breakdown;
 
     let mut spends_map = arena.atom0();
     let mut witness_data_map = arena.atom0();

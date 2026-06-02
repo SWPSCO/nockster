@@ -70,6 +70,7 @@ pub const FEATURE_SECURE_UPDATE: u32 = 1 << 10;
 pub const FEATURE_RELEASE_INFO: u32 = 1 << 11;
 pub const FEATURE_UPDATE_BOOT_STATUS: u32 = 1 << 12;
 pub const FEATURE_DEVICE_REBOOT: u32 = 1 << 13;
+pub const FEATURE_DEVICE_ADDRESS_BOOK: u32 = 1 << 14;
 pub const FEATURE_ALL_KNOWN: u32 = FEATURE_CHEETAH
     | FEATURE_FRAG
     | FEATURE_XPUB
@@ -83,7 +84,8 @@ pub const FEATURE_ALL_KNOWN: u32 = FEATURE_CHEETAH
     | FEATURE_SECURE_UPDATE
     | FEATURE_RELEASE_INFO
     | FEATURE_UPDATE_BOOT_STATUS
-    | FEATURE_DEVICE_REBOOT;
+    | FEATURE_DEVICE_REBOOT
+    | FEATURE_DEVICE_ADDRESS_BOOK;
 
 pub const HMAC_KEY_PURPOSE_DOWN_ALL: u8 = 5;
 pub const HMAC_KEY_PURPOSE_DOWN_JTAG: u8 = 6;
@@ -202,6 +204,16 @@ pub struct SeedSlotLabel {
     pub label: heapless::String<MAX_SEED_LABEL_LEN>,
 }
 
+pub const MAX_DEVICE_ADDRESS_BOOK_ENTRIES: usize = 50;
+pub const MAX_ADDRESS_BOOK_LABEL_LEN: usize = 32;
+pub const MAX_ADDRESS_BOOK_PKH_LEN: usize = 64;
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DeviceAddressBookEntry {
+    pub label: heapless::String<MAX_ADDRESS_BOOK_LABEL_LEN>,
+    pub pkh: heapless::String<MAX_ADDRESS_BOOK_PKH_LEN>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct UpdateTrust {
     pub configured: bool,
@@ -238,6 +250,7 @@ pub struct UpdateBootStatus {
 pub enum FragKind {
     SetSeed,
     SignDraft,
+    AddressBook,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -375,6 +388,7 @@ pub enum Request {
     GetReleaseInfo,
     GetUpdateBootStatus,
     Reboot,
+    GetAddressBook,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -441,6 +455,7 @@ pub enum Response {
     OkUpdateStatus(UpdateStatus),
     OkReleaseInfo(ReleaseInfo),
     OkUpdateBootStatus(UpdateBootStatus),
+    OkAddressBook(alloc::vec::Vec<DeviceAddressBookEntry>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -593,6 +608,9 @@ mod tests {
         let reboot = postcard::to_slice(&Request::Reboot, &mut update_buf).unwrap();
         assert_eq!(reboot, &[40]);
 
+        let address_book = postcard::to_slice(&Request::GetAddressBook, &mut update_buf).unwrap();
+        assert_eq!(address_book, &[41]);
+
         let err = postcard::to_slice(&Response::Err { code: 0x1234 }, &mut buf).unwrap();
         assert_eq!(err[0], 14);
 
@@ -703,6 +721,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(update_boot_status_response[0], 22);
+
+        let address_book_response =
+            postcard::to_slice(&Response::OkAddressBook(alloc::vec::Vec::new()), &mut buf).unwrap();
+        assert_eq!(address_book_response[0], 23);
     }
 
     #[test]

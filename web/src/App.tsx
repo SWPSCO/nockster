@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, useEffect, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   NocksterDevice,
@@ -16,15 +16,33 @@ import {
   fetchLatestUpdateRelease as fetchLatestUpdateReleaseFromIndex,
   FEATURE_SECURITY_STATUS,
   FEATURE_BUILD_INFO,
+  FEATURE_SEED_LABELS,
   FEATURE_SECURE_UPDATE,
   FEATURE_RELEASE_INFO,
   FEATURE_UPDATE_BOOT_STATUS,
   FEATURE_DEVICE_REBOOT,
+  FEATURE_DEVICE_ADDRESS_BOOK,
+  MAX_DEVICE_ADDRESS_BOOK_ENTRIES,
+  MAX_ADDRESS_BOOK_LABEL_LEN,
+  MAX_ADDRESS_BOOK_PKH_LEN,
   formatCheetahPubkey,
 } from 'nockster-js';
-import type { BuildInfo, FetchedUpdateRelease, SecurityStatus, UpdateBootStatus } from 'nockster-js';
+import type {
+  BuildInfo,
+  DeviceAddressBookEntry,
+  FetchedUpdateRelease,
+  SecurityStatus,
+  SeedSlotLabel,
+  UpdateBootStatus,
+} from 'nockster-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import { createSerialTransport } from './serial';
+import type { WalletAddress } from './composer/types';
+import {
+  NOCKBLOCKS_API_KEY_STORAGE_KEY,
+  fetchNockblocksNotes,
+  loadLocalNockblocksKey,
+} from './composer/nockblocks';
 import './App.css';
 
 const ComposerView = lazy(() =>
@@ -65,6 +83,12 @@ export async function connectSerial(): Promise<SerialPort | string> {
 
 type DeviceKey = { slot: number; path: number[]; x: bigint[]; y: bigint[] };
 type InfoResponse = Extract<Response, { type: 'Info' }>;
+type SlotBalance = {
+  status: 'ok' | 'error';
+  nicks?: number;
+  notes?: number;
+  error?: string;
+};
 type DeviceStatusSnapshot = {
   info: InfoResponse | null;
   releaseVersion: number | null;
@@ -72,6 +96,11 @@ type DeviceStatusSnapshot = {
   updateBootStatus: UpdateBootStatus | null;
 };
 const DEFAULT_RELEASE_INDEX_PATH = '/updates/latest.json';
+const RELEASE_INDEX_STORAGE_KEY = 'nockster.update.releaseIndexUrl.v1';
+const MAX_SEED_LABEL_LEN = 32;
+const AUTO_BALANCE_REFRESH_MS = 60_000;
+const NICKS_PER_NOCK = 1n << 16n;
+const NOCK_DEC_SCALE = 10n ** 6n;
 
 function yesNo(value: boolean): string {
   return value ? 'yes' : 'no';
@@ -124,10 +153,81 @@ function parseMaybeRelativeReleaseUrl(value: string, base: URL, label: string): 
   }
 }
 
-function configuredReleaseIndexUrl(): URL {
-  const configured = import.meta.env.VITE_NOCKSTER_RELEASE_INDEX_URL?.trim() || DEFAULT_RELEASE_INDEX_PATH;
+function convertMapToObject(obj: any): any {
+  if (obj instanceof Map) {
+    const result: any = {};
+    obj.forEach((value, key) => {
+      result[key] = convertMapToObject(value);
+    });
+    return result;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(convertMapToObject);
+  }
+  if (obj && typeof obj === 'object') {
+    const result: any = {};
+    for (const key in obj) {
+      result[key] = convertMapToObject(obj[key]);
+    }
+    return result;
+  }
+  return obj;
+}
+
+function defaultReleaseIndexSource(): string {
+  return import.meta.env.VITE_NOCKSTER_RELEASE_INDEX_URL?.trim() || DEFAULT_RELEASE_INDEX_PATH;
+}
+
+function configuredReleaseIndexUrl(source?: string): URL {
+  const configured = source?.trim() || defaultReleaseIndexSource();
   const base = typeof window === 'undefined' ? 'http://localhost/' : window.location.href;
   return parseMaybeRelativeReleaseUrl(configured, new URL(base), 'release index URL');
+}
+
+function validSeedLabel(label: string): boolean {
+  return label.length <= MAX_SEED_LABEL_LEN
+    && Array.from(label).every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x20 || (code >= 0x21 && code <= 0x7e);
+    });
+}
+
+function validDeviceAddressLabel(label: string): boolean {
+  return label.length > 0
+    && label.length <= MAX_ADDRESS_BOOK_LABEL_LEN
+    && Array.from(label).every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x20 || (code >= 0x21 && code <= 0x7e);
+    });
+}
+
+function validDeviceAddressPkh(pkh: string): boolean {
+  return pkh.length > 0
+    && pkh.length <= MAX_ADDRESS_BOOK_PKH_LEN
+    && /^[1-9A-HJ-NP-Za-km-z]+$/.test(pkh);
+}
+
+function normalizeDeviceAddressEntry(entry: DeviceAddressBookEntry): DeviceAddressBookEntry {
+  return {
+    label: entry.label.trim(),
+    pkh: entry.pkh.trim(),
+  };
+}
+
+function formatNicksCompact(nicks: number): string {
+  if (!Number.isFinite(nicks)) return '-';
+  const value = BigInt(Math.trunc(nicks));
+  if (value < NICKS_PER_NOCK) {
+    return `${value.toString()} n`;
+  }
+  const whole = value / NICKS_PER_NOCK;
+  const frac = value % NICKS_PER_NOCK;
+  if (frac === 0n) return `${whole.toString()} N`;
+  const fracStr = ((frac * NOCK_DEC_SCALE) / NICKS_PER_NOCK)
+    .toString()
+    .padStart(6, '0')
+    .replace(/0+$/, '');
+  return `${whole.toString()}.${fracStr} N`;
 }
 
 function App() {
@@ -149,6 +249,19 @@ function App() {
   const [pin, setPin] = useState('');
   const [info, setInfo] = useState<InfoResponse | null>(null);
   const [deviceKeys, setDeviceKeys] = useState<DeviceKey[]>([]);
+  const [seedLabels, setSeedLabels] = useState<SeedSlotLabel[]>([]);
+  const [labelDrafts, setLabelDrafts] = useState<Record<number, string>>({});
+  const [savingLabelSlot, setSavingLabelSlot] = useState<number | null>(null);
+  const [deviceAddressBook, setDeviceAddressBook] = useState<DeviceAddressBookEntry[]>([]);
+  const [addressBookLabel, setAddressBookLabel] = useState('');
+  const [addressBookPkh, setAddressBookPkh] = useState('');
+  const [addressBookStatus, setAddressBookStatus] = useState('');
+  const [syncingAddressBook, setSyncingAddressBook] = useState(false);
+  const [slotBalances, setSlotBalances] = useState<Record<number, SlotBalance>>({});
+  const [balanceStatus, setBalanceStatus] = useState('');
+  const [syncingBalances, setSyncingBalances] = useState(false);
+  const lastAutoBalanceRefreshAtRef = useRef(0);
+  const [deviceNockblocksKey, setDeviceNockblocksKey] = useState('');
   const [selectedSlotState, setSelectedSlotState] = useState<number>(0);
   const selectedSlotRef = useRef(0);
   const setSelectedSlot = (slot: number) => {
@@ -178,6 +291,11 @@ function App() {
   const [releaseBundleUrl, setReleaseBundleUrl] = useState('');
   const [releaseFirmwareUrl, setReleaseFirmwareUrl] = useState('');
   const [releaseBearerToken, setReleaseBearerToken] = useState('');
+  const [releaseIndexSource, setReleaseIndexSource] = useState(() => {
+    if (typeof window === 'undefined') return defaultReleaseIndexSource();
+    return localStorage.getItem(RELEASE_INDEX_STORAGE_KEY)?.trim() || defaultReleaseIndexSource();
+  });
+  const [releaseIndexDraft, setReleaseIndexDraft] = useState(releaseIndexSource);
   const [fetchingRelease, setFetchingRelease] = useState(false);
   const [advancedUpdateExpanded, setAdvancedUpdateExpanded] = useState(false);
 
@@ -193,14 +311,13 @@ function App() {
   const [activeTab, setActiveTab] = useState<'device' | 'composer'>('device');
 
   useEffect(() => {
-    const cls = 'app-composer';
-    if (activeTab === 'composer') {
-      document.body.classList.add(cls);
-    } else {
-      document.body.classList.remove(cls);
-    }
+    const composerCls = 'app-composer';
+    const deviceCls = 'app-device';
+    document.body.classList.toggle(composerCls, activeTab === 'composer');
+    document.body.classList.toggle(deviceCls, activeTab === 'device');
     return () => {
-      document.body.classList.remove(cls);
+      document.body.classList.remove(composerCls);
+      document.body.classList.remove(deviceCls);
     };
   }, [activeTab]);
 
@@ -248,10 +365,12 @@ function App() {
   );
   const secureUpdateAvailable = !!info && (info.features & FEATURE_SECURE_UPDATE) !== 0;
   const securityStatusAvailable = !!info && (info.features & FEATURE_SECURITY_STATUS) !== 0;
+  const seedLabelsAvailable = !!info && (info.features & FEATURE_SEED_LABELS) !== 0;
   const releaseInfoAvailable = !!info && (info.features & FEATURE_RELEASE_INFO) !== 0;
   const buildInfoAvailable = !!info && (info.features & FEATURE_BUILD_INFO) !== 0;
   const updateBootStatusAvailable = !!info && (info.features & FEATURE_UPDATE_BOOT_STATUS) !== 0;
   const deviceRebootAvailable = !!info && (info.features & FEATURE_DEVICE_REBOOT) !== 0;
+  const deviceAddressBookAvailable = !!info && (info.features & FEATURE_DEVICE_ADDRESS_BOOK) !== 0;
   const updateBlockReason = getUpdateBundleCompatibilityBlocker(updateBundle, {
     releaseVersion: firmwareReleaseVersion,
     buildInfo: firmwareBuildInfo,
@@ -260,9 +379,16 @@ function App() {
   const updatePercent = updateProgress && updateProgress.image_size > 0
     ? Math.min(100, Math.round((updateProgress.bytes_received / updateProgress.image_size) * 100))
     : 0;
+  const seedLabelMap = useMemo(() => {
+    const labels = new Map<number, string>();
+    for (const entry of seedLabels) {
+      labels.set(Number(entry.slot), entry.label);
+    }
+    return labels;
+  }, [seedLabels]);
   const latestReleaseIndexLabel = (() => {
     try {
-      return configuredReleaseIndexUrl().href;
+      return configuredReleaseIndexUrl(releaseIndexSource).href;
     } catch {
       return 'invalid release index';
     }
@@ -288,6 +414,139 @@ function App() {
     });
     return `m/${parts.join('/')}`;
   };
+
+  const walletAddresses = useMemo<WalletAddress[]>(() => {
+    if (!wasmReady || !wasm) return [];
+
+    return Array.from(new Map(deviceKeys.map((pub) => [pub.slot, pub])).values())
+      .sort((a, b) => a.slot - b.slot)
+      .flatMap((pub) => {
+        try {
+          const address = wasm.cheetah_pkh_b58(
+            pub.x.map((n) => n.toString()),
+            pub.y.map((n) => n.toString())
+          );
+          return [
+            {
+              slot: pub.slot,
+              path: pub.path,
+              pathLabel: formatDerivationPath(pub.path),
+              address,
+              alias: seedLabelMap.get(pub.slot)?.trim() || `wallet slot ${pub.slot}`,
+            },
+          ];
+        } catch {
+          return [];
+        }
+      });
+  }, [deviceKeys, seedLabelMap, wasm, wasmReady]);
+
+  const walletBySlot = useMemo(() => {
+    const wallets = new Map<number, WalletAddress>();
+    for (const wallet of walletAddresses) {
+      wallets.set(wallet.slot, wallet);
+    }
+    return wallets;
+  }, [walletAddresses]);
+  const walletBalanceKey = useMemo(
+    () => walletAddresses.map((wallet) => `${wallet.slot}:${wallet.address}`).sort().join('|'),
+    [walletAddresses]
+  );
+
+  useEffect(() => {
+    const saved = typeof window === 'undefined'
+      ? ''
+      : localStorage.getItem(NOCKBLOCKS_API_KEY_STORAGE_KEY)?.trim() || '';
+    if (saved) {
+      setDeviceNockblocksKey(saved);
+      return;
+    }
+
+    let cancelled = false;
+    loadLocalNockblocksKey()
+      .then((loaded) => {
+        if (!cancelled && loaded.key) {
+          setDeviceNockblocksKey(loaded.key);
+        }
+      })
+      .catch(() => {
+        // Composer owns key-entry UX; the device page only shows balances when configured.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'device' || typeof window === 'undefined') return;
+    const saved = localStorage.getItem(NOCKBLOCKS_API_KEY_STORAGE_KEY)?.trim() || '';
+    if (saved && saved !== deviceNockblocksKey) {
+      setDeviceNockblocksKey(saved);
+    }
+  }, [activeTab, deviceNockblocksKey]);
+
+  const refreshWalletBalances = useCallback(async (quiet = false) => {
+    lastAutoBalanceRefreshAtRef.current = Date.now();
+    const key = deviceNockblocksKey.trim();
+    if (!key) {
+      setSlotBalances({});
+      if (!quiet) setBalanceStatus('Nockblocks API key is not configured');
+      return;
+    }
+    if (walletAddresses.length === 0) {
+      setSlotBalances({});
+      setBalanceStatus('');
+      return;
+    }
+
+    setSyncingBalances(true);
+    if (!quiet) setBalanceStatus('refreshing balances...');
+    const next: Record<number, SlotBalance> = {};
+    try {
+      await Promise.all(walletAddresses.map(async (wallet) => {
+        try {
+          const imported = await fetchNockblocksNotes({
+            address: wallet.address,
+            apiKey: key,
+          });
+          next[wallet.slot] = {
+            status: 'ok',
+            nicks: imported.nicks,
+            notes: imported.notes.length,
+          };
+        } catch (err: any) {
+          next[wallet.slot] = {
+            status: 'error',
+            error: err?.message ?? String(err),
+          };
+        }
+      }));
+
+      setSlotBalances(next);
+      const failures = Object.values(next).filter((entry) => entry.status === 'error').length;
+      if (!quiet || failures > 0) {
+        setBalanceStatus(
+          failures > 0
+            ? `balance refresh failed for ${failures} slot${failures === 1 ? '' : 's'}`
+            : 'balances refreshed'
+        );
+      }
+    } finally {
+      setSyncingBalances(false);
+    }
+  }, [deviceNockblocksKey, walletAddresses]);
+
+  useEffect(() => {
+    if (!connected || activeTab !== 'device' || !walletBalanceKey || !deviceNockblocksKey.trim()) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastAutoBalanceRefreshAtRef.current < AUTO_BALANCE_REFRESH_MS) {
+      return;
+    }
+    lastAutoBalanceRefreshAtRef.current = now;
+    void refreshWalletBalances(true);
+  }, [activeTab, connected, deviceNockblocksKey, refreshWalletBalances, walletBalanceKey]);
 
 
   const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
@@ -337,6 +596,14 @@ function App() {
     setAttemptsRemaining(null);
     setInfo(null);
     setDeviceKeys([]);
+    setSeedLabels([]);
+    setLabelDrafts({});
+    setDeviceAddressBook([]);
+    setAddressBookLabel('');
+    setAddressBookPkh('');
+    setAddressBookStatus('');
+    setSlotBalances({});
+    setBalanceStatus('');
     setSelectedSlot(0);
     setUpdateTrustHash(null);
     setFirmwareReleaseVersion(null);
@@ -421,6 +688,37 @@ function App() {
         }));
         setDeviceKeys(normalizedKeys);
 
+        let nextLabels: SeedSlotLabel[] = [];
+        if ((deviceInfo.features & FEATURE_SEED_LABELS) !== 0) {
+          try {
+            nextLabels = await device.getSeedLabels();
+          } catch (err: any) {
+            console.warn('getSeedLabels failed', err);
+          }
+        }
+        setSeedLabels(nextLabels);
+        setLabelDrafts((current) => {
+          const labelsBySlot = new Map(nextLabels.map((entry) => [Number(entry.slot), entry.label]));
+          const slots = new Set(normalizedKeys.map((pub) => pub.slot));
+          const next: Record<number, string> = {};
+          for (const slot of slots) {
+            const currentValue = current[slot] ?? '';
+            const storedValue = labelsBySlot.get(slot) ?? '';
+            next[slot] = currentValue.trim() ? currentValue : storedValue || currentValue;
+          }
+          return next;
+        });
+
+        let nextAddressBook: DeviceAddressBookEntry[] = [];
+        if (!lockStatus.locked && (deviceInfo.features & FEATURE_DEVICE_ADDRESS_BOOK) !== 0) {
+          try {
+            nextAddressBook = await device.getAddressBook();
+          } catch (err: any) {
+            console.warn('getAddressBook failed', err);
+          }
+        }
+        setDeviceAddressBook(nextAddressBook);
+
         const slotNumbers = normalizedKeys.map((pub) => pub.slot);
         if (slotNumbers.length === 0) {
           if (selectedSlotRef.current !== 0) {
@@ -480,6 +778,14 @@ function App() {
   const refreshingRef = useRef(false);
   const deviceBusyRef = useRef(false);
   const [deviceBusy, setDeviceBusy] = useState(false);
+  const canSignComposerDraft = connected && locked === false && !deviceBusy && !signing;
+  const composerSignDisabledReason = !connected
+    ? 'connect device to sign'
+    : locked !== false
+      ? 'unlock device to sign'
+      : deviceBusy || signing
+        ? 'device is busy'
+        : undefined;
 
   useEffect(() => {
     if (!connected) return;
@@ -572,6 +878,14 @@ function App() {
       setSeedPassphrase('');
       setSeedPin('');
       setDeviceKeys([]);
+      setSeedLabels([]);
+      setLabelDrafts({});
+      setDeviceAddressBook([]);
+      setAddressBookLabel('');
+      setAddressBookPkh('');
+      setAddressBookStatus('');
+      setSlotBalances({});
+      setBalanceStatus('');
       setSelectedSlot(0);
       await refreshStatus();
       setStatus('Device reset to factory state');
@@ -790,7 +1104,7 @@ function App() {
   const fetchLatestUpdateRelease = async (
     deviceReleaseVersion: number | null = firmwareReleaseVersion,
     deviceBuildInfo: BuildInfo | null = firmwareBuildInfo,
-  ): Promise<FetchedUpdateRelease> => fetchLatestUpdateReleaseFromIndex(configuredReleaseIndexUrl(), {
+  ): Promise<FetchedUpdateRelease> => fetchLatestUpdateReleaseFromIndex(configuredReleaseIndexUrl(releaseIndexSource), {
     validateBundle: (bundle) => assertUpdateBundleCompatible(bundle, deviceReleaseVersion, deviceBuildInfo),
   });
 
@@ -1083,6 +1397,32 @@ function App() {
     }
   };
 
+  const parseTransactionBytes = (bytes: Uint8Array): {
+    parsedTx: ParsedTransactionInstance;
+    info: any;
+    details: any;
+  } => {
+    if (!wasm) {
+      throw new Error('WASM API unavailable, refresh the page and try again');
+    }
+
+    const parsedTx = new wasm.ParsedTransaction(bytes);
+    const info = parsedTx.info();
+    const details = convertMapToObject(parsedTx.get_details());
+    return { parsedTx, info, details };
+  };
+
+  const setLoadedTransaction = (
+    bytes: Uint8Array,
+    loaded: { parsedTx: ParsedTransactionInstance; info: any; details: any }
+  ) => {
+    setTx(loaded.parsedTx);
+    setTxInfo(loaded.info);
+    setTxDetails(loaded.details);
+    setTxBytes(bytes);
+    setSignedTxBytes(null);
+  };
+
   const loadTransaction = async (file: File) => {
     try {
       if (!wasmReady) {
@@ -1098,48 +1438,17 @@ function App() {
       setStatus('Loading transaction...');
 
       const bytes = new Uint8Array(await file.arrayBuffer());
-      setTxBytes(bytes);
       console.log('File loaded, bytes:', bytes.length);
       console.log('First 32 bytes:', Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '));
 
       console.log('Creating ParsedTransaction...');
-      const parsedTx = new wasm.ParsedTransaction(bytes);
+      const loaded = parseTransactionBytes(bytes);
       console.log('ParsedTransaction created successfully');
+      console.log('Transaction info:', loaded.info);
+      console.log('Converted details:', loaded.details);
 
-      const info = parsedTx.info();
-      console.log('Transaction info:', info);
-
-      const details = parsedTx.get_details();
-      console.log('Transaction details from WASM:', details);
-
-      // Convert Map to plain object for JSON.stringify
-      const convertMapToObject = (obj: any): any => {
-        if (obj instanceof Map) {
-          const result: any = {};
-          obj.forEach((value, key) => {
-            result[key] = convertMapToObject(value);
-          });
-          return result;
-        } else if (Array.isArray(obj)) {
-          return obj.map(convertMapToObject);
-        } else if (obj && typeof obj === 'object') {
-          const result: any = {};
-          for (const key in obj) {
-            result[key] = convertMapToObject(obj[key]);
-          }
-          return result;
-        }
-        return obj;
-      };
-
-      const detailsObj = convertMapToObject(details);
-      console.log('Converted details:', detailsObj);
-
-      setTx(parsedTx);
-      setTxInfo(info);
-      setTxDetails(detailsObj);
-      setSignedTxBytes(null);
-      setStatus(`Loaded transaction: ${info.tx_id} (${info.input_count} spends)`);
+      setLoadedTransaction(bytes, loaded);
+      setStatus(`Loaded transaction: ${loaded.info.tx_id} (${loaded.info.input_count} spends)`);
 
     } catch (error: any) {
       console.error('Transaction load error:', error);
@@ -1148,13 +1457,13 @@ function App() {
     }
   };
 
-  const signTransaction = async () => {
-    if (!tx || !txInfo || !connected || locked) {
+  const signDraftBytes = async (
+    draftBytes: Uint8Array,
+    loadedInput?: { parsedTx: ParsedTransactionInstance; info: any; details: any }
+  ) => {
+    const loaded = loadedInput ?? parseTransactionBytes(draftBytes);
+    if (!connected || locked) {
       setStatus('Device must be connected and unlocked');
-      return;
-    }
-    if (!txBytes) {
-      setStatus('Missing transaction bytes; reload the file');
       return;
     }
     if (!wasm) {
@@ -1166,7 +1475,8 @@ function App() {
       deviceBusyRef.current = true;
       setDeviceBusy(true);
       setSigning(true);
-      const txVersion = txDetails?.version ?? 0;
+      setLoadedTransaction(draftBytes, loaded);
+      const txVersion = loaded.details?.version ?? loaded.info?.version ?? 0;
       if (txVersion !== 1) {
         throw new Error('Only Bythos/V1 transaction drafts are supported');
       }
@@ -1176,38 +1486,17 @@ function App() {
 
       setStatus('Sending draft to device (approve on-device)...');
       setBanner({ open: true, message: 'Sending draft to device (approve on-device)...' });
-      const signedBytes = await device.signDraft(txBytes);
+      const signedBytes = await device.signDraft(draftBytes);
 
-      const signedParsed = new wasm.ParsedTransaction(signedBytes);
-      const signedInfo = signedParsed.info();
-      const signedDetails = signedParsed.get_details();
+      const signedLoaded = parseTransactionBytes(signedBytes);
 
-      const convertMapToObject = (obj: any): any => {
-        if (obj instanceof Map) {
-          const result: any = {};
-          obj.forEach((value, key) => {
-            result[key] = convertMapToObject(value);
-          });
-          return result;
-        } else if (Array.isArray(obj)) {
-          return obj.map(convertMapToObject);
-        } else if (obj && typeof obj === 'object') {
-          const result: any = {};
-          for (const key in obj) {
-            result[key] = convertMapToObject(obj[key]);
-          }
-          return result;
-        }
-        return obj;
-      };
-
-      setTx(signedParsed);
-      setTxInfo(signedInfo);
-      setTxDetails(convertMapToObject(signedDetails));
+      setTx(signedLoaded.parsedTx);
+      setTxInfo(signedLoaded.info);
+      setTxDetails(signedLoaded.details);
       setTxBytes(signedBytes);
       setSignedTxBytes(signedBytes);
 
-      const filename = `${signedInfo.tx_id.slice(0, 16)}.tx`;
+      const filename = `${signedLoaded.info.tx_id.slice(0, 16)}.tx`;
       const ab = new ArrayBuffer(signedBytes.byteLength);
       new Uint8Array(ab).set(signedBytes);
       const txBlob = new Blob([ab], { type: 'application/octet-stream' });
@@ -1230,6 +1519,28 @@ function App() {
       deviceBusyRef.current = false;
       setDeviceBusy(false);
       setBanner(null);
+    }
+  };
+
+  const signTransaction = async () => {
+    if (!tx || !txInfo || !txBytes) {
+      setStatus('Missing transaction bytes; reload the file');
+      return;
+    }
+    await signDraftBytes(txBytes, { parsedTx: tx, info: txInfo, details: txDetails });
+  };
+
+  const signComposerDraft = async (draft: { psnt: Uint8Array; filename: string; summaryJson: string }) => {
+    try {
+      if (!wasmReady) {
+        setStatus('WASM not ready yet, please wait...');
+        return;
+      }
+      setStatus(`Loaded composer draft ${draft.filename}`);
+      const bytes = new Uint8Array(draft.psnt);
+      await signDraftBytes(bytes);
+    } catch (error: any) {
+      setStatus(`Composer signing failed: ${error?.message ?? String(error)}`);
     }
   };
 
@@ -1258,6 +1569,188 @@ function App() {
     setStatus('');
   };
 
+  const deviceStateLabel = locked === null ? 'checking' : locked ? 'locked' : 'unlocked';
+  const workStateLabel = deviceBusy || seeding || signing || updatingFirmware || fetchingRelease ? 'busy' : 'ready';
+  const topStatusLabel = workStateLabel === 'busy' ? 'busy' : connected ? deviceStateLabel : 'offline';
+  const firmwareSummaryLabel = info
+    ? releaseInfoAvailable
+      ? `fw v${info.fw_major}.${info.fw_minor} / rel ${firmwareReleaseVersion === null ? '...' : firmwareReleaseVersion}`
+      : `fw v${info.fw_major}.${info.fw_minor}`
+    : 'fw ...';
+
+  const saveReleaseIndexSource = () => {
+    try {
+      configuredReleaseIndexUrl(releaseIndexDraft);
+      const trimmed = releaseIndexDraft.trim() || defaultReleaseIndexSource();
+      setReleaseIndexSource(trimmed);
+      if (trimmed === defaultReleaseIndexSource()) {
+        localStorage.removeItem(RELEASE_INDEX_STORAGE_KEY);
+      } else {
+        localStorage.setItem(RELEASE_INDEX_STORAGE_KEY, trimmed);
+      }
+      setStatus('Update source saved');
+    } catch (error: any) {
+      setStatus(error?.message ?? String(error));
+    }
+  };
+
+  const resetReleaseIndexSource = () => {
+    const source = defaultReleaseIndexSource();
+    setReleaseIndexSource(source);
+    setReleaseIndexDraft(source);
+    localStorage.removeItem(RELEASE_INDEX_STORAGE_KEY);
+    setStatus('Update source reset');
+  };
+
+  const saveSeedLabel = async (slot: number) => {
+    const label = (labelDrafts[slot] ?? '').trim();
+    if (!seedLabelsAvailable) {
+      setStatus('Seed labels are not available on this firmware');
+      return;
+    }
+    if (locked !== false) {
+      setStatus('Unlock the device before renaming a wallet slot');
+      return;
+    }
+    if (!validSeedLabel(label)) {
+      setStatus(`Nickname must be printable ASCII and at most ${MAX_SEED_LABEL_LEN} bytes`);
+      return;
+    }
+
+    try {
+      setSavingLabelSlot(slot);
+      await device.setSeedLabel(slot, label);
+      const labels = await device.getSeedLabels();
+      setSeedLabels(labels);
+      setLabelDrafts((current) => ({ ...current, [slot]: label }));
+      setStatus(label ? `Saved nickname for slot ${slot}` : `Cleared nickname for slot ${slot}`);
+    } catch (error: any) {
+      setStatus(`Nickname save failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setSavingLabelSlot(null);
+    }
+  };
+
+  const saveDeviceAddressBookEntries = async (
+    entries: DeviceAddressBookEntry[],
+    successMessage: string,
+  ) => {
+    if (!deviceAddressBookAvailable) {
+      setAddressBookStatus('Address book is not available on this firmware');
+      return;
+    }
+    if (locked !== false) {
+      setAddressBookStatus('Unlock the device before editing the address book');
+      return;
+    }
+
+    const normalized = entries.map(normalizeDeviceAddressEntry);
+    if (normalized.length > MAX_DEVICE_ADDRESS_BOOK_ENTRIES) {
+      setAddressBookStatus(`Device address book holds at most ${MAX_DEVICE_ADDRESS_BOOK_ENTRIES} entries`);
+      return;
+    }
+    for (const entry of normalized) {
+      if (!validDeviceAddressLabel(entry.label)) {
+        setAddressBookStatus(`Labels must be printable ASCII and at most ${MAX_ADDRESS_BOOK_LABEL_LEN} bytes`);
+        return;
+      }
+      if (!validDeviceAddressPkh(entry.pkh)) {
+        setAddressBookStatus(`PKHs must be base58 and at most ${MAX_ADDRESS_BOOK_PKH_LEN} chars`);
+        return;
+      }
+    }
+
+    try {
+      setSyncingAddressBook(true);
+      await device.setAddressBook(normalized);
+      const reloaded = await device.getAddressBook();
+      setDeviceAddressBook(reloaded);
+      setAddressBookStatus(successMessage);
+    } catch (error: any) {
+      setAddressBookStatus(`Address book save failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setSyncingAddressBook(false);
+    }
+  };
+
+  const refreshDeviceAddressBook = async () => {
+    if (!deviceAddressBookAvailable) {
+      setAddressBookStatus('Address book is not available on this firmware');
+      return;
+    }
+    if (locked !== false) {
+      setAddressBookStatus('Unlock the device before reading the address book');
+      return;
+    }
+
+    try {
+      setSyncingAddressBook(true);
+      const entries = await device.getAddressBook();
+      setDeviceAddressBook(entries);
+      setAddressBookStatus(`Loaded ${entries.length} address${entries.length === 1 ? '' : 'es'}`);
+    } catch (error: any) {
+      setAddressBookStatus(`Address book load failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setSyncingAddressBook(false);
+    }
+  };
+
+  const upsertDeviceAddressBookEntry = async (entry: DeviceAddressBookEntry, message: string) => {
+    const normalized = normalizeDeviceAddressEntry(entry);
+    const existingIndex = deviceAddressBook.findIndex(
+      (candidate) => candidate.label.trim().toLowerCase() === normalized.label.toLowerCase()
+    );
+    if (existingIndex < 0 && deviceAddressBook.length >= MAX_DEVICE_ADDRESS_BOOK_ENTRIES) {
+      setAddressBookStatus(`Device address book holds at most ${MAX_DEVICE_ADDRESS_BOOK_ENTRIES} entries`);
+      return;
+    }
+
+    const next = [...deviceAddressBook];
+    if (existingIndex >= 0) {
+      next[existingIndex] = normalized;
+    } else {
+      next.push(normalized);
+    }
+    await saveDeviceAddressBookEntries(next, message);
+  };
+
+  const addDeviceAddressBookEntry = async () => {
+    const label = addressBookLabel.trim();
+    const pkh = addressBookPkh.trim();
+    if (!validDeviceAddressLabel(label)) {
+      setAddressBookStatus(`Labels must be printable ASCII and at most ${MAX_ADDRESS_BOOK_LABEL_LEN} bytes`);
+      return;
+    }
+    if (!validDeviceAddressPkh(pkh)) {
+      setAddressBookStatus(`PKHs must be base58 and at most ${MAX_ADDRESS_BOOK_PKH_LEN} chars`);
+      return;
+    }
+
+    await upsertDeviceAddressBookEntry({ label, pkh }, `Saved ${label}`);
+    setAddressBookLabel('');
+    setAddressBookPkh('');
+  };
+
+  const saveWalletAddressToDeviceBook = async (wallet: WalletAddress) => {
+    const label = (
+      labelDrafts[wallet.slot]?.trim()
+      || seedLabelMap.get(wallet.slot)?.trim()
+      || wallet.alias.trim()
+    )
+      || `slot ${wallet.slot}`;
+    await upsertDeviceAddressBookEntry(
+      { label, pkh: wallet.address },
+      `Saved ${label} to device address book`
+    );
+  };
+
+  const removeDeviceAddressBookEntry = async (index: number) => {
+    const entry = deviceAddressBook[index];
+    if (!entry) return;
+    const next = deviceAddressBook.filter((_, candidateIndex) => candidateIndex !== index);
+    await saveDeviceAddressBookEntries(next, `Removed ${entry.label}`);
+  };
+
   const formatDeviceAddress = (pub: DeviceKey): string => {
     if (wasmReady && wasm) {
       try {
@@ -1273,7 +1766,13 @@ function App() {
   };
 
   return (
-    <div className={activeTab === 'composer' ? 'container container-wide' : 'container'}>
+    <div className={
+      activeTab === 'composer'
+        ? 'container container-wide'
+        : activeTab === 'device'
+          ? 'container container-device'
+          : 'container'
+    }>
       <div className={`toast ${banner?.open ? 'toast-open' : ''}`}>
         {banner?.open && (
           <div className="toast-inner">
@@ -1315,12 +1814,24 @@ function App() {
 
       {activeTab === 'composer' && (
         <div className="section section-composer">
-          <h2>Transaction composer (V1)</h2>
-          <p className="seed-subtitle">
-            Compose an unsigned V1 transaction noun locally, then download the `.psnt`.
-          </p>
+          <div className="composer-title-row">
+            <div>
+              <h2>Transaction composer</h2>
+              <p className="seed-subtitle">
+                Build a V1 draft from synced notes, then sign it on the connected device.
+              </p>
+            </div>
+          </div>
           <Suspense fallback={<div className="status-message">loading composer...</div>}>
-            <ComposerView wasmReady={wasmReady} />
+            <ComposerView
+              wasmReady={wasmReady}
+              walletAddresses={walletAddresses}
+              deviceAddressBook={deviceAddressBook}
+              onSignDraft={signComposerDraft}
+              canSignDraft={canSignComposerDraft}
+              signingDraft={signing}
+              signDraftDisabledReason={composerSignDisabledReason}
+            />
           </Suspense>
         </div>
       )}
@@ -1333,9 +1844,251 @@ function App() {
       )}
 
       {activeTab === 'device' && connected && (
-        <>
-          {showSeedForm && (
-            <div className="section">
+        <div className="device-page device-page-connected">
+          <div className="device-topbar">
+            <div className="device-title">
+              <span className="device-eyebrow">Nockster</span>
+              <h2>Device console</h2>
+            </div>
+            <div className="device-metrics" aria-label="Device summary">
+              <span className={`device-pill ${locked === false && workStateLabel !== 'busy' ? 'device-pill-good' : topStatusLabel !== 'offline' ? 'device-pill-warn' : ''}`}>
+                {topStatusLabel}
+              </span>
+              <span className="device-pill">{firmwareSummaryLabel}</span>
+            </div>
+          </div>
+          {deviceKeys.length > 0 && (
+            <div className="section device-panel device-wallet-panel">
+              <div className="device-panel-header">
+                <h2>Wallet slots</h2>
+                <div className="device-panel-actions">
+                  {showSeedForm && !isInitialSeed && (
+                    <button
+                      type="button"
+                      onClick={() => setAddSeedExpanded((prev) => !prev)}
+                      className="btn btn-small btn-secondary"
+                    >
+                      {addSeedExpanded ? 'hide seed form' : 'add seed'}
+                    </button>
+                  )}
+                  {deviceNockblocksKey.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => void refreshWalletBalances(false)}
+                      disabled={syncingBalances}
+                      className="btn btn-small btn-secondary"
+                    >
+                      {syncingBalances ? 'balances...' : 'refresh balances'}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="wallet-slot-grid">
+                {slotSummary.map((pub) => {
+                  const storedLabel = seedLabelMap.get(pub.slot) ?? '';
+                  const draftLabel = labelDrafts[pub.slot] ?? storedLabel;
+                  const wallet = walletBySlot.get(pub.slot);
+                  const balance = slotBalances[pub.slot];
+                  const balanceText = !deviceNockblocksKey.trim()
+                    ? ''
+                    : balance?.status === 'ok'
+                      ? `${formatNicksCompact(balance.nicks ?? 0)} · ${balance.notes ?? 0} notes`
+                      : balance?.status === 'error'
+                        ? 'balance unavailable'
+                        : syncingBalances ? 'loading balance...' : 'balance not loaded';
+                  return (
+                    <div
+                      key={pub.slot}
+                      className={`wallet-slot-card ${selectedSlot === pub.slot ? 'active' : ''}`}
+                    >
+                      <div className="wallet-slot-head">
+                        <div>
+                          <div className="wallet-slot-title">
+                            {storedLabel || `slot ${pub.slot}`}
+                          </div>
+                          <div className="path-tag">{formatDerivationPath(pub.path)}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleSlotChange(pub.slot)}
+                          disabled={deviceBusy || locked !== false || selectedSlot === pub.slot}
+                          className="btn btn-small btn-secondary"
+                        >
+                          {selectedSlot === pub.slot ? 'active' : 'select'}
+                        </button>
+                      </div>
+                      <div className="wallet-slot-label-row">
+                        <input
+                          className="input wallet-label-input"
+                          value={draftLabel}
+                          placeholder="nickname"
+                          maxLength={MAX_SEED_LABEL_LEN}
+                          disabled={!seedLabelsAvailable || locked !== false || savingLabelSlot === pub.slot}
+                          onChange={(event) => {
+                            const next = event.target.value;
+                            setLabelDrafts((current) => ({ ...current, [pub.slot]: next }));
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') {
+                              void saveSeedLabel(pub.slot);
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-small btn-secondary"
+                          disabled={
+                            !seedLabelsAvailable ||
+                            locked !== false ||
+                            savingLabelSlot === pub.slot ||
+                            draftLabel.trim() === storedLabel
+                          }
+                          onClick={() => void saveSeedLabel(pub.slot)}
+                        >
+                          {savingLabelSlot === pub.slot ? 'saving...' : 'save'}
+                        </button>
+                      </div>
+                      <div className="wallet-slot-address">
+                        <span className="pubkey-text">{wallet?.address ?? formatDeviceAddress(pub)}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(wallet?.address ?? formatDeviceAddress(pub));
+                            setStatus(`Copied slot ${pub.slot} address to clipboard`);
+                          }}
+                          className="btn btn-small copy-btn"
+                        >
+                          copy
+                        </button>
+                      </div>
+                      {balanceText && (
+                        <div className={`wallet-slot-balance ${balance?.status === 'error' ? 'error' : ''}`}>
+                          {balanceText}
+                          {balance?.status === 'error' && balance.error ? `: ${balance.error}` : ''}
+                        </div>
+                      )}
+                      <div className="wallet-slot-actions">
+                        <button
+                          type="button"
+                          onClick={() => void saveWalletAddressToDeviceBook(wallet ?? {
+                            slot: pub.slot,
+                            path: pub.path,
+                            pathLabel: formatDerivationPath(pub.path),
+                            address: formatDeviceAddress(pub),
+                            alias: `wallet slot ${pub.slot}`,
+                          })}
+                          className="btn btn-small btn-secondary"
+                          disabled={
+                            !deviceAddressBookAvailable ||
+                            locked !== false ||
+                            syncingAddressBook ||
+                            !wallet?.address
+                          }
+                        >
+                          save to book
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteSeedSlot(pub.slot)}
+                          className="btn btn-small btn-danger"
+                          disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
+                        >
+                          {deletingSlot === pub.slot ? 'removing...' : 'remove'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {balanceStatus && <div className="device-inline-status">{balanceStatus}</div>}
+            </div>
+          )}
+
+          {info?.has_seed && deviceKeys.length === 0 && (
+            <div className="section device-panel device-wallet-panel">
+              <div className="device-panel-header">
+                <h2>Wallet slots</h2>
+              </div>
+              <div className="device-empty-state">Unlock to view wallet slots.</div>
+            </div>
+          )}
+
+          <div className="section device-panel device-address-book-panel">
+            <div className="device-panel-header">
+              <h2>Address book</h2>
+              <div className="device-panel-actions">
+                <button
+                  type="button"
+                  onClick={() => void refreshDeviceAddressBook()}
+                  className="btn btn-small btn-secondary"
+                  disabled={!deviceAddressBookAvailable || locked !== false || syncingAddressBook}
+                >
+                  {syncingAddressBook ? 'loading...' : 'refresh'}
+                </button>
+              </div>
+            </div>
+            {!deviceAddressBookAvailable ? (
+              <div className="device-empty-state">Update firmware to use the on-device address book.</div>
+            ) : locked !== false ? (
+              <div className="device-empty-state">Unlock to edit addresses stored on the device.</div>
+            ) : (
+              <>
+                <div className="device-address-form">
+                  <input
+                    className="input"
+                    value={addressBookLabel}
+                    maxLength={MAX_ADDRESS_BOOK_LABEL_LEN}
+                    placeholder="short label"
+                    disabled={syncingAddressBook}
+                    onChange={(event) => setAddressBookLabel(event.target.value)}
+                  />
+                  <input
+                    className="input"
+                    value={addressBookPkh}
+                    maxLength={MAX_ADDRESS_BOOK_PKH_LEN}
+                    placeholder="recipient pkh"
+                    disabled={syncingAddressBook}
+                    spellCheck={false}
+                    onChange={(event) => setAddressBookPkh(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={() => void addDeviceAddressBookEntry()}
+                    disabled={syncingAddressBook}
+                  >
+                    save address
+                  </button>
+                </div>
+                {deviceAddressBook.length === 0 ? (
+                  <div className="device-empty-state">No saved addresses.</div>
+                ) : (
+                  <div className="device-address-list">
+                    {deviceAddressBook.map((entry, index) => (
+                      <div className="device-address-row" key={`${entry.label}:${entry.pkh}:${index}`}>
+                        <div className="device-address-main">
+                          <strong>{entry.label}</strong>
+                          <span className="pubkey-text">{entry.pkh}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-small btn-danger"
+                          onClick={() => void removeDeviceAddressBookEntry(index)}
+                          disabled={syncingAddressBook}
+                        >
+                          remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            {addressBookStatus && <div className="device-inline-status">{addressBookStatus}</div>}
+          </div>
+
+          {showSeedForm && (isInitialSeed || addSeedExpanded) && (
+            <div className="section device-panel device-seed-panel">
               <div className="seed-header">
                 <h2>{isInitialSeed ? 'Load a seed' : 'Add a seed slot'}</h2>
                 {!isInitialSeed && (
@@ -1344,96 +2097,92 @@ function App() {
                     onClick={() => setAddSeedExpanded((prev) => !prev)}
                     className="btn btn-small btn-secondary seed-toggle"
                   >
-                    {addSeedExpanded ? 'hide form' : 'add seed'}
+                    close
                   </button>
                 )}
               </div>
 
-              {(isInitialSeed || addSeedExpanded) && (
-                <>
-                  <p className="seed-subtitle">
-                    {isInitialSeed
-                      ? 'Device ready to seed. Make sure your keys are written on something that isn\'t a computer!'
-                      : 'Add another BIP39 seedphrase to this device. Keep it unlocked; no new PIN required.'}
-                  </p>
-                  <div className="seed-form">
-                    <textarea
-                      className="input mnemonic-input"
-                      value={mnemonic}
-                      onChange={(e) => setMnemonic(e.target.value)}
-                      placeholder="twelve or twenty-four words, separated by spaces"
-                      spellCheck={false}
-                      disabled={deviceBusy || seeding}
-                    />
-                    {isInitialSeed && (
-                      <input
-                        type="password"
-                        className="input pin-input"
-                        value={seedPin}
-                        onChange={(e) => setSeedPin(e.target.value)}
-                        placeholder="set a device PIN"
-                        disabled={deviceBusy || seeding}
-                        autoComplete="off"
-                      />
-                    )}
-                    <input
-                      type="text"
-                      className="input passphrase-input"
-                      value={seedPassphrase}
-                      onChange={(e) => setSeedPassphrase(e.target.value)}
-                      placeholder="optional bip39 passphrase"
-                      disabled={deviceBusy || seeding}
-                    />
-                    <div className="seed-actions">
-                      <button
-                        type="button"
-                        onClick={seedDevice}
-                        disabled={deviceBusy || seeding || !canSubmitSeed}
-                        className="btn btn-success"
-                      >
-                        {seeding ? 'seeding...' : isInitialSeed ? 'load seed' : 'add seed'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMnemonic('');
-                          setSeedPassphrase('');
-                          setSeedPin('');
-                        }}
-                        disabled={deviceBusy || seeding}
-                        className="btn btn-secondary"
-                      >
-                        clear
-                      </button>
-                    </div>
-                    {mnemonic.trim() && !wordCountValid && (
-                      <div className="validation-text">
-                        Seed words should contain 12, 15, 18, 21, or 24 words (currently {wordCount}).
-                      </div>
-                    )}
-                    {!isInitialSeed && (
-                      <div className="seed-hint">
-                        Device uses your existing PIN. Unlock it in the control section before adding a seed.
-                      </div>
-                    )}
+              <p className="seed-subtitle">
+                {isInitialSeed
+                  ? 'Device ready to seed. Make sure your keys are written on something that isn\'t a computer!'
+                  : 'Add another BIP39 seedphrase to this device. Keep it unlocked; no new PIN required.'}
+              </p>
+              <div className="seed-form">
+                <textarea
+                  className="input mnemonic-input"
+                  value={mnemonic}
+                  onChange={(e) => setMnemonic(e.target.value)}
+                  placeholder="twelve or twenty-four words, separated by spaces"
+                  spellCheck={false}
+                  disabled={deviceBusy || seeding}
+                />
+                {isInitialSeed && (
+                  <input
+                    type="password"
+                    className="input pin-input"
+                    value={seedPin}
+                    onChange={(e) => setSeedPin(e.target.value)}
+                    placeholder="set a device PIN"
+                    disabled={deviceBusy || seeding}
+                    autoComplete="off"
+                  />
+                )}
+                <input
+                  type="text"
+                  className="input passphrase-input"
+                  value={seedPassphrase}
+                  onChange={(e) => setSeedPassphrase(e.target.value)}
+                  placeholder="optional bip39 passphrase"
+                  disabled={deviceBusy || seeding}
+                />
+                <div className="seed-actions">
+                  <button
+                    type="button"
+                    onClick={seedDevice}
+                    disabled={deviceBusy || seeding || !canSubmitSeed}
+                    className="btn btn-success"
+                  >
+                    {seeding ? 'seeding...' : isInitialSeed ? 'load seed' : 'add seed'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMnemonic('');
+                      setSeedPassphrase('');
+                      setSeedPin('');
+                    }}
+                    disabled={deviceBusy || seeding}
+                    className="btn btn-secondary"
+                  >
+                    clear
+                  </button>
+                </div>
+                {mnemonic.trim() && !wordCountValid && (
+                  <div className="validation-text">
+                    Seed words should contain 12, 15, 18, 21, or 24 words (currently {wordCount}).
                   </div>
-                </>
-              )}
+                )}
+                {!isInitialSeed && (
+                  <div className="seed-hint">
+                    Device uses your existing PIN. Unlock it in the control section before adding a seed.
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
           {status && (
-            <div className="status-message">
+            <div className="status-message device-status-message">
               {status}
             </div>
           )}
 
-          <div className="section">
-            <h2>Device</h2>
+          <div className="section device-panel device-overview-panel">
+            <h2>Status</h2>
             <div className="status-grid">
               <div className="status-item">
                 <span className="label">lock status:</span>
-                <span className={`value ${locked ? 'locked' : 'unlocked'}`}>
+                <span className={`value ${locked === true ? 'locked' : locked === false ? 'unlocked' : ''}`}>
                   {locked === null ? '...' : locked ? 'locked' : 'unlocked'}
                 </span>
               </div>
@@ -1460,17 +2209,15 @@ function App() {
                     </div>
                   )}
                   <div className="status-item">
-                    <span className="label">has seed:</span>
-                    <span className="value">{info.has_seed ? 'yes' : 'no'}</span>
+                    <span className="label">seed:</span>
+                    <span className="value">{info.has_seed ? 'loaded' : 'empty'}</span>
                   </div>
                   {securityStatusAvailable && securityStatus && (
                     <>
                       <div className="status-item">
-                        <span className="label">nvs:</span>
+                        <span className="label">storage:</span>
                         <span className="value">
-                          {securityStatus.nvs_initialized
-                            ? `schema v${securityStatus.nvs_schema_version} · ${securityStatus.nvs_slot_count} slots`
-                            : 'uninitialized'}
+                          {securityStatus.nvs_initialized ? 'initialized' : 'empty'}
                         </span>
                       </div>
                       <div className="status-item">
@@ -1497,65 +2244,6 @@ function App() {
                       )}
                     </>
                   )}
-                  {info.has_seed && deviceKeys.length === 0 && (
-                    <div className="status-item full-width">
-                      <span className="label">public keys:</span>
-                      <span className="value">unlock to view</span>
-                    </div>
-                  )}
-                  {deviceKeys.length > 0 && (
-                    <>
-                      <div className="status-item full-width">
-                        <span className="label">active slot:</span>
-                        <select
-                          value={selectedSlot}
-                          onChange={(e) => handleSlotChange(Number(e.target.value))}
-                          className="slot-select"
-                        >
-                          {slotSummary.map((pub) => (
-                            <option key={pub.slot} value={pub.slot}>
-                              {`slot ${pub.slot} · ${formatDerivationPath(pub.path)}`}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="status-item full-width multi-keys">
-                        <span className="label">public keys:</span>
-                        <div className="pubkey-list">
-                          {slotSummary.map((pub, idx) => (
-                            <div key={idx} className="pubkey-list-item">
-                              <div className="pubkey-meta">
-                                <span className="path-tag">slot {pub.slot} · {formatDerivationPath(pub.path)}</span>
-                              </div>
-                              <div className="pubkey-display">
-                                <span className="pubkey-text">{formatDeviceAddress(pub)}</span>
-                                <div className="pubkey-actions">
-                                  <button
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(formatDeviceAddress(pub));
-                                      setStatus(
-                                        `Copied slot ${pub.slot} ${formatDerivationPath(pub.path)} to clipboard`
-                                      );
-                                    }}
-                                    className="btn btn-small copy-btn"
-                                  >
-                                    copy
-                                  </button>
-                                  <button
-                                    onClick={() => deleteSeedSlot(pub.slot)}
-                                    className="btn btn-small btn-danger"
-                                    disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
-                                  >
-                                    {deletingSlot === pub.slot ? 'removing...' : 'remove'}
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
                 </>
               )}
             </div>
@@ -1564,9 +2252,7 @@ function App() {
             </button>
           </div>
 
-
-
-          <div className="section">
+          <div className="section device-panel device-control-panel">
             <h2>Control</h2>
             <div className="pin-controls">
               {locked && (
@@ -1654,16 +2340,11 @@ function App() {
                     {resettingPin ? 'waiting...' : 'start PIN change'}
                   </button>
                 </div>
-                {securityStatus && securityStatus.nvs_initialized && (
-                  <p className="reset-pin-note">
-                    NVS schema v{securityStatus.nvs_schema_version}
-                  </p>
-                )}
               </div>
             )}
           </div>
 
-          <div className="section">
+          <div className="section device-panel device-update-panel">
             <div className="seed-header">
               <h2>Firmware update</h2>
               <div className="update-header-actions">
@@ -1762,10 +2443,6 @@ function App() {
                 <span className="label">trust anchor:</span>
                 <span className="value update-hash">{updateTrustHash ?? 'not loaded'}</span>
               </div>
-              <div className="status-item full-width">
-                <span className="label">latest source:</span>
-                <span className="value update-hash">{latestReleaseIndexLabel}</span>
-              </div>
               {updateBundle && (
                 <div className="status-item full-width">
                   <span className="label">bundle:</span>
@@ -1798,6 +2475,45 @@ function App() {
             )}
             {advancedUpdateExpanded && (
               <div className="update-advanced">
+                <details className="device-subdetails">
+                  <summary>Update source</summary>
+                  <div className="device-subdetails-body">
+                    <label className="file-control">
+                      <span>latest release index</span>
+                      <input
+                        type="url"
+                        value={releaseIndexDraft}
+                        disabled={deviceBusy || updatingFirmware || fetchingRelease}
+                        onChange={(e) => setReleaseIndexDraft(e.target.value)}
+                        className="input"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                    </label>
+                    <div className="status-item full-width">
+                      <span className="label">active:</span>
+                      <span className="value update-hash">{latestReleaseIndexLabel}</span>
+                    </div>
+                    <div className="button-group update-source-actions">
+                      <button
+                        type="button"
+                        onClick={saveReleaseIndexSource}
+                        disabled={deviceBusy || updatingFirmware || fetchingRelease}
+                        className="btn btn-small btn-secondary"
+                      >
+                        save source
+                      </button>
+                      <button
+                        type="button"
+                        onClick={resetReleaseIndexSource}
+                        disabled={deviceBusy || updatingFirmware || fetchingRelease}
+                        className="btn btn-small btn-secondary"
+                      >
+                        reset source
+                      </button>
+                    </div>
+                  </div>
+                </details>
                 <div className="update-files">
                   <label className="file-control">
                     <span>bundle JSON</span>
@@ -1903,7 +2619,7 @@ function App() {
           </div>
 
           {wasmReady && info && (
-            <div className="section">
+            <div className="section device-panel device-signing-panel">
               <h2>Transaction signing</h2>
 
               {!tx ? (
@@ -1955,52 +2671,59 @@ function App() {
               )}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {activeTab === 'device' && !connected && (
-        <div className="section connect-panel">
-          {isTauri && availablePorts.length === 0 && (
-            <div className="connect-actions">
-              <button onClick={showPortSelector} className="btn btn-secondary">
-                select port
-              </button>
+        <div className="device-page device-page-disconnected">
+          <div className="device-topbar">
+            <div className="device-title">
+              <span className="device-eyebrow">Nockster</span>
+              <h2>Device console</h2>
             </div>
-          )}
-          {isTauri && availablePorts.length > 0 && (
-            <select value={selectedPort} onChange={(e) => setSelectedPort(e.target.value)} className="input">
-              {availablePorts.map(port => (
-                <option key={port} value={port}>{port}</option>
-              ))}
-            </select>
-          )}
-          <div className="update-grid">
-            <div className="status-item full-width">
-              <span className="label">latest source:</span>
-              <span className="value update-hash">{latestReleaseIndexLabel}</span>
+            <div className="device-metrics" aria-label="Device summary">
+              <span className="device-pill device-pill-warn">offline</span>
             </div>
           </div>
-          <div className="connect-actions">
-            <button
-              onClick={installLatestUpdate}
-              className="btn btn-primary"
-              disabled={
-                !isSupported ||
-                updatingFirmware ||
-                fetchingRelease ||
-                deviceBusy ||
-                (isTauri && !selectedPort)
-              }
-            >
-              {updatingFirmware || fetchingRelease ? 'updating...' : 'update firmware'}
-            </button>
-            <button
-              onClick={connect}
-              className="btn btn-secondary"
-              disabled={!isSupported || deviceBusy || updatingFirmware || fetchingRelease || (isTauri && !selectedPort)}
-            >
-              connect
-            </button>
+          <div className="section connect-panel device-panel device-connect-panel">
+            <div className="connect-main">
+              {isTauri && availablePorts.length === 0 && (
+                <div className="connect-actions">
+                  <button onClick={showPortSelector} className="btn btn-secondary">
+                    select port
+                  </button>
+                </div>
+              )}
+              {isTauri && availablePorts.length > 0 && (
+                <select value={selectedPort} onChange={(e) => setSelectedPort(e.target.value)} className="input">
+                  {availablePorts.map(port => (
+                    <option key={port} value={port}>{port}</option>
+                  ))}
+                </select>
+              )}
+              <div className="connect-actions">
+                <button
+                  onClick={installLatestUpdate}
+                  className="btn btn-primary"
+                  disabled={
+                    !isSupported ||
+                    updatingFirmware ||
+                    fetchingRelease ||
+                    deviceBusy ||
+                    (isTauri && !selectedPort)
+                  }
+                >
+                  {updatingFirmware || fetchingRelease ? 'updating...' : 'update firmware'}
+                </button>
+                <button
+                  onClick={connect}
+                  className="btn btn-secondary"
+                  disabled={!isSupported || deviceBusy || updatingFirmware || fetchingRelease || (isTauri && !selectedPort)}
+                >
+                  connect
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

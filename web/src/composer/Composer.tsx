@@ -19,10 +19,16 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import type { DeviceAddressBookEntry } from 'nockster-js';
 
-import { compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'nockster-wasm';
-import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1 } from './types';
+import { ParsedTransaction, compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'nockster-wasm';
+import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1, WalletAddress } from './types';
 import { loadAddressBook, newId, saveAddressBook } from './storage';
+import {
+  NOCKBLOCKS_API_KEY_STORAGE_KEY,
+  fetchNockblocksNotes,
+  loadLocalNockblocksKey,
+} from './nockblocks';
 
 import './Composer.css';
 
@@ -48,21 +54,75 @@ type NoteNodeData = {
 };
 type TxNodeData = {
   onCompose?: () => void;
+  onSignDraft?: (draft: ComposedDraft) => void | Promise<void>;
   composing?: boolean;
+  signingDraft?: boolean;
+  canSignDraft?: boolean;
+  signDraftDisabledReason?: string;
   lastError?: string;
-  result?: {
-    psnt: Uint8Array;
-    filename: string;
-    summaryJson: string;
+  result?: ComposedDraft;
+};
+
+type ComposedDraft = {
+  psnt: Uint8Array;
+  filename: string;
+  summaryJson: string;
+};
+
+type ComposeSummary = {
+  outputs?: Array<{ amount?: number; alias?: string; recipient?: unknown }>;
+  total_fees?: number;
+  minimum_fee?: number;
+  inputs_used?: Array<{ assets?: number }>;
+};
+
+type ImportedTxPreview = {
+  name: string;
+  info: {
+    tx_id: string;
+    shape: string;
+    version: number;
+    input_count: number;
   };
+  details: PreviewTxDetails;
+};
+
+type PreviewSeed = {
+  gift?: unknown;
+  recipient_pkh?: unknown;
+  lock_root?: unknown;
+  parent_hash?: unknown;
+};
+
+type PreviewSpend = {
+  name_first?: unknown;
+  name_last?: unknown;
+  fee?: unknown;
+  seeds?: PreviewSeed[];
+};
+
+type PreviewTxDetails = {
+  version?: unknown;
+  transaction_id?: unknown;
+  spend_count?: unknown;
+  spends?: PreviewSpend[];
+};
+
+type PreviewNodeData = {
+  label: string;
+  title: string;
+  meta?: string[];
+  mono?: string;
 };
 
 type UnitMode = 'n' | 'ℕ';
+type ComposerSidebarPanel = 'send' | 'wallet' | 'preview' | 'canvas';
 
 type AddressFlowNode = Node<AddressNodeData, 'address'>;
 type NoteFlowNode = Node<NoteNodeData, 'note'>;
 type TxFlowNode = Node<TxNodeData, 'tx'>;
-type ComposerNode = AddressFlowNode | NoteFlowNode | TxFlowNode;
+type PreviewFlowNode = Node<PreviewNodeData, 'preview'>;
+type ComposerNode = AddressFlowNode | NoteFlowNode | TxFlowNode | PreviewFlowNode;
 type ComposerEdge = Edge;
 
 const NICKS_PER_NOCK = 1n << 16n; // 65536
@@ -154,6 +214,83 @@ function formatSummaryJson(raw: string): string {
   }
 }
 
+function formatPreviewDetails(value: unknown): string {
+  try {
+    return JSON.stringify(normalizeWasmValue(value), null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeWasmValue(value: unknown): unknown {
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Map) {
+    const result: Record<string, unknown> = {};
+    for (const [key, mapValue] of value.entries()) {
+      result[String(key)] = normalizeWasmValue(mapValue);
+    }
+    return result;
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeWasmValue);
+  }
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, objectValue] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = normalizeWasmValue(objectValue);
+    }
+    return result;
+  }
+  return value;
+}
+
+function normalizePreviewDetails(value: unknown): PreviewTxDetails {
+  const normalized = normalizeWasmValue(value);
+  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
+    return {};
+  }
+
+  const details = normalized as PreviewTxDetails;
+  return {
+    ...details,
+    spends: Array.isArray(details.spends) ? details.spends : [],
+  };
+}
+
+function previewNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function previewString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseComposeSummary(raw: string | undefined): ComposeSummary | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as ComposeSummary) : null;
+  } catch {
+    return null;
+  }
+}
+
+function summaryOutputTotal(summary: ComposeSummary | null): number {
+  return (summary?.outputs ?? []).reduce((acc, output) => acc + (Number(output.amount) || 0), 0);
+}
+
+function summaryInputTotal(summary: ComposeSummary | null): number {
+  return (summary?.inputs_used ?? []).reduce((acc, input) => acc + (Number(input.assets) || 0), 0);
+}
+
+function isHighFeeSummary(summary: ComposeSummary | null): boolean {
+  const fee = Number(summary?.total_fees) || 0;
+  const minimum = Number(summary?.minimum_fee);
+  if (!Number.isFinite(minimum)) return false;
+  return fee > minimum;
+}
+
 function downloadBytes(name: string, bytes: Uint8Array) {
   const ab = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(ab).set(bytes);
@@ -166,6 +303,10 @@ function downloadBytes(name: string, bytes: Uint8Array) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function stopNodeInputEvent(event: { stopPropagation: () => void }) {
+  event.stopPropagation();
 }
 
 function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { unitMode: UnitMode }) {
@@ -195,9 +336,13 @@ function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { unitMode
         )}
         {showAmount && (
           <input
-            className="node-input node-input-compact"
+            className="node-input node-input-compact nodrag"
             placeholder={`amount (${unitMode})`}
             value={data.amount}
+            onClick={stopNodeInputEvent}
+            onDoubleClick={stopNodeInputEvent}
+            onKeyDown={stopNodeInputEvent}
+            onPointerDown={stopNodeInputEvent}
             onChange={(e) => data.onChangeAmount(e.target.value)}
           />
         )}
@@ -228,9 +373,16 @@ function NoteNode({ data, unitMode }: NodeProps<NoteFlowNode> & { unitMode: Unit
   );
 }
 
-function TxNode({ data }: NodeProps<TxFlowNode>) {
+function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: UnitMode }) {
   const composing = data.composing ?? false;
   const onCompose = data.onCompose;
+  const summary = parseComposeSummary(data.result?.summaryJson);
+  const fee = Number(summary?.total_fees) || 0;
+  const minimumFee = Number(summary?.minimum_fee) || 0;
+  const external = summaryOutputTotal(summary);
+  const inputTotal = summaryInputTotal(summary);
+  const change = Math.max(0, inputTotal - external - fee);
+  const highFee = isHighFeeSummary(summary);
 
   return (
     <div className="node-card">
@@ -240,21 +392,56 @@ function TxNode({ data }: NodeProps<TxFlowNode>) {
       <div className="node-body">
         <div className="node-actions">
           <button
-            className="btn btn-success btn-small"
-            onClick={() => onCompose?.()}
+            className="btn btn-success btn-small nodrag"
+            onPointerDown={stopNodeInputEvent}
+            onClick={(event) => {
+              event.stopPropagation();
+              onCompose?.();
+            }}
             disabled={!onCompose || composing}
           >
             {composing ? 'composing...' : 'compose'}
           </button>
         </div>
         {data.result && (
-          <div className="composer-group" style={{ marginTop: '0.5rem' }}>
-            <div className="composer-row">
+          <div className="composer-result">
+            {summary && (
+              <div className="composer-result-grid">
+                <span>send</span>
+                <strong>{formatAmountWithUnit(external, unitMode)}</strong>
+                <span>fee</span>
+                <strong className={highFee ? 'composer-warn-text' : ''}>
+                  {formatAmountWithUnit(fee, unitMode)}
+                </strong>
+                <span>min</span>
+                <strong>{formatAmountWithUnit(minimumFee, unitMode)}</strong>
+                <span>change</span>
+                <strong>{formatAmountWithUnit(change, unitMode)}</strong>
+              </div>
+            )}
+            {highFee && <div className="validation-text">Fee exceeds calculated minimum.</div>}
+            <div className="composer-row composer-action-row">
               <button
-                className="btn btn-secondary btn-small"
-                onClick={() => downloadBytes(data.result!.filename, data.result!.psnt)}
+                className="btn btn-primary btn-small nodrag"
+                title={!data.canSignDraft ? data.signDraftDisabledReason : undefined}
+                onPointerDown={stopNodeInputEvent}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (data.result) void data.onSignDraft?.(data.result);
+                }}
+                disabled={!data.result || !data.onSignDraft || !data.canSignDraft || data.signingDraft}
               >
-                download .psnt
+                {data.signingDraft ? 'signing...' : 'sign on device'}
+              </button>
+              <button
+                className="btn btn-secondary btn-small nodrag"
+                onPointerDown={stopNodeInputEvent}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  downloadBytes(data.result!.filename, data.result!.psnt);
+                }}
+              >
+                download
               </button>
             </div>
           </div>
@@ -267,27 +454,57 @@ function TxNode({ data }: NodeProps<TxFlowNode>) {
   );
 }
 
+function PreviewNode({ data }: NodeProps<PreviewFlowNode>) {
+  return (
+    <div className="node-card preview-node-card">
+      <div className="node-header preview">
+        <span>{data.label}</span>
+      </div>
+      <div className="node-body">
+        <div>{data.title}</div>
+        {data.meta?.map((item) => (
+          <div key={item} className="inspector-help">
+            {item}
+          </div>
+        ))}
+        {data.mono && <div className="node-mono preview-node-mono">{data.mono}</div>}
+      </div>
+      <Handle type="target" id="in" position={Position.Left} isConnectable={false} />
+      <Handle type="source" id="out" position={Position.Right} isConnectable={false} />
+    </div>
+  );
+}
+
 function sumAssets(notes: NoteV1[]): number {
   return notes.reduce((acc, n) => acc + (Number(n.assets) || 0), 0);
 }
 
-export function Composer({ wasmReady }: { wasmReady: boolean }) {
+export function Composer({
+  wasmReady,
+  walletAddresses = [],
+  deviceAddressBook = [],
+  onSignDraft,
+  canSignDraft = false,
+  signingDraft = false,
+  signDraftDisabledReason = 'connect and unlock device to sign',
+}: {
+  wasmReady: boolean;
+  walletAddresses?: WalletAddress[];
+  deviceAddressBook?: DeviceAddressBookEntry[];
+  onSignDraft?: (draft: ComposedDraft) => void | Promise<void>;
+  canSignDraft?: boolean;
+  signingDraft?: boolean;
+  signDraftDisabledReason?: string;
+}) {
   const [addressBook, setAddressBook] = useState<AddressBookEntry[]>(() => loadAddressBook());
 
   const unitStorageKey = 'nockster.composer.unit.v1';
-  const [unitModePinned, setUnitModePinned] = useState<boolean>(() => {
-    const stored = localStorage.getItem(unitStorageKey);
-    return stored === 'n' || stored === 'ℕ';
-  });
+  const nockblocksApiKeyStorageKey = NOCKBLOCKS_API_KEY_STORAGE_KEY;
+  const [unitModePinned, setUnitModePinned] = useState<boolean>(true);
   const [unitMode, setUnitMode] = useState<UnitMode>(() => {
     const stored = localStorage.getItem(unitStorageKey);
     if (stored === 'n' || stored === 'ℕ') return stored;
-
-    const entries = loadAddressBook();
-    const hasWholeNocks = entries.some((e) =>
-      (e.notes ?? []).some((n) => (Number(n.assets) || 0) >= Number(NICKS_PER_NOCK))
-    );
-    return hasWholeNocks ? 'ℕ' : 'n';
+    return 'n';
   });
   const unitModeRef = useRef<UnitMode>(unitMode);
 
@@ -318,6 +535,7 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   const [selectedNodes, setSelectedNodes] = useState<ComposerNode[]>([]);
   const [selectedEdges, setSelectedEdges] = useState<ComposerEdge[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarPanel, setSidebarPanel] = useState<ComposerSidebarPanel>('send');
   const [inspectorDrag, setInspectorDrag] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
   const [inspectorDragging, setInspectorDragging] = useState(false);
   const inspectorDragRef = useRef<{
@@ -329,6 +547,10 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
 
   const [addressAddOpen, setAddressAddOpen] = useState(false);
   const [noteAddOpen, setNoteAddOpen] = useState(false);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem(nockblocksApiKeyStorageKey)?.trim() || '');
+  const [apiStatus, setApiStatus] = useState('');
+  const [syncingNotes, setSyncingNotes] = useState(false);
+  const [walletImportStatus, setWalletImportStatus] = useState('');
 
   const [entryFormAlias, setEntryFormAlias] = useState('');
   const [entryFormKind, setEntryFormKind] = useState<AddressKind>('pkh');
@@ -342,6 +564,52 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   const [noteFormOriginPage, setNoteFormOriginPage] = useState('');
   const [noteFormAssets, setNoteFormAssets] = useState('');
   const [noteFormError, setNoteFormError] = useState<string | null>(null);
+  const [quickRecipient, setQuickRecipient] = useState('');
+  const [quickAmount, setQuickAmount] = useState('');
+  const [quickDraft, setQuickDraft] = useState<ComposedDraft | null>(null);
+  const [quickStatus, setQuickStatus] = useState('');
+  const [importedTxPreview, setImportedTxPreview] = useState<ImportedTxPreview | null>(null);
+  const [importedTxStatus, setImportedTxStatus] = useState('');
+  const walletAutoSyncKeyRef = useRef('');
+  const walletByAddress = useMemo(() => {
+    const byAddress = new Map<string, WalletAddress>();
+    for (const wallet of walletAddresses) {
+      const address = wallet.address.trim();
+      if (address) byAddress.set(address, wallet);
+    }
+    return byAddress;
+  }, [walletAddresses]);
+  const walletAddressKey = useMemo(
+    () =>
+      walletAddresses
+        .map((wallet) => wallet.address.trim())
+        .filter(Boolean)
+        .sort()
+        .join('|'),
+    [walletAddresses]
+  );
+
+  useEffect(() => {
+    if (localStorage.getItem(nockblocksApiKeyStorageKey)?.trim()) {
+      return;
+    }
+
+    let cancelled = false;
+    loadLocalNockblocksKey()
+      .then((loaded) => {
+        if (cancelled) return;
+        if (loaded.key) {
+          setApiKey(loaded.key);
+        }
+      })
+      .catch((err: any) => {
+        if (cancelled) return;
+        setApiStatus(`API key lookup failed: ${err?.message ?? String(err)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nockblocksApiKeyStorageKey]);
 
   const multisigPreview = useMemo(() => {
     if (entryFormKind !== 'multisig') return { address: '', error: null as string | null };
@@ -363,7 +631,8 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
     () => ({
       address: ((props: any) => <AddressNode {...props} unitMode={unitMode} />) as any,
       note: ((props: any) => <NoteNode {...props} unitMode={unitMode} />) as any,
-      tx: TxNode as any,
+      tx: ((props: any) => <TxNode {...props} unitMode={unitMode} />) as any,
+      preview: PreviewNode as any,
     }),
     [unitMode]
   );
@@ -437,6 +706,99 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   useEffect(() => {
     addressBookRef.current = addressBook;
   }, [addressBook]);
+
+  useEffect(() => {
+    setNodes((current) => {
+      let changed = false;
+      const next = current.flatMap((n): ComposerNode[] => {
+        if (n.type === 'address') {
+          const data = n.data as AddressNodeData;
+          const entry = addressBook.find((e) => e.id === data.entryId);
+          if (!entry) {
+            changed = true;
+            return [];
+          }
+
+          const kind: AddressKind = entry.kind ?? 'pkh';
+          const notes = kind === 'pkh' ? entry.notes ?? [] : [];
+          const multisig = kind === 'multisig' ? entry.multisig : undefined;
+          const total = sumAssets(notes);
+          if (
+            data.alias === entry.alias &&
+            data.kind === kind &&
+            data.address === entry.address &&
+            data.multisig === multisig &&
+            data.noteCount === notes.length &&
+            data.total === total
+          ) {
+            return [n];
+          }
+
+          changed = true;
+          return [
+            {
+              ...n,
+              data: {
+                ...data,
+                alias: entry.alias,
+                kind,
+                address: entry.address,
+                multisig,
+                noteCount: notes.length,
+                total,
+              },
+            } as AddressFlowNode,
+          ];
+        }
+
+        if (n.type === 'note') {
+          const data = n.data as NoteNodeData;
+          const note = addressBook
+            .find((e) => e.id === data.entryId)
+            ?.notes?.find((candidate) => candidate.id === data.noteId);
+          if (!note) {
+            changed = true;
+            return [];
+          }
+
+          if (
+            data.assets === note.assets &&
+            data.originPage === note.originPage &&
+            data.nameFirst === note.nameFirst &&
+            data.nameLast === note.nameLast
+          ) {
+            return [n];
+          }
+
+          changed = true;
+          return [
+            {
+              ...n,
+              data: {
+                ...data,
+                assets: note.assets,
+                originPage: note.originPage,
+                nameFirst: note.nameFirst,
+                nameLast: note.nameLast,
+              },
+            } as NoteFlowNode,
+          ];
+        }
+
+        return [n];
+      });
+
+      return changed ? next : current;
+    });
+  }, [addressBook, setNodes]);
+
+  useEffect(() => {
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    setEdges((current) => {
+      const next = current.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+      return next.length === current.length ? current : next;
+    });
+  }, [nodes, setEdges]);
 
   useEffect(() => {
     const prev = prevUnitModeRef.current;
@@ -554,6 +916,184 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
     queueMicrotask(() => rfInstance.current?.fitView?.({ padding: 0.3, maxZoom: 0.9 }));
   }, [setEdges, setNodes]);
 
+  const clearImportedPreviewGraph = useCallback(() => {
+    setEdges((current) => current.filter((edge) => !edge.id.startsWith('preview-')));
+    setNodes((current) => current.filter((node) => node.type !== 'preview'));
+  }, [setEdges, setNodes]);
+
+  const showImportedPreviewGraph = useCallback(
+    (preview: ImportedTxPreview) => {
+      const base = `preview-${newId()}`;
+      const txNodeId = `${base}-tx`;
+      const spends = Array.isArray(preview.details.spends) ? preview.details.spends : [];
+      const outputs = spends.flatMap((spend, spendIndex) =>
+        (Array.isArray(spend.seeds) ? spend.seeds : []).map((seed, seedIndex) => ({
+          spendIndex,
+          seedIndex,
+          seed,
+        }))
+      );
+      const visibleSpends = spends.slice(0, 8);
+      const visibleOutputs = outputs.slice(0, 12);
+      const hiddenCount = Math.max(0, spends.length - visibleSpends.length)
+        + Math.max(0, outputs.length - visibleOutputs.length);
+
+      const previewNodes: ComposerNode[] = [
+        {
+          id: txNodeId,
+          type: 'preview',
+          position: { x: 520, y: 180 },
+          data: {
+            label: 'Imported tx',
+            title: shortHash(preview.info.tx_id, 6),
+            meta: [
+              `${preview.info.shape} · v${preview.info.version}`,
+              `${preview.info.input_count} spend${preview.info.input_count === 1 ? '' : 's'}`,
+            ],
+            mono: preview.info.tx_id,
+          },
+        } as PreviewFlowNode,
+      ];
+      const previewEdges: ComposerEdge[] = [];
+
+      if (visibleSpends.length === 0) {
+        const id = `${base}-spend-empty`;
+        previewNodes.push({
+          id,
+          type: 'preview',
+          position: { x: 60, y: 180 },
+          data: {
+            label: 'Spends',
+            title: 'No parsed spend detail',
+            meta: ['The jam parsed, but the preview did not expose spend rows.'],
+          },
+        } as PreviewFlowNode);
+        previewEdges.push({
+          id: `${base}-edge-empty-spend`,
+          source: id,
+          sourceHandle: 'out',
+          target: txNodeId,
+          targetHandle: 'in',
+          type: 'smoothstep',
+        });
+      }
+
+      visibleSpends.forEach((spend, index) => {
+        const id = `${base}-spend-${index}`;
+        const fee = previewNumber(spend.fee);
+        const first = previewString(spend.name_first);
+        const last = previewString(spend.name_last);
+        const seeds = Array.isArray(spend.seeds) ? spend.seeds.length : 0;
+        const meta = [
+          fee === null ? '' : `fee ${formatAmountWithUnit(fee, unitModeRef.current)}`,
+          `${seeds} output${seeds === 1 ? '' : 's'}`,
+        ].filter(Boolean);
+        previewNodes.push({
+          id,
+          type: 'preview',
+          position: { x: 60, y: 40 + index * 190 },
+          data: {
+            label: `Spend ${index + 1}`,
+            title: first || last ? `${shortHash(first, 5)} ${shortHash(last, 5)}` : 'Input note',
+            meta,
+            mono: first || last ? `${first} ${last}`.trim() : undefined,
+          },
+        } as PreviewFlowNode);
+        previewEdges.push({
+          id: `${base}-edge-spend-${index}`,
+          source: id,
+          sourceHandle: 'out',
+          target: txNodeId,
+          targetHandle: 'in',
+          type: 'smoothstep',
+        });
+      });
+
+      if (visibleOutputs.length === 0) {
+        const id = `${base}-output-empty`;
+        previewNodes.push({
+          id,
+          type: 'preview',
+          position: { x: 980, y: 180 },
+          data: {
+            label: 'Outputs',
+            title: 'No parsed output detail',
+          },
+        } as PreviewFlowNode);
+        previewEdges.push({
+          id: `${base}-edge-empty-output`,
+          source: txNodeId,
+          sourceHandle: 'out',
+          target: id,
+          targetHandle: 'in',
+          type: 'smoothstep',
+        });
+      }
+
+      visibleOutputs.forEach(({ seed, spendIndex, seedIndex }, index) => {
+        const id = `${base}-output-${index}`;
+        const gift = previewNumber(seed.gift);
+        const recipient = previewString(seed.recipient_pkh);
+        const lockRoot = previewString(seed.lock_root);
+        const parent = previewString(seed.parent_hash);
+        const meta = [
+          gift === null ? '' : formatAmountWithUnit(gift, unitModeRef.current),
+          `spend ${spendIndex + 1}.${seedIndex + 1}`,
+        ].filter(Boolean);
+        previewNodes.push({
+          id,
+          type: 'preview',
+          position: { x: 980, y: 40 + index * 165 },
+          data: {
+            label: `Output ${index + 1}`,
+            title: recipient ? shortHash(recipient, 6) : lockRoot ? shortHash(lockRoot, 6) : 'Recipient',
+            meta,
+            mono: recipient || lockRoot || parent || undefined,
+          },
+        } as PreviewFlowNode);
+        previewEdges.push({
+          id: `${base}-edge-output-${index}`,
+          source: txNodeId,
+          sourceHandle: 'out',
+          target: id,
+          targetHandle: 'in',
+          type: 'smoothstep',
+        });
+      });
+
+      if (hiddenCount > 0) {
+        previewNodes.push({
+          id: `${base}-hidden`,
+          type: 'preview',
+          position: { x: 520, y: 380 },
+          data: {
+            label: 'Preview',
+            title: `+${hiddenCount} hidden row${hiddenCount === 1 ? '' : 's'}`,
+            meta: ['Large imported transactions are truncated on the canvas.'],
+          },
+        } as PreviewFlowNode);
+      }
+
+      setNodes((current) => {
+        const connectedNodeIds = new Set<string>();
+        for (const edge of edgesRef.current) {
+          connectedNodeIds.add(edge.source);
+          connectedNodeIds.add(edge.target);
+        }
+        const retained = current.filter((node) => {
+          if (node.type === 'preview') return false;
+          if (node.type !== 'tx') return true;
+          const data = node.data as Partial<TxNodeData>;
+          return connectedNodeIds.has(node.id) || !!data.result;
+        });
+        return [...retained, ...previewNodes];
+      });
+      setEdges((current) => current.filter((edge) => !edge.id.startsWith('preview-')).concat(previewEdges));
+      queueMicrotask(() => rfInstance.current?.fitView?.({ padding: 0.25, maxZoom: 0.9 }));
+    },
+    [setEdges, setNodes]
+  );
+
   const ensureTxNodeData = useCallback(
     (nodeId: string) => {
       const existing = nodes.find((n) => n.id === nodeId);
@@ -561,10 +1101,29 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
       if (existing.type !== 'tx') return;
 
       const data = existing.data as Partial<TxNodeData>;
-      if (typeof data.onCompose === 'function') return;
+      if (typeof data.onCompose === 'function') {
+        if (
+          data.onSignDraft !== onSignDraft ||
+          data.canSignDraft !== canSignDraft ||
+          data.signingDraft !== signingDraft ||
+          data.signDraftDisabledReason !== signDraftDisabledReason
+        ) {
+          updateNodeData(nodeId, {
+            onSignDraft,
+            canSignDraft,
+            signingDraft,
+            signDraftDisabledReason,
+          });
+        }
+        return;
+      }
 
       updateNodeData(nodeId, {
         composing: false,
+        onSignDraft,
+        canSignDraft,
+        signingDraft,
+        signDraftDisabledReason,
         onCompose: async () => {
           if (!wasmReady) {
             updateNodeData(nodeId, { lastError: 'WASM not ready yet' });
@@ -719,7 +1278,7 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
         },
       });
     },
-    [nodes, updateNodeData, wasmReady]
+    [canSignDraft, nodes, onSignDraft, signDraftDisabledReason, signingDraft, updateNodeData, wasmReady]
   );
 
   useEffect(() => {
@@ -827,6 +1386,129 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   );
 
   const selectedEntry = selectedEntryId ? entryById(selectedEntryId) : null;
+  const pkhEntries = useMemo(
+    () => addressBook.filter((entry) => (entry.kind ?? 'pkh') === 'pkh'),
+    [addressBook]
+  );
+  const quickSourceId =
+    selectedEntry && (selectedEntry.kind ?? 'pkh') === 'pkh' ? selectedEntryId : pkhEntries[0]?.id ?? '';
+  const quickSourceEntry = quickSourceId ? entryById(quickSourceId) : null;
+
+  const composeQuickPayment = useCallback(
+    async (signAfterCompose: boolean) => {
+      if (!wasmReady) {
+        setQuickStatus('WASM not ready yet');
+        return;
+      }
+      if (!quickSourceEntry || (quickSourceEntry.kind ?? 'pkh') !== 'pkh') {
+        setQuickStatus('select a source pkh');
+        return;
+      }
+      const notes = quickSourceEntry.notes ?? [];
+      if (notes.length === 0) {
+        setQuickStatus('source has no notes');
+        return;
+      }
+      const recipient = quickRecipient.trim();
+      if (!recipient) {
+        setQuickStatus('recipient required');
+        return;
+      }
+      const parsedAmount = parseAmountTextToNicks(quickAmount, unitModeRef.current);
+      if ('error' in parsedAmount) {
+        setQuickStatus(parsedAmount.error);
+        return;
+      }
+
+      try {
+        setQuickStatus('composing...');
+        const result = compose_tx_v1_unsigned({
+          source_pkh: quickSourceEntry.address,
+          notes: notes.map((note) => ({
+            name_first: note.nameFirst,
+            name_last: note.nameLast,
+            origin_page: note.originPage,
+            assets: note.assets,
+            version: note.version ?? 1,
+          })),
+          outputs: [{ recipient, amount: parsedAmount.nicks, alias: 'recipient' }],
+        });
+        const draft: ComposedDraft = {
+          filename: `draft-${Date.now()}.psnt`,
+          psnt: result.wallet_jam,
+          summaryJson: result.summary_json,
+        };
+        setQuickDraft(draft);
+
+        const summary = parseComposeSummary(draft.summaryJson);
+        const fee = Number(summary?.total_fees) || 0;
+        const external = summaryOutputTotal(summary);
+        const warning = isHighFeeSummary(summary) ? ' · fee exceeds calculated minimum' : '';
+        setQuickStatus(
+          `ready · send ${formatAmountWithUnit(external, unitModeRef.current)} · fee ${formatAmountWithUnit(
+            fee,
+            unitModeRef.current
+          )}${warning}`
+        );
+
+        if (signAfterCompose) {
+          if (!onSignDraft || !canSignDraft) {
+            setQuickStatus(signDraftDisabledReason);
+            return;
+          }
+          await onSignDraft(draft);
+        }
+      } catch (err: any) {
+        setQuickDraft(null);
+        setQuickStatus(err?.message ?? String(err));
+      }
+    },
+    [
+      canSignDraft,
+      onSignDraft,
+      quickAmount,
+      quickRecipient,
+      quickSourceEntry,
+      signDraftDisabledReason,
+      wasmReady,
+    ]
+  );
+
+  const loadTransactionPreview = useCallback(async (file: File | null | undefined) => {
+    if (!file) return;
+    setImportedTxStatus(`loading ${file.name}...`);
+    setImportedTxPreview(null);
+    clearImportedPreviewGraph();
+
+    let parsed: ParsedTransaction | null = null;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      parsed = new ParsedTransaction(bytes);
+      const info = parsed.info();
+      const previewInfo = {
+        tx_id: info.tx_id,
+        shape: info.shape,
+        version: info.version,
+        input_count: info.input_count,
+      };
+      info.free();
+      const details = normalizePreviewDetails(parsed.get_details());
+      const preview: ImportedTxPreview = {
+        name: file.name,
+        info: previewInfo,
+        details,
+      };
+      setImportedTxPreview(preview);
+      showImportedPreviewGraph(preview);
+      setImportedTxStatus(`loaded ${previewInfo.tx_id}`);
+    } catch (err: any) {
+      setImportedTxPreview(null);
+      clearImportedPreviewGraph();
+      setImportedTxStatus(`transaction preview failed: ${err?.message ?? String(err)}`);
+    } finally {
+      parsed?.free();
+    }
+  }, [clearImportedPreviewGraph, showImportedPreviewGraph]);
 
   const addEntry = useCallback(async () => {
     const alias = entryFormAlias.trim();
@@ -973,6 +1655,318 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
     [addressBook]
   );
 
+  const reloadLocalApiKey = useCallback(async () => {
+    setApiStatus('loading local API key...');
+    try {
+      const loaded = await loadLocalNockblocksKey();
+      if (loaded.key) {
+        setApiKey(loaded.key);
+        setApiStatus(`loaded API key from ${loaded.source}; save it to keep using it`);
+      } else {
+        setApiStatus('no local API key found; paste one below');
+      }
+    } catch (err: any) {
+      setApiStatus(`API key lookup failed: ${err?.message ?? String(err)}`);
+    }
+  }, []);
+
+  const saveNockblocksSettings = useCallback(() => {
+    const trimmedKey = apiKey.trim();
+
+    if (trimmedKey) {
+      localStorage.setItem(nockblocksApiKeyStorageKey, trimmedKey);
+      setApiKey(trimmedKey);
+      setApiStatus('saved Nockblocks API key in this browser');
+    } else {
+      localStorage.removeItem(nockblocksApiKeyStorageKey);
+      setApiStatus('cleared saved Nockblocks API key');
+    }
+  }, [apiKey, nockblocksApiKeyStorageKey]);
+
+  const clearNockblocksSettings = useCallback(() => {
+    localStorage.removeItem(nockblocksApiKeyStorageKey);
+    setApiKey('');
+    setApiStatus('cleared Nockblocks API key from this browser');
+  }, [nockblocksApiKeyStorageKey]);
+
+  const upsertWalletEntries = useCallback(
+    (entries: AddressBookEntry[]) => {
+      const walletPkhs = walletAddresses
+        .map((wallet) => ({ ...wallet, address: wallet.address.trim() }))
+        .filter((wallet) => wallet.address.length > 0);
+
+      const next = [...entries];
+      let added = 0;
+      let updated = 0;
+      let firstAddedId = '';
+
+      for (const wallet of walletPkhs) {
+        const alias = wallet.alias?.trim() || `wallet slot ${wallet.slot}`;
+        const existingIndex = next.findIndex((entry) => entry.address === wallet.address);
+        if (existingIndex >= 0) {
+          const existing = next[existingIndex];
+          if (existing.alias !== alias) {
+            next[existingIndex] = { ...existing, alias };
+            updated += 1;
+          }
+          continue;
+        }
+
+        const id = newId();
+        if (!firstAddedId) firstAddedId = id;
+        next.push({
+          id,
+          alias,
+          kind: 'pkh',
+          address: wallet.address,
+          notes: [],
+        });
+        added += 1;
+      }
+
+      return { added, updated, firstAddedId, next, walletPkhs };
+    },
+    [walletAddresses]
+  );
+
+  const importWalletAddresses = useCallback(
+    (quiet = false) => {
+      const { added, updated, firstAddedId, next, walletPkhs } = upsertWalletEntries(addressBook);
+
+      if (walletPkhs.length === 0) {
+        if (!quiet) setWalletImportStatus('connect and unlock the device to import wallet pkhs');
+        return;
+      }
+
+      if (added > 0 || updated > 0) {
+        setAddressBook(next);
+        saveAddressBook(next);
+        if (!selectedEntryId && firstAddedId) {
+          setSelectedEntryId(firstAddedId);
+        }
+      }
+
+      if (!quiet) {
+        setWalletImportStatus(
+          added > 0 || updated > 0
+            ? `imported ${added} wallet pkh${added === 1 ? '' : 's'}`
+              + (updated > 0 ? ` · updated ${updated} nickname${updated === 1 ? '' : 's'}` : '')
+            : 'wallet pkhs already imported'
+        );
+      }
+    },
+    [addressBook, selectedEntryId, upsertWalletEntries]
+  );
+
+  const importDeviceAddressBook = useCallback(
+    (quiet = false) => {
+      const candidates = deviceAddressBook
+        .map((entry) => ({
+          label: entry.label.trim(),
+          pkh: entry.pkh.trim(),
+        }))
+        .filter((entry) => entry.label && entry.pkh);
+
+      if (candidates.length === 0) {
+        if (!quiet) setWalletImportStatus('device address book is empty');
+        return;
+      }
+
+      const next = [...addressBook];
+      let added = 0;
+      let updated = 0;
+      let firstAddedId = '';
+
+      for (const entry of candidates) {
+        const existingIndex = next.findIndex((candidate) => candidate.address === entry.pkh);
+        if (existingIndex >= 0) {
+          const existing = next[existingIndex];
+          if (existing.alias !== entry.label) {
+            next[existingIndex] = { ...existing, alias: entry.label };
+            updated += 1;
+          }
+          continue;
+        }
+
+        const id = newId();
+        if (!firstAddedId) firstAddedId = id;
+        next.push({
+          id,
+          alias: entry.label,
+          kind: 'pkh',
+          address: entry.pkh,
+          notes: [],
+        });
+        added += 1;
+      }
+
+      if (added > 0 || updated > 0) {
+        setAddressBook(next);
+        saveAddressBook(next);
+        if (!selectedEntryId && firstAddedId) {
+          setSelectedEntryId(firstAddedId);
+        }
+      }
+
+      if (!quiet) {
+        setWalletImportStatus(
+          added > 0 || updated > 0
+            ? `imported ${added} and updated ${updated} from device book`
+            : 'device book already imported'
+        );
+      }
+    },
+    [addressBook, deviceAddressBook, selectedEntryId]
+  );
+
+  useEffect(() => {
+    if (walletAddresses.length === 0) return;
+    importWalletAddresses(true);
+  }, [importWalletAddresses, walletAddresses.length]);
+
+  useEffect(() => {
+    if (deviceAddressBook.length === 0) return;
+    importDeviceAddressBook(true);
+  }, [deviceAddressBook.length, importDeviceAddressBook]);
+
+  const syncWalletNotes = useCallback(
+    async (quiet = false) => {
+      const key = apiKey.trim();
+      const {
+        added,
+        updated,
+        firstAddedId,
+        next: withWalletEntries,
+        walletPkhs,
+      } = upsertWalletEntries(addressBook);
+
+      if (walletPkhs.length === 0) {
+        if (!quiet) setWalletImportStatus('connect and unlock the device to sync wallet notes');
+        return;
+      }
+      if (!key) {
+        if (added > 0 || updated > 0) {
+          setAddressBook(withWalletEntries);
+          saveAddressBook(withWalletEntries);
+          if (!selectedEntryId && firstAddedId) {
+            setSelectedEntryId(firstAddedId);
+          }
+        }
+        if (!quiet) setApiStatus('save a Nockblocks API key before syncing wallet notes');
+        return;
+      }
+
+      setSyncingNotes(true);
+      if (!quiet) setApiStatus(`syncing notes for ${walletPkhs.length} wallet pkh${walletPkhs.length === 1 ? '' : 's'}...`);
+
+      let next = withWalletEntries;
+      let synced = 0;
+      let noteCount = 0;
+      let totalNicks = 0;
+      let skipped = 0;
+      let multisig = 0;
+      const failures: string[] = [];
+
+      try {
+        for (const wallet of walletPkhs) {
+          try {
+            const imported = await fetchNockblocksNotes({
+              address: wallet.address,
+              apiKey: key,
+            });
+            next = next.map((entry) =>
+              entry.address === wallet.address && (entry.kind ?? 'pkh') === 'pkh'
+                ? { ...entry, notes: imported.notes }
+                : entry
+            );
+            synced += 1;
+            noteCount += imported.notes.length;
+            totalNicks += sumAssets(imported.notes);
+            skipped += imported.skipped;
+            multisig += imported.multisig;
+          } catch (err: any) {
+            failures.push(`${wallet.alias}: ${err?.message ?? String(err)}`);
+          }
+        }
+
+        setAddressBook(next);
+        saveAddressBook(next);
+        if (!selectedEntryId && firstAddedId) {
+          setSelectedEntryId(firstAddedId);
+        }
+
+        const parts = [
+          `synced ${noteCount} notes for ${synced}/${walletPkhs.length} wallet pkhs`,
+          `${formatAmountWithUnit(totalNicks, unitModeRef.current)} imported`,
+        ];
+        if (added > 0) parts.push(`${added} pkh${added === 1 ? '' : 's'} added`);
+        if (updated > 0) parts.push(`${updated} nickname${updated === 1 ? '' : 's'} updated`);
+        if (skipped > 0) parts.push(`${skipped} skipped`);
+        if (multisig > 0) parts.push(`${multisig} multisig notes not imported`);
+        if (failures.length > 0) parts.push(`${failures.length} failed`);
+        if (!quiet || failures.length > 0) setApiStatus(parts.join(' · '));
+        if (!quiet && failures.length > 0) setWalletImportStatus(failures.join(' · '));
+      } finally {
+        setSyncingNotes(false);
+      }
+    },
+    [addressBook, apiKey, selectedEntryId, upsertWalletEntries]
+  );
+
+  useEffect(() => {
+    const key = apiKey.trim();
+    if (!walletAddressKey || !key) return;
+    const syncKey = `${walletAddressKey}:${key}`;
+    if (walletAutoSyncKeyRef.current === syncKey) return;
+    walletAutoSyncKeyRef.current = syncKey;
+    syncWalletNotes(true);
+  }, [apiKey, syncWalletNotes, walletAddressKey]);
+
+  const syncSelectedEntryNotes = useCallback(async () => {
+    if (!selectedEntry) {
+      setApiStatus('select a pkh address first');
+      return;
+    }
+    if ((selectedEntry.kind ?? 'pkh') !== 'pkh') {
+      setApiStatus('note sync supports pkh address entries only');
+      return;
+    }
+    if (!apiKey.trim()) {
+      setApiStatus('Nockblocks API key required');
+      return;
+    }
+
+    setSyncingNotes(true);
+    setApiStatus(`fetching notes for ${selectedEntry.alias}...`);
+    try {
+      const imported = await fetchNockblocksNotes({
+        address: selectedEntry.address,
+        apiKey,
+      });
+      const next = addressBook.map((entry) =>
+        entry.id === selectedEntry.id ? { ...entry, notes: imported.notes } : entry
+      );
+      setAddressBook(next);
+      saveAddressBook(next);
+
+      const importedTotal = sumAssets(imported.notes);
+      const parts = [
+        `synced ${imported.notes.length} V1 notes`,
+        `${formatAmountWithUnit(importedTotal, unitModeRef.current)} imported`,
+      ];
+      if (imported.nicks !== importedTotal) {
+        parts.push(`${formatAmountWithUnit(imported.nicks, unitModeRef.current)} reported by API`);
+      }
+      if (imported.skipped > 0) parts.push(`${imported.skipped} skipped`);
+      if (imported.multisig > 0) parts.push(`${imported.multisig} multisig notes not imported`);
+      setApiStatus(parts.join(' · '));
+    } catch (err: any) {
+      setApiStatus(`sync failed: ${err?.message ?? String(err)}`);
+    } finally {
+      setSyncingNotes(false);
+    }
+  }, [addressBook, apiKey, selectedEntry]);
+
   const dragData = (payload: any) => JSON.stringify(payload);
 
   return (
@@ -980,9 +1974,9 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
       <div className={`composer-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         {!sidebarCollapsed && (
           <div className="composer-sidebar">
-            <div className="composer-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ fontWeight: 700 }}>Library</div>
-              <div className="composer-row" style={{ alignItems: 'center' }}>
+            <div className="composer-sidebar-header">
+              <div className="composer-sidebar-title">Composer</div>
+              <div className="composer-row composer-sidebar-tools">
                 <div className="composer-unit-toggle" role="group" aria-label="unit">
                   <button
                     type="button"
@@ -1009,6 +2003,25 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
               </div>
             </div>
 
+            <div className="composer-sidebar-tabs" role="tablist" aria-label="Composer panels">
+              {([
+                ['send', 'Send'],
+                ['wallet', 'Wallet'],
+                ['preview', 'Preview'],
+                ['canvas', 'Canvas'],
+              ] as const).map(([panel, label]) => (
+                <button
+                  key={panel}
+                  type="button"
+                  className={`composer-sidebar-tab ${sidebarPanel === panel ? 'active' : ''}`}
+                  onClick={() => setSidebarPanel(panel)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {sidebarPanel === 'canvas' && (
             <details className="composer-details" open>
               <summary className="composer-summary">
                 <span>Canvas</span>
@@ -1033,12 +2046,221 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                 </div>
               </div>
             </details>
+            )}
+
+            {sidebarPanel === 'send' && (
+            <details className="composer-details" open>
+              <summary className="composer-summary">
+                <span>Simple send</span>
+              </summary>
+              <div className="composer-details-body">
+                <label className="composer-field">
+                  <span>Source</span>
+                  <select
+                    className="node-input"
+                    value={quickSourceId}
+                    onChange={(event) => setSelectedEntryId(event.target.value)}
+                    disabled={pkhEntries.length === 0}
+                  >
+                    {pkhEntries.length === 0 ? (
+                      <option value="">no wallet pkh</option>
+                    ) : (
+                      pkhEntries.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.alias} · {(entry.notes ?? []).length} notes
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
+                <label className="composer-field">
+                  <span>Recipient</span>
+                  <input
+                    className="node-input"
+                    value={quickRecipient}
+                    onChange={(event) => setQuickRecipient(event.target.value)}
+                    placeholder="recipient pkh"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="composer-field">
+                  <span>Amount ({unitMode})</span>
+                  <input
+                    className="node-input"
+                    value={quickAmount}
+                    onChange={(event) => setQuickAmount(event.target.value)}
+                    inputMode={unitMode === 'ℕ' ? 'decimal' : 'numeric'}
+                    placeholder={`amount in ${unitMode}`}
+                  />
+                </label>
+                <div className="composer-row composer-action-row">
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={() => void composeQuickPayment(false)}
+                    disabled={pkhEntries.length === 0}
+                  >
+                    compose
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={() => void composeQuickPayment(true)}
+                    disabled={pkhEntries.length === 0 || signingDraft || !canSignDraft}
+                    title={!canSignDraft ? signDraftDisabledReason : undefined}
+                  >
+                    {signingDraft ? 'signing...' : 'compose + sign'}
+                  </button>
+                  {quickDraft && (
+                    <button
+                      type="button"
+                      className="btn btn-small btn-secondary"
+                      onClick={() => downloadBytes(quickDraft.filename, quickDraft.psnt)}
+                    >
+                      download
+                    </button>
+                  )}
+                </div>
+                {quickStatus && <div className="composer-api-status">{quickStatus}</div>}
+              </div>
+            </details>
+            )}
+
+            {sidebarPanel === 'preview' && (
+            <details className="composer-details" open>
+              <summary className="composer-summary">
+                <span>Transaction preview</span>
+              </summary>
+              <div className="composer-details-body">
+                <label className="composer-field">
+                  <span>Jam file</span>
+                  <input
+                    className="node-input"
+                    type="file"
+                    accept=".jam,.draft,.psnt,.wallet,application/octet-stream"
+                    onChange={(event) => void loadTransactionPreview(event.target.files?.[0])}
+                  />
+                </label>
+                {importedTxPreview && (
+                  <div className="composer-result">
+                    <div className="composer-result-grid">
+                      <span>file</span>
+                      <strong>{importedTxPreview.name}</strong>
+                      <span>shape</span>
+                      <strong>{importedTxPreview.info.shape}</strong>
+                      <span>spends</span>
+                      <strong>{importedTxPreview.info.input_count}</strong>
+                      <span>tx</span>
+                      <strong>{shortHash(importedTxPreview.info.tx_id, 5)}</strong>
+                    </div>
+                    <pre className="inspector-pre tx-preview-pre">
+                      {formatPreviewDetails(importedTxPreview.details)}
+                    </pre>
+                  </div>
+                )}
+                {importedTxStatus && <div className="composer-api-status">{importedTxStatus}</div>}
+              </div>
+            </details>
+            )}
+
+            {sidebarPanel === 'wallet' && (
+            <>
+            <details className="composer-details" open>
+              <summary className="composer-summary">
+                <span>Nockblocks</span>
+              </summary>
+              <div className="composer-details-body nockblocks-panel">
+                <label className="composer-field">
+                  <span>API key</span>
+                  <input
+                    className="node-input"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="paste Nockblocks API key"
+                    value={apiKey}
+                    onChange={(e) => {
+                      setApiKey(e.target.value);
+                    }}
+                  />
+                </label>
+                <div className="composer-row composer-action-row">
+                  <button type="button" className="btn btn-small btn-primary" onClick={saveNockblocksSettings}>
+                    save key
+                  </button>
+                  <button type="button" className="btn btn-small btn-secondary" onClick={clearNockblocksSettings}>
+                    clear
+                  </button>
+                  <button type="button" className="btn btn-small btn-secondary" onClick={reloadLocalApiKey}>
+                    load dev key
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={syncSelectedEntryNotes}
+                    disabled={
+                      !selectedEntry ||
+                      (selectedEntry.kind ?? 'pkh') !== 'pkh' ||
+                      !apiKey.trim() ||
+                      syncingNotes
+                    }
+                  >
+                    {syncingNotes ? 'syncing...' : 'sync selected'}
+                  </button>
+                </div>
+                {selectedEntry ? (
+                  <div className="composer-item-meta">
+                    selected: {selectedEntry.alias} · {shortHash(selectedEntry.address, 5)}
+                  </div>
+                ) : (
+                  <div className="composer-item-meta">select a pkh address to sync notes</div>
+                )}
+                {apiStatus && <div className="composer-api-status">{apiStatus}</div>}
+              </div>
+            </details>
 
             <details className="composer-details" open>
               <summary className="composer-summary">
                 <span>Address book ({addressBook.length})</span>
               </summary>
               <div className="composer-details-body">
+                <div className="composer-row composer-action-row">
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={() => syncWalletNotes(false)}
+                    disabled={walletAddresses.length === 0 || syncingNotes}
+                  >
+                    {syncingNotes ? 'syncing...' : 'sync wallet notes'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={() => importWalletAddresses(false)}
+                    disabled={walletAddresses.length === 0}
+                  >
+                    import pkhs
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-secondary"
+                    onClick={() => importDeviceAddressBook(false)}
+                    disabled={deviceAddressBook.length === 0}
+                  >
+                    import device book
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={() => setAddressAddOpen(true)}
+                  >
+                    add address
+                  </button>
+                </div>
+                {walletAddresses.length === 0 && (
+                  <div className="inspector-help">Connect and unlock the device to import wallet pkhs.</div>
+                )}
+                {walletImportStatus && <div className="composer-api-status">{walletImportStatus}</div>}
                 <details
                   className="composer-subdetails"
                   open={addressAddOpen}
@@ -1157,18 +2379,21 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                         >
                           <div className="composer-item-title">
                             <span>{entry.alias}</span>
-                            <button
-                              type="button"
-                              className="btn btn-small btn-danger"
-                              draggable={false}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                removeEntry(entry.id);
-                              }}
-                            >
-                              remove
-                            </button>
+                            <div className="composer-row composer-item-actions">
+                              {walletByAddress.has(entry.address) && <span className="composer-count">wallet</span>}
+                              <button
+                                type="button"
+                                className="btn btn-small btn-danger"
+                                draggable={false}
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  removeEntry(entry.id);
+                                }}
+                              >
+                                remove
+                              </button>
+                            </div>
                           </div>
                           <div className="composer-item-meta">{shortHash(entry.address)}</div>
                           {kind === 'multisig' && multisig ? (
@@ -1301,6 +2526,9 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                             </button>
                           </div>
                           <div className="composer-item-meta">
+                            owner: {selectedEntry.alias} · {shortHash(selectedEntry.address, 5)}
+                          </div>
+                          <div className="composer-item-meta">
                             {shortHash(note.nameFirst)} {shortHash(note.nameLast)}
                           </div>
                         </div>
@@ -1323,6 +2551,8 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                   <div className="node-mono">{selectedEntry.address}</div>
                 </div>
               </details>
+            )}
+            </>
             )}
           </div>
         )}
@@ -1485,6 +2715,24 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
                   );
                 }
 
+                if (node.type === 'preview') {
+                  const data = node.data as PreviewNodeData;
+                  return (
+                    <div className="composer-list">
+                      <div>
+                        <strong>{data.label}</strong>
+                      </div>
+                      <div>{data.title}</div>
+                      {data.meta?.map((item) => (
+                        <div key={item} className="inspector-help">
+                          {item}
+                        </div>
+                      ))}
+                      {data.mono && <div className="node-mono">{data.mono}</div>}
+                    </div>
+                  );
+                }
+
                 return <div className="inspector-help">Unknown node type.</div>;
               })()}
             </div>
@@ -1495,10 +2743,34 @@ export function Composer({ wasmReady }: { wasmReady: boolean }) {
   );
 }
 
-export function ComposerView({ wasmReady }: { wasmReady: boolean }) {
+export function ComposerView({
+  wasmReady,
+  walletAddresses,
+  deviceAddressBook,
+  onSignDraft,
+  canSignDraft,
+  signingDraft,
+  signDraftDisabledReason,
+}: {
+  wasmReady: boolean;
+  walletAddresses?: WalletAddress[];
+  deviceAddressBook?: DeviceAddressBookEntry[];
+  onSignDraft?: (draft: ComposedDraft) => void | Promise<void>;
+  canSignDraft?: boolean;
+  signingDraft?: boolean;
+  signDraftDisabledReason?: string;
+}) {
   return (
     <ReactFlowProvider>
-      <Composer wasmReady={wasmReady} />
+      <Composer
+        wasmReady={wasmReady}
+        walletAddresses={walletAddresses}
+        deviceAddressBook={deviceAddressBook}
+        onSignDraft={onSignDraft}
+        canSignDraft={canSignDraft}
+        signingDraft={signingDraft}
+        signDraftDisabledReason={signDraftDisabledReason}
+      />
     </ReactFlowProvider>
   );
 }

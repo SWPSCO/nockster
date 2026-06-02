@@ -63,6 +63,8 @@ pub struct DraftReviewV1 {
     pub refund_total: u64,
     /// Sum of v1 spend fees in nicks.
     pub fee_total: u64,
+    /// Minimum valid post-Bythos fee in nicks for the reviewed draft.
+    pub minimum_fee: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +86,9 @@ const LOCK_MERKLE_AXIS_HASH: [u64; 5] = [
     8368574252173164961,
 ];
 const LOCK_MERKLE_PROOF_FULL_TAG: &[u8] = b"full";
+const BASE_FEE: u64 = 1 << 14;
+const INPUT_FEE_DIVISOR: u64 = 4;
+const MIN_FEE: u64 = 256;
 
 fn cheetah_pub_from_sk_tuple(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
     #[cfg(feature = "std")]
@@ -204,6 +209,16 @@ fn hashable_noun_digest(noun: Noun, arena: &Arena) -> Result<[u64; 5], SignDraft
     }
 }
 
+fn count_leaves(noun: Noun, arena: &Arena) -> u64 {
+    match noun {
+        Noun::Atom(_) => 1,
+        Noun::Cell(id) => {
+            let cell = arena.cell(id);
+            count_leaves(cell.head, arena).saturating_add(count_leaves(cell.tail, arena))
+        }
+    }
+}
+
 fn decompose_map(map: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun)> {
     let (node, tail) = uncons(map, arena)?;
     if let Some((left, right)) = uncons(tail, arena) {
@@ -215,6 +230,87 @@ fn decompose_map(map: Noun, arena: &Arena) -> Option<(Noun, Noun, Noun)> {
 
 fn decompose_pair(pair: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
     uncons(pair, arena)
+}
+
+fn merge_note_data_into(
+    arena: &mut Arena,
+    src: Noun,
+    dst: &mut Noun,
+) -> Result<(), SignDraftError> {
+    if src == arena.atom0() {
+        return Ok(());
+    }
+    let (node, left, right) = decompose_map(src, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    *dst = zmap::canonical_zmap_put(arena, *dst, key, value)?;
+    merge_note_data_into(arena, left, dst)?;
+    merge_note_data_into(arena, right, dst)
+}
+
+fn collect_seed_note_data_for_fee(
+    arena: &mut Arena,
+    seeds: Noun,
+    merged: &mut Vec<([u64; 5], Noun)>,
+) -> Result<(), SignDraftError> {
+    if seeds == arena.atom0() {
+        return Ok(());
+    }
+
+    let (seed, lr) = uncons(seeds, arena).ok_or(SignDraftError::Malformed)?;
+    let (left, right) = uncons(lr, arena).ok_or(SignDraftError::Malformed)?;
+    let (_output_source, lock_root_noun, note_data, _gift, _parent_hash) =
+        tuple5(seed, arena).ok_or(SignDraftError::Malformed)?;
+    let lock_root = parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
+
+    if let Some((_root, data)) = merged.iter_mut().find(|(root, _)| *root == lock_root) {
+        merge_note_data_into(arena, note_data, data)?;
+    } else {
+        let mut data = arena.atom0();
+        merge_note_data_into(arena, note_data, &mut data)?;
+        merged.push((lock_root, data));
+    }
+
+    collect_seed_note_data_for_fee(arena, left, merged)?;
+    collect_seed_note_data_for_fee(arena, right, merged)
+}
+
+fn collect_spend_words_for_fee(
+    arena: &mut Arena,
+    spends: Noun,
+    merged: &mut Vec<([u64; 5], Noun)>,
+    witness_words: &mut u64,
+) -> Result<(), SignDraftError> {
+    if spends == arena.atom0() {
+        return Ok(());
+    }
+
+    let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
+    let (_name, spend) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    let (ver, body) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(ver, arena) != Some(1) {
+        return Err(SignDraftError::Unsupported);
+    }
+    let (witness, seeds, _fee) = tuple3(body, arena).ok_or(SignDraftError::Malformed)?;
+    *witness_words = witness_words.saturating_add(count_leaves(witness, arena));
+    collect_seed_note_data_for_fee(arena, seeds, merged)?;
+
+    collect_spend_words_for_fee(arena, left, merged, witness_words)?;
+    collect_spend_words_for_fee(arena, right, merged, witness_words)
+}
+
+fn calculate_minimum_fee_v1(arena: &mut Arena, spends: Noun) -> Result<u64, SignDraftError> {
+    let mut merged = Vec::<([u64; 5], Noun)>::new();
+    let mut witness_words = 0u64;
+    collect_spend_words_for_fee(arena, spends, &mut merged, &mut witness_words)?;
+    let seed_words = merged
+        .iter()
+        .map(|(_root, note_data)| count_leaves(*note_data, arena))
+        .sum::<u64>();
+    let seed_fee = seed_words.saturating_mul(BASE_FEE);
+    let witness_fee = witness_words
+        .saturating_mul(BASE_FEE)
+        .saturating_div(INPUT_FEE_DIVISOR);
+    Ok(seed_fee.saturating_add(witness_fee).max(MIN_FEE))
 }
 
 fn hash_note_data(map: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
@@ -1235,6 +1331,8 @@ pub fn draft_review_v1(
         return Err(SignDraftError::Malformed);
     };
 
+    let minimum_fee = calculate_minimum_fee_v1(&mut arena, spends)?;
+
     let mut acc: Vec<([u64; 5], u64)> = Vec::new();
     let mut refund: Option<u64> = None;
     let mut input_count = 0u32;
@@ -1277,6 +1375,7 @@ pub fn draft_review_v1(
         external_total,
         refund_total,
         fee_total,
+        minimum_fee,
     })
 }
 

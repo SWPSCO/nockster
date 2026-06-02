@@ -73,6 +73,7 @@ const FIRMWARE_FEATURES: u32 = FEATURE_CHEETAH
     | FEATURE_RELEASE_INFO
     | FEATURE_UPDATE_BOOT_STATUS
     | FEATURE_DEVICE_REBOOT
+    | FEATURE_DEVICE_ADDRESS_BOOK
     | FIRMWARE_UPDATE_FEATURES;
 
 const fn valid_update_anchor_env() -> bool {
@@ -457,11 +458,8 @@ fn tx_review_summary_from_draft(
     review: &nockster_core::draft_sign::DraftReviewV1,
 ) -> TxReviewSummary {
     let mut flags = 0u8;
-    if review.fee_total != 0 && review.external_total != 0 {
-        let high_fee_threshold = (review.external_total / 20).max(1);
-        if review.fee_total > high_fee_threshold {
-            flags |= TX_REVIEW_FLAG_HIGH_FEE;
-        }
+    if review.fee_total > review.minimum_fee {
+        flags |= TX_REVIEW_FLAG_HIGH_FEE;
     }
     if review.external_total != 0 && review.refund_total == 0 {
         flags |= TX_REVIEW_FLAG_NO_REFUND;
@@ -1569,6 +1567,21 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
     }
 
     match frame {
+        Frame::One(Request::GetAddressBook) => {
+            match dispatch::read_address_book_payload(is_device_locked()) {
+                Ok(out) => {
+                    let total = out.len() as u32;
+                    let frag_id = (req_id as u16).max(1);
+                    fragments::set_outbound(req_id, frag_id, out);
+                    Response::FragBegin {
+                        id: frag_id,
+                        total_len: total,
+                        kind: FragKind::AddressBook,
+                    }
+                }
+                Err(resp) => resp,
+            }
+        }
         Frame::One(req) => handle_request_v1(req, ui),
         Frame::FragBegin {
             id,
@@ -1713,6 +1726,9 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                         }
                     }
                 }
+                FragKind::AddressBook => {
+                    dispatch::write_address_book_payload(st.buf.as_slice(), is_device_locked())
+                }
             }
         }
     }
@@ -1797,6 +1813,9 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
                 code: ERR_UNSUPPORTED_VERSION,
             })
         }
+        Request::GetAddressBook => Response::Err {
+            code: ERR_UNSUPPORTED_VERSION,
+        },
     }
 }
 

@@ -1,15 +1,15 @@
 :root {
   --font-base: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace;
-  --color-bg: #f6f6f3;
+  --color-bg: #f3f3ef;
   --color-panel: #ffffff;
-  --color-panel-soft: #fbfbf9;
+  --color-panel-soft: #f8f8f5;
   --color-text: #080808;
-  --color-muted: #5f5f5a;
+  --color-muted: #666660;
   --color-border: #171717;
-  --color-border-soft: #d7d7d1;
+  --color-border-soft: #d9d9d2;
   --color-focus: rgba(0, 0, 0, 0.14);
-  --shadow-panel: 0 18px 50px rgba(0, 0, 0, 0.07), 0 1px 0 rgba(0, 0, 0, 0.05);
+  --shadow-panel: 0 10px 34px rgba(0, 0, 0, 0.055), 0 1px 0 rgba(0, 0, 0, 0.04);
   --radius: 8px;
 }
 
@@ -24,25 +24,33 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 28px;
+  padding: 20px;
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-base);
-  line-height: 1.45;
+  line-height: 1.38;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 body.app-composer {
-  padding: 18px;
+  padding: 8px 10px;
 }
 
 .container {
-  width: min(760px, 100%);
+  width: min(900px, 100%);
 }
 
 .container-wide {
-  width: min(1280px, 100%);
+  width: min(1880px, calc(100vw - 24px));
+}
+
+body.app-composer .header-img {
+  margin-bottom: 10px;
+}
+
+body.app-composer .header-img img {
+  width: min(150px, 32vw);
 }
 
 .header-img {
@@ -62,23 +70,23 @@ body.app-composer {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   padding: 6px;
-  margin: 0 auto 18px;
+  margin: 0 auto 12px;
   width: min(420px, 100%);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
   background: var(--color-panel);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05);
 }
 
 .tab-btn {
-  min-height: 40px;
-  padding: 0 14px;
+  min-height: 36px;
+  padding: 0 12px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--color-muted);
   font-family: var(--font-base);
-  font-size: 0.95rem;
+  font-size: 0.88rem;
   font-weight: 700;
   cursor: pointer;
 }
@@ -109,9 +117,9 @@ h1 {
 }
 
 h2 {
-  font-size: 1.12rem;
+  font-size: 1.05rem;
   font-weight: 750;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
 }
 
 h3 {
@@ -121,15 +129,31 @@ h3 {
 
 .section {
   background: var(--color-panel);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
-  padding: 18px;
-  margin-bottom: 18px;
+  padding: 14px;
+  margin-bottom: 12px;
   box-shadow: var(--shadow-panel);
 }
 
 .section.section-composer {
-  padding: 16px;
+  padding: 8px;
+}
+
+.composer-title-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+
+.composer-title-row h2 {
+  margin-bottom: 4px;
+}
+
+.composer-title-row .seed-subtitle {
+  margin-bottom: 0;
 }
 
 .error {
@@ -149,8 +173,8 @@ h3 {
 .update-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .update-grid {
@@ -163,8 +187,8 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px;
-  background: var(--color-panel-soft);
+  padding: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, var(--color-panel-soft) 100%);
   border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
 }
@@ -178,15 +202,16 @@ h3 {
 
 .label {
   color: var(--color-muted);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 700;
+  text-transform: uppercase;
 }
 
 .value {
   max-width: 100%;
   color: var(--color-text);
   font-family: var(--font-mono);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
   font-weight: 700;
   text-align: right;
 }
@@ -269,14 +294,14 @@ h3 {
 .slot-select,
 .input {
   width: 100%;
-  min-height: 44px;
-  padding: 10px 12px;
+  min-height: 40px;
+  padding: 8px 10px;
   border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
   background: var(--color-panel);
   color: var(--color-text);
   font-family: var(--font-base);
-  font-size: 0.95rem;
+  font-size: 0.88rem;
 }
 
 .slot-select {
@@ -318,7 +343,7 @@ input[type="password"].input,
 .button-group {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .control-actions {
@@ -326,14 +351,14 @@ input[type="password"].input,
 }
 
 .btn {
-  min-height: 42px;
-  padding: 0 14px;
-  border: 1px solid var(--color-border);
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
   background: var(--color-panel);
   color: var(--color-text);
   font-family: var(--font-base);
-  font-size: 0.95rem;
+  font-size: 0.86rem;
   font-weight: 750;
   cursor: pointer;
   display: inline-flex;
@@ -364,6 +389,7 @@ input[type="password"].input,
 .btn-success {
   background: var(--color-text);
   color: var(--color-panel);
+  border-color: var(--color-text);
 }
 
 .btn-primary:hover:not(:disabled),
@@ -379,19 +405,20 @@ input[type="password"].input,
 }
 
 .btn-danger {
-  border-style: double;
+  border-color: #b00020;
+  color: #8f001a;
 }
 
 .btn-small,
 .copy-btn {
-  min-height: 34px;
-  padding: 0 10px;
-  font-size: 0.82rem;
+  min-height: 30px;
+  padding: 0 9px;
+  font-size: 0.78rem;
 }
 
 .status-message {
-  margin-bottom: 18px;
-  padding: 12px 14px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   background: var(--color-text);
@@ -469,7 +496,7 @@ input[type="password"].input,
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .seed-header h2 {
@@ -485,7 +512,7 @@ input[type="password"].input,
 }
 
 .seed-subtitle {
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .seed-form,
@@ -498,7 +525,7 @@ input[type="password"].input,
 .update-progress {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .seed-actions .btn {
@@ -510,8 +537,8 @@ input[type="password"].input,
 }
 
 .validation-text {
-  padding: 9px 11px;
-  border: 1px solid var(--color-border);
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
   background: var(--color-panel-soft);
   color: var(--color-text);
@@ -524,8 +551,8 @@ input[type="password"].input,
 }
 
 .reset-pin {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--color-border-soft);
 }
 
@@ -533,13 +560,13 @@ input[type="password"].input,
 .update-files {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .connect-actions {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-  gap: 10px;
+  gap: 8px;
 }
 
 .update-header-actions {
@@ -616,9 +643,9 @@ input[type="password"].input,
 
 .tx-details {
   margin: 12px 0 18px;
-  max-height: 360px;
+  max-height: 320px;
   overflow: auto;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--color-border-soft);
   border-radius: var(--radius);
   background: var(--color-panel-soft);
@@ -671,5 +698,673 @@ input[type="password"].input,
   .reset-pin-actions .btn,
   .connect-actions .btn {
     width: 100%;
+  }
+}
+
+body.app-device {
+  padding: 10px 12px 18px;
+}
+
+.container-device {
+  width: min(1320px, calc(100vw - 24px));
+}
+
+body.app-device .header-img {
+  margin-bottom: 8px;
+}
+
+body.app-device .header-img img {
+  width: min(168px, 34vw);
+}
+
+body.app-device .tab-bar {
+  width: min(360px, 100%);
+  padding: 4px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+body.app-device .tab-btn {
+  min-height: 32px;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+
+.device-page {
+  display: grid;
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+  grid-template-areas:
+    "topbar topbar"
+    "wallet wallet"
+    "seed seed"
+    "message message"
+    "status address"
+    "control address"
+    "update update"
+    "signing signing";
+  gap: 10px;
+  align-items: start;
+}
+
+.device-page-disconnected {
+  max-width: 860px;
+  margin: 0 auto;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "topbar"
+    "message"
+    "connect";
+}
+
+.device-topbar,
+.device-status-message {
+  grid-column: 1 / -1;
+}
+
+.device-topbar {
+  grid-area: topbar;
+}
+
+.device-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-panel);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.055);
+}
+
+.device-title {
+  min-width: 150px;
+}
+
+.device-title h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.device-eyebrow {
+  display: block;
+  margin-bottom: 1px;
+  color: var(--color-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.device-metrics {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.device-pill {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 3px;
+  background: var(--color-panel-soft);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.device-pill-good {
+  border-color: #5ba56f;
+  background: #eaf7ee;
+  color: #124d28;
+}
+
+.device-pill-warn {
+  border-color: #c83b46;
+  background: #fff0f1;
+  color: #8f001a;
+}
+
+.device-panel {
+  margin-bottom: 0;
+  padding: 10px;
+  border-color: #c9c9c1;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.device-overview-panel {
+  grid-area: status;
+}
+
+.device-control-panel {
+  grid-area: control;
+}
+
+.device-wallet-panel {
+  grid-area: wallet;
+}
+
+.device-address-book-panel {
+  grid-area: address;
+  align-self: stretch;
+}
+
+.device-seed-panel {
+  grid-area: seed;
+}
+
+.device-update-panel {
+  grid-area: update;
+}
+
+.device-signing-panel {
+  grid-area: signing;
+}
+
+.device-status-message {
+  grid-area: message;
+}
+
+.device-page h2 {
+  margin-bottom: 8px;
+  font-size: 0.92rem;
+}
+
+.device-page h3 {
+  font-size: 0.85rem;
+}
+
+.device-page .seed-header {
+  margin-bottom: 8px;
+}
+
+.device-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.device-panel-header h2 {
+  margin-bottom: 0;
+}
+
+.device-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.device-page .seed-subtitle,
+.device-page .reset-pin-note,
+.device-page .seed-hint,
+.device-page .file-control {
+  font-size: 0.78rem;
+}
+
+.device-page .status-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.device-overview-panel .status-grid {
+  grid-template-columns: 1fr;
+}
+
+.device-page .status-item {
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 3px;
+  background: #fbfbf8;
+}
+
+.device-overview-panel .status-item {
+  min-height: 44px;
+}
+
+.device-page .status-item.full-width {
+  align-items: center;
+  flex-direction: row;
+}
+
+.device-page .status-item.full-width > .slot-select,
+.device-page .status-item.full-width > .value {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.device-page .status-item.multi-keys {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.device-page .label {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+}
+
+.device-page .value {
+  min-width: 0;
+  font-size: 0.74rem;
+}
+
+.device-page .value.locked,
+.device-page .value.unlocked {
+  min-width: 76px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.device-page .slot-select,
+.device-page .input {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  font-size: 0.8rem;
+}
+
+.device-page .slot-select {
+  font-size: 0.74rem;
+}
+
+.device-page textarea.input.mnemonic-input {
+  min-height: 86px;
+}
+
+.device-page .btn {
+  min-height: 32px;
+  padding: 0 9px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+
+.device-page .btn:hover:not(:disabled) {
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.device-page .btn-small,
+.device-page .copy-btn {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 0.72rem;
+}
+
+.device-status-message {
+  margin-bottom: 0;
+  padding: 8px 10px;
+  border-radius: 3px;
+  box-shadow: none;
+  font-size: 0.76rem;
+}
+
+.device-page .pin-controls,
+.device-page .reset-pin,
+.device-page .seed-form,
+.device-page .input-list,
+.device-page .signing-info,
+.device-page .update-progress {
+  gap: 8px;
+}
+
+.device-page .button-group,
+.device-page .control-actions {
+  gap: 6px;
+}
+
+.device-control-panel .control-actions {
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+}
+
+.device-page .reset-pin {
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.device-page .reset-pin-grid,
+.device-page .update-files {
+  gap: 6px;
+}
+
+.device-page .pubkey-list {
+  gap: 6px;
+}
+
+.device-page .pubkey-list-item,
+.device-page .input-item {
+  gap: 6px;
+  padding: 8px;
+  border-radius: 3px;
+}
+
+.device-page .pubkey-meta,
+.device-page .pubkey-actions,
+.device-page .seed-actions,
+.device-page .reset-pin-actions,
+.device-page .update-header-actions {
+  gap: 6px;
+}
+
+.device-page .pubkey-text,
+.device-page .mono-small,
+.device-page .hash-small {
+  font-size: 0.72rem;
+}
+
+.device-page .path-tag,
+.device-page .path-small {
+  font-size: 0.68rem;
+}
+
+.device-page .validation-text {
+  padding: 7px 8px;
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+
+.device-update-panel .seed-header {
+  align-items: center;
+}
+
+.device-update-panel .update-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.device-update-panel .update-grid .status-item.full-width {
+  grid-column: auto;
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.device-update-panel .update-grid .update-hash {
+  text-align: left;
+}
+
+.device-page .update-advanced {
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.device-subdetails {
+  border: 1px solid var(--color-border-soft);
+  border-radius: 3px;
+  background: var(--color-panel-soft);
+}
+
+.device-subdetails summary {
+  padding: 7px 8px;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.device-subdetails-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+
+.update-source-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.device-page .update-files {
+  margin-bottom: 8px;
+}
+
+.device-page .update-remote {
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.device-page .update-remote-fetch {
+  min-height: 34px;
+}
+
+.device-page .update-progress-bar {
+  height: 9px;
+  border-radius: 3px;
+}
+
+.device-page .update-progress-text {
+  font-size: 0.7rem;
+}
+
+.device-page .tx-details {
+  max-height: 260px;
+  margin: 8px 0 10px;
+  padding: 8px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+}
+
+.device-signing-panel p {
+  margin-bottom: 8px;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+}
+
+.wallet-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 8px;
+}
+
+.wallet-slot-card {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto auto auto;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 3px;
+  background: #fbfbf8;
+}
+
+.wallet-slot-card.active {
+  border-color: var(--color-border);
+  background: #ffffff;
+}
+
+.wallet-slot-head,
+.wallet-slot-label-row,
+.wallet-slot-address,
+.wallet-slot-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wallet-slot-head {
+  justify-content: space-between;
+}
+
+.wallet-slot-title {
+  font-weight: 850;
+  font-size: 0.86rem;
+}
+
+.wallet-slot-label-row .wallet-label-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wallet-slot-address {
+  align-items: start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.wallet-slot-address .pubkey-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wallet-slot-actions {
+  justify-content: flex-end;
+}
+
+.wallet-slot-balance,
+.device-inline-status,
+.device-empty-state {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.wallet-slot-balance.error {
+  color: #8f001a;
+}
+
+.device-address-form {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.32fr) minmax(300px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.device-address-form input:nth-of-type(2) {
+  grid-column: auto;
+}
+
+.device-address-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.device-address-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 3px;
+  background: #fbfbf8;
+}
+
+.device-address-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.device-address-main .pubkey-text {
+  min-width: 0;
+  font-size: 0.72rem;
+}
+
+.device-inline-status {
+  margin-top: 8px;
+}
+
+.device-connect-panel.connect-panel {
+  grid-area: connect;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.65fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.connect-main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (max-width: 980px) {
+  .device-page,
+  .device-page-disconnected,
+  .device-connect-panel.connect-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .device-page {
+    grid-template-areas:
+      "topbar"
+      "wallet"
+      "seed"
+      "message"
+      "status"
+      "control"
+      "address"
+      "update"
+      "signing";
+  }
+
+  .device-page-disconnected {
+    grid-template-areas:
+      "topbar"
+      "message"
+      "connect";
+  }
+
+  .device-overview-panel,
+  .device-control-panel,
+  .device-wallet-panel,
+  .device-address-book-panel,
+  .device-seed-panel,
+  .device-update-panel,
+  .device-signing-panel {
+    grid-column: 1 / -1;
+  }
+
+  .device-page .status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  body.app-device {
+    padding: 10px;
+  }
+
+  .container-device {
+    width: 100%;
+  }
+
+  .device-topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .device-metrics {
+    justify-content: flex-start;
+  }
+
+  .device-page .status-grid,
+  .device-page .button-group,
+  .device-page .control-actions,
+  .device-page .update-files,
+  .device-page .update-remote,
+  .device-page .update-actions,
+  .device-page .connect-actions,
+  .device-page .reset-pin-grid,
+  .device-address-form,
+  .device-address-row {
+    grid-template-columns: 1fr;
+  }
+
+  .device-page .status-item.full-width {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

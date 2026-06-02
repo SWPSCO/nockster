@@ -1,4 +1,5 @@
 use crate::serial::{open, send_call};
+use crate::ui;
 use anyhow::bail;
 use nockster_core::{
     Request, Response, ERR_BUSY, ERR_CRYPTO, ERR_FLASH, ERR_NO_SEED, ERR_PIN_LOCKED_OUT,
@@ -8,7 +9,7 @@ use nockster_core::{
 pub fn run(port: &str, baud: u32, current_pin: &str) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
 
-    println!("enter the new PIN twice on the device");
+    ui::info("enter the new PIN twice on the device");
     match send_call(
         &mut *sp,
         0x47,
@@ -17,7 +18,7 @@ pub fn run(port: &str, baud: u32, current_pin: &str) -> anyhow::Result<()> {
         },
     )? {
         Response::Ok => {
-            println!("changed PIN");
+            ui::ok("changed PIN");
             Ok(())
         }
         Response::Err {

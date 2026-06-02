@@ -33,6 +33,10 @@ absolute_path() {
   local path="$1"
   local dir
   local base
+  if [[ -e "${path}" ]]; then
+    realpath -- "${path}"
+    return
+  fi
   dir="$(dirname -- "${path}")"
   base="$(basename -- "${path}")"
   if [[ ! -d "${dir}" ]]; then

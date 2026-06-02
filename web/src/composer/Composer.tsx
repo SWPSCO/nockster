@@ -27,7 +27,6 @@ import { loadAddressBook, newId, saveAddressBook } from './storage';
 import {
   NOCKBLOCKS_API_KEY_STORAGE_KEY,
   fetchNockblocksNotes,
-  loadLocalNockblocksKey,
 } from './nockblocks';
 
 import './Composer.css';
@@ -113,6 +112,10 @@ type PreviewNodeData = {
   title: string;
   meta?: string[];
   mono?: string;
+  copyValue?: string;
+  copyLabel?: string;
+  feeNicks?: number;
+  giftNicks?: number;
 };
 
 type UnitMode = 'n' | 'ℕ';
@@ -454,7 +457,16 @@ function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: UnitMode
   );
 }
 
-function PreviewNode({ data }: NodeProps<PreviewFlowNode>) {
+function PreviewNode({ data, unitMode }: NodeProps<PreviewFlowNode> & { unitMode: UnitMode }) {
+  const amountMeta = [
+    data.feeNicks === undefined ? '' : `fee ${formatAmountWithUnit(data.feeNicks, unitMode)}`,
+    data.giftNicks === undefined ? '' : formatAmountWithUnit(data.giftNicks, unitMode),
+  ].filter(Boolean);
+  const copyPreviewValue = () => {
+    if (!data.copyValue) return;
+    void navigator.clipboard.writeText(data.copyValue);
+  };
+
   return (
     <div className="node-card preview-node-card">
       <div className="node-header preview">
@@ -462,12 +474,25 @@ function PreviewNode({ data }: NodeProps<PreviewFlowNode>) {
       </div>
       <div className="node-body">
         <div>{data.title}</div>
-        {data.meta?.map((item) => (
+        {[...amountMeta, ...(data.meta ?? [])].map((item) => (
           <div key={item} className="inspector-help">
             {item}
           </div>
         ))}
         {data.mono && <div className="node-mono preview-node-mono">{data.mono}</div>}
+        {data.copyValue && (
+          <button
+            type="button"
+            className="btn btn-small btn-secondary preview-copy-btn nodrag"
+            onPointerDown={stopNodeInputEvent}
+            onClick={(event) => {
+              event.stopPropagation();
+              copyPreviewValue();
+            }}
+          >
+            copy {data.copyLabel ?? 'value'}
+          </button>
+        )}
       </div>
       <Handle type="target" id="in" position={Position.Left} isConnectable={false} />
       <Handle type="source" id="out" position={Position.Right} isConnectable={false} />
@@ -589,28 +614,6 @@ export function Composer({
     [walletAddresses]
   );
 
-  useEffect(() => {
-    if (localStorage.getItem(nockblocksApiKeyStorageKey)?.trim()) {
-      return;
-    }
-
-    let cancelled = false;
-    loadLocalNockblocksKey()
-      .then((loaded) => {
-        if (cancelled) return;
-        if (loaded.key) {
-          setApiKey(loaded.key);
-        }
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        setApiStatus(`API key lookup failed: ${err?.message ?? String(err)}`);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [nockblocksApiKeyStorageKey]);
-
   const multisigPreview = useMemo(() => {
     if (entryFormKind !== 'multisig') return { address: '', error: null as string | null };
     if (!wasmReady) return { address: '', error: 'WASM not ready yet' };
@@ -632,7 +635,7 @@ export function Composer({
       address: ((props: any) => <AddressNode {...props} unitMode={unitMode} />) as any,
       note: ((props: any) => <NoteNode {...props} unitMode={unitMode} />) as any,
       tx: ((props: any) => <TxNode {...props} unitMode={unitMode} />) as any,
-      preview: PreviewNode as any,
+      preview: ((props: any) => <PreviewNode {...props} unitMode={unitMode} />) as any,
     }),
     [unitMode]
   );
@@ -951,6 +954,8 @@ export function Composer({
               `${preview.info.input_count} spend${preview.info.input_count === 1 ? '' : 's'}`,
             ],
             mono: preview.info.tx_id,
+            copyValue: preview.info.tx_id,
+            copyLabel: 'tx id',
           },
         } as PreviewFlowNode,
       ];
@@ -984,10 +989,7 @@ export function Composer({
         const first = previewString(spend.name_first);
         const last = previewString(spend.name_last);
         const seeds = Array.isArray(spend.seeds) ? spend.seeds.length : 0;
-        const meta = [
-          fee === null ? '' : `fee ${formatAmountWithUnit(fee, unitModeRef.current)}`,
-          `${seeds} output${seeds === 1 ? '' : 's'}`,
-        ].filter(Boolean);
+        const meta = [`${seeds} output${seeds === 1 ? '' : 's'}`];
         previewNodes.push({
           id,
           type: 'preview',
@@ -997,6 +999,9 @@ export function Composer({
             title: first || last ? `${shortHash(first, 5)} ${shortHash(last, 5)}` : 'Input note',
             meta,
             mono: first || last ? `${first} ${last}`.trim() : undefined,
+            feeNicks: fee === null ? undefined : fee,
+            copyValue: first || last ? `${first} ${last}`.trim() : undefined,
+            copyLabel: 'note id',
           },
         } as PreviewFlowNode);
         previewEdges.push({
@@ -1036,10 +1041,7 @@ export function Composer({
         const recipient = previewString(seed.recipient_pkh);
         const lockRoot = previewString(seed.lock_root);
         const parent = previewString(seed.parent_hash);
-        const meta = [
-          gift === null ? '' : formatAmountWithUnit(gift, unitModeRef.current),
-          `spend ${spendIndex + 1}.${seedIndex + 1}`,
-        ].filter(Boolean);
+        const meta = [`spend ${spendIndex + 1}.${seedIndex + 1}`];
         previewNodes.push({
           id,
           type: 'preview',
@@ -1049,6 +1051,9 @@ export function Composer({
             title: recipient ? shortHash(recipient, 6) : lockRoot ? shortHash(lockRoot, 6) : 'Recipient',
             meta,
             mono: recipient || lockRoot || parent || undefined,
+            giftNicks: gift === null ? undefined : gift,
+            copyValue: recipient || lockRoot || parent || undefined,
+            copyLabel: recipient ? 'address' : 'value',
           },
         } as PreviewFlowNode);
         previewEdges.push({
@@ -1655,21 +1660,6 @@ export function Composer({
     [addressBook]
   );
 
-  const reloadLocalApiKey = useCallback(async () => {
-    setApiStatus('loading local API key...');
-    try {
-      const loaded = await loadLocalNockblocksKey();
-      if (loaded.key) {
-        setApiKey(loaded.key);
-        setApiStatus(`loaded API key from ${loaded.source}; save it to keep using it`);
-      } else {
-        setApiStatus('no local API key found; paste one below');
-      }
-    } catch (err: any) {
-      setApiStatus(`API key lookup failed: ${err?.message ?? String(err)}`);
-    }
-  }, []);
-
   const saveNockblocksSettings = useCallback(() => {
     const trimmedKey = apiKey.trim();
 
@@ -2190,9 +2180,6 @@ export function Composer({
                   </button>
                   <button type="button" className="btn btn-small btn-secondary" onClick={clearNockblocksSettings}>
                     clear
-                  </button>
-                  <button type="button" className="btn btn-small btn-secondary" onClick={reloadLocalApiKey}>
-                    load dev key
                   </button>
                   <button
                     type="button"

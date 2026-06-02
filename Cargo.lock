@@ -3595,6 +3595,8 @@ dependencies = [
 name = "nockster-cli"
 version = "0.1.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "anyhow",
  "bech32",
  "bip39",
@@ -3625,6 +3627,7 @@ dependencies = [
  "serde_json",
  "serialport",
  "sha2",
+ "terminal_size",
  "tx-types",
  "unicode-normalization",
  "zeroize",
@@ -6172,6 +6175,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

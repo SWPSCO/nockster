@@ -1,15 +1,17 @@
 use crate::cli::TouchArgs;
 use crate::serial::{open, send_call};
+use crate::ui;
 use nockster_core::{Request, Response, TouchCalibration};
 
 pub fn run(args: &TouchArgs) -> anyhow::Result<()> {
     let mut sp = open(&args.port, args.baud)?;
+    ui::header("touch");
 
     if args.calibrate {
-        println!("touch each target on the device");
+        ui::info("touch each target on the device");
         match send_call(&mut *sp, 0x5403, Request::StartTouchCalibration)? {
             Response::OkTouchCalibration(calibration) => {
-                println!("wrote touch calibration");
+                ui::ok("wrote touch calibration");
                 print_calibration(calibration);
                 return Ok(());
             }
@@ -60,7 +62,7 @@ pub fn run(args: &TouchArgs) -> anyhow::Result<()> {
             0x5401,
             Request::SetTouchCalibration { calibration: next },
         )? {
-            Response::Ok => println!("wrote touch calibration"),
+            Response::Ok => ui::ok("wrote touch calibration"),
             Response::Err { code } => {
                 anyhow::bail!("set touch calibration failed with code {code}")
             }
@@ -79,9 +81,9 @@ pub fn run(args: &TouchArgs) -> anyhow::Result<()> {
         )? {
             Response::Ok => {
                 if args.diagnostics {
-                    println!("touch diagnostics shown on device");
+                    ui::ok("touch diagnostics shown on device");
                 } else {
-                    println!("touch diagnostics hidden on device");
+                    ui::ok("touch diagnostics hidden on device");
                 }
             }
             Response::Err { code } => {
@@ -104,13 +106,20 @@ fn validate(calibration: TouchCalibration) -> anyhow::Result<()> {
 }
 
 fn print_calibration(calibration: TouchCalibration) {
-    println!(
-        "touch: x={}..{}, y={}..{}, mirror_x={}, mirror_y={}",
-        calibration.raw_x_min,
-        calibration.raw_x_max,
-        calibration.raw_y_min,
-        calibration.raw_y_max,
-        calibration.mirror_x,
-        calibration.mirror_y
+    ui::kv(
+        "x range",
+        ui::strong(&format!(
+            "{}..{}",
+            calibration.raw_x_min, calibration.raw_x_max
+        )),
     );
+    ui::kv(
+        "y range",
+        ui::strong(&format!(
+            "{}..{}",
+            calibration.raw_y_min, calibration.raw_y_max
+        )),
+    );
+    ui::kv("mirror x", ui::yesno(calibration.mirror_x));
+    ui::kv("mirror y", ui::yesno(calibration.mirror_y));
 }

@@ -41,7 +41,6 @@ import type { WalletAddress } from './composer/types';
 import {
   NOCKBLOCKS_API_KEY_STORAGE_KEY,
   fetchNockblocksNotes,
-  loadLocalNockblocksKey,
 } from './composer/nockblocks';
 import './App.css';
 
@@ -415,31 +414,40 @@ function App() {
     return `m/${parts.join('/')}`;
   };
 
-  const walletAddresses = useMemo<WalletAddress[]>(() => {
-    if (!wasmReady || !wasm) return [];
+  const deriveDevicePkh = useCallback((pub: DeviceKey): string | null => {
+    if (!wasmReady || !wasm) return null;
+    try {
+      const address = wasm.cheetah_pkh_b58(
+        pub.x.map((n) => n.toString()),
+        pub.y.map((n) => n.toString())
+      );
+      return validDeviceAddressPkh(address) ? address : null;
+    } catch {
+      return null;
+    }
+  }, [wasm, wasmReady]);
 
+  const formatDeviceAddress = useCallback((pub: DeviceKey): string => {
+    return deriveDevicePkh(pub) ?? formatCheetahPubkey(pub.x, pub.y);
+  }, [deriveDevicePkh]);
+
+  const walletAddresses = useMemo<WalletAddress[]>(() => {
     return Array.from(new Map(deviceKeys.map((pub) => [pub.slot, pub])).values())
       .sort((a, b) => a.slot - b.slot)
       .flatMap((pub) => {
-        try {
-          const address = wasm.cheetah_pkh_b58(
-            pub.x.map((n) => n.toString()),
-            pub.y.map((n) => n.toString())
-          );
-          return [
-            {
-              slot: pub.slot,
-              path: pub.path,
-              pathLabel: formatDerivationPath(pub.path),
-              address,
-              alias: seedLabelMap.get(pub.slot)?.trim() || `wallet slot ${pub.slot}`,
-            },
-          ];
-        } catch {
-          return [];
-        }
+        const address = deriveDevicePkh(pub);
+        if (!address) return [];
+        return [
+          {
+            slot: pub.slot,
+            path: pub.path,
+            pathLabel: formatDerivationPath(pub.path),
+            address,
+            alias: seedLabelMap.get(pub.slot)?.trim() || `wallet slot ${pub.slot}`,
+          },
+        ];
       });
-  }, [deviceKeys, seedLabelMap, wasm, wasmReady]);
+  }, [deriveDevicePkh, deviceKeys, seedLabelMap]);
 
   const walletBySlot = useMemo(() => {
     const wallets = new Map<number, WalletAddress>();
@@ -459,22 +467,7 @@ function App() {
       : localStorage.getItem(NOCKBLOCKS_API_KEY_STORAGE_KEY)?.trim() || '';
     if (saved) {
       setDeviceNockblocksKey(saved);
-      return;
     }
-
-    let cancelled = false;
-    loadLocalNockblocksKey()
-      .then((loaded) => {
-        if (!cancelled && loaded.key) {
-          setDeviceNockblocksKey(loaded.key);
-        }
-      })
-      .catch(() => {
-        // Composer owns key-entry UX; the device page only shows balances when configured.
-      });
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   useEffect(() => {
@@ -676,6 +669,18 @@ function App() {
           }
         }
         setUpdateBootStatus(nextUpdateBootStatus);
+
+        if ((deviceInfo.features & FEATURE_SECURE_UPDATE) !== 0) {
+          try {
+            const trust = await device.getUpdateTrust();
+            setUpdateTrustHash(trust.configured ? bytesToHex(trust.pubkey_sha256) : null);
+          } catch (err: any) {
+            console.warn('getUpdateTrust failed', err);
+            setUpdateTrustHash(null);
+          }
+        } else {
+          setUpdateTrustHash(null);
+        }
 
         const pubsRaw = Array.isArray(deviceInfo.cheetah_pubs)
           ? deviceInfo.cheetah_pubs
@@ -1636,7 +1641,7 @@ function App() {
     successMessage: string,
   ) => {
     if (!deviceAddressBookAvailable) {
-      setAddressBookStatus('Address book is not available on this firmware');
+      setAddressBookStatus(info ? 'Update firmware to use the on-device address book' : 'Read device status before editing the address book');
       return;
     }
     if (locked !== false) {
@@ -1675,7 +1680,7 @@ function App() {
 
   const refreshDeviceAddressBook = async () => {
     if (!deviceAddressBookAvailable) {
-      setAddressBookStatus('Address book is not available on this firmware');
+      setAddressBookStatus(info ? 'Update firmware to use the on-device address book' : 'Read device status before loading the address book');
       return;
     }
     if (locked !== false) {
@@ -1749,20 +1754,6 @@ function App() {
     if (!entry) return;
     const next = deviceAddressBook.filter((_, candidateIndex) => candidateIndex !== index);
     await saveDeviceAddressBookEntries(next, `Removed ${entry.label}`);
-  };
-
-  const formatDeviceAddress = (pub: DeviceKey): string => {
-    if (wasmReady && wasm) {
-      try {
-        return wasm.cheetah_pkh_b58(
-          pub.x.map((n) => n.toString()),
-          pub.y.map((n) => n.toString())
-        );
-      } catch {
-        // fall back to old (pubkey) encoding
-      }
-    }
-    return formatCheetahPubkey(pub.x, pub.y);
   };
 
   return (
@@ -1888,6 +1879,8 @@ function App() {
                   const storedLabel = seedLabelMap.get(pub.slot) ?? '';
                   const draftLabel = labelDrafts[pub.slot] ?? storedLabel;
                   const wallet = walletBySlot.get(pub.slot);
+                  const walletAddress = wallet?.address ?? deriveDevicePkh(pub);
+                  const displayAddress = walletAddress ?? formatDeviceAddress(pub);
                   const balance = slotBalances[pub.slot];
                   const balanceText = !deviceNockblocksKey.trim()
                     ? ''
@@ -1949,11 +1942,11 @@ function App() {
                         </button>
                       </div>
                       <div className="wallet-slot-address">
-                        <span className="pubkey-text">{wallet?.address ?? formatDeviceAddress(pub)}</span>
+                        <span className="pubkey-text">{displayAddress}</span>
                         <button
                           type="button"
                           onClick={() => {
-                            navigator.clipboard.writeText(wallet?.address ?? formatDeviceAddress(pub));
+                            navigator.clipboard.writeText(displayAddress);
                             setStatus(`Copied slot ${pub.slot} address to clipboard`);
                           }}
                           className="btn btn-small copy-btn"
@@ -1970,19 +1963,25 @@ function App() {
                       <div className="wallet-slot-actions">
                         <button
                           type="button"
-                          onClick={() => void saveWalletAddressToDeviceBook(wallet ?? {
-                            slot: pub.slot,
-                            path: pub.path,
-                            pathLabel: formatDerivationPath(pub.path),
-                            address: formatDeviceAddress(pub),
-                            alias: `wallet slot ${pub.slot}`,
-                          })}
+                          onClick={() => {
+                            if (!walletAddress) {
+                              setAddressBookStatus('Wallet PKH is not ready yet');
+                              return;
+                            }
+                            void saveWalletAddressToDeviceBook(wallet ?? {
+                              slot: pub.slot,
+                              path: pub.path,
+                              pathLabel: formatDerivationPath(pub.path),
+                              address: walletAddress,
+                              alias: storedLabel || `wallet slot ${pub.slot}`,
+                            });
+                          }}
                           className="btn btn-small btn-secondary"
                           disabled={
                             !deviceAddressBookAvailable ||
                             locked !== false ||
                             syncingAddressBook ||
-                            !wallet?.address
+                            !walletAddress
                           }
                         >
                           save to book
@@ -2028,7 +2027,9 @@ function App() {
               </div>
             </div>
             {!deviceAddressBookAvailable ? (
-              <div className="device-empty-state">Update firmware to use the on-device address book.</div>
+              <div className="device-empty-state">
+                {info ? 'Update firmware to use the on-device address book.' : 'Reading device status...'}
+              </div>
             ) : locked !== false ? (
               <div className="device-empty-state">Unlock to edit addresses stored on the device.</div>
             ) : (
@@ -2441,7 +2442,9 @@ function App() {
               )}
               <div className="status-item full-width">
                 <span className="label">trust anchor:</span>
-                <span className="value update-hash">{updateTrustHash ?? 'not loaded'}</span>
+                <span className="value update-hash">
+                  {secureUpdateAvailable ? updateTrustHash ?? 'not configured' : 'unavailable'}
+                </span>
               </div>
               {updateBundle && (
                 <div className="status-item full-width">

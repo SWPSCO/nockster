@@ -425,8 +425,8 @@ export class NocksterDevice {
   }
 
   async initializePIN(pin: string, seed64: Uint8Array) {
-    // InitializePIN takes ~5 seconds due to PBKDF2, use longer timeout
-    const resp = await this.call({ type: 'InitializePIN', pin, seed64 }, 15000);
+    // InitializePIN runs PBKDF2 and rewrites persistent flash storage.
+    const resp = await this.call({ type: 'InitializePIN', pin, seed64 }, 120000);
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
     }
@@ -437,7 +437,7 @@ export class NocksterDevice {
     if (seed64.length !== 64) {
       throw new Error('seed must be 64 bytes');
     }
-    const resp = await this.call({ type: 'AddSeed', seed64 });
+    const resp = await this.call({ type: 'AddSeed', seed64 }, 60000);
     if (resp.type === 'Err') {
       throw new Error(getErrorMessage(resp.code));
     }

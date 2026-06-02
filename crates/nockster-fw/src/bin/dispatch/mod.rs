@@ -6,7 +6,8 @@ use nockster_core::{
     BuildInfo, Caps, DeviceAddressBookEntry, Frame, ReleaseInfo, Request, Response,
     TouchCalibration, UpdateTrust, ERR_BAD_COBS_OR_POSTCARD, ERR_BUSY, ERR_CRYPTO,
     ERR_DEVICE_LOCKED, ERR_ENCODE_TOO_BIG, ERR_FLASH, ERR_NO_SEED, ERR_OVERFLOW,
-    ERR_UNSUPPORTED_VERSION, PROTO_V1,
+    ERR_UNSUPPORTED_VERSION, MAX_ADDRESS_BOOK_LABEL_LEN, MAX_ADDRESS_BOOK_PKH_LEN,
+    MAX_DEVICE_ADDRESS_BOOK_ENTRIES, PROTO_V1,
 };
 
 use crate::gui::{
@@ -17,6 +18,9 @@ use crate::{seed_store, session};
 use esp_hal::time::Duration;
 use nockster_fw::nvs_store::{NvsError, NvsStore};
 use nockster_fw::security::read_security_status;
+
+const ADDRESS_BOOK_PAYLOAD_MAX: usize = 4 + MAX_DEVICE_ADDRESS_BOOK_ENTRIES
+    * (MAX_ADDRESS_BOOK_LABEL_LEN + MAX_ADDRESS_BOOK_PKH_LEN + 2);
 
 pub fn update_mode_allows_frame(frame: &Frame) -> bool {
     matches!(
@@ -228,9 +232,11 @@ pub fn read_address_book_payload(locked: bool) -> Result<alloc::vec::Vec<u8>, Re
         Err(NvsError::Flash) => return Err(Response::Err { code: ERR_FLASH }),
         Err(_) => alloc::vec::Vec::new(),
     };
-    postcard::to_allocvec(&entries).map_err(|_| Response::Err {
+    let mut buf = alloc::vec![0u8; ADDRESS_BOOK_PAYLOAD_MAX];
+    let used = postcard::to_slice(&entries, buf.as_mut_slice()).map_err(|_| Response::Err {
         code: ERR_ENCODE_TOO_BIG,
-    })
+    })?;
+    Ok(used.to_vec())
 }
 
 pub fn write_address_book_payload(payload: &[u8], locked: bool) -> Response {
@@ -446,10 +452,11 @@ fn encode_response(out: &mut alloc::vec::Vec<u8>, id: u32, resp: Response) {
         id,
         msg: resp,
     };
-    let tmp = postcard::to_allocvec(&msg).unwrap();
+    let mut tmp = [0u8; 4096];
+    let tmp = postcard::to_slice(&msg, &mut tmp).unwrap();
     let mut enc = alloc::vec::Vec::with_capacity(cobs::max_encoding_length(tmp.len()));
     enc.resize(cobs::max_encoding_length(tmp.len()), 0);
-    let used = cobs::encode(&tmp, &mut enc[..]);
+    let used = cobs::encode(tmp, &mut enc[..]);
     enc.truncate(used);
     out.extend_from_slice(&enc);
     out.push(0);

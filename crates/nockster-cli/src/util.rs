@@ -6,7 +6,7 @@ use nockapp::AtomExt;
 use nockvm::noun::{Atom, Noun};
 use noun_serde::NounDecode;
 use tx_types::transaction_types::SpendBody;
-use tx_types::transaction_types_v1::RawTransactionV1;
+use tx_types::transaction_types_v1::{compute_tx_id_v1, RawTransactionV1};
 
 fn is_printable_ascii(bytes: &[u8]) -> bool {
     bytes
@@ -59,26 +59,102 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
     Err(anyhow!("unable to extract transaction identifier"))
 }
 
-pub fn print_raw_v1_details(raw: &RawTransactionV1) {
-    println!("raw-tx (V1):");
-    println!("  version      = {}", raw.version);
-    println!("  id           = {}", raw.id.to_b58());
-    println!("  spends       = {}", raw.spends.map.wyt());
-    for (idx, (name, spend)) in raw.spends.map.tap().into_iter().enumerate() {
-        println!("  - spend[{}]:", idx);
-        if name.p.len() >= 2 {
-            println!(
-                "      name        = [{:?} {:?}]",
-                name.p[0].to_b58(),
-                name.p[1].to_b58()
-            );
+/// Group a u64 into thousands for readable amounts: `12345678` -> `12,345,678`.
+fn group_u64(n: u64) -> String {
+    let digits = n.to_string();
+    let len = digits.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            out.push(',');
         }
-        let fee = match &spend.body {
-            SpendBody::V0(v0) => v0.fee.value,
-            SpendBody::V0ToV1(v0tov1) => v0tov1.fee.value,
-            SpendBody::V1(v1) => v1.fee.value,
-        };
-        println!("      fee         = {}", fee);
+        out.push(ch);
+    }
+    out
+}
+
+pub fn print_raw_v1_details(raw: &RawTransactionV1) {
+    use crate::ui;
+
+    let stats = tx_types::transaction_stats(raw);
+    let computed = compute_tx_id_v1(&raw.spends);
+    let verified = raw.id == computed;
+
+    ui::subhead("transaction");
+    ui::kv("version", ui::strong(&raw.version.to_string()));
+    let badge = if verified {
+        ui::dot(ui::Health::Good, "verified")
+    } else {
+        ui::dot(ui::Health::Warn, "id mismatch")
+    };
+    ui::kv("tx id", format!("{}  {}", ui::accent(&raw.id.to_b58()), badge));
+    if !verified {
+        ui::kv("computed", ui::dim(&computed.to_b58()));
+    }
+
+    ui::subhead("summary");
+    ui::kv("spends", ui::strong(&stats.num_spends.to_string()));
+    ui::kv("outputs", ui::strong(&stats.total_seeds.to_string()));
+    ui::kv("fee", ui::strong(&group_u64(stats.total_fee)));
+    ui::kv("output value", ui::strong(&group_u64(stats.total_output_value)));
+    ui::kv(
+        "total",
+        ui::strong(&group_u64(stats.total_output_value + stats.total_fee)),
+    );
+
+    for (idx, (name, spend)) in raw.spends.map.tap().into_iter().enumerate() {
+        ui::subhead(&format!("spend {idx}"));
+
+        if !name.p.is_empty() {
+            let note = name
+                .p
+                .iter()
+                .map(|h| h.to_b58())
+                .collect::<Vec<_>>()
+                .join(":");
+            ui::kv("note", ui::dim(&note));
+        }
+
+        match &spend.body {
+            SpendBody::V1(v1) => {
+                ui::kv("fee", ui::strong(&group_u64(v1.fee.value)));
+
+                let signers: Vec<String> = v1
+                    .witness
+                    .pkh
+                    .map
+                    .tap()
+                    .into_iter()
+                    .map(|(hash, _)| hash.to_b58())
+                    .collect();
+                if !signers.is_empty() {
+                    ui::kv("from", ui::dim(&signers.join(", ")));
+                }
+
+                let seeds = v1.seeds.set.tap();
+                if seeds.is_empty() {
+                    ui::note("no outputs");
+                } else {
+                    for seed in seeds.into_iter() {
+                        ui::item(format!(
+                            "{} {} {}",
+                            ui::accent(&group_u64(seed.gift.value)),
+                            ui::dim("→"),
+                            ui::strong(&seed.lock_root.to_b58()),
+                        ));
+                    }
+                }
+            }
+            other => {
+                let (fee, kind) = match other {
+                    SpendBody::V0(v0) => (v0.fee.value, "v0"),
+                    SpendBody::V0ToV1(v0tov1) => (v0tov1.fee.value, "v0->v1"),
+                    SpendBody::V1(_) => unreachable!(),
+                };
+                ui::kv("fee", ui::strong(&group_u64(fee)));
+                ui::note(&format!("body: {kind} (outputs not decoded)"));
+            }
+        }
     }
 }
 

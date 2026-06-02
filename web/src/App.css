@@ -10,7 +10,7 @@
   --color-border-soft: #d9d9d2;
   --color-focus: rgba(0, 0, 0, 0.14);
   --shadow-panel: 0 10px 34px rgba(0, 0, 0, 0.055), 0 1px 0 rgba(0, 0, 0, 0.04);
-  --radius: 8px;
+  --radius: 5px;
 }
 
 * {

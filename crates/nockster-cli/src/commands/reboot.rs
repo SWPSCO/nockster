@@ -1,5 +1,6 @@
 use crate::cli::PortArgs;
 use crate::serial::{open, send_call, send_call_with_deadline, Link};
+use crate::ui;
 use anyhow::{Context, Result};
 use nockster_core::{Request, Response, FEATURE_DEVICE_REBOOT};
 use std::time::Duration;
@@ -23,13 +24,13 @@ pub(crate) fn request_device_reboot(sp: &mut dyn Link) -> Result<()> {
 
     match send_call_with_deadline(sp, 0x0601, Request::Reboot, Duration::from_secs(5)) {
         Ok(Response::Ok) => {
-            println!("device reboot requested");
+            ui::ok("device reboot requested");
             Ok(())
         }
         Ok(Response::Err { code }) => anyhow::bail!("reboot failed with error code {code}"),
         Ok(other) => anyhow::bail!("unexpected reboot response: {other:?}"),
         Err(err) if reboot_read_disconnect_indicates_success(&err) => {
-            println!("device reboot command sent; device may already be restarting");
+            ui::ok("device reboot command sent; device may already be restarting");
             Ok(())
         }
         Err(err) => Err(err).context("request device reboot"),

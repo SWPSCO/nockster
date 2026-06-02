@@ -18,7 +18,7 @@
 .composer-inspector,
 .composer-canvas {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-radius: 4px;
   background: var(--color-panel);
   box-shadow: var(--shadow-panel);
 }
@@ -72,7 +72,7 @@
 .composer-subdetails,
 .inspector-pre {
   border: 1px solid var(--color-border-soft);
-  border-radius: var(--radius);
+  border-radius: 4px;
   background: var(--color-panel);
 }
 
@@ -171,7 +171,7 @@
   padding: 4px;
   margin-bottom: 8px;
   border: 1px solid var(--color-border-soft);
-  border-radius: 4px;
+  border-radius: 3px;
   background: var(--color-panel-soft);
 }
 
@@ -326,8 +326,19 @@
 
 .preview-node-mono {
   max-width: 300px;
+  padding: 6px 7px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 3px;
+  background: var(--color-panel-soft);
+  color: var(--color-text);
+  font-size: 0.72rem;
+  line-height: 1.35;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.preview-copy-btn {
+  width: fit-content;
 }
 
 .node-mono {
@@ -340,7 +351,7 @@
   min-height: 36px;
   padding: 7px 8px;
   border: 1px solid var(--color-border-soft);
-  border-radius: var(--radius);
+  border-radius: 3px;
   background: var(--color-panel);
   color: var(--color-text);
   font-size: 0.82rem;

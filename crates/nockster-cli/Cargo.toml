@@ -13,6 +13,9 @@ hidapi = "2.6.3"
 postcard   = { workspace = true, features = ["use-std"] } # to_stdvec_cobs
 serde = { workspace = true, features = ["std", "derive"] }
 serde-big-array = "0.5"
+anstream = "0.6"
+anstyle = "1"
+terminal_size = "0.4"
 cobs = { version = "0.4",    default-features = false }
 k256 = { version = "0.13", features = ["ecdsa"] }
 hex = "0.4"

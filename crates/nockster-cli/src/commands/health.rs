@@ -1,9 +1,11 @@
 use crate::serial::{open, send_call};
+use crate::ui;
 use nockster_core::{Request, Response};
 
 pub fn run(port: &str, baud: u32) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
     let resp: Response = send_call(&mut *sp, 2, Request::Health)?;
-    println!("{resp:?}");
+    ui::header("health");
+    ui::kv("response", ui::strong(&format!("{resp:?}")));
     Ok(())
 }

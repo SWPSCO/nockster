@@ -1,5 +1,6 @@
 use crate::cli::SecurityArgs;
 use crate::serial::{open, send_call};
+use crate::ui;
 use nockster_core::{
     Request, Response, SecurityStatus, HMAC_KEY_PURPOSE_DOWN_ALL, HMAC_KEY_PURPOSE_DOWN_DS,
     HMAC_KEY_PURPOSE_DOWN_JTAG, HMAC_KEY_PURPOSE_UP,
@@ -8,60 +9,87 @@ use nockster_core::{
 pub fn run(args: &SecurityArgs) -> anyhow::Result<()> {
     let mut sp = open(&args.port, args.baud)?;
     let status = read_security_status(&mut *sp)?;
+    ui::header("security");
     print_status(&status);
 
     validate_expectations(&status, args)?;
     Ok(())
 }
 
+/// Coloured dot for a boolean where `true` is the hardened/desired state.
+fn flag(value: bool) -> String {
+    ui::yesno(value)
+}
+
 pub(crate) fn print_status(status: &SecurityStatus) {
-    println!("security:");
+    ui::subhead("security");
     if status.chip_security_available {
-        println!("  mac: {}", format_mac(status.mac));
-        println!(
-            "  boot: secure_boot={}, flash_encryption={}, secure_version={}, flash_crypt_cnt=0b{:03b}",
-            on_off(status.secure_boot),
-            on_off(status.flash_encryption),
-            status.secure_version,
-            status.flash_crypt_cnt & 0x07
+        ui::kv("mac", ui::strong(&format_mac(status.mac)));
+
+        ui::subhead("boot");
+        ui::kv("secure boot", flag(status.secure_boot));
+        ui::kv("flash encrypt", flag(status.flash_encryption));
+        ui::kv(
+            "secure version",
+            ui::strong(&status.secure_version.to_string()),
         );
-        println!(
-            "  keys: purposes=[{}], hmac_slots={}, hmac_user_slots={}, read_protected_slots={}",
-            format_key_purposes(status.key_purposes),
-            format_slot_mask(status.hmac_key_slots),
-            format_slot_mask(status.hmac_user_key_slots),
-            format_slot_mask(status.read_protected_key_slots)
+        ui::kv(
+            "flash crypt",
+            ui::dim(&format!("0b{:03b}", status.flash_crypt_cnt & 0x07)),
         );
-        println!(
-            "  debug: pad_jtag_disabled={}, usb_jtag_disabled={}, soft_jtag_disabled={} (bits=0b{:03b}), usb_serial_jtag_disabled={}",
-            on_off(status.pad_jtag_disabled),
-            on_off(status.usb_jtag_disabled),
-            on_off(status.soft_jtag_disabled),
-            status.soft_jtag_disable_bits & 0x07,
-            on_off(status.usb_serial_jtag_disabled)
+
+        ui::subhead("keys");
+        ui::kv("purposes", format_key_purposes(status.key_purposes));
+        ui::kv(
+            "hmac slots",
+            ui::strong(&format_slot_mask(status.hmac_key_slots)),
         );
-        println!(
-            "  download: disabled={}, secure_download={}, usb_serial_jtag_download_disabled={}, usb_otg_download_disabled={}, direct_boot_disabled={}, usb_rom_print_disabled={}",
-            on_off(status.download_mode_disabled),
-            on_off(status.secure_download_enabled),
-            on_off(status.usb_serial_jtag_download_disabled),
-            on_off(status.usb_otg_download_disabled),
-            on_off(status.direct_boot_disabled),
-            on_off(status.usb_rom_print_disabled)
+        ui::kv(
+            "user slots",
+            ui::strong(&format_slot_mask(status.hmac_user_key_slots)),
         );
-        println!(
-            "  physical: power_glitch_enabled={}",
-            on_off(status.power_glitch_enabled)
+        ui::kv(
+            "read-prot",
+            ui::strong(&format_slot_mask(status.read_protected_key_slots)),
         );
+
+        ui::subhead("debug");
+        ui::kv("pad jtag", flag(status.pad_jtag_disabled));
+        ui::kv("usb jtag", flag(status.usb_jtag_disabled));
+        ui::kv(
+            "soft jtag",
+            format!(
+                "{}  {}",
+                flag(status.soft_jtag_disabled),
+                ui::dim(&format!(
+                    "bits=0b{:03b}",
+                    status.soft_jtag_disable_bits & 0x07
+                ))
+            ),
+        );
+        ui::kv("usb serial/jtag", flag(status.usb_serial_jtag_disabled));
+
+        ui::subhead("download");
+        ui::kv("disabled", flag(status.download_mode_disabled));
+        ui::kv("secure dl", flag(status.secure_download_enabled));
+        ui::kv(
+            "usb s/jtag dl",
+            flag(status.usb_serial_jtag_download_disabled),
+        );
+        ui::kv("usb otg dl", flag(status.usb_otg_download_disabled));
+        ui::kv("direct boot", flag(status.direct_boot_disabled));
+        ui::kv("usb rom print", flag(status.usb_rom_print_disabled));
+
+        ui::subhead("physical");
+        ui::kv("power glitch", flag(status.power_glitch_enabled));
     } else {
-        println!("  chip: hidden (firmware built without chip-security)");
+        ui::note("chip: hidden (firmware built without chip-security)");
     }
-    println!(
-        "  nvs: initialized={}, schema_v={}, slots={}",
-        on_off(status.nvs_initialized),
-        status.nvs_schema_version,
-        status.nvs_slot_count
-    );
+
+    ui::subhead("nvs");
+    ui::kv("initialized", flag(status.nvs_initialized));
+    ui::kv("schema", ui::strong(&status.nvs_schema_version.to_string()));
+    ui::kv("slots", ui::strong(&status.nvs_slot_count.to_string()));
 }
 
 fn read_security_status(sp: &mut dyn crate::serial::Link) -> anyhow::Result<SecurityStatus> {
@@ -233,7 +261,7 @@ fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow
         );
     }
 
-    println!("security validation: ok");
+    ui::ok("security validation: ok");
     Ok(())
 }
 

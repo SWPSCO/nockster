@@ -43,9 +43,7 @@ VITE_NOCKSTER_RELEASE_INDEX_URL=https://example.com/updates/latest.json npm run 
 ```
 
 The composer stores the Nockblocks API key in browser local storage from the
-Nockblocks panel. During `make serve` or `npm run dev`, the panel can also
-prefill from repo-root `nockblocks.key` or `NOCKBLOCKS_API_KEY`; use `save key`
-in the UI to persist it for the browser.
+Nockblocks panel.
 
 Local development sends Nockblocks RPC through Vite's same-origin
 `/__nockblocks/rpc` proxy to avoid browser CORS restrictions. A hosted composer

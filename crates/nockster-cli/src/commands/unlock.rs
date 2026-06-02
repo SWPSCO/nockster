@@ -1,4 +1,5 @@
 use crate::serial::{open, send_call};
+use crate::ui;
 use nockster_core::{Request, Response};
 
 pub fn unlock(port: &str, baud: u32, pin: &str) -> anyhow::Result<()> {
@@ -12,7 +13,7 @@ pub fn unlock(port: &str, baud: u32, pin: &str) -> anyhow::Result<()> {
         },
     )? {
         Response::Ok => {
-            println!("✔ device unlocked");
+            ui::ok("device unlocked");
             Ok(())
         }
         Response::Err { code } => {
@@ -47,7 +48,7 @@ pub fn lock(port: &str, baud: u32) -> anyhow::Result<()> {
 
     match send_call(&mut *sp, 0x45, Request::Lock)? {
         Response::Ok => {
-            println!("✔ device locked");
+            ui::ok("device locked");
             Ok(())
         }
         Response::Err { code } => {

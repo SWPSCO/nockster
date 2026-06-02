@@ -2,12 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import wasm from 'vite-plugin-wasm'
 import topLevelAwait from 'vite-plugin-top-level-await'
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(__dirname, '..')
 const nockblocksRpcUrl = 'https://nockblocks.com/rpc'
 
 function setJsonHeaders(res: any) {
@@ -37,30 +32,6 @@ function nockblocksDevPlugin() {
   return {
     name: 'nockblocks-dev',
     configureServer(server: any) {
-      server.middlewares.use('/__nockblocks/key', (req: any, res: any, next: any) => {
-        if (req.method !== 'GET') {
-          next()
-          return
-        }
-
-        const envKey = process.env.NOCKBLOCKS_API_KEY?.trim()
-        const keyPath = path.join(repoRoot, 'nockblocks.key')
-        let key = envKey ?? ''
-        let source = envKey ? 'NOCKBLOCKS_API_KEY' : 'nockblocks.key'
-
-        if (!key) {
-          try {
-            key = fs.readFileSync(keyPath, 'utf8').trim()
-          } catch {
-            key = ''
-          }
-        }
-
-        res.statusCode = key ? 200 : 404
-        setJsonHeaders(res)
-        res.end(JSON.stringify({ key: key || null, source, path: keyPath }))
-      })
-
       server.middlewares.use('/__nockblocks/rpc', async (req: any, res: any, next: any) => {
         if (req.method === 'OPTIONS') {
           res.statusCode = 204

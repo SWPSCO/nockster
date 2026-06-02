@@ -3,18 +3,18 @@ use crate::commands::info::format_features;
 use crate::commands::security;
 use crate::commands::sign_draft;
 use crate::serial::{open, send_call, Link};
+use crate::ui;
 use nockster_core::{CheetahPub, Request, Response, ERR_NO_SEED, FEATURE_SECURITY_STATUS};
 use std::fmt::Write as _;
 
 pub fn run(args: &SmokeArgs) -> anyhow::Result<()> {
     let mut sp = open(&args.port, args.baud)?;
+    ui::header("smoke");
 
     match send_call(&mut *sp, 0x5300, Request::Hello)? {
         Response::Hello(caps) => {
-            println!(
-                "hello: proto_v={}, compressed_pk={}",
-                caps.proto_v, caps.compressed_pk
-            );
+            ui::kv("proto", ui::strong(&caps.proto_v.to_string()));
+            ui::kv("compressed pk", ui::yesno(caps.compressed_pk));
         }
         other => anyhow::bail!("unexpected hello response: {other:?}"),
     }
@@ -28,11 +28,11 @@ pub fn run(args: &SmokeArgs) -> anyhow::Result<()> {
             has_seed,
             cheetah_pubs,
         } => {
-            println!(
-                "info: proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}, pubkeys={}",
-                cheetah_pubs.len()
-            );
-            println!("features: {}", format_features(features));
+            ui::kv("firmware", ui::strong(&format!("{fw_major}.{fw_minor}")));
+            ui::kv("proto", ui::strong(&proto_v.to_string()));
+            ui::kv("pubkeys", ui::strong(&cheetah_pubs.len().to_string()));
+            ui::kv("has seed", ui::yesno(has_seed));
+            ui::kv("features", format_features(features));
             (features, has_seed, cheetah_pubs)
         }
         other => anyhow::bail!("unexpected info response: {other:?}"),
@@ -43,9 +43,18 @@ pub fn run(args: &SmokeArgs) -> anyhow::Result<()> {
             locked,
             attempts_remaining,
         } => {
-            println!(
-                "lock: locked={}, attempts_remaining={attempts_remaining}",
-                yes_no(locked)
+            let dot = if locked {
+                ui::dot(ui::Health::Bad, "locked")
+            } else {
+                ui::dot(ui::Health::Good, "unlocked")
+            };
+            ui::kv(
+                "lock",
+                format!(
+                    "{}  {}",
+                    dot,
+                    ui::dim(&format!("attempts {attempts_remaining}"))
+                ),
             );
             locked
         }
@@ -58,24 +67,26 @@ pub fn run(args: &SmokeArgs) -> anyhow::Result<()> {
             other => anyhow::bail!("unexpected security response: {other:?}"),
         }
     } else {
-        println!("security: skipped (firmware does not advertise security-status)");
+        ui::subhead("security");
+        ui::note("skipped (firmware does not advertise security-status)");
     }
 
+    ui::subhead("checks");
     if has_seed && !locked {
         check_seed_pubkeys(&mut *sp, &cheetah_pubs)?;
 
         match send_call(&mut *sp, 0x5304, Request::Health)? {
-            Response::OkCheetahSig { .. } => println!("health: ok"),
+            Response::OkCheetahSig { .. } => ui::ok("health"),
             Response::Err { code: ERR_NO_SEED } => {
-                println!("health: skipped (seed unavailable)");
+                ui::note("health: skipped (seed unavailable)");
             }
             Response::Err { code } => anyhow::bail!("health failed with error code {code}"),
             other => anyhow::bail!("unexpected health response: {other:?}"),
         }
     } else if has_seed {
-        println!("health: skipped (device locked)");
+        ui::note("health: skipped (device locked)");
     } else {
-        println!("health: skipped (device has no seed)");
+        ui::note("health: skipped (device has no seed)");
     }
 
     if let Some(draft_path) = args.sign_draft.as_deref() {
@@ -86,7 +97,9 @@ pub fn run(args: &SmokeArgs) -> anyhow::Result<()> {
             anyhow::bail!("sign-draft smoke requested, but device is locked");
         }
         drop(sp);
-        println!("sign-draft: requesting on-device approval for {draft_path}");
+        ui::info(&format!(
+            "sign-draft: requesting on-device approval for {draft_path}"
+        ));
         sign_draft::run(
             &args.port,
             args.baud,
@@ -97,7 +110,8 @@ pub fn run(args: &SmokeArgs) -> anyhow::Result<()> {
         )?;
     }
 
-    println!("smoke: ok");
+    ui::rule();
+    ui::ok("smoke ok");
     Ok(())
 }
 
@@ -117,11 +131,11 @@ fn check_seed_pubkeys(sp: &mut dyn Link, cheetah_pubs: &[CheetahPub]) -> anyhow:
             },
         )? {
             Response::OkCheetahPub { x, y } if x == pubinfo.x && y == pubinfo.y => {
-                println!(
-                    "pubkey: slot[{}] path={} ok",
+                ui::ok(&format!(
+                    "pubkey slot {} {}",
                     pubinfo.slot,
-                    format_path(pubinfo.path.as_slice())
-                );
+                    ui::dim(&format_path(pubinfo.path.as_slice()))
+                ));
             }
             Response::OkCheetahPub { .. } => anyhow::bail!(
                 "pubkey: slot[{}] path={} mismatch",
@@ -152,12 +166,4 @@ fn format_path(path: &[u32]) -> String {
         }
     }
     out
-}
-
-fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
-    }
 }

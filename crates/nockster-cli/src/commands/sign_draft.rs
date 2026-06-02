@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use nockster_core::{draft_sign, FragKind, Request, Response};
 
 use crate::serial::{open, send_blob_and_recv_outbound, send_call};
+use crate::ui;
 
 fn default_out_path_for(input: &str, explicit: Option<&str>) -> PathBuf {
     match explicit {
@@ -49,12 +50,16 @@ pub fn run(
         if let Some(bytes) = rewritten.rewritten {
             out_bytes = bytes;
         }
-        println!("host tx-id: {}", rewritten.name);
+        ui::kv("host tx-id", ui::accent(&rewritten.name));
     }
 
     let out_path = default_out_path_for(draft_path, out_opt);
     fs::write(&out_path, &out_bytes).with_context(|| format!("write {}", out_path.display()))?;
 
-    println!("wrote {} bytes to {}", out_bytes.len(), out_path.display());
+    ui::ok(&format!(
+        "wrote {} bytes to {}",
+        out_bytes.len(),
+        out_path.display()
+    ));
     Ok(())
 }

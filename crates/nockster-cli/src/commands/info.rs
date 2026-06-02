@@ -1,5 +1,6 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_call};
+use crate::ui;
 use nockster_core::{
     Request, Response, FEATURE_ALL_KNOWN, FEATURE_BUILD_INFO, FEATURE_CHEETAH,
     FEATURE_DEVICE_REBOOT, FEATURE_FRAG, FEATURE_PIN_CHANGE_UI, FEATURE_RELEASE_INFO,
@@ -12,6 +13,8 @@ use std::fmt::Write as _;
 pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
 
+    ui::header("device info");
+
     // Get device info
     let resp: Response = send_call(&mut *sp, 0x01, Request::GetInfo)?;
     match resp {
@@ -23,20 +26,26 @@ pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
             has_seed,
             cheetah_pubs,
         } => {
-            println!(
-                "info: proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}"
-            );
-            println!("features: {}", format_features(features));
+            ui::kv("proto", ui::strong(&proto_v.to_string()));
+            ui::kv("firmware", ui::strong(&format!("{fw_major}.{fw_minor}")));
+            ui::kv("features", format_features(features));
+            ui::kv("flags", ui::dim(&format!("0x{features:08x}")));
             if features & FEATURE_BUILD_INFO != 0 {
                 let build_resp: Response = send_call(&mut *sp, 0x03, Request::GetBuildInfo)?;
                 match build_resp {
                     Response::OkBuildInfo(build) => {
                         let dirty = if build.git_dirty { "-dirty" } else { "" };
-                        println!(
-                            "build: profile={}, protocol_v={}, git={}{}",
-                            build.build_profile, build.protocol_v, build.git_commit, dirty
+                        ui::kv(
+                            "build",
+                            format!(
+                                "{} · proto {} · git {}{}",
+                                build.build_profile,
+                                build.protocol_v,
+                                build.git_commit,
+                                ui::amber(dirty)
+                            ),
                         );
-                        println!("tx-types: {}", build.tx_types_rev);
+                        ui::kv("tx-types", ui::dim(&build.tx_types_rev.to_string()));
                     }
                     other => anyhow::bail!("unexpected build info response: {other:?}"),
                 }
@@ -45,26 +54,27 @@ pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
                 let release_resp: Response = send_call(&mut *sp, 0x04, Request::GetReleaseInfo)?;
                 match release_resp {
                     Response::OkReleaseInfo(release) => {
-                        println!("release: version={}", release.release_version);
+                        ui::kv("release", ui::strong(&release.release_version.to_string()));
                     }
                     other => anyhow::bail!("unexpected release info response: {other:?}"),
                 }
             }
             if has_seed {
+                ui::subhead("keys");
                 if cheetah_pubs.is_empty() {
-                    println!("  (device locked; pubkeys withheld)");
+                    ui::note("device locked; pubkeys withheld");
                 } else {
                     for (idx, pubinfo) in cheetah_pubs.iter().enumerate() {
                         let pk_xy = (pubinfo.x, pubinfo.y);
                         let b58 = pubkey_to_b58(&pk_xy, version);
                         let path_display = format_path(pubinfo.path.as_slice());
-                        println!(
-                            "  slot[{slot}] key[{idx:02}]: path={} pubkey(v{})={}",
-                            path_display,
-                            version,
-                            b58,
-                            slot = pubinfo.slot
-                        );
+                        ui::item(format!(
+                            "slot {slot} {key}  {path}  {pk}",
+                            slot = pubinfo.slot,
+                            key = ui::dim(&format!("key[{idx:02}]")),
+                            path = ui::strong(&path_display),
+                            pk = ui::accent(&b58),
+                        ));
                     }
                 }
             }
@@ -79,15 +89,14 @@ pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
             locked,
             attempts_remaining,
         } => {
-            println!(
-                "status: {}",
-                if locked {
-                    "🔒 locked"
-                } else {
-                    "🔓 unlocked"
-                }
-            );
-            println!("attempts remaining: {}", attempts_remaining);
+            ui::subhead("status");
+            let dot = if locked {
+                ui::dot(ui::Health::Bad, "locked")
+            } else {
+                ui::dot(ui::Health::Good, "unlocked")
+            };
+            ui::kv("lock", dot);
+            ui::kv("attempts", ui::strong(&attempts_remaining.to_string()));
         }
         other => anyhow::bail!("unexpected status response: {other:?}"),
     }

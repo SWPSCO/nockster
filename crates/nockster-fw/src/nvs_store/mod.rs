@@ -32,12 +32,15 @@ const ADDRESS_BOOK_HEADER_SIZE: usize = 8;
 const ADDRESS_BOOK_RECORD_SIZE: usize = MAX_ADDRESS_BOOK_LABEL_LEN + MAX_ADDRESS_BOOK_PKH_LEN;
 const ADDRESS_BOOK_SIZE: usize =
     ADDRESS_BOOK_HEADER_SIZE + ADDRESS_BOOK_RECORD_SIZE * MAX_DEVICE_ADDRESS_BOOK_ENTRIES;
-const NVS_TOTAL_SIZE: usize = SEED_TOTAL_SIZE + CALIBRATION_SIZE + LABELS_SIZE + ADDRESS_BOOK_SIZE;
-const NVS_STORAGE_SIZE: usize = align_up(NVS_TOTAL_SIZE, NVS_SECTOR_SIZE);
-const NVS_STORAGE_END: u32 = NVS_BASE_ADDR + NVS_STORAGE_SIZE as u32;
+const SEED_CORE_TOTAL_SIZE: usize = SEED_TOTAL_SIZE + CALIBRATION_SIZE + LABELS_SIZE;
+const SEED_CORE_STORAGE_SIZE: usize = align_up(SEED_CORE_TOTAL_SIZE, NVS_SECTOR_SIZE);
+const SEED_CORE_STORAGE_END: u32 = NVS_BASE_ADDR + SEED_CORE_STORAGE_SIZE as u32;
+const ADDRESS_BOOK_STORAGE_SIZE: usize = align_up(ADDRESS_BOOK_SIZE, NVS_SECTOR_SIZE);
 const CALIBRATION_ADDR: u32 = NVS_BASE_ADDR + SEED_TOTAL_SIZE as u32;
 const LABELS_ADDR: u32 = CALIBRATION_ADDR + CALIBRATION_SIZE as u32;
-const ADDRESS_BOOK_ADDR: u32 = LABELS_ADDR + LABELS_SIZE as u32;
+const ADDRESS_BOOK_ADDR: u32 = SEED_CORE_STORAGE_END;
+const ADDRESS_BOOK_STORAGE_END: u32 = ADDRESS_BOOK_ADDR + ADDRESS_BOOK_STORAGE_SIZE as u32;
+const NVS_STORAGE_END: u32 = ADDRESS_BOOK_STORAGE_END;
 
 const MAGIC: [u8; 4] = *b"NCK1";
 const LEGACY_MAGIC: [u8; 4] = [b'S', b'G', b'R', b'1'];
@@ -105,6 +108,7 @@ pub enum NvsInitStage {
     WriteSlot,
     WriteHeaderFinal,
     WriteLabels,
+    WriteFlash,
     Complete,
 }
 
@@ -325,7 +329,7 @@ fn matches_magic(buf: &[u8], current: &[u8; 4], legacy: &[u8; 4]) -> bool {
     stored == current.as_ref() || stored == legacy.as_ref()
 }
 
-fn relative_nvs_offset(address: u32, len: usize) -> Result<usize, NvsError> {
+fn relative_seed_offset(address: u32, len: usize) -> Result<usize, NvsError> {
     if address < NVS_BASE_ADDR {
         return Err(NvsError::Flash);
     }
@@ -333,7 +337,7 @@ fn relative_nvs_offset(address: u32, len: usize) -> Result<usize, NvsError> {
     let Some(end) = start.checked_add(len) else {
         return Err(NvsError::Flash);
     };
-    if end > NVS_TOTAL_SIZE {
+    if end > SEED_CORE_TOTAL_SIZE {
         return Err(NvsError::Flash);
     }
     Ok(start)
@@ -343,7 +347,7 @@ fn slot_sector_offset(index: usize) -> Result<usize, NvsError> {
     if index >= MAX_SEED_SLOTS {
         return Err(NvsError::InvalidSlot);
     }
-    relative_nvs_offset(
+    relative_seed_offset(
         NVS_BASE_ADDR + HEADER_SIZE as u32 + (index * SLOT_SIZE) as u32,
         SLOT_SIZE,
     )
@@ -464,6 +468,7 @@ impl NvsStore {
         header.set_initialized();
         progress(NvsInitStage::WriteHeaderFinal);
         progress(NvsInitStage::WriteLabels);
+        progress(NvsInitStage::WriteFlash);
         self.initialize_seed_storage_transaction(&header, &slot_record)?;
         progress(NvsInitStage::Complete);
         Ok((key, 0))
@@ -625,7 +630,6 @@ impl NvsStore {
         old_key.zeroize();
         let pubs = self.list_seed_pubs()?;
         let labels = self.read_seed_labels().unwrap_or_default();
-        let address_book = self.read_device_address_book().unwrap_or_default();
         let calibration = self.read_touch_calibration().ok().flatten();
 
         if seeds.is_empty() {
@@ -637,7 +641,6 @@ impl NvsStore {
             seeds.as_slice(),
             pubs.as_slice(),
             labels.as_slice(),
-            address_book.as_slice(),
             calibration,
             pepper_source,
         )?;
@@ -651,7 +654,6 @@ impl NvsStore {
         seeds: &[[u8; 64]],
         pubs: &[CheetahPub],
         labels: &[SeedSlotLabel],
-        address_book: &[DeviceAddressBookEntry],
         calibration: Option<TouchCalibration>,
         pepper_source: &mut P,
     ) -> Result<[u8; 32], NvsError> {
@@ -688,13 +690,9 @@ impl NvsStore {
         }
 
         header.attempts = 0;
-        if let Err(err) = self.rewrite_seed_storage_transaction(
-            &header,
-            records.as_slice(),
-            labels,
-            address_book,
-            calibration,
-        ) {
+        if let Err(err) =
+            self.rewrite_seed_storage_transaction(&header, records.as_slice(), labels, calibration)
+        {
             key.zeroize();
             return Err(err);
         }
@@ -702,12 +700,7 @@ impl NvsStore {
     }
 
     pub fn wipe(&mut self) -> Result<(), NvsError> {
-        embedded_storage::nor_flash::NorFlash::erase(
-            &mut self.flash,
-            NVS_BASE_ADDR,
-            NVS_STORAGE_END,
-        )
-        .map_err(|_| NvsError::Flash)?;
+        self.erase_flash_region(NVS_BASE_ADDR, NVS_STORAGE_END)?;
         Ok(())
     }
 
@@ -862,7 +855,7 @@ impl NvsStore {
         entries: &[DeviceAddressBookEntry],
     ) -> Result<(), NvsError> {
         let buf = Self::device_address_book_bytes(entries)?;
-        self.write_nvs_bytes(ADDRESS_BOOK_ADDR, &buf)
+        self.write_address_book_region(&buf)
     }
 
     pub fn get_salt(&mut self) -> Result<[u8; 32], NvsError> {
@@ -909,7 +902,7 @@ impl NvsStore {
         calibration: &TouchCalibration,
     ) -> Result<(), NvsError> {
         let buf = Self::touch_calibration_bytes(calibration)?;
-        self.write_nvs_bytes(CALIBRATION_ADDR, &buf)
+        self.write_seed_core_bytes(CALIBRATION_ADDR, &buf)
     }
 
     fn touch_calibration_bytes(
@@ -1083,7 +1076,7 @@ impl NvsStore {
 
     fn write_header(&mut self, header: &Header) -> Result<(), NvsError> {
         let buf = header.to_bytes();
-        self.write_nvs_bytes(NVS_BASE_ADDR, &buf)
+        self.write_seed_core_bytes(NVS_BASE_ADDR, &buf)
     }
 
     fn read_slot(&mut self, index: usize) -> Result<Option<SlotRecord>, NvsError> {
@@ -1103,7 +1096,7 @@ impl NvsStore {
 
     fn write_seed_label_records(&mut self, labels: &[SeedSlotLabel]) -> Result<(), NvsError> {
         let buf = Self::seed_label_records_bytes(labels)?;
-        self.write_nvs_bytes(LABELS_ADDR, &buf)
+        self.write_seed_core_bytes(LABELS_ADDR, &buf)
     }
 
     fn seed_label_records_bytes(labels: &[SeedSlotLabel]) -> Result<[u8; LABELS_SIZE], NvsError> {
@@ -1200,8 +1193,7 @@ impl NvsStore {
         header: &Header,
         record: &SlotRecord,
     ) -> Result<(), NvsError> {
-        let address_book = self.read_device_address_book().unwrap_or_default();
-        let mut sector = self.read_nvs_region()?;
+        let mut sector = self.read_seed_core_region()?;
         sector[..SEED_TOTAL_SIZE].fill(0xFF);
 
         let header_bytes = header.to_bytes();
@@ -1212,15 +1204,10 @@ impl NvsStore {
         sector[slot..slot + SLOT_SIZE].copy_from_slice(&slot_bytes);
 
         let labels = Self::seed_label_records_bytes(&[])?;
-        let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
+        let labels_start = relative_seed_offset(LABELS_ADDR, LABELS_SIZE)?;
         sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
 
-        let address_book = Self::device_address_book_bytes(address_book.as_slice())?;
-        let address_book_start = relative_nvs_offset(ADDRESS_BOOK_ADDR, ADDRESS_BOOK_SIZE)?;
-        sector[address_book_start..address_book_start + ADDRESS_BOOK_SIZE]
-            .copy_from_slice(&address_book);
-
-        self.write_nvs_region(&sector)
+        self.write_seed_core_region(&sector)
     }
 
     fn rewrite_seed_storage_transaction(
@@ -1228,14 +1215,13 @@ impl NvsStore {
         header: &Header,
         records: &[SlotRecord],
         labels: &[SeedSlotLabel],
-        address_book: &[DeviceAddressBookEntry],
         calibration: Option<TouchCalibration>,
     ) -> Result<(), NvsError> {
         if records.len() > MAX_SEED_SLOTS {
             return Err(NvsError::Crypto);
         }
 
-        let mut sector = vec![0xFFu8; NVS_STORAGE_SIZE];
+        let mut sector = vec![0xFFu8; SEED_CORE_STORAGE_SIZE];
 
         let header_bytes = header.to_bytes();
         sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
@@ -1247,22 +1233,17 @@ impl NvsStore {
         }
 
         let labels = Self::seed_label_records_bytes(labels)?;
-        let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
+        let labels_start = relative_seed_offset(LABELS_ADDR, LABELS_SIZE)?;
         sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
-
-        let address_book = Self::device_address_book_bytes(address_book)?;
-        let address_book_start = relative_nvs_offset(ADDRESS_BOOK_ADDR, ADDRESS_BOOK_SIZE)?;
-        sector[address_book_start..address_book_start + ADDRESS_BOOK_SIZE]
-            .copy_from_slice(&address_book);
 
         if let Some(calibration) = calibration {
             let calibration = Self::touch_calibration_bytes(&calibration)?;
-            let calibration_start = relative_nvs_offset(CALIBRATION_ADDR, CALIBRATION_SIZE)?;
+            let calibration_start = relative_seed_offset(CALIBRATION_ADDR, CALIBRATION_SIZE)?;
             sector[calibration_start..calibration_start + CALIBRATION_SIZE]
                 .copy_from_slice(&calibration);
         }
 
-        self.write_nvs_region(&sector)
+        self.write_seed_core_region(&sector)
     }
 
     fn delete_seed_records_transaction(
@@ -1276,7 +1257,7 @@ impl NvsStore {
             return Err(NvsError::InvalidSlot);
         }
 
-        let mut sector = self.read_nvs_region()?;
+        let mut sector = self.read_seed_core_region()?;
         for index in deleted_slot..old_last_slot {
             let dst = slot_sector_offset(index)?;
             let src = slot_sector_offset(index + 1)?;
@@ -1294,10 +1275,10 @@ impl NvsStore {
             deleted_slot,
             old_last_slot,
         )?;
-        let labels_start = relative_nvs_offset(LABELS_ADDR, LABELS_SIZE)?;
+        let labels_start = relative_seed_offset(LABELS_ADDR, LABELS_SIZE)?;
         sector[labels_start..labels_start + LABELS_SIZE].copy_from_slice(&labels);
 
-        self.write_nvs_region(&sector)
+        self.write_seed_core_region(&sector)
     }
 
     fn add_seed_record_transaction(
@@ -1310,7 +1291,7 @@ impl NvsStore {
             return Err(NvsError::Full);
         }
 
-        let mut sector = self.read_nvs_region()?;
+        let mut sector = self.read_seed_core_region()?;
         let slot = slot_sector_offset(slot_index)?;
         let slot_bytes = record.to_bytes();
         sector[slot..slot + SLOT_SIZE].copy_from_slice(&slot_bytes);
@@ -1318,7 +1299,7 @@ impl NvsStore {
         let header_bytes = header.to_bytes();
         sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
 
-        self.write_nvs_region(&sector)
+        self.write_seed_core_region(&sector)
     }
 
     fn increment_attempts(&mut self, header: &mut Header) -> Result<(), NvsError> {
@@ -1337,45 +1318,73 @@ impl NvsStore {
         self.write_header(header)
     }
 
-    fn write_nvs_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), NvsError> {
-        let start = relative_nvs_offset(address, bytes.len())?;
-        let mut sector = self.read_nvs_region()?;
+    fn write_seed_core_bytes(&mut self, address: u32, bytes: &[u8]) -> Result<(), NvsError> {
+        let start = relative_seed_offset(address, bytes.len())?;
+        let mut sector = self.read_seed_core_region()?;
         let end = start + bytes.len();
         sector[start..end].copy_from_slice(bytes);
-        self.write_nvs_region(&sector)
+        self.write_seed_core_region(&sector)
     }
 
-    fn read_nvs_region(&mut self) -> Result<Vec<u8>, NvsError> {
-        let mut sector = vec![0xFFu8; NVS_STORAGE_SIZE];
+    fn read_seed_core_region(&mut self) -> Result<Vec<u8>, NvsError> {
+        let mut sector = vec![0xFFu8; SEED_CORE_STORAGE_SIZE];
         self.flash
             .read(NVS_BASE_ADDR, &mut sector)
             .map_err(|_| NvsError::Flash)?;
         Ok(sector)
     }
 
-    fn write_nvs_region(&mut self, sector: &[u8]) -> Result<(), NvsError> {
-        if sector.len() != NVS_STORAGE_SIZE {
+    fn write_seed_core_region(&mut self, sector: &[u8]) -> Result<(), NvsError> {
+        self.write_flash_region(NVS_BASE_ADDR, SEED_CORE_STORAGE_END, sector)
+    }
+
+    fn write_address_book_region(
+        &mut self,
+        address_book: &[u8; ADDRESS_BOOK_SIZE],
+    ) -> Result<(), NvsError> {
+        let mut region = vec![0xFFu8; ADDRESS_BOOK_STORAGE_SIZE];
+        region[..ADDRESS_BOOK_SIZE].copy_from_slice(address_book);
+        self.write_flash_region(ADDRESS_BOOK_ADDR, ADDRESS_BOOK_STORAGE_END, &region)
+    }
+
+    fn erase_flash_region(&mut self, start: u32, end: u32) -> Result<(), NvsError> {
+        let sector_size = NVS_SECTOR_SIZE as u32;
+        if start >= end || start % sector_size != 0 || end % sector_size != 0 {
+            return Err(NvsError::Flash);
+        }
+
+        let mut cursor = start;
+        while cursor < end {
+            let next = cursor + sector_size;
+            embedded_storage::nor_flash::NorFlash::erase(&mut self.flash, cursor, next)
+                .map_err(|_| NvsError::Flash)?;
+            cursor = next;
+        }
+        Ok(())
+    }
+
+    fn write_flash_region(&mut self, start: u32, end: u32, region: &[u8]) -> Result<(), NvsError> {
+        let Some(region_len) = end.checked_sub(start) else {
+            return Err(NvsError::Flash);
+        };
+        if region.len() != region_len as usize {
             return Err(NvsError::Flash);
         }
         if NVS_WRITE_CHUNK_SIZE == 0 || NVS_WRITE_CHUNK_SIZE % FlashStorage::WORD_SIZE as usize != 0
         {
             return Err(NvsError::Flash);
         }
-        embedded_storage::nor_flash::NorFlash::erase(
-            &mut self.flash,
-            NVS_BASE_ADDR,
-            NVS_STORAGE_END,
-        )
-        .map_err(|_| NvsError::Flash)?;
+
+        self.erase_flash_region(start, end)?;
 
         let mut offset = 0usize;
-        while offset < sector.len() {
-            let end = (offset + NVS_WRITE_CHUNK_SIZE).min(sector.len());
-            let chunk = &sector[offset..end];
+        while offset < region.len() {
+            let end = (offset + NVS_WRITE_CHUNK_SIZE).min(region.len());
+            let chunk = &region[offset..end];
             if chunk.iter().any(|byte| *byte != 0xFF) {
                 embedded_storage::nor_flash::NorFlash::write(
                     &mut self.flash,
-                    NVS_BASE_ADDR + offset as u32,
+                    start + offset as u32,
                     chunk,
                 )
                 .map_err(|_| NvsError::Flash)?;

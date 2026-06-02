@@ -4,6 +4,8 @@ TARGET_ESP := xtensa-esp32s3-none-elf
 FW_BINARY := target/$(TARGET_ESP)/release/nockster-fw
 PARTITION_TABLE ?= partitions.csv
 NOCKSTER_APP_SLOT_SIZE_BYTES ?= 3145728
+ESP_CHIP ?= esp32s3
+ESP_FLASH_SIZE ?= 16mb
 WASM_TOOLCHAIN := nightly
 WASM_TARGET := wasm32-unknown-unknown
 FLASH_PORT ?=
@@ -22,9 +24,12 @@ FLASH_ENCRYPTION_KEY_FILE ?=
 FLASH_ENCRYPTION_KEY_BLOCK ?= BLOCK_KEY4
 FLASH_CRYPT_CNT_VALUE ?= 0x7
 NVS_PARTITION_ENCRYPTION_VALIDATED ?= 0
-UPDATE_SIGNING_KEY_FILE ?=
-UPDATE_BUNDLE ?=
-UPDATE_FIRMWARE ?=
+LOCAL_UPDATE_SIGNING_KEY_FILE ?= .secrets/update-signing.key
+UPDATE_SIGNING_KEY_FILE ?= $(LOCAL_UPDATE_SIGNING_KEY_FILE)
+NOCKSTER_UPDATE_PUBKEY_SHA256_HEX ?= 5aa46209222080a2ce107e25d427c3d9ada6cb77be25d7d2a3df8959b7fa2602
+UPDATE_ARTIFACT_DIR ?= target/update
+UPDATE_BUNDLE ?= $(UPDATE_ARTIFACT_DIR)/nockster-fw.update.json
+UPDATE_FIRMWARE ?= $(UPDATE_ARTIFACT_DIR)/nockster-fw.bin
 UPDATE_INDEX ?= latest.json
 UPDATE_BUNDLE_URL ?=
 UPDATE_FIRMWARE_URL ?=
@@ -52,7 +57,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production cli core wasm js js-test web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-lockdown-rom-print provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm js js-test web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-lockdown-rom-print provision-power-glitch-protection
 
 all: build
 
@@ -90,6 +95,56 @@ fw-production:
 	echo "For dry-run metadata only: make fw FW_PROFILE=production ALLOW_UNSIGNED_PRODUCTION=1"; \
 	exit 1
 
+check-update-trust:
+	@if [[ -z "$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" ]]; then \
+		echo "signed updates require NOCKSTER_UPDATE_PUBKEY_SHA256_HEX to be compiled into firmware"; \
+		exit 1; \
+	fi
+
+update-firmware-image: fw
+	@set -e; \
+	mkdir -p "$(dir $(UPDATE_FIRMWARE))"; \
+	espflash save-image \
+		--chip "$(ESP_CHIP)" \
+		--flash-size "$(ESP_FLASH_SIZE)" \
+		--partition-table "$(PARTITION_TABLE)" \
+		--target-app-partition factory \
+		"$(FW_BINARY)" \
+		"$(UPDATE_FIRMWARE)"; \
+	bash scripts/provision/check-release-image.sh \
+		"$(UPDATE_FIRMWARE)" \
+		"$(NOCKSTER_APP_SLOT_SIZE_BYTES)" \
+		"update firmware image"
+
+signed-update: check-update-trust update-firmware-image
+	@set -e; \
+	if [[ -z "$(UPDATE_SIGNING_KEY_FILE)" ]]; then \
+		echo "Set UPDATE_SIGNING_KEY_FILE=/path/to/release-signing-key.hex"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(dir $(UPDATE_BUNDLE))"; \
+	args=(update sign \
+		--firmware "$(UPDATE_FIRMWARE)" \
+		--out "$(UPDATE_BUNDLE)" \
+		--signing-key-file "$(UPDATE_SIGNING_KEY_FILE)" \
+		--release-version "$(NOCKSTER_RELEASE_VERSION)" \
+		--hardware-target esp32s3-touch-lcd-1.47 \
+		--build-profile "$(EFFECTIVE_FW_PROFILE)"); \
+	if [[ -n "$(NOCKSTER_CLI)" ]]; then \
+		"$(NOCKSTER_CLI)" "$${args[@]}"; \
+	else \
+		cargo run -p nockster-cli --bin nockster-cli -- "$${args[@]}"; \
+	fi; \
+	verify_args=(update verify \
+		--bundle "$(UPDATE_BUNDLE)" \
+		--firmware "$(UPDATE_FIRMWARE)" \
+		--trusted-pubkey-sha256 "$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)"); \
+	if [[ -n "$(NOCKSTER_CLI)" ]]; then \
+		"$(NOCKSTER_CLI)" "$${verify_args[@]}"; \
+	else \
+		cargo run -p nockster-cli --bin nockster-cli -- "$${verify_args[@]}"; \
+	fi
+
 flash: fw
 	@if [[ -n "$(FLASH_PORT)" ]]; then \
 		DEV="$(FLASH_PORT)"; \
@@ -123,10 +178,11 @@ flash: fw
 	if [[ "$$OSTYPE" != "darwin"* ]]; then \
 		fuser -k "$$PORT_PATH" 2>/dev/null || true; \
 	fi; \
+	espflash erase-parts --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" --after no-reset otadata; \
 	espflash flash --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" $(FW_BINARY); #\
 	#pyserial-miniterm --dtr 0 --rts 0 /dev/$$DEV 115200
 
-wipe:
+wipe: signed-update
 	@if [[ -n "$(WIPE_PORT)" ]]; then \
 		DEV="$(WIPE_PORT)"; \
 	elif [[ "$$OSTYPE" == "darwin"* ]]; then \
@@ -146,6 +202,7 @@ wipe:
 		fi; \
 	fi; \
 	if [[ "$$DEV" == hid* ]]; then \
+		echo "HID mode: signed update artifacts are built, but serial bootloader mode is required to flash this firmware while wiping NVS."; \
 		cargo run -p nockster-cli --bin nockster-cli -- reset --port "$$DEV"; \
 	else \
 		PORT_PATH="/dev/$$DEV"; \
@@ -155,8 +212,8 @@ wipe:
 		if [[ "$$OSTYPE" != "darwin"* ]]; then \
 			fuser -k "$$PORT_PATH" 2>/dev/null || true; \
 		fi; \
-		make fw; \
-		espflash flash --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" --erase-parts nvs $(FW_BINARY); \
+		espflash erase-parts --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" --after no-reset nvs otadata; \
+		espflash flash --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" $(FW_BINARY); \
 	fi
 
 test:
@@ -563,7 +620,8 @@ help:
 	@echo "    make fw-dev     - Build default dev firmware"
 	@echo "    make fw-chip-security - Build firmware with read-only chip security status"
 	@echo "    make fw-production - Refuse until signed/encrypted release flow is explicit"
-	@echo "    make wipe       - Wipe NVS (serial or HID via WIPE_PORT=hid)"
+	@echo "    make signed-update - Build OTA .bin and signed update bundle"
+	@echo "    make wipe       - Build signed update artifacts; serial flashes+wipes, HID resets storage"
 	@echo "    make provision-summary - Show eFuse summary (PROVISION_PORT=/dev/ttyACM0)"
 	@echo "    make provision-plan - Print a non-destructive provisioning checklist"
 	@echo "    make validate-device-state - Run scriptable device security/update checks"

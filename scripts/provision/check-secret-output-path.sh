@@ -16,22 +16,26 @@ case "${path}" in
   *) target="$(pwd -P)/${path}" ;;
 esac
 
-parent="$(dirname -- "${target}")"
-base="$(basename -- "${target}")"
-probe="${parent}"
-suffix=""
-while [[ ! -d "${probe}" && "${probe}" != "/" ]]; do
-  suffix="/$(basename -- "${probe}")${suffix}"
-  probe="$(dirname -- "${probe}")"
-done
+if [[ -e "${target}" ]]; then
+  resolved_target="$(realpath -- "${target}")"
+else
+  parent="$(dirname -- "${target}")"
+  base="$(basename -- "${target}")"
+  probe="${parent}"
+  suffix=""
+  while [[ ! -d "${probe}" && "${probe}" != "/" ]]; do
+    suffix="/$(basename -- "${probe}")${suffix}"
+    probe="$(dirname -- "${probe}")"
+  done
 
-if [[ ! -d "${probe}" ]]; then
-  echo "could not resolve ${label} parent path: ${parent}" >&2
-  exit 2
+  if [[ ! -d "${probe}" ]]; then
+    echo "could not resolve ${label} parent path: ${parent}" >&2
+    exit 2
+  fi
+
+  resolved_parent="$(cd "${probe}" && pwd -P)${suffix}"
+  resolved_target="${resolved_parent}/${base}"
 fi
-
-resolved_parent="$(cd "${probe}" && pwd -P)${suffix}"
-resolved_target="${resolved_parent}/${base}"
 
 case "${resolved_target}" in
   "${repo_root}" | "${repo_root}"/*)

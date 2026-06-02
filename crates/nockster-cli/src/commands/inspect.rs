@@ -1,3 +1,4 @@
+use crate::ui;
 use crate::util::{pretty_noun, print_raw_v1_details, transaction_name_from_noun};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
@@ -72,10 +73,10 @@ fn bythos_raw_from_noun(noun: &Noun) -> anyhow::Result<RawTransactionV1> {
     if let Some(wallet) = decode_no_panic::<WalletTransactionV1>(noun) {
         let computed = compute_tx_id_v1(&wallet.spends);
         if wallet.name != computed.to_b58() {
-            println!(
+            ui::warn(&format!(
                 "wallet name differs from computed txid: {}",
                 computed.to_b58()
-            );
+            ));
         }
         return Ok(raw_v1_from_spends(wallet.spends));
     }
@@ -97,17 +98,16 @@ pub fn run(
         .cue_into(Bytes::from(data.clone()))
         .map_err(|e| anyhow!("cue failed: {e:?}"))?;
 
-    println!("file: {draft_path}");
+    ui::header("inspect");
+    ui::kv("file", ui::strong(draft_path));
 
     if let Ok(name) = transaction_name_from_noun(&noun) {
-        println!("txid: {name}");
+        ui::kv("name", ui::accent(&name));
     }
 
     if dump_noun {
-        println!(
-            "noun:\n{}",
-            pretty_noun(&noun, max_depth.max(1), max_items.max(1))
-        );
+        ui::subhead("noun");
+        anstream::println!("{}", pretty_noun(&noun, max_depth.max(1), max_items.max(1)));
     }
 
     let raw = bythos_raw_from_noun(&noun)?;

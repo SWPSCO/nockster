@@ -1,6 +1,7 @@
 use crate::cli::SeedArgs;
 use crate::keys;
 use crate::serial::{open, send_call, Link};
+use crate::ui;
 use crate::util::parse_64;
 use nockster_core::{
     Request, Response, SeedSlotLabel, ERR_ALREADY_INITIALIZED, ERR_BAD_COBS_OR_POSTCARD,
@@ -39,6 +40,7 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     }
 
     let mut sp = open(&args.port, args.baud)?;
+    ui::header("seed");
 
     if args.list {
         return print_seed_slots(&mut *sp, args.version);
@@ -47,7 +49,7 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     if let Some(slot) = args.select {
         match send_call(&mut *sp, 0x44, Request::SelectSeed { slot })? {
             Response::Ok => {
-                println!("selected seed slot {slot}");
+                ui::ok(&format!("selected seed slot {slot}"));
                 if let Some(label) = args.label.as_deref() {
                     set_seed_label(&mut *sp, slot, label)?;
                 }
@@ -67,7 +69,7 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     if let Some(slot) = args.delete {
         match send_call(&mut *sp, 0x45, Request::DeleteSeed { slot })? {
             Response::Ok => {
-                println!("deleted seed slot {slot}");
+                ui::ok(&format!("deleted seed slot {slot}"));
                 return print_seed_slots(&mut *sp, args.version);
             }
             Response::Err {
@@ -111,12 +113,13 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e))?;
             let (json_path, bin_path) =
                 keys::write_key_files(out, &key, &blob).map_err(|e| anyhow::anyhow!(e))?;
-            println!("wrote key JSON to {}", json_path.display());
-            println!("wrote device blob to {}", bin_path.display());
-            println!("pubkey (b58, v{}): {}", args.version, key.pk_b58);
+            ui::kv("pubkey", ui::accent(&key.pk_b58));
+            ui::kv("version", ui::strong(&format!("v{}", args.version)));
             if let Some(p) = &key.path {
-                println!("path: {}", p);
+                ui::kv("path", ui::strong(p));
             }
+            ui::ok(&format!("wrote key JSON to {}", json_path.display()));
+            ui::ok(&format!("wrote device blob to {}", bin_path.display()));
         }
 
     // seed via seed_hex
@@ -131,12 +134,13 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e))?;
             let (json_path, bin_path) =
                 keys::write_key_files(out, &key, &blob).map_err(|e| anyhow::anyhow!(e))?;
-            println!("pubkey (b58, v{}): {}", args.version, key.pk_b58);
-            println!("wrote key JSON to {}", json_path.display());
-            println!("wrote device blob to {}", bin_path.display());
+            ui::kv("pubkey", ui::accent(&key.pk_b58));
+            ui::kv("version", ui::strong(&format!("v{}", args.version)));
             if let Some(p) = &key.path {
-                println!("path: {}", p);
+                ui::kv("path", ui::strong(p));
             }
+            ui::ok(&format!("wrote key JSON to {}", json_path.display()));
+            ui::ok(&format!("wrote device blob to {}", bin_path.display()));
         }
     } else {
         // clap’s conflicts and the preflight above should make this unreachable.
@@ -164,7 +168,7 @@ fn initialize_or_add_seed(sp: &mut dyn Link, pin: &str, seed64: [u8; 64]) -> any
         },
     )? {
         Response::Ok => {
-            println!("initialized device with PIN (encrypted NVS storage)");
+            ui::ok("initialized device with PIN (encrypted NVS storage)");
             Ok(0)
         }
         Response::Err { code } if code == ERR_ALREADY_INITIALIZED => {
@@ -218,7 +222,7 @@ fn unlock_and_add_seed(sp: &mut dyn Link, pin: &str, seed64: [u8; 64]) -> anyhow
     let slot = seed_slot_count(sp)?;
     match send_call(sp, 0x43, Request::AddSeed { seed64 })? {
         Response::Ok => {
-            println!("added additional seed slot {slot}");
+            ui::ok(&format!("added additional seed slot {slot}"));
             Ok(slot)
         }
         Response::Err {
@@ -244,38 +248,36 @@ fn print_seed_slots(sp: &mut dyn Link, version: u8) -> anyhow::Result<()> {
             cheetah_pubs,
             ..
         } => {
+            ui::subhead("seeds");
             if !has_seed {
-                println!("no seed slots");
+                ui::note("no seed slots");
                 return Ok(());
             }
             if cheetah_pubs.is_empty() {
-                println!("(device locked; pubkeys withheld)");
+                ui::note("device locked; pubkeys withheld");
                 for entry in labels.iter() {
-                    println!("slot[{}] label=\"{}\"", entry.slot, entry.label);
+                    ui::item(format!(
+                        "slot {}  {}",
+                        entry.slot,
+                        ui::strong(&format!("\"{}\"", entry.label))
+                    ));
                 }
                 return Ok(());
             }
             for pubinfo in cheetah_pubs.iter() {
                 let pk_xy = (pubinfo.x, pubinfo.y);
                 let b58 = keys::pubkey_to_b58(&pk_xy, version);
-                if let Some(label) = label_for_slot(&labels, pubinfo.slot) {
-                    println!(
-                        "slot[{}] label=\"{}\" path={} pkh(v{})={}",
-                        pubinfo.slot,
-                        label,
-                        format_path(pubinfo.path.as_slice()),
-                        version,
-                        b58
-                    );
-                } else {
-                    println!(
-                        "slot[{}] path={} pkh(v{})={}",
-                        pubinfo.slot,
-                        format_path(pubinfo.path.as_slice()),
-                        version,
-                        b58
-                    );
-                }
+                let label = match label_for_slot(&labels, pubinfo.slot) {
+                    Some(label) => format!("{}  ", ui::strong(&format!("\"{label}\""))),
+                    None => String::new(),
+                };
+                ui::item(format!(
+                    "slot {}  {}{}  {}",
+                    pubinfo.slot,
+                    label,
+                    ui::dim(&format_path(pubinfo.path.as_slice())),
+                    ui::accent(&b58),
+                ));
             }
             Ok(())
         }
@@ -325,9 +327,9 @@ fn set_seed_label(sp: &mut dyn Link, slot: u8, label: &str) -> anyhow::Result<()
     )? {
         Response::Ok => {
             if label.is_empty() {
-                println!("cleared label for seed slot {slot}");
+                ui::ok(&format!("cleared label for seed slot {slot}"));
             } else {
-                println!("labeled seed slot {slot}: {label}");
+                ui::ok(&format!("labeled seed slot {slot}: {label}"));
             }
             Ok(())
         }

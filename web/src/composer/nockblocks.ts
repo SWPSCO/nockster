@@ -27,28 +27,6 @@ export type ImportedNotes = {
   multisig: number;
 };
 
-export async function loadLocalNockblocksKey(): Promise<{
-  key: string | null;
-  source: string;
-  path?: string;
-}> {
-  const response = await fetch('/__nockblocks/key', { cache: 'no-store' });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    return {
-      key: null,
-      source: body?.source ?? './nockblocks.key',
-      path: body?.path,
-    };
-  }
-  const key = typeof body?.key === 'string' ? body.key.trim() : '';
-  return {
-    key: key || null,
-    source: body?.source ?? './nockblocks.key',
-    path: body?.path,
-  };
-}
-
 export async function fetchNockblocksNotes(args: {
   address: string;
   apiKey: string;

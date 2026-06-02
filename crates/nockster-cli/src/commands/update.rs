@@ -5,6 +5,7 @@ use crate::cli::{
 };
 use crate::commands::reboot::request_device_reboot;
 use crate::serial::{open, send_call, Link};
+use crate::ui;
 use anyhow::{anyhow, Context, Result};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, Signature, SigningKey};
 use nockster_core::update::{
@@ -101,13 +102,14 @@ fn keygen(args: &UpdateKeygenArgs) -> Result<()> {
     let pubkey_sec1 = verifying_key.to_encoded_point(true);
     let pubkey_bytes = pubkey_sec1.as_bytes();
 
-    println!("wrote release signing key: {}", args.out.display());
-    println!("format: {}", if args.raw { "raw" } else { "hex" });
-    println!("signing_pubkey_sec1: {}", hex::encode(pubkey_bytes));
-    println!(
-        "trusted_pubkey_sha256: {}",
-        hex::encode(pubkey_sha256(pubkey_bytes))
+    ui::header("update keygen");
+    ui::kv("format", ui::strong(if args.raw { "raw" } else { "hex" }));
+    ui::kv("pubkey sec1", ui::dim(&hex::encode(pubkey_bytes)));
+    ui::kv(
+        "trusted hash",
+        ui::accent(&hex::encode(pubkey_sha256(pubkey_bytes))),
     );
+    ui::ok(&format!("wrote release signing key: {}", args.out.display()));
     Ok(())
 }
 
@@ -157,11 +159,12 @@ fn sign(args: &UpdateSignArgs) -> Result<()> {
     let json = serde_json::to_string_pretty(&bundle)?;
     fs::write(&args.out, json).with_context(|| format!("write {}", args.out.display()))?;
 
-    println!("wrote update bundle: {}", args.out.display());
-    println!("signing_pubkey_sec1: {}", hex::encode(pubkey_bytes));
-    println!("trusted_pubkey_sha256: {}", hex::encode(trusted_hash));
-    println!("git_commit: {}", release_metadata.git_commit);
-    println!("tx_types_rev: {}", release_metadata.tx_types_rev);
+    ui::header("update sign");
+    ui::kv("pubkey sec1", ui::dim(&hex::encode(pubkey_bytes)));
+    ui::kv("trusted hash", ui::accent(&hex::encode(trusted_hash)));
+    ui::kv("git commit", ui::strong(&release_metadata.git_commit));
+    ui::kv("tx-types", ui::dim(&release_metadata.tx_types_rev));
+    ui::ok(&format!("wrote update bundle: {}", args.out.display()));
     Ok(())
 }
 
@@ -175,10 +178,11 @@ fn index(args: &UpdateIndexArgs) -> Result<()> {
     let json = serde_json::to_string_pretty(&index)?;
     fs::write(&args.out, json).with_context(|| format!("write {}", args.out.display()))?;
 
-    println!("wrote release index: {}", args.out.display());
-    println!("release_version: {}", manifest.release_version);
-    println!("bundle_url: {}", index.bundle_url);
-    println!("firmware_url: {}", index.firmware_url);
+    ui::header("update index");
+    ui::kv("release", ui::strong(&manifest.release_version.to_string()));
+    ui::kv("bundle url", ui::accent(&index.bundle_url));
+    ui::kv("firmware url", ui::accent(&index.firmware_url));
+    ui::ok(&format!("wrote release index: {}", args.out.display()));
     Ok(())
 }
 
@@ -194,10 +198,11 @@ fn verify(args: &UpdateVerifyArgs) -> Result<()> {
     verify_update_bundle_signature(&manifest, &signature, &bundled_pubkey, &trusted_hash)
         .map_err(|e| anyhow!("bundle signature check failed: {e:?}"))?;
 
-    println!("update bundle verified");
-    println!("release_version: {}", manifest.release_version);
-    println!("image_sha256: {}", hex::encode(manifest.image_sha256));
-    println!("trusted_pubkey_sha256: {}", hex::encode(trusted_hash));
+    ui::header("update verify");
+    ui::kv("release", ui::strong(&manifest.release_version.to_string()));
+    ui::kv("image sha256", ui::dim(&hex::encode(manifest.image_sha256)));
+    ui::kv("trusted hash", ui::accent(&hex::encode(trusted_hash)));
+    ui::ok("update bundle verified");
     Ok(())
 }
 
@@ -205,11 +210,9 @@ fn trust(args: &UpdateTrustArgs) -> Result<()> {
     let mut sp = open(&args.port, args.baud)?;
     match send_call(&mut *sp, 0x5500, Request::GetUpdateTrust)? {
         Response::OkUpdateTrust(trust) => {
-            println!("configured: {}", trust.configured);
-            println!(
-                "trusted_pubkey_sha256: {}",
-                hex::encode(trust.pubkey_sha256)
-            );
+            ui::header("update trust");
+            ui::kv("configured", ui::yesno(trust.configured));
+            ui::kv("trusted hash", ui::accent(&hex::encode(trust.pubkey_sha256)));
             Ok(())
         }
         other => Err(anyhow!("unexpected update trust response: {other:?}")),
@@ -219,6 +222,7 @@ fn trust(args: &UpdateTrustArgs) -> Result<()> {
 fn device_verify(args: &UpdateDeviceVerifyArgs) -> Result<()> {
     let (manifest, bundled_pubkey, signature) = read_bundle(&args.bundle)?;
     let mut sp = open(&args.port, args.baud)?;
+    ui::header("update device-verify");
     preflight_device_update_policy(&mut *sp, &manifest)?;
     match send_call(
         &mut *sp,
@@ -230,7 +234,7 @@ fn device_verify(args: &UpdateDeviceVerifyArgs) -> Result<()> {
         },
     )? {
         Response::Ok => {
-            println!("device accepted update manifest signature");
+            ui::ok("device accepted update manifest signature");
             Ok(())
         }
         Response::Err { code } => Err(anyhow!("device rejected update manifest: code {code}")),
@@ -240,6 +244,7 @@ fn device_verify(args: &UpdateDeviceVerifyArgs) -> Result<()> {
 
 fn update_status(args: &UpdateStatusArgs) -> Result<()> {
     let mut sp = open(&args.port, args.baud)?;
+    ui::header("update status");
     let status = expect_update_status(
         send_call(&mut *sp, 0x5502, Request::GetUpdateStatus)?,
         "read update status",
@@ -255,7 +260,7 @@ fn update_status(args: &UpdateStatusArgs) -> Result<()> {
         }
         Response::Err {
             code: ERR_UNSUPPORTED_VERSION,
-        } => println!("update boot: unsupported by firmware"),
+        } => ui::note("update boot: unsupported by firmware"),
         Response::Err { code } => {
             return Err(anyhow!(
                 "read update boot status: device returned error code {code}"
@@ -314,6 +319,11 @@ fn stream_update_to_device(
     let (manifest, bundled_pubkey, signature) = read_bundle(bundle)?;
     verify_firmware_file_matches_manifest(firmware, &manifest)?;
     let mut sp = open(port, baud)?;
+    ui::header(if write_flash {
+        "update install"
+    } else {
+        "update stream-verify"
+    });
     preflight_device_update_policy(&mut *sp, &manifest)?;
 
     let begin = expect_update_status(
@@ -331,16 +341,22 @@ fn stream_update_to_device(
     )?;
     validate_stream_begin_status(&begin, &manifest)?;
     if write_flash {
-        println!(
-            "device accepted update install: release={} size={} bytes",
+        ui::ok(&format!(
+            "device accepted update install: release {} · {} bytes",
             begin.release_version, begin.image_size
-        );
+        ));
     } else {
-        println!(
-            "device accepted update manifest: release={} size={} bytes",
+        ui::ok(&format!(
+            "device accepted update manifest: release {} · {} bytes",
             begin.release_version, begin.image_size
-        );
+        ));
     }
+
+    let progress = ui::Progress::new(
+        if write_flash { "flashing" } else { "verifying" },
+        begin.image_size as u64,
+    );
+    progress.set(0);
 
     let mut file =
         fs::File::open(firmware).with_context(|| format!("open {}", firmware.display()))?;
@@ -369,11 +385,14 @@ fn stream_update_to_device(
             }
         };
         if let Err(err) = validate_stream_chunk_status(&status, &manifest, expected_offset) {
+            progress.done();
             let _ = send_call(&mut *sp, 0x5513, Request::CancelUpdate);
             return Err(err);
         }
         offset = status.bytes_received;
+        progress.set(offset as u64);
     }
+    progress.done();
 
     let finish = expect_update_status(
         send_call(&mut *sp, 0x5512, Request::FinishUpdate)?,
@@ -382,19 +401,19 @@ fn stream_update_to_device(
     validate_stream_finish_status(&finish, &manifest)?;
 
     if write_flash {
-        println!("device installed and activated streamed firmware image");
+        ui::ok("device installed and activated streamed firmware image");
         confirm_install_activation(&mut *sp)?;
     } else {
-        println!("device verified streamed firmware image");
+        ui::ok("device verified streamed firmware image");
     }
-    println!("release_version: {}", finish.release_version);
-    println!("image_size: {}", finish.image_size);
-    println!("bytes_received: {}", finish.bytes_received);
+    ui::kv("release", ui::strong(&finish.release_version.to_string()));
+    ui::kv("image size", ui::strong(&finish.image_size.to_string()));
+    ui::kv("bytes received", ui::strong(&finish.bytes_received.to_string()));
     if write_flash {
         if reboot_after_install {
             request_device_reboot(&mut *sp)?;
         } else {
-            println!("reboot the device to boot the new OTA slot");
+            ui::info("reboot the device to boot the new OTA slot");
         }
     }
     Ok(())
@@ -453,7 +472,7 @@ fn confirm_install_activation(sp: &mut dyn Link) -> Result<()> {
         );
     }
 
-    println!("update activation: ok");
+    ui::ok("update activation: ok");
     Ok(())
 }
 
@@ -466,10 +485,11 @@ fn pubkey(args: &UpdatePubkeyArgs) -> Result<()> {
     let pubkey_sec1 = verifying_key.to_encoded_point(true);
     let pubkey_bytes = pubkey_sec1.as_bytes();
 
-    println!("signing_pubkey_sec1: {}", hex::encode(pubkey_bytes));
-    println!(
-        "trusted_pubkey_sha256: {}",
-        hex::encode(pubkey_sha256(pubkey_bytes))
+    ui::header("update pubkey");
+    ui::kv("pubkey sec1", ui::dim(&hex::encode(pubkey_bytes)));
+    ui::kv(
+        "trusted hash",
+        ui::accent(&hex::encode(pubkey_sha256(pubkey_bytes))),
     );
     Ok(())
 }
@@ -583,36 +603,49 @@ fn validate_update_status_shape(
 }
 
 fn print_update_status(status: &UpdateStatus) {
-    println!("update:");
-    println!("  active: {}", yes_no(status.active));
-    println!("  manifest_verified: {}", yes_no(status.manifest_verified));
-    println!("  image_verified: {}", yes_no(status.image_verified));
-    println!("  release_version: {}", status.release_version);
-    println!("  bytes_received: {}", status.bytes_received);
-    println!("  image_size: {}", status.image_size);
+    ui::subhead("stream");
+    ui::kv("active", ui::yesno(status.active));
+    ui::kv("manifest ok", ui::yesno(status.manifest_verified));
+    ui::kv("image ok", ui::yesno(status.image_verified));
+    ui::kv("release", ui::strong(&status.release_version.to_string()));
+    ui::kv("received", ui::strong(&status.bytes_received.to_string()));
+    ui::kv("image size", ui::strong(&status.image_size.to_string()));
 }
 
 fn print_update_boot_status(status: &UpdateBootStatus) {
-    println!("update boot:");
-    println!(
-        "  partition_table_ok: {}",
-        yes_no(status.partition_table_ok)
+    ui::subhead("boot");
+    ui::kv("partition tbl", ui::yesno(status.partition_table_ok));
+    ui::kv("otadata", ui::yesno(status.ota_data_present));
+    ui::kv(
+        "ota0",
+        format!(
+            "{}  {}",
+            ui::yesno(status.ota0_present),
+            ui::dim(&format!(
+                "offset=0x{:x} size={}",
+                status.ota0_offset, status.ota0_size
+            ))
+        ),
     );
-    println!("  otadata_present: {}", yes_no(status.ota_data_present));
-    println!(
-        "  slots: ota0={} offset=0x{:x} size={}, ota1={} offset=0x{:x} size={}",
-        yes_no(status.ota0_present),
-        status.ota0_offset,
-        status.ota0_size,
-        yes_no(status.ota1_present),
-        status.ota1_offset,
-        status.ota1_size
+    ui::kv(
+        "ota1",
+        format!(
+            "{}  {}",
+            ui::yesno(status.ota1_present),
+            ui::dim(&format!(
+                "offset=0x{:x} size={}",
+                status.ota1_offset, status.ota1_size
+            ))
+        ),
     );
-    println!(
-        "  selected: current={}, next={}, state={}",
-        slot_name(status.current_slot),
-        slot_name(status.next_slot),
-        ota_state_name(status.ota_state)
+    ui::kv(
+        "selected",
+        ui::strong(&format!(
+            "current={} · next={} · state={}",
+            slot_name(status.current_slot),
+            slot_name(status.next_slot),
+            ota_state_name(status.ota_state)
+        )),
     );
 }
 
@@ -689,7 +722,7 @@ fn validate_boot_status(status: Option<&UpdateBootStatus>, args: &UpdateStatusAr
         anyhow::bail!("update validation failed:\n  - {}", failures.join("\n  - "));
     }
 
-    println!("update validation: ok");
+    ui::ok("update validation: ok");
     Ok(())
 }
 
@@ -775,8 +808,8 @@ fn resolve_release_metadata(args: &UpdateSignArgs) -> Result<ReleaseMetadata> {
             let commit = git_output(["rev-parse", "HEAD"])
                 .ok_or_else(|| anyhow!("could not derive --git-commit; pass it explicitly"))?;
             if git_dirty() {
-                eprintln!(
-                    "warning: working tree has uncommitted changes; bundle git_commit records HEAD only"
+                ui::warn(
+                    "working tree has uncommitted changes; bundle git_commit records HEAD only",
                 );
             }
             commit
@@ -892,20 +925,23 @@ fn preflight_device_update_policy(
                     Some((&build_profile, protocol_v)),
                 )
             })?;
-            println!(
-                "device update preflight: current_release={} bundle_release={} device_profile={} bundle_profile={} protocol_v={}",
-                current_release,
-                manifest.release_version,
-                build_profile,
-                manifest.build_profile.as_str(),
-                protocol_v
+            ui::kv(
+                "preflight",
+                ui::dim(&format!(
+                    "release {current_release}→{} · profile {build_profile}→{} · proto {protocol_v}",
+                    manifest.release_version,
+                    manifest.build_profile.as_str(),
+                )),
             );
         }
         (Some(current_release), None) => {
             validate_release_advances(manifest.release_version, current_release)?;
-            println!(
-                "device release preflight: current={} bundle={}",
-                current_release, manifest.release_version
+            ui::kv(
+                "preflight",
+                ui::dim(&format!(
+                    "release {current_release}→{}",
+                    manifest.release_version
+                )),
             );
         }
         (None, Some((build_profile, protocol_v))) => {
@@ -919,19 +955,20 @@ fn preflight_device_update_policy(
                     )
                 },
             )?;
-            eprintln!(
-                "warning: device does not report release info; firmware will still enforce rollback policy"
+            ui::warn(
+                "device does not report release info; firmware will still enforce rollback policy",
             );
-            println!(
-                "device metadata preflight: device_profile={} bundle_profile={} protocol_v={}",
-                build_profile,
-                manifest.build_profile.as_str(),
-                protocol_v
+            ui::kv(
+                "preflight",
+                ui::dim(&format!(
+                    "profile {build_profile}→{} · proto {protocol_v}",
+                    manifest.build_profile.as_str(),
+                )),
             );
         }
         (None, None) => {
-            eprintln!(
-                "warning: device does not report release/build info; firmware will still enforce update policy"
+            ui::warn(
+                "device does not report release/build info; firmware will still enforce update policy",
             );
         }
     }
@@ -1309,6 +1346,10 @@ fn normalize_output_path(path: &Path) -> Result<PathBuf> {
         cwd.join(path)
     };
 
+    if absolute.exists() {
+        return normalize_existing_path(&absolute);
+    }
+
     let file_name = absolute
         .file_name()
         .ok_or_else(|| anyhow!("release signing key path must include a file name"))?;
@@ -1362,10 +1403,10 @@ fn secure_secret_dir(path: &Path, existed: bool) -> Result<()> {
             .permissions()
             .mode();
         if mode & 0o077 != 0 {
-            eprintln!(
-                "warning: {} is accessible by group/other; keep release keys outside shared directories",
+            ui::warn(&format!(
+                "{} is accessible by group/other; keep release keys outside shared directories",
                 path.display()
-            );
+            ));
         }
         return Ok(());
     }

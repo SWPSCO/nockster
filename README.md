@@ -48,7 +48,8 @@ signing Nockchain transactions on an ESP32-S3 touchscreen board.
 
 - Build firmware: `make fw`
 - Flash firmware without erasing seed storage: `make flash`
-- Flash and erase persistent device data: `make flash-wipe`
+- Build signed OTA artifacts: `make signed-update`
+- Flash and erase persistent device data: `make wipe`
 - Build the CLI: `make cli`
 - Seed a wiped device over HID: `nockster-cli seed --seedphrase "..." --pin 1234`
 - Check device info: `nockster-cli info`

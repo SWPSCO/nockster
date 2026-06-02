@@ -1,5 +1,6 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_blob, send_call};
+use crate::ui;
 use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8};
 use nockster_core::alloc_path as pathmod;
 use nockster_core::FragKind;
@@ -24,6 +25,7 @@ pub fn run(
     use nockster_core::cheetah;
 
     let mut sp = open(port, baud)?;
+    ui::header("self-test");
     let _ = send_call(&mut *sp, 0x4001, Request::SelectSeed { slot: 0 })?;
 
     // 0) wipe first
@@ -31,7 +33,7 @@ pub fn run(
 
     // 1) hello
     let caps: Response = send_call(&mut *sp, 1, Request::Hello)?;
-    println!("caps: {caps:?}");
+    ui::kv("caps", ui::dim(&format!("{caps:?}")));
 
     // 2) info BEFORE seed
     if let Response::Info {
@@ -43,19 +45,24 @@ pub fn run(
         cheetah_pubs,
     } = send_call(&mut *sp, 2, Request::GetInfo)?
     {
-        println!(
-            "info(before): proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}, keys={}",
-            cheetah_pubs.len()
+        ui::kv(
+            "info before",
+            ui::dim(&format!(
+                "proto {proto_v} · fw {fw_major}.{fw_minor} · 0x{features:08x} · has_seed={has_seed} · keys={}",
+                cheetah_pubs.len()
+            )),
         );
     }
 
     // 3) use a deterministic non-secret seed for hardware smoke testing.
     let seed64 = synthetic_smoke_seed64();
-    println!("seed: deterministic test seed (len=64)");
 
     // 4) set seed via inbound frag
     send_blob(&mut *sp, 42, FragKind::SetSeed, &seed64)?;
-    println!("seed: set ({} bytes via frag)", seed64.len());
+    ui::ok(&format!(
+        "seed set ({} bytes, deterministic test seed)",
+        seed64.len()
+    ));
 
     // 5) info after seed
     if let Response::Info {
@@ -67,23 +74,23 @@ pub fn run(
         cheetah_pubs,
     } = send_call(&mut *sp, 3, Request::GetInfo)?
     {
-        println!(
-            "info(after):  proto_v={proto_v}, fw={fw_major}.{fw_minor}, features=0x{features:08x}, has_seed={has_seed}, keys={}",
-            cheetah_pubs.len()
+        ui::kv(
+            "info after",
+            ui::dim(&format!(
+                "proto {proto_v} · fw {fw_major}.{fw_minor} · 0x{features:08x} · has_seed={has_seed} · keys={}",
+                cheetah_pubs.len()
+            )),
         );
         if let Some(first) = cheetah_pubs.get(0) {
-            println!(
-                "info(after):  key[00] path={} X={} Y={}",
-                format_path(first.path.as_slice()),
-                fmt_u64x6(&first.x),
-                fmt_u64x6(&first.y)
-            );
+            ui::kv("key[00] path", ui::strong(&format_path(first.path.as_slice())));
+            ui::kv("  X", ui::dim(&fmt_u64x6(&first.x)));
+            ui::kv("  Y", ui::dim(&fmt_u64x6(&first.y)));
         }
     }
 
     // 6) fingerprint (for visibility)
     match send_call(&mut *sp, 4, Request::GetFingerprint)? {
-        Response::OkFingerprint { fp4 } => println!("fingerprint: {}", hex::encode(fp4)),
+        Response::OkFingerprint { fp4 } => ui::kv("fingerprint", ui::accent(&hex::encode(fp4))),
         other => anyhow::bail!("unexpected: {other:?}"),
     }
 
@@ -91,6 +98,7 @@ pub fn run(
     let path = pathmod::Path::from_iter(core::iter::empty());
 
     // 8) device cheetah pub
+    ui::subhead("cheetah pub");
     let (dev_x, dev_y) = match send_call(
         &mut *sp,
         5,
@@ -100,8 +108,8 @@ pub fn run(
         },
     )? {
         Response::OkCheetahPub { x, y } => {
-            println!("cheetah pub.X = {}", fmt_u64x6(&x));
-            println!("cheetah pub.Y = {}", fmt_u64x6(&y));
+            ui::kv("X", ui::dim(&fmt_u64x6(&x)));
+            ui::kv("Y", ui::dim(&fmt_u64x6(&y)));
             (x, y)
         }
         other => anyhow::bail!("unexpected: {other:?}"),
@@ -109,7 +117,7 @@ pub fn run(
 
     // 8b) encode to base58 for visibility.
     let dev_pk_b58 = pubkey_to_b58(&(dev_x, dev_y), version);
-    println!("cheetah pub (base58 v{}): {dev_pk_b58}", version);
+    ui::kv(&format!("base58 v{version}"), ui::accent(&dev_pk_b58));
 
     // 9) host-derive same path and compare affine limbs
     let (sk, cc) = cheetah::master_from_seed(&seed64);
@@ -120,9 +128,10 @@ pub fn run(
         host_pk.0 == dev_x && host_pk.1 == dev_y,
         "device pk != host pk"
     );
-    println!("pk match: OK");
+    ui::ok("pk match");
 
     // 10) device sign dummy hash
+    ui::subhead("sign");
     let dummy = cheetah::Hash {
         values: [1, 2, 3, 4, 5],
     };
@@ -137,9 +146,9 @@ pub fn run(
         },
     )? {
         Response::OkCheetahSig { chal, sig } => {
-            println!("sign: spend  = {}", fmt_u64x5(&dummy.values));
-            println!("sign: chal e = {}", fmt_u64x8(&chal));
-            println!("sign: sig  s = {}", fmt_u64x8(&sig));
+            ui::kv("spend", ui::dim(&fmt_u64x5(&dummy.values)));
+            ui::kv("chal e", ui::dim(&fmt_u64x8(&chal)));
+            ui::kv("sig s", ui::dim(&fmt_u64x8(&sig)));
         }
         other => anyhow::bail!("unexpected: {other:?}"),
     }
@@ -163,20 +172,21 @@ pub fn run(
         e_dev == e_host.values && s_dev == s_host.values,
         "sign-for mismatch"
     );
-    println!("self-test: OK");
+    ui::ok("self-test");
 
     // 12) health
     match send_call(&mut *sp, 8, Request::Health)? {
         Response::OkCheetahSig { chal, sig } => {
-            println!("health: chal e = {}", fmt_u64x8(&chal));
-            println!("health: sig  s = {}", fmt_u64x8(&sig));
+            ui::subhead("health");
+            ui::kv("chal e", ui::dim(&fmt_u64x8(&chal)));
+            ui::kv("sig s", ui::dim(&fmt_u64x8(&sig)));
         }
         other => anyhow::bail!("unexpected: {other:?}"),
     }
 
-    println!(
-        "transaction signing smoke moved to `nockster-cli smoke --sign-draft <current-bythos.draft>`"
-    );
+    ui::rule();
+    ui::ok("self-test ok");
+    ui::note("transaction signing smoke: `nockster-cli smoke --sign-draft <current-bythos.draft>`");
     Ok(())
 }
 

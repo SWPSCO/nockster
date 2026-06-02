@@ -135,8 +135,9 @@ enum InitPinProgress {
     NvsWriteSlot = 13,
     NvsWriteHeaderFinal = 14,
     NvsWriteLabels = 15,
-    Complete = 16,
-    Error = 17,
+    NvsWriteFlash = 16,
+    Complete = 17,
+    Error = 18,
 }
 
 impl InitPinProgress {
@@ -157,8 +158,9 @@ impl InitPinProgress {
             13 => Self::NvsWriteSlot,
             14 => Self::NvsWriteHeaderFinal,
             15 => Self::NvsWriteLabels,
-            16 => Self::Complete,
-            17 => Self::Error,
+            16 => Self::NvsWriteFlash,
+            17 => Self::Complete,
+            18 => Self::Error,
             _ => Self::Idle,
         }
     }
@@ -181,6 +183,7 @@ impl InitPinProgress {
             Self::NvsWriteSlot => Some("Seed: slot"),
             Self::NvsWriteHeaderFinal => Some("Seed: hdr 2"),
             Self::NvsWriteLabels => Some("Seed: labels"),
+            Self::NvsWriteFlash => Some("Seed: flash"),
             Self::Complete => Some("Seed: done"),
             Self::Error => Some("Seed: error"),
         }
@@ -222,6 +225,7 @@ fn nvs_init_progress(stage: NvsInitStage) {
         NvsInitStage::WriteSlot => InitPinProgress::NvsWriteSlot,
         NvsInitStage::WriteHeaderFinal => InitPinProgress::NvsWriteHeaderFinal,
         NvsInitStage::WriteLabels => InitPinProgress::NvsWriteLabels,
+        NvsInitStage::WriteFlash => InitPinProgress::NvsWriteFlash,
         NvsInitStage::Complete => InitPinProgress::Complete,
     };
     set_initpin_progress(progress);

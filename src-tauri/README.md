@@ -1,4 +1,4 @@
-# Siger Wallet - Tauri Desktop Application
+# Nockster Wallet - Tauri Desktop Application
 
 Secure cross-platform desktop application for the Nockchain hardware wallet.
 
@@ -94,8 +94,8 @@ This will create platform-specific installers in `src-tauri/target/release/bundl
 │  │     WebView (React App)           │  │
 │  │  - UI components                  │  │
 │  │  - WebUSB/WebSerial               │  │
-│  │  - WASM crypto (siger-wasm)       │  │
-│  │  - Device protocol (siger-js)     │  │
+│  │  - WASM crypto (nockster-wasm)       │  │
+│  │  - Device protocol (nockster-js)     │  │
 │  └───────────────────────────────────┘  │
 │                  │                       │
 │                  ↓ USB                   │
@@ -154,7 +154,7 @@ DevTools automatically open in debug builds. To debug a release build:
 
 1. Set `TAURI_DEBUG` environment variable:
 ```bash
-TAURI_DEBUG=1 ./target/release/siger-wallet
+TAURI_DEBUG=1 ./target/release/nockster-wallet
 ```
 
 2. Or enable in code (main.rs):
@@ -205,14 +205,14 @@ Tauri supports automatic updates. See [Tauri Updater docs](https://v2.tauri.app/
 Add udev rules for your device:
 ```bash
 echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="YOUR_VID", MODE="0666"' | \
-  sudo tee /etc/udev/rules.d/99-siger.rules
+  sudo tee /etc/udev/rules.d/99-nockster.rules
 sudo udevadm control --reload-rules
 ```
 
 ### macOS: App won't open
 Run from terminal to see error messages:
 ```bash
-open -a "Siger Wallet"
+open -a "Nockster Wallet"
 ```
 
 ### Windows: WebView2 issues
@@ -221,4 +221,4 @@ https://developer.microsoft.com/en-us/microsoft-edge/webview2/
 
 ## License
 
-Same as the main siger-esp project.
+Same as the main nockster-esp project.

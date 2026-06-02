@@ -20,8 +20,29 @@ target
 
 *.draft
 *.tx
-./*.bin
-./*.json
+/*.bin
+/*.json
+
+# Local hardware test artifacts and secrets.
+/.envrc
+/.envrc.secret
+/flash-out*.txt
+/seed.txt
+/*.seed
+/*.update.json
+/*.signed
+/*.wallet
+/*.psnt
+/release-signing-key*.hex
+/update-signing-key*.hex
+/secure-boot*.pem
+/flash-encryption-key*.bin
+/.secrets/
+/secrets/
+/nockster-secrets/
+/*.digest
+/*.pem
+/*.key
 dist
 node_modules
 pkg

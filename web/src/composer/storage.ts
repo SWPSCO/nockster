@@ -1,7 +1,7 @@
 import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1 } from './types';
 
-const KEY_WALLETS = 'siger.composer.wallets.v1';
-const KEY_ADDRESS_BOOK = 'siger.composer.addressBook.v1';
+const KEY_WALLETS = 'nockster.composer.wallets.v1';
+const KEY_ADDRESS_BOOK = 'nockster.composer.addressBook.v1';
 
 function safeParseJson<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;

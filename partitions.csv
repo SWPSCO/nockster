@@ -1,4 +1,8 @@
-# Name,   Type, SubType, Offset,  Size, Flags
-# Note: Bootloader is at 0x0 (32K), partition table at 0x8000
-nvs,      data, nvs,     0x9000,  28K,
-factory,  app,  factory, 0x10000, 3M,
+# Name,    Type, SubType, Offset,   Size, Flags
+# Note: Bootloader is at 0x0 (32K), partition table at 0x8000.
+# Keep factory at 0x10000 for serial flashing, then add two OTA slots.
+nvs,       data, nvs,     0x9000,   28K,
+factory,   app,  factory, 0x10000,  3M,
+otadata,   data, ota,     0x310000, 8K,
+ota_0,     app,  ota_0,   0x320000, 3M,
+ota_1,     app,  ota_1,   0x620000, 3M,

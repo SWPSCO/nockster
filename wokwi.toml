@@ -1,4 +1,4 @@
 [wokwi]
 version = 1
-firmware = "target/xtensa-esp32s3-none-elf/release/siger-fw"
-elf = "target/xtensa-esp32s3-none-elf/release/siger-fw"
+firmware = "target/xtensa-esp32s3-none-elf/release/nockster-fw"
+elf = "target/xtensa-esp32s3-none-elf/release/nockster-fw"

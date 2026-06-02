@@ -1,6 +1,6 @@
+use serialport::SerialPort;
 use std::sync::Mutex;
 use std::time::Duration;
-use serialport::SerialPort;
 
 struct SerialState {
     port: Option<Box<dyn SerialPort>>,
@@ -23,7 +23,7 @@ fn list_serial_ports() -> Result<Vec<String>, String> {
 fn connect_serial(
     state: tauri::State<Mutex<SerialState>>,
     port: String,
-    baud_rate: u32
+    baud_rate: u32,
 ) -> Result<(), String> {
     let mut serial_state = state.lock().unwrap();
     let port = serialport::new(port, baud_rate)

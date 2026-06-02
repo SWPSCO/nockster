@@ -1,59 +1,85 @@
-# siger-esp
-Hardware wallet firmware, host tooling, and web front-end for signing Nockchain transactions on [ESP32-S3](ESP32-S3-Touch-LCD-1.47).
+# nockster-esp
+Nockster is hardware-wallet firmware, host tooling, and a browser interface for
+signing Nockchain transactions on an ESP32-S3 touchscreen board.
 
-The CLI/wasm app deserializes draft jams, sends the input values over the wire for signature, recomputes `tx_id`, jams the signed noun, and hands it back as a `.tx`.
+## Features
 
-NVS data is AES-256-GCM encrypted with a key derived from the PIN; dumping flash without the PIN is useless.
+- On-device seed storage, transaction review, approval, and signing.
+- USB HID transport by default, with serial/COBS still available for firmware
+  development and diagnostics.
+- Browser UI over WebHID for seed management, transaction signing, device
+  status, touch calibration, and firmware updates.
+- CLI for scripting the same workflows from a terminal.
+- AES-256-GCM encrypted seed slots in flash, keyed by PIN-derived schema-v2 NVS
+  storage.
+- Optional ESP32-S3 chip-security path for eFuse/HMAC-backed NVS hardening,
+  secure boot, flash encryption, and release validation.
+- Signed firmware update bundles with on-device manifest and image validation.
+- WASM transaction composer/parser shared by the browser app.
+- Tauri desktop wrapper for packaging the web UI as a local app.
 
-## Components
-- `crates/siger-core` — library containing comms protocol and crypto wrappers shared between CLI, firmware and wasm (see also separate `tx-types` repo)
-- `crates/siger-cli` — desktop binary for interacting with device over USB
-- `crates/siger-fw` — esp32 firmware; talks serial/WebUSB/WebSerial, signs transactions without exposing key material, and persists encrypted seed material in NVS
-- `crates/siger-wasm` — wasm build of the toolchain used by the browser client
-- `siger-js` — thin typescript wrapper around the device protocol, consumed by the web app
-- `web` — demo vite/react interface to drive the device from browser
-- `src-tauri` — cross-platform desktop app bundler (see [TAURI_SETUP.md](TAURI_SETUP.md))
+## User Workflows
 
-## Device protocol
-- Transport is plain USB CDC with COBS framing; every message is a postcard-encoded `Request` or `Response` enum from `siger-core`.
-- Typical flow: `GetInfo`/`GetLockStatus` -> `Unlock { pin }` -> `GetCheetahPub { path }` ->  `SignSpendHash { path, msg5 }`
-- Error handling mirrors the CLI: firmware replies with `Response::Err { code }` and the host decides whether to retry or surface it.
-- The JS wrapper in `siger-js` and the Rust CLI both share the same codec, so debugging on desktop transfers directly to the browser.
+- Initialize a device with a mnemonic and PIN.
+- Add, list, select, label, and delete seed slots.
+- Unlock or lock the device from the screen, CLI, or browser.
+- Compose or load a transaction draft, review it on the device, and export the
+  signed transaction.
+- Calibrate the touchscreen and run hardware smoke checks.
+- Install signed firmware updates from a hosted update page or from local
+  release artifacts.
 
-## Flash
-- Bootloader lives at `0x0` (32 KB) followed by the partition table at `0x8000`.
-- NVS starts at `0x9000` (28 KB slot, ~24 KB effectively used) and stores the encrypted seed, salt, nonce, and attempt counter.
-- Firmware image is placed at `0x10000` with a 3 MB ceiling (device has 16MB, maybe we put more stuff on it later?)
-- `make flash` updates firmware without touching NVS; use `make flash-wipe` when you really need a factory reset.
+## Repository Layout
 
-#### Partitions
+- `crates/nockster-core`: shared protocol types, request/response codec, and
+  crypto wrappers.
+- `crates/nockster-fw`: ESP32-S3 firmware, touchscreen UI, USB HID/serial
+  transports, NVS storage, and update verifier.
+- `crates/nockster-cli`: desktop CLI for device operations and release/admin
+  checks.
+- `crates/nockster-wasm`: WASM bindings for browser transaction tooling.
+- `nockster-js`: TypeScript device client used by the web app.
+- `web`: Vite/React browser UI.
+- `src-tauri`: desktop app wrapper. See [TAURI_SETUP.md](TAURI_SETUP.md).
+- `docs`: hardware smoke checks, security/provisioning notes, update flow, and
+  roadmap.
 
-| Address | Size  | Type       | Purpose                        |
-|---------|-------|------------|--------------------------------|
-| 0x0     | 32KB  | Bootloader | First-stage bootloader         |
-| 0x8000  | —     | Partition  | Partition table                |
-| 0x9000  | 28KB  | NVS        | Encrypted seed storage (PIN)   |
-| 0x10000 | 3MB   | APP        | Firmware binary                |
+## Quick Commands
 
-#### Seeds
+- Build firmware: `make fw`
+- Flash firmware without erasing seed storage: `make flash`
+- Build signed OTA artifacts: `make signed-update`
+- Flash and erase persistent device data: `make wipe`
+- Build the CLI: `make cli`
+- Seed a wiped device over HID: `nockster-cli seed --seedphrase "..." --pin 1234`
+- Check device info: `nockster-cli info`
+- Run a hardware smoke check:
+  `target/x86_64-unknown-linux-gnu/release/nockster-cli smoke`
+- Serve the browser UI locally: `make serve`
+- Build the web/WASM bundle: `make wasm`
+- Start the desktop app in development: `make tauri-dev`
 
+The CLI defaults to HID. Use `--device hid` or `--port hid` explicitly when you
+want to be clear, and use `--port /dev/ttyACM0` for the serial path.
 
+## Firmware Layout
 
-## Commands
-- Provision from scratch: `make flash-wipe`, then `siger-cli seed --port /dev/ttyACM0 --mnemonic "..." --pin 1234`.
-- Firmware update: `make flash` (seed stays put).
-- Sanity check after flashing: `siger-cli info --port /dev/ttyACM0` followed by a lock/unlock cycle to confirm the seed loads from NVS.
-- Other shortcuts:
-  - `make fw` builds the ESP32-S3 image, `make monitor` tails the serial console.
-  - `make wasm` rebuilds the web bundle (`crates/siger-wasm/pkg`) for the browser client.
-    - `cd web && npm run dev` to use webapp wallet
-    - `make tauri-dev` to run the desktop app
-  - `make cli` and `make core` build the host tooling and shared library shared between firmware iterations.
-    - CLI app available at `target/x86_64-unknown-linux-gnu/release/siger-cli`
+| Address | Size | Purpose |
+| --- | --- | --- |
+| `0x0` | 32 KB | Bootloader |
+| `0x8000` | varies | Partition table |
+| `0x9000` | 28 KB | Encrypted NVS seed storage |
+| `0x10000` | 3 MB | Factory firmware image |
+| `0x310000` | 8 KB | OTA boot metadata |
+| `0x320000` | 3 MB | OTA slot 0 |
+| `0x620000` | 3 MB | OTA slot 1 |
 
-## Notes
+## Security Notes
 
----
+Seed slots are encrypted in flash with AES-256-GCM. The active storage schema
+uses a PIN-derived key, per-device salt, and v2 pepper input. Dev/test builds
+use a software pepper so boards can be wiped and reseeded without eFuse
+provisioning. Production hardening is documented in [docs/security.md](docs/security.md).
 
 ## Development
 
@@ -95,6 +121,7 @@ You probably just want to run one of these:
 
 - `make flash` to re-flash the esp
   - `make wipe` to re-flash and erase persistent data (keys)
-- `make serve` to build and serve the demo webui (includes wasm build)
-- `make cli` to build the CLI tool `siger-cli`
+- `make serve` to build and serve the browser UI (includes wasm build)
+- `make cli` to build the CLI tool `nockster-cli`
+- `target/x86_64-unknown-linux-gnu/release/nockster-cli smoke` to run a non-destructive hardware smoke check
 - `make tauri` to build the desktop app

@@ -1,7 +1,7 @@
 # nockster
 
 Nockster is hardware-wallet firmware, host tooling, and a browser interface for
-signing Nockchain transactions on an ESP32-S3 touchscreen board.
+signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waveshare.com/esp32-s3-touch-lcd-1.47.htm) touchscreen board.
 
 <img width="700" height="706" alt="image" src="https://github.com/user-attachments/assets/3487a9e0-e1f1-48d2-aac7-8dfad7362a35" />
 

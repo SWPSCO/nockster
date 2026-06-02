@@ -212,7 +212,7 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
                 let _ = write!(header_text, " ({}/{})", pos, total);
             }
         } else {
-            let _ = header_text.push_str("???");
+            let _ = header_text.push_str("No match");
         }
     } else if state.words.is_empty() {
         let _ = write!(header_text, "Word 1/{}", MAX_SEED_WORDS);

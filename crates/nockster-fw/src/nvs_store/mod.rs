@@ -3,10 +3,13 @@ use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::result::Result;
+use core::sync::atomic::{AtomicBool, Ordering};
 use embedded_storage::ReadStorage;
+use esp_hal::delay::Delay;
 use esp_storage::FlashStorage;
 use hmac::Hmac;
 use nockster_core::alloc_path as pathmod;
+use nockster_core::cheetah;
 use nockster_core::{
     CheetahPub, DeviceAddressBookEntry, SeedSlotLabel, TouchCalibration,
     MAX_ADDRESS_BOOK_LABEL_LEN, MAX_ADDRESS_BOOK_PKH_LEN, MAX_DEVICE_ADDRESS_BOOK_ENTRIES,
@@ -41,6 +44,7 @@ const LABELS_ADDR: u32 = CALIBRATION_ADDR + CALIBRATION_SIZE as u32;
 const ADDRESS_BOOK_ADDR: u32 = SEED_CORE_STORAGE_END;
 const ADDRESS_BOOK_STORAGE_END: u32 = ADDRESS_BOOK_ADDR + ADDRESS_BOOK_STORAGE_SIZE as u32;
 const NVS_STORAGE_END: u32 = ADDRESS_BOOK_STORAGE_END;
+const FLASH_PAUSE_TIMEOUT_MS: u16 = 2_000;
 
 const MAGIC: [u8; 4] = *b"NCK1";
 const LEGACY_MAGIC: [u8; 4] = [b'S', b'G', b'R', b'1'];
@@ -73,6 +77,57 @@ const fn align_up(value: usize, alignment: usize) -> usize {
     }
 }
 
+static FLASH_PAUSE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static FLASH_PAUSE_WORKER_PARKED: AtomicBool = AtomicBool::new(false);
+static FLASH_PAUSE_WORKER_ONLINE: AtomicBool = AtomicBool::new(false);
+
+#[esp_hal::ram]
+pub fn worker_flash_pause_requested() -> bool {
+    FLASH_PAUSE_REQUESTED.load(Ordering::SeqCst)
+}
+
+#[esp_hal::ram]
+pub fn worker_flash_pause_set_parked(parked: bool) {
+    FLASH_PAUSE_WORKER_PARKED.store(parked, Ordering::SeqCst);
+}
+
+pub fn worker_flash_pause_set_online(online: bool) {
+    FLASH_PAUSE_WORKER_ONLINE.store(online, Ordering::SeqCst);
+    if !online {
+        FLASH_PAUSE_WORKER_PARKED.store(false, Ordering::SeqCst);
+    }
+}
+
+struct FlashPauseGuard;
+
+impl FlashPauseGuard {
+    fn acquire() -> Result<Self, NvsError> {
+        FLASH_PAUSE_WORKER_PARKED.store(false, Ordering::SeqCst);
+        FLASH_PAUSE_REQUESTED.store(true, Ordering::SeqCst);
+
+        let delay = Delay::new();
+        for _ in 0..FLASH_PAUSE_TIMEOUT_MS {
+            if !FLASH_PAUSE_WORKER_ONLINE.load(Ordering::SeqCst)
+                || FLASH_PAUSE_WORKER_PARKED.load(Ordering::SeqCst)
+            {
+                return Ok(Self);
+            }
+            delay.delay_millis(1u32);
+        }
+
+        FLASH_PAUSE_REQUESTED.store(false, Ordering::SeqCst);
+        FLASH_PAUSE_WORKER_PARKED.store(false, Ordering::SeqCst);
+        Err(NvsError::Flash)
+    }
+}
+
+impl Drop for FlashPauseGuard {
+    fn drop(&mut self) {
+        FLASH_PAUSE_REQUESTED.store(false, Ordering::SeqCst);
+        FLASH_PAUSE_WORKER_PARKED.store(false, Ordering::SeqCst);
+    }
+}
+
 #[derive(Debug)]
 pub enum NvsError {
     Flash,
@@ -89,6 +144,18 @@ pub enum NvsError {
 
 pub struct NvsStore {
     flash: FlashStorage,
+}
+
+pub struct PreparedSeedInit {
+    header: Header,
+    slot_record: SlotRecord,
+}
+
+pub struct PreparedSeedRewrite {
+    header: Header,
+    records: Vec<SlotRecord>,
+    labels: Vec<SeedSlotLabel>,
+    calibration: Option<TouchCalibration>,
 }
 
 pub trait NvsPepperSource {
@@ -245,6 +312,14 @@ impl SlotRecord {
         read_u64_array(&buf[96..144], &mut pub_x);
         let mut pub_y = [0u64; 6];
         read_u64_array(&buf[144..192], &mut pub_y);
+        if nonce.iter().all(|byte| *byte == 0xFF)
+            || enc_seed.iter().all(|byte| *byte == 0xFF)
+            || pub_x == [u64::MAX; 6]
+            || pub_y == [u64::MAX; 6]
+            || (pub_x == [0; 6] && pub_y == [0; 6])
+        {
+            return None;
+        }
         Some(Self {
             nonce,
             enc_seed,
@@ -370,6 +445,12 @@ fn zeroize_optional_secret(value: &mut Option<[u8; 32]>) {
     }
 }
 
+fn zeroize_seed_vec(seeds: &mut Vec<[u8; 64]>) {
+    for seed in seeds.iter_mut() {
+        seed.zeroize();
+    }
+}
+
 impl NvsStore {
     pub fn new() -> Self {
         Self {
@@ -378,7 +459,10 @@ impl NvsStore {
     }
 
     pub fn is_initialized(&mut self) -> bool {
-        matches!(self.read_header(), Ok(Some(header)) if header.initialized())
+        matches!(
+            self.read_header(),
+            Ok(Some(header)) if header.initialized() && self.seed_slots_present(&header).unwrap_or(false)
+        )
     }
 
     pub fn get_attempts_remaining(&mut self) -> u8 {
@@ -392,21 +476,34 @@ impl NvsStore {
 
     pub fn storage_status(&mut self) -> NvsStorageStatus {
         match self.read_header() {
-            Ok(Some(header)) => NvsStorageStatus {
-                initialized: header.initialized(),
-                schema_version: header.version,
-                slot_count: if header.initialized() {
-                    header.slot_count
-                } else {
-                    0
-                },
-            },
+            Ok(Some(header)) => {
+                let initialized =
+                    header.initialized() && self.seed_slots_present(&header).unwrap_or(false);
+                NvsStorageStatus {
+                    initialized,
+                    schema_version: header.version,
+                    slot_count: if initialized { header.slot_count } else { 0 },
+                }
+            }
             _ => NvsStorageStatus {
                 initialized: false,
                 schema_version: 0,
                 slot_count: 0,
             },
         }
+    }
+
+    fn seed_slots_present(&mut self, header: &Header) -> Result<bool, NvsError> {
+        if !header.initialized() || header.slot_count == 0 {
+            return Ok(false);
+        }
+
+        for index in 0..header.slot_count as usize {
+            if self.read_slot(index)?.is_none() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     pub fn initialize_pin(
@@ -441,6 +538,34 @@ impl NvsStore {
         P: NvsPepperSource,
         F: FnMut(NvsInitStage),
     {
+        let (prepared, mut key, slot) = self.prepare_initialize_pin_with_pepper_and_progress(
+            pin,
+            seed64,
+            pub_xy,
+            pepper_source,
+            &mut progress,
+        )?;
+        progress(NvsInitStage::WriteFlash);
+        if let Err(err) = self.commit_prepared_initialize_pin(prepared) {
+            key.zeroize();
+            return Err(err);
+        }
+        progress(NvsInitStage::Complete);
+        Ok((key, slot))
+    }
+
+    pub fn prepare_initialize_pin_with_pepper_and_progress<P, F>(
+        &mut self,
+        pin: &str,
+        seed64: &[u8; 64],
+        pub_xy: ([u64; 6], [u64; 6]),
+        pepper_source: &mut P,
+        mut progress: F,
+    ) -> Result<(PreparedSeedInit, [u8; 32], u8), NvsError>
+    where
+        P: NvsPepperSource,
+        F: FnMut(NvsInitStage),
+    {
         progress(NvsInitStage::ReadHeader);
         if let Ok(Some(header)) = self.read_header() {
             if header.initialized() {
@@ -457,21 +582,49 @@ impl NvsStore {
         progress(NvsInitStage::Pepper);
         let mut maybe_pepper = Self::pepper_for_new_header(&mut header, pepper_source)?;
         progress(NvsInitStage::Kdf);
-        let key = Self::derive_master_key_for_header(pin, &header, maybe_pepper.as_ref())?;
+        let mut key = match Self::derive_master_key_for_header(pin, &header, maybe_pepper.as_ref())
+        {
+            Ok(key) => key,
+            Err(err) => {
+                zeroize_optional_secret(&mut maybe_pepper);
+                return Err(err);
+            }
+        };
         progress(NvsInitStage::KdfDone);
         zeroize_optional_secret(&mut maybe_pepper);
         progress(NvsInitStage::EncryptSeed);
-        let slot_record = self.encrypt_seed_record(&key, seed64, pub_xy)?;
+        let slot_record = match self.encrypt_seed_record(&key, seed64, pub_xy) {
+            Ok(record) => record,
+            Err(err) => {
+                key.zeroize();
+                return Err(err);
+            }
+        };
 
         progress(NvsInitStage::WriteHeaderPending);
         progress(NvsInitStage::WriteSlot);
         header.set_initialized();
         progress(NvsInitStage::WriteHeaderFinal);
         progress(NvsInitStage::WriteLabels);
-        progress(NvsInitStage::WriteFlash);
-        self.initialize_seed_storage_transaction(&header, &slot_record)?;
-        progress(NvsInitStage::Complete);
-        Ok((key, 0))
+        Ok((
+            PreparedSeedInit {
+                header,
+                slot_record,
+            },
+            key,
+            0,
+        ))
+    }
+
+    pub fn commit_prepared_initialize_pin(
+        &mut self,
+        prepared: PreparedSeedInit,
+    ) -> Result<(), NvsError> {
+        // Do not immediately read back here. On this target the flash write
+        // can be durable while a same-cycle readback still reports failure.
+        // Header-last commit ordering plus unlock-time seed/pub validation
+        // protect against interrupted or corrupt writes.
+        self.initialize_seed_storage_transaction(&prepared.header, &prepared.slot_record)
     }
 
     pub fn add_seed_with_key(
@@ -492,9 +645,13 @@ impl NvsStore {
         }
 
         let slot_index = header.slot_count as usize;
-        if self.verify_master_key(master_key, &header).is_err() {
-            self.increment_attempts(&mut header)?;
-            return Err(NvsError::WrongPin);
+        match self.verify_master_key(master_key, &header) {
+            Ok(()) => {}
+            Err(NvsError::WrongPin) => {
+                self.increment_attempts(&mut header)?;
+                return Err(NvsError::WrongPin);
+            }
+            Err(err) => return Err(err),
         }
 
         let slot_record = self.encrypt_seed_record(master_key, seed64, pub_xy)?;
@@ -515,7 +672,25 @@ impl NvsStore {
         pin: &str,
         pepper_source: &mut P,
     ) -> Result<(Vec<[u8; 64]>, [u8; 32]), NvsError> {
+        let (mut seeds, mut key, clear_attempts) =
+            self.unlock_with_pepper_readonly(pin, pepper_source)?;
         let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
+        if clear_attempts {
+            if let Err(err) = self.clear_attempts_if_needed(&mut header) {
+                zeroize_seed_vec(&mut seeds);
+                key.zeroize();
+                return Err(err);
+            }
+        }
+        Ok((seeds, key))
+    }
+
+    pub fn unlock_with_pepper_readonly<P: NvsPepperSource>(
+        &mut self,
+        pin: &str,
+        pepper_source: &mut P,
+    ) -> Result<(Vec<[u8; 64]>, [u8; 32], bool), NvsError> {
+        let header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
         if !header.initialized() {
             return Err(NvsError::NotInitialized);
         }
@@ -533,21 +708,48 @@ impl NvsStore {
         for index in 0..header.slot_count as usize {
             let record = match self.read_slot(index)? {
                 Some(r) => r,
-                None => continue,
+                None => {
+                    zeroize_seed_vec(&mut seeds);
+                    key.zeroize();
+                    return Err(NvsError::Flash);
+                }
             };
             match self.decrypt_seed(&key, &record) {
-                Ok(seed) => {
+                Ok(mut seed) => {
+                    if !Self::record_pub_matches_seed(&record, &seed) {
+                        seed.zeroize();
+                        zeroize_seed_vec(&mut seeds);
+                        key.zeroize();
+                        return Err(NvsError::Flash);
+                    }
                     seeds.push(seed);
                 }
                 Err(_) => {
-                    self.increment_attempts(&mut header)?;
+                    zeroize_seed_vec(&mut seeds);
+                    key.zeroize();
                     return Err(NvsError::WrongPin);
                 }
             }
         }
 
-        self.clear_attempts_if_needed(&mut header)?;
-        Ok((seeds, key))
+        Ok((seeds, key, header.attempts != 0))
+    }
+
+    pub fn record_wrong_pin_attempt(&mut self) -> Result<u8, NvsError> {
+        let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
+        if !header.initialized() {
+            return Err(NvsError::NotInitialized);
+        }
+        if header.attempts >= MAX_PIN_ATTEMPTS {
+            return Ok(0);
+        }
+        self.increment_attempts(&mut header)?;
+        Ok(MAX_PIN_ATTEMPTS.saturating_sub(header.attempts))
+    }
+
+    pub fn clear_pin_attempts(&mut self) -> Result<(), NvsError> {
+        let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
+        self.clear_attempts_if_needed(&mut header)
     }
 
     pub fn derive_master_key_for_pin(&mut self, pin: &str) -> Result<[u8; 32], NvsError> {
@@ -568,13 +770,27 @@ impl NvsStore {
             return Err(NvsError::LockedOut);
         }
 
-        let key = Self::derive_master_key_with_source(pin, &header, pepper_source)?;
-        if self.verify_master_key(&key, &header).is_err() {
-            self.increment_attempts(&mut header)?;
-            return Err(NvsError::WrongPin);
+        let mut key = Self::derive_master_key_with_source(pin, &header, pepper_source)?;
+        match self.verify_master_key(&key, &header) {
+            Ok(()) => {}
+            Err(NvsError::WrongPin) => {
+                if let Err(err) = self.increment_attempts(&mut header) {
+                    key.zeroize();
+                    return Err(err);
+                }
+                key.zeroize();
+                return Err(NvsError::WrongPin);
+            }
+            Err(err) => {
+                key.zeroize();
+                return Err(err);
+            }
         }
 
-        self.clear_attempts_if_needed(&mut header)?;
+        if let Err(err) = self.clear_attempts_if_needed(&mut header) {
+            key.zeroize();
+            return Err(err);
+        }
         Ok(key)
     }
 
@@ -594,9 +810,13 @@ impl NvsStore {
             return Err(NvsError::InvalidSlot);
         }
 
-        if self.verify_master_key(master_key, &header).is_err() {
-            self.increment_attempts(&mut header)?;
-            return Err(NvsError::WrongPin);
+        match self.verify_master_key(master_key, &header) {
+            Ok(()) => {}
+            Err(NvsError::WrongPin) => {
+                self.increment_attempts(&mut header)?;
+                return Err(NvsError::WrongPin);
+            }
+            Err(err) => return Err(err),
         }
 
         let labels_before_delete = self.read_seed_labels().unwrap_or_default();
@@ -626,41 +846,69 @@ impl NvsStore {
         new_pin: &str,
         pepper_source: &mut P,
     ) -> Result<(), NvsError> {
-        let (seeds, mut old_key) = self.unlock_with_pepper(old_pin, pepper_source)?;
+        let (prepared, mut seeds, mut new_key) =
+            match self.prepare_change_pin_with_pepper(old_pin, new_pin, pepper_source) {
+                Ok(prepared) => prepared,
+                Err(NvsError::WrongPin) => {
+                    self.record_wrong_pin_attempt()?;
+                    return Err(NvsError::WrongPin);
+                }
+                Err(err) => return Err(err),
+            };
+        if let Err(err) = self.commit_prepared_seed_rewrite(prepared) {
+            new_key.zeroize();
+            zeroize_seed_vec(&mut seeds);
+            return Err(err);
+        }
+        new_key.zeroize();
+        zeroize_seed_vec(&mut seeds);
+        Ok(())
+    }
+
+    pub fn prepare_change_pin_with_pepper<P: NvsPepperSource>(
+        &mut self,
+        old_pin: &str,
+        new_pin: &str,
+        pepper_source: &mut P,
+    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
+        let (mut seeds, mut old_key, _clear_attempts) =
+            self.unlock_with_pepper_readonly(old_pin, pepper_source)?;
         old_key.zeroize();
-        let pubs = self.list_seed_pubs()?;
         let labels = self.read_seed_labels().unwrap_or_default();
         let calibration = self.read_touch_calibration().ok().flatten();
 
         if seeds.is_empty() {
-            return Ok(());
+            return Err(NvsError::NotInitialized);
         }
 
-        let mut new_key = self.rewrite_seed_storage(
+        let (prepared, new_key) = match self.prepare_rewrite_seed_storage(
             new_pin,
             seeds.as_slice(),
-            pubs.as_slice(),
             labels.as_slice(),
             calibration,
             pepper_source,
-        )?;
-        new_key.zeroize();
-        Ok(())
+        ) {
+            Ok(key) => key,
+            Err(err) => {
+                zeroize_seed_vec(&mut seeds);
+                return Err(err);
+            }
+        };
+        Ok((prepared, seeds, new_key))
     }
 
-    fn rewrite_seed_storage<P: NvsPepperSource>(
+    fn prepare_rewrite_seed_storage<P: NvsPepperSource>(
         &mut self,
         pin: &str,
         seeds: &[[u8; 64]],
-        pubs: &[CheetahPub],
         labels: &[SeedSlotLabel],
         calibration: Option<TouchCalibration>,
         pepper_source: &mut P,
-    ) -> Result<[u8; 32], NvsError> {
+    ) -> Result<(PreparedSeedRewrite, [u8; 32]), NvsError> {
         if seeds.is_empty() {
             return Err(NvsError::NotInitialized);
         }
-        if seeds.len() != pubs.len() || seeds.len() > MAX_SEED_SLOTS {
+        if seeds.len() > MAX_SEED_SLOTS {
             return Err(NvsError::Crypto);
         }
 
@@ -670,7 +918,14 @@ impl NvsStore {
         getrandom::getrandom(&mut header.salt).map_err(|_| NvsError::Crypto)?;
 
         let mut maybe_pepper = Self::pepper_for_new_header(&mut header, pepper_source)?;
-        let mut key = Self::derive_master_key_for_header(pin, &header, maybe_pepper.as_ref())?;
+        let mut key = match Self::derive_master_key_for_header(pin, &header, maybe_pepper.as_ref())
+        {
+            Ok(key) => key,
+            Err(err) => {
+                zeroize_optional_secret(&mut maybe_pepper);
+                return Err(err);
+            }
+        };
         zeroize_optional_secret(&mut maybe_pepper);
 
         let mut records = Vec::new();
@@ -678,8 +933,9 @@ impl NvsStore {
             key.zeroize();
             return Err(NvsError::Crypto);
         }
-        for (seed, pubinfo) in seeds.iter().zip(pubs.iter()) {
-            let record = match self.encrypt_seed_record(&key, seed, (pubinfo.x, pubinfo.y)) {
+        for seed in seeds.iter() {
+            let pub_xy = Self::seed_root_pub(seed);
+            let record = match self.encrypt_seed_record(&key, seed, pub_xy) {
                 Ok(record) => record,
                 Err(err) => {
                     key.zeroize();
@@ -689,17 +945,41 @@ impl NvsStore {
             records.push(record);
         }
 
-        header.attempts = 0;
-        if let Err(err) =
-            self.rewrite_seed_storage_transaction(&header, records.as_slice(), labels, calibration)
-        {
+        let mut stored_labels = Vec::new();
+        if stored_labels.try_reserve_exact(labels.len()).is_err() {
             key.zeroize();
-            return Err(err);
+            return Err(NvsError::Crypto);
         }
-        Ok(key)
+        for label in labels {
+            stored_labels.push(label.clone());
+        }
+
+        header.attempts = 0;
+        Ok((
+            PreparedSeedRewrite {
+                header,
+                records,
+                labels: stored_labels,
+                calibration,
+            },
+            key,
+        ))
+    }
+
+    pub fn commit_prepared_seed_rewrite(
+        &mut self,
+        prepared: PreparedSeedRewrite,
+    ) -> Result<(), NvsError> {
+        self.rewrite_seed_storage_transaction(
+            &prepared.header,
+            prepared.records.as_slice(),
+            prepared.labels.as_slice(),
+            prepared.calibration,
+        )
     }
 
     pub fn wipe(&mut self) -> Result<(), NvsError> {
+        let _pause = FlashPauseGuard::acquire()?;
         self.erase_flash_region(NVS_BASE_ADDR, NVS_STORAGE_END)?;
         Ok(())
     }
@@ -983,7 +1263,13 @@ impl NvsStore {
         } else {
             None
         };
-        let key = Self::derive_master_key_for_header(pin, header, maybe_pepper.as_ref())?;
+        let key = match Self::derive_master_key_for_header(pin, header, maybe_pepper.as_ref()) {
+            Ok(key) => key,
+            Err(err) => {
+                zeroize_optional_secret(&mut maybe_pepper);
+                return Err(err);
+            }
+        };
         zeroize_optional_secret(&mut maybe_pepper);
         Ok(key)
     }
@@ -1013,13 +1299,35 @@ impl NvsStore {
 
     fn verify_master_key(&mut self, key: &[u8; 32], header: &Header) -> Result<(), NvsError> {
         if header.slot_count == 0 {
-            return Ok(());
+            return Err(NvsError::Flash);
         }
         if let Some(record) = self.read_slot(0)? {
-            self.decrypt_seed(key, &record).map(|_| ())
+            let mut seed = self
+                .decrypt_seed(key, &record)
+                .map_err(|_| NvsError::WrongPin)?;
+            let matches = Self::record_pub_matches_seed(&record, &seed);
+            seed.zeroize();
+            if matches {
+                Ok(())
+            } else {
+                Err(NvsError::Flash)
+            }
         } else {
-            Ok(())
+            Err(NvsError::Flash)
         }
+    }
+
+    fn seed_root_pub(seed: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
+        let (mut sk, mut cc) = cheetah::master_from_seed(seed);
+        let pub_xy = cheetah::cheetah_pub_from_sk(sk);
+        sk.zeroize();
+        cc.zeroize();
+        pub_xy
+    }
+
+    fn record_pub_matches_seed(record: &SlotRecord, seed: &[u8; 64]) -> bool {
+        let pub_xy = Self::seed_root_pub(seed);
+        record.pub_x == pub_xy.0 && record.pub_y == pub_xy.1
     }
 
     fn encrypt_seed_record(
@@ -1335,16 +1643,24 @@ impl NvsStore {
     }
 
     fn write_seed_core_region(&mut self, sector: &[u8]) -> Result<(), NvsError> {
-        self.write_flash_region(NVS_BASE_ADDR, SEED_CORE_STORAGE_END, sector)
+        self.write_flash_region_defer_first_chunk(NVS_BASE_ADDR, SEED_CORE_STORAGE_END, sector)
     }
 
     fn write_address_book_region(
         &mut self,
         address_book: &[u8; ADDRESS_BOOK_SIZE],
     ) -> Result<(), NvsError> {
-        let mut region = vec![0xFFu8; ADDRESS_BOOK_STORAGE_SIZE];
-        region[..ADDRESS_BOOK_SIZE].copy_from_slice(address_book);
-        self.write_flash_region(ADDRESS_BOOK_ADDR, ADDRESS_BOOK_STORAGE_END, &region)
+        let count = core::cmp::min(address_book[5] as usize, MAX_DEVICE_ADDRESS_BOOK_ENTRIES);
+        let used_len = ADDRESS_BOOK_HEADER_SIZE + count * ADDRESS_BOOK_RECORD_SIZE;
+        let storage_len = align_up(used_len.max(ADDRESS_BOOK_HEADER_SIZE), NVS_SECTOR_SIZE)
+            .min(ADDRESS_BOOK_STORAGE_SIZE);
+        let mut region = vec![0xFFu8; storage_len];
+        region[..used_len].copy_from_slice(&address_book[..used_len]);
+        self.write_flash_region(
+            ADDRESS_BOOK_ADDR,
+            ADDRESS_BOOK_ADDR + storage_len as u32,
+            &region,
+        )
     }
 
     fn erase_flash_region(&mut self, start: u32, end: u32) -> Result<(), NvsError> {
@@ -1364,6 +1680,30 @@ impl NvsStore {
     }
 
     fn write_flash_region(&mut self, start: u32, end: u32, region: &[u8]) -> Result<(), NvsError> {
+        self.validate_flash_region(start, end, region)?;
+        let _pause = FlashPauseGuard::acquire()?;
+        self.erase_flash_region(start, end)?;
+        self.write_flash_chunks(start, region, 0, region.len())
+    }
+
+    fn write_flash_region_defer_first_chunk(
+        &mut self,
+        start: u32,
+        end: u32,
+        region: &[u8],
+    ) -> Result<(), NvsError> {
+        self.validate_flash_region(start, end, region)?;
+        if region.len() <= NVS_WRITE_CHUNK_SIZE {
+            return self.write_flash_region(start, end, region);
+        }
+
+        let _pause = FlashPauseGuard::acquire()?;
+        self.erase_flash_region(start, end)?;
+        self.write_flash_chunks(start, region, NVS_WRITE_CHUNK_SIZE, region.len())?;
+        self.write_flash_chunks(start, region, 0, NVS_WRITE_CHUNK_SIZE)
+    }
+
+    fn validate_flash_region(&self, start: u32, end: u32, region: &[u8]) -> Result<(), NvsError> {
         let Some(region_len) = end.checked_sub(start) else {
             return Err(NvsError::Flash);
         };
@@ -1374,12 +1714,18 @@ impl NvsStore {
         {
             return Err(NvsError::Flash);
         }
+        Ok(())
+    }
 
-        self.erase_flash_region(start, end)?;
-
-        let mut offset = 0usize;
-        while offset < region.len() {
-            let end = (offset + NVS_WRITE_CHUNK_SIZE).min(region.len());
+    fn write_flash_chunks(
+        &mut self,
+        start: u32,
+        region: &[u8],
+        mut offset: usize,
+        limit: usize,
+    ) -> Result<(), NvsError> {
+        while offset < limit {
+            let end = (offset + NVS_WRITE_CHUNK_SIZE).min(limit);
             let chunk = &region[offset..end];
             if chunk.iter().any(|byte| *byte != 0xFF) {
                 embedded_storage::nor_flash::NorFlash::write(

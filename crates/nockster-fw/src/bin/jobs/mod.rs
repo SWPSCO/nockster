@@ -4,17 +4,21 @@ use critical_section::Mutex;
 use esp_hal::delay::Delay;
 use heapless::String as HString;
 use nockster_core::{Frame, Response};
+use nockster_fw::nvs_store::{
+    worker_flash_pause_requested, worker_flash_pause_set_online, worker_flash_pause_set_parked,
+    PreparedSeedInit, PreparedSeedRewrite,
+};
 
 pub enum UnlockOutcome {
     Success {
         seeds: Vec<[u8; 64]>,
         master_key: [u8; 32],
+        clear_attempts: bool,
     },
-    WrongPin {
-        attempts_remaining: u8,
-    },
+    WrongPin,
     LockedOut,
     NotInitialized,
+    Flash,
     Failed,
 }
 
@@ -28,9 +32,10 @@ pub struct InitPinRequest {
 }
 
 pub enum InitPinOutcome {
-    Success {
+    Prepared {
         seed64: [u8; 64],
         master_key: [u8; 32],
+        prepared: PreparedSeedInit,
     },
     AlreadyInitialized,
     Flash,
@@ -93,10 +98,11 @@ pub struct DirectSignOutcome {
 }
 
 pub enum ChangePinOutcome {
-    Success {
+    Prepared {
         msg_id: u32,
         seeds: Vec<[u8; 64]>,
         master_key: [u8; 32],
+        prepared: PreparedSeedRewrite,
     },
     WrongPin {
         msg_id: u32,
@@ -158,11 +164,6 @@ static CHANGE_PIN_REQUEST: Mutex<RefCell<Option<ChangePinRequest>>> =
 #[allow(clippy::declare_interior_mutable_const)]
 static CHANGE_PIN_RESULT: Mutex<RefCell<Option<ChangePinOutcome>>> = Mutex::new(RefCell::new(None));
 
-#[allow(clippy::declare_interior_mutable_const)]
-static SEED_OP_REQUEST: Mutex<RefCell<Option<SeedOpRequest>>> = Mutex::new(RefCell::new(None));
-#[allow(clippy::declare_interior_mutable_const)]
-static SEED_OP_RESULT: Mutex<RefCell<Option<SeedOpOutcome>>> = Mutex::new(RefCell::new(None));
-
 pub struct UnlockController {
     awaiting_result: bool,
 }
@@ -178,10 +179,6 @@ pub struct DirectSignController {
 }
 
 pub struct ChangePinController {
-    awaiting_result: bool,
-}
-
-pub struct SeedOpController {
     awaiting_result: bool,
 }
 
@@ -410,55 +407,6 @@ impl ChangePinController {
     }
 }
 
-impl SeedOpController {
-    pub fn new() -> Self {
-        Self {
-            awaiting_result: false,
-        }
-    }
-
-    pub fn submit(&mut self, request: SeedOpRequest) -> Result<(), SeedOpRequest> {
-        if self.awaiting_result {
-            return Err(request);
-        }
-
-        let mut request = Some(request);
-        let queued = critical_section::with(|cs| {
-            let mut pending = SEED_OP_REQUEST.borrow_ref_mut(cs);
-            if pending.is_some() || SEED_OP_RESULT.borrow_ref(cs).is_some() {
-                false
-            } else {
-                *pending = request.take();
-                true
-            }
-        });
-
-        if queued {
-            self.awaiting_result = true;
-            Ok(())
-        } else {
-            Err(request.expect("request still available when not queued"))
-        }
-    }
-
-    pub fn poll(&mut self) -> Option<SeedOpOutcome> {
-        let outcome = critical_section::with(|cs| {
-            let mut slot = SEED_OP_RESULT.borrow_ref_mut(cs);
-            let outcome = slot.take();
-            if outcome.is_some() {
-                self.awaiting_result = false;
-            }
-            outcome
-        });
-
-        if let Some(result) = outcome {
-            return Some(result);
-        }
-
-        None
-    }
-}
-
 fn take_unlock_request() -> Option<UnlockRequest> {
     critical_section::with(|cs| UNLOCK_REQUEST.borrow_ref_mut(cs).take())
 }
@@ -509,24 +457,28 @@ fn store_change_pin_result(outcome: ChangePinOutcome) {
     });
 }
 
-fn take_seed_op_request() -> Option<SeedOpRequest> {
-    critical_section::with(|cs| SEED_OP_REQUEST.borrow_ref_mut(cs).take())
+#[esp_hal::ram]
+fn park_while_flash_paused() -> bool {
+    if !worker_flash_pause_requested() {
+        worker_flash_pause_set_parked(false);
+        return false;
+    }
+
+    worker_flash_pause_set_parked(true);
+    while worker_flash_pause_requested() {
+        core::hint::spin_loop();
+    }
+    worker_flash_pause_set_parked(false);
+    true
 }
 
-fn store_seed_op_result(outcome: SeedOpOutcome) {
-    critical_section::with(|cs| {
-        *SEED_OP_RESULT.borrow_ref_mut(cs) = Some(outcome);
-    });
-}
-
-pub fn worker_loop<S, CU, CI, CSD, CDS, CCP, CSO>(
+pub fn worker_loop<S, CU, CI, CSD, CDS, CCP>(
     state: &mut S,
     mut compute_unlock: CU,
     mut compute_initpin: CI,
     mut compute_sign_draft: CSD,
     mut compute_direct_sign: CDS,
     mut compute_change_pin: CCP,
-    mut compute_seed_op: CSO,
 ) -> !
 where
     CU: FnMut(&mut S, &str) -> UnlockOutcome,
@@ -534,10 +486,14 @@ where
     CSD: FnMut(&mut S, SignDraftRequest) -> SignDraftOutcome,
     CDS: FnMut(&mut S, DirectSignRequest) -> DirectSignOutcome,
     CCP: FnMut(&mut S, ChangePinRequest) -> ChangePinOutcome,
-    CSO: FnMut(&mut S, SeedOpRequest) -> SeedOpOutcome,
 {
     let delay = Delay::new();
+    worker_flash_pause_set_online(true);
     loop {
+        if park_while_flash_paused() {
+            continue;
+        }
+
         if let Some(request) = take_initpin_request() {
             let outcome = compute_initpin(state, request);
             store_initpin_result(outcome);
@@ -553,9 +509,6 @@ where
         } else if let Some(request) = take_change_pin_request() {
             let outcome = compute_change_pin(state, request);
             store_change_pin_result(outcome);
-        } else if let Some(request) = take_seed_op_request() {
-            let outcome = compute_seed_op(state, request);
-            store_seed_op_result(outcome);
         } else {
             delay.delay_millis(5);
         }

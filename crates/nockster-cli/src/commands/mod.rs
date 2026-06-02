@@ -6,6 +6,7 @@ pub mod reboot;
 pub mod reset;
 pub mod security;
 pub mod seed;
+pub mod seed_prompt;
 pub mod sign_draft;
 pub mod smoke;
 pub mod test;

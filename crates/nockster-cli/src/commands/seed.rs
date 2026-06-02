@@ -1,4 +1,5 @@
 use crate::cli::SeedArgs;
+use crate::commands::seed_prompt;
 use crate::keys;
 use crate::serial::{open, send_call, Link};
 use crate::ui;
@@ -10,16 +11,32 @@ use nockster_core::{
 };
 use std::fmt::Write as _;
 
-pub fn run(args: SeedArgs) -> anyhow::Result<()> {
-    let adding_seed = args.seedphrase.is_some() || args.seed_hex.is_some();
+pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
     let labeling = args.label.is_some();
     let managing_slot = args.list || args.select.is_some() || args.delete.is_some() || labeling;
+    let mut adding_seed = args.seedphrase.is_some() || args.seed_hex.is_some();
+
+    ui::header("seed");
+
+    // No input source and nothing to manage: drop into the interactive
+    // seed-phrase prompt when we have a real terminal to drive it. The PIN is
+    // prompted later, once we've opened the device and know whether one is set.
+    let mut interactive = false;
     if !adding_seed && !managing_slot {
-        anyhow::bail!(
-            "provide one of --seedphrase, --seed-hex, --list, --select, --delete, or --label"
-        );
+        if !seed_prompt::available() {
+            anyhow::bail!(
+                "provide one of --seedphrase, --seed-hex, --list, --select, --delete, or --label \
+                 (or run in a terminal for interactive entry)"
+            );
+        }
+        let Some(mnemonic) = seed_prompt::read_mnemonic()? else {
+            return Ok(());
+        };
+        args.seedphrase = Some(mnemonic);
+        adding_seed = true;
+        interactive = true;
     }
-    if adding_seed && args.pin.is_none() {
+    if adding_seed && args.pin.is_none() && !interactive {
         anyhow::bail!("must provide --pin when adding or initializing a seed");
     }
     if let Some(label) = args.label.as_deref() {
@@ -40,7 +57,16 @@ pub fn run(args: SeedArgs) -> anyhow::Result<()> {
     }
 
     let mut sp = open(&args.port, args.baud)?;
-    ui::header("seed");
+
+    // For interactive entry the PIN is collected here: confirm it (double-entry)
+    // only when the device has no seed yet, i.e. no PIN has been set.
+    if interactive && args.pin.is_none() {
+        let needs_confirm = !device_has_seed(&mut *sp)?;
+        let Some(pin) = seed_prompt::read_pin(needs_confirm)? else {
+            return Ok(());
+        };
+        args.pin = Some(pin);
+    }
 
     if args.list {
         return print_seed_slots(&mut *sp, args.version);

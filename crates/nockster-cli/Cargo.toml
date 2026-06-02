@@ -16,6 +16,7 @@ serde-big-array = "0.5"
 anstream = "0.6"
 anstyle = "1"
 terminal_size = "0.4"
+crossterm = "0.29"
 cobs = { version = "0.4",    default-features = false }
 k256 = { version = "0.13", features = ["ecdsa"] }
 hex = "0.4"

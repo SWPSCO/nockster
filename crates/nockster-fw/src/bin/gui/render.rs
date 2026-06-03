@@ -183,26 +183,26 @@ pub fn draw_settings_gear(display: &mut GuiDisplay<'_>, active: bool, header_bg:
     let center = settings_gear_center();
 
     let teeth = [
-        (0, -13),
-        (0, 13),
-        (-13, 0),
-        (13, 0),
-        (-9, -9),
-        (9, -9),
-        (-9, 9),
-        (9, 9),
+        (0, -16),
+        (0, 16),
+        (-16, 0),
+        (16, 0),
+        (-11, -11),
+        (11, -11),
+        (-11, 11),
+        (11, 11),
     ];
     for (dx, dy) in teeth {
         let tooth =
-            Rectangle::with_center(Point::new(center.x + dx, center.y + dy), Size::new(5, 5));
+            Rectangle::with_center(Point::new(center.x + dx, center.y + dy), Size::new(6, 6));
         let _ = tooth
             .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
             .draw(display);
     }
-    let _ = Circle::with_center(center, 22)
+    let _ = Circle::with_center(center, 28)
         .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
         .draw(display);
-    let _ = Circle::with_center(center, 10)
+    let _ = Circle::with_center(center, 12)
         .into_styled(PrimitiveStyleBuilder::new().fill_color(header_bg).build())
         .draw(display);
 }

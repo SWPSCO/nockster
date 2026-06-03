@@ -28,6 +28,7 @@ pub struct WalletRow {
     pub index: u8,
     pub active: bool,
     pub label: HString<32>,
+    pub pkh: HString<64>,
 }
 
 pub type WalletRows = HVec<WalletRow, MAX_SEED_SLOTS>;
@@ -118,7 +119,8 @@ pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow]) {
     render_header(display, "Wallets", COLOR_SURFACE_HIGH);
 
     let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
-    let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let secondary = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
     let left = MENU_MARGIN;
     let mut y = header_height() + 18;
 
@@ -136,7 +138,7 @@ pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow]) {
     // Keep rows clear of the bottom Back button; summarise any overflow.
     let rows_bottom = SCREEN_HEIGHT as i32 - MENU_BUTTON_HEIGHT - 14;
     for (i, row) in rows.iter().enumerate() {
-        if y + 12 > rows_bottom {
+        if y + 34 > rows_bottom {
             let mut more = HString::<24>::new();
             let _ = write!(more, "...{} more", rows.len() - i);
             let _ =
@@ -144,17 +146,43 @@ pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow]) {
                     .draw(display);
             break;
         }
-        let mut line = HString::<40>::new();
-        let label = if row.label.is_empty() {
-            "(unnamed)"
+        let mut short_pkh = HString::<16>::new();
+        if !row.pkh.is_empty() {
+            push_short_pkh(&mut short_pkh, row.pkh.as_str());
+        }
+
+        let mut line = HString::<56>::new();
+        let name = if row.label.is_empty() {
+            short_pkh.as_str()
         } else {
             row.label.as_str()
         };
         let marker = if row.active { "*" } else { " " };
-        let _ = write!(line, "{}{}: {}", marker, row.index, label);
+        let _ = write!(line, "{}slot {} {}", marker, row.index, name);
         let _ = Text::with_alignment(line.as_str(), Point::new(left, y), style, Alignment::Left)
             .draw(display);
         y += 16;
+
+        if row.pkh.is_empty() && row.label.is_empty() {
+            let _ = Text::with_alignment(
+                "pkh unavailable",
+                Point::new(left, y),
+                secondary,
+                Alignment::Left,
+            )
+            .draw(display);
+            y += 12;
+        } else if !row.label.is_empty() && !short_pkh.is_empty() {
+            let _ = Text::with_alignment(
+                short_pkh.as_str(),
+                Point::new(left, y),
+                secondary,
+                Alignment::Left,
+            )
+            .draw(display);
+            y += 12;
+        }
+        y += 4;
     }
 
     draw_text_button(display, wallets_back_button(), "Back", false);
@@ -170,4 +198,16 @@ fn within(hit: &ButtonHit, point: Point, slack: i32) -> bool {
     let top = hit.top_left.y - slack;
     let bottom = hit.top_left.y + hit.size.height as i32 + slack;
     point.x >= left && point.x < right && point.y >= top && point.y < bottom
+}
+
+fn push_short_pkh(out: &mut HString<16>, pkh: &str) {
+    let bytes = pkh.as_bytes();
+    if bytes.len() <= 12 {
+        let _ = out.push_str(pkh);
+        return;
+    }
+
+    let _ = out.push_str(core::str::from_utf8(&bytes[..4]).unwrap_or(""));
+    let _ = out.push_str("...");
+    let _ = out.push_str(core::str::from_utf8(&bytes[bytes.len() - 4..]).unwrap_or(""));
 }

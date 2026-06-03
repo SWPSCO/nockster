@@ -754,6 +754,38 @@ fn digest_to_b58(digest: [u64; 5]) -> String {
     bs58::encode(bytes_be).into_string()
 }
 
+fn cheetah_pubkey_noun(arena: &mut Arena, pk_coords: ([u64; 6], [u64; 6])) -> Noun {
+    let x_elems = [
+        arena.alloc_atom_u64(pk_coords.0[0]),
+        arena.alloc_atom_u64(pk_coords.0[1]),
+        arena.alloc_atom_u64(pk_coords.0[2]),
+        arena.alloc_atom_u64(pk_coords.0[3]),
+        arena.alloc_atom_u64(pk_coords.0[4]),
+        arena.alloc_atom_u64(pk_coords.0[5]),
+    ];
+    let x_noun = build_tuple(arena, &x_elems);
+
+    let y_elems = [
+        arena.alloc_atom_u64(pk_coords.1[0]),
+        arena.alloc_atom_u64(pk_coords.1[1]),
+        arena.alloc_atom_u64(pk_coords.1[2]),
+        arena.alloc_atom_u64(pk_coords.1[3]),
+        arena.alloc_atom_u64(pk_coords.1[4]),
+        arena.alloc_atom_u64(pk_coords.1[5]),
+    ];
+    let y_noun = build_tuple(arena, &y_elems);
+
+    let inf_noun = arena.alloc_atom_u64(1);
+    build_tuple(arena, &[x_noun, y_noun, inf_noun])
+}
+
+pub fn cheetah_pubkey_pkh_v1(pk_coords: ([u64; 6], [u64; 6])) -> Result<String, SignDraftError> {
+    let mut arena = Arena::new();
+    let pk_noun = cheetah_pubkey_noun(&mut arena, pk_coords);
+    let pkh_digest = tip5::hash_noun_varlen(pk_noun, &arena)?;
+    Ok(digest_to_b58(pkh_digest))
+}
+
 fn hash_nname_hashable(noun: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
     let (first_noun, rest) = uncons(noun, arena).ok_or(SignDraftError::Malformed)?;
     let (second_noun, end) = uncons(rest, arena).ok_or(SignDraftError::Malformed)?;

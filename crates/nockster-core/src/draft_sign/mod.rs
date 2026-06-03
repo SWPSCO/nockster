@@ -16,6 +16,6 @@ mod zmap;
 
 pub use noun_codec::{cue, jam, Arena, Noun};
 pub use tx_v1::{
-    draft_outputs_v1, draft_review_v1, rewrite_txid_v1, sign_draft_v1, DraftOutputV1,
-    DraftReviewV1, RewriteTxIdV1, SignDraftError, SignerConfig,
+    cheetah_pubkey_pkh_v1, draft_outputs_v1, draft_review_v1, rewrite_txid_v1, sign_draft_v1,
+    DraftOutputV1, DraftReviewV1, RewriteTxIdV1, SignDraftError, SignerConfig,
 };

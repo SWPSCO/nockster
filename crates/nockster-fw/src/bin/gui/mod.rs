@@ -10,7 +10,7 @@ mod state;
 mod touch;
 
 pub use menu::{WalletRow, WalletRows};
-pub use seed::SeedInteraction;
+pub use seed::{SeedInteraction, SeedPhrase};
 pub use state::{
     GuiInteraction, GuiMode, MenuItem, TxReviewSummary, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
@@ -304,14 +304,7 @@ impl<'d> Gui<'d> {
                 }
             }
         }
-        if matches!(
-            self.mode,
-            GuiMode::Unlocked
-                | GuiMode::Confirm
-                | GuiMode::TxReview
-                | GuiMode::Diagnostics
-                | GuiMode::Wallets
-        ) {
+        if self.auto_lock_enabled() {
             match self.auto_lock_deadline {
                 Some(deadline) => {
                     if now >= deadline {
@@ -557,15 +550,20 @@ impl<'d> Gui<'d> {
         self.header_dirty = false;
     }
 
-    fn refresh_auto_lock(&mut self, now: Instant) {
-        if matches!(
+    fn auto_lock_enabled(&self) -> bool {
+        matches!(
             self.mode,
             GuiMode::Unlocked
                 | GuiMode::Confirm
                 | GuiMode::TxReview
                 | GuiMode::Diagnostics
+                | GuiMode::Menu
                 | GuiMode::Wallets
-        ) {
+        )
+    }
+
+    fn refresh_auto_lock(&mut self, now: Instant) {
+        if self.auto_lock_enabled() {
             self.auto_lock_deadline = Some(now + AUTO_LOCK_TIMEOUT);
         }
     }
@@ -706,8 +704,7 @@ impl<'d> Gui<'d> {
         seed::render_seed_setup(&mut self.display, "Add seed");
     }
 
-    /// Blocking-work splash shown before the ~2s BIP-39 PBKDF2 derivation so the
-    /// screen doesn't appear frozen.
+    /// Progress splash shown while BIP-39 PBKDF2 runs on the worker core.
     pub fn show_deriving(&mut self) {
         self.disarm_active();
         self.stop_unlock_demo();
@@ -1450,12 +1447,12 @@ impl<'d> Gui<'d> {
         now: Instant,
         finger_present: bool,
     ) -> Option<GuiInteraction> {
-        self.refresh_auto_lock(now);
         if finger_present {
             self.interaction.finger_down = true;
             self.interaction.last_touch_sample_at = Some(now);
             match self.read_touch_sample() {
                 Ok(Some(sample)) => {
+                    self.refresh_auto_lock(now);
                     // Tapping the header row leaves the diagnostics screen — it's
                     // the only on-device way back out (USB toggle aside).
                     if (sample.screen.y as i32) < header_height() {

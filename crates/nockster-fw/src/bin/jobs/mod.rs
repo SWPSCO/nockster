@@ -9,6 +9,8 @@ use nockster_fw::nvs_store::{
     PreparedSeedInit, PreparedSeedRewrite,
 };
 
+use crate::gui::SeedPhrase;
+
 pub enum UnlockOutcome {
     Success {
         seeds: Vec<[u8; 64]>,
@@ -31,6 +33,10 @@ pub struct InitPinRequest {
     pub seed64: [u8; 64],
 }
 
+pub struct SeedDeriveRequest {
+    pub phrase: SeedPhrase,
+}
+
 pub enum InitPinOutcome {
     Prepared {
         seed64: [u8; 64],
@@ -40,6 +46,11 @@ pub enum InitPinOutcome {
     AlreadyInitialized,
     Flash,
     Crypto,
+    Failed,
+}
+
+pub enum SeedDeriveOutcome {
+    Success { seed64: [u8; 64] },
     Failed,
 }
 
@@ -146,6 +157,13 @@ static INITPIN_REQUEST: Mutex<RefCell<Option<InitPinRequest>>> = Mutex::new(RefC
 static INITPIN_RESULT: Mutex<RefCell<Option<InitPinOutcome>>> = Mutex::new(RefCell::new(None));
 
 #[allow(clippy::declare_interior_mutable_const)]
+static SEED_DERIVE_REQUEST: Mutex<RefCell<Option<SeedDeriveRequest>>> =
+    Mutex::new(RefCell::new(None));
+#[allow(clippy::declare_interior_mutable_const)]
+static SEED_DERIVE_RESULT: Mutex<RefCell<Option<SeedDeriveOutcome>>> =
+    Mutex::new(RefCell::new(None));
+
+#[allow(clippy::declare_interior_mutable_const)]
 static SIGN_DRAFT_REQUEST: Mutex<RefCell<Option<SignDraftRequest>>> =
     Mutex::new(RefCell::new(None));
 #[allow(clippy::declare_interior_mutable_const)]
@@ -169,6 +187,10 @@ pub struct UnlockController {
 }
 
 pub struct InitPinController;
+
+pub struct SeedDeriveController {
+    awaiting_result: bool,
+}
 
 pub struct SignDraftController {
     awaiting_result: bool,
@@ -257,6 +279,57 @@ impl InitPinController {
             let mut slot = INITPIN_RESULT.borrow_ref_mut(cs);
             slot.take()
         })
+    }
+}
+
+impl SeedDeriveController {
+    pub fn new() -> Self {
+        Self {
+            awaiting_result: false,
+        }
+    }
+
+    pub fn submit(&mut self, phrase: SeedPhrase) -> Result<(), SeedPhrase> {
+        if self.awaiting_result {
+            return Err(phrase);
+        }
+
+        let mut request = Some(SeedDeriveRequest { phrase });
+        let queued = critical_section::with(|cs| {
+            let mut pending = SEED_DERIVE_REQUEST.borrow_ref_mut(cs);
+            if pending.is_some() || SEED_DERIVE_RESULT.borrow_ref(cs).is_some() {
+                false
+            } else {
+                *pending = request.take();
+                true
+            }
+        });
+
+        if queued {
+            self.awaiting_result = true;
+            Ok(())
+        } else {
+            Err(request
+                .expect("request still available when not queued")
+                .phrase)
+        }
+    }
+
+    pub fn poll(&mut self) -> Option<SeedDeriveOutcome> {
+        let outcome = critical_section::with(|cs| {
+            let mut slot = SEED_DERIVE_RESULT.borrow_ref_mut(cs);
+            let outcome = slot.take();
+            if outcome.is_some() {
+                self.awaiting_result = false;
+            }
+            outcome
+        });
+
+        if let Some(result) = outcome {
+            return Some(result);
+        }
+
+        None
     }
 }
 
@@ -427,6 +500,16 @@ fn store_initpin_result(outcome: InitPinOutcome) {
     });
 }
 
+fn take_seed_derive_request() -> Option<SeedDeriveRequest> {
+    critical_section::with(|cs| SEED_DERIVE_REQUEST.borrow_ref_mut(cs).take())
+}
+
+fn store_seed_derive_result(outcome: SeedDeriveOutcome) {
+    critical_section::with(|cs| {
+        *SEED_DERIVE_RESULT.borrow_ref_mut(cs) = Some(outcome);
+    });
+}
+
 fn take_sign_draft_request() -> Option<SignDraftRequest> {
     critical_section::with(|cs| SIGN_DRAFT_REQUEST.borrow_ref_mut(cs).take())
 }
@@ -472,10 +555,11 @@ fn park_while_flash_paused() -> bool {
     true
 }
 
-pub fn worker_loop<S, CU, CI, CSD, CDS, CCP>(
+pub fn worker_loop<S, CU, CI, CSDR, CSD, CDS, CCP>(
     state: &mut S,
     mut compute_unlock: CU,
     mut compute_initpin: CI,
+    mut compute_seed_derive: CSDR,
     mut compute_sign_draft: CSD,
     mut compute_direct_sign: CDS,
     mut compute_change_pin: CCP,
@@ -483,6 +567,7 @@ pub fn worker_loop<S, CU, CI, CSD, CDS, CCP>(
 where
     CU: FnMut(&mut S, &str) -> UnlockOutcome,
     CI: FnMut(&mut S, InitPinRequest) -> InitPinOutcome,
+    CSDR: FnMut(&mut S, SeedDeriveRequest) -> SeedDeriveOutcome,
     CSD: FnMut(&mut S, SignDraftRequest) -> SignDraftOutcome,
     CDS: FnMut(&mut S, DirectSignRequest) -> DirectSignOutcome,
     CCP: FnMut(&mut S, ChangePinRequest) -> ChangePinOutcome,
@@ -497,6 +582,9 @@ where
         if let Some(request) = take_initpin_request() {
             let outcome = compute_initpin(state, request);
             store_initpin_result(outcome);
+        } else if let Some(request) = take_seed_derive_request() {
+            let outcome = compute_seed_derive(state, request);
+            store_seed_derive_result(outcome);
         } else if let Some(request) = take_unlock_request() {
             let outcome = compute_unlock(state, request.pin.as_str());
             store_unlock_result(outcome);

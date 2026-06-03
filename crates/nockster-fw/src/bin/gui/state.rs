@@ -20,6 +20,18 @@ pub enum GuiMode {
     SeedConfirm,
     Diagnostics,
     TouchCalibration,
+    Menu,
+    Wallets,
+}
+
+/// Items on the settings menu reachable from the unlocked header gear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuItem {
+    Wallets,
+    AddSeed,
+    Calibrate,
+    Diagnostics,
+    Back,
 }
 
 pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
@@ -51,6 +63,7 @@ pub enum Button {
     Clear,
     Ok,
     Seed(SeedButton),
+    Menu(MenuItem),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,6 +84,8 @@ pub enum GuiInteraction {
     LockRequested,
     Seed(SeedInteraction),
     TouchCalibrationComplete(nockster_core::TouchCalibration),
+    Menu(MenuItem),
+    ExitDiagnostics,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

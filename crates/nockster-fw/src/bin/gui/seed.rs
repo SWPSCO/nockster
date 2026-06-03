@@ -201,9 +201,9 @@ impl SeedEntryState {
     }
 }
 
-pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
+pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str) {
     let _ = display.clear(COLOR_BACKGROUND);
-    render_header(display, "No seeds", COLOR_SURFACE_HIGH);
+    render_header(display, title, COLOR_SURFACE_HIGH);
 
     let mut body = HString::<96>::new();
     let _ = body
@@ -312,9 +312,7 @@ pub fn draw_seed_button(
         Button::Seed(sb) if mode == GuiMode::SeedFirstBoot => {
             draw_text_button(display, hit, setup_button_label(sb), active)
         }
-        Button::Seed(SeedButton::EnterSeed) => {
-            draw_text_button(display, hit, "Enter Seed", active)
-        }
+        Button::Seed(SeedButton::EnterSeed) => draw_text_button(display, hit, "Enter Seed", active),
         _ => {}
     }
 }
@@ -348,7 +346,12 @@ fn setup_button_label(button: SeedButton) -> &'static str {
     }
 }
 
-fn draw_text_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, label: &str, active: bool) {
+pub(crate) fn draw_text_button(
+    display: &mut GuiDisplay<'_>,
+    hit: ButtonHit,
+    label: &str,
+    active: bool,
+) {
     draw_button_frame(display, hit, active);
     let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
     let center = Point::new(

@@ -54,6 +54,23 @@ fn runtime_signer_scalar() -> [u8; 32] {
 }
 
 #[test]
+fn cheetah_pubkey_pkh_v1_matches_tx_types_encoder() {
+    let pk_xy = (
+        [0x101, 0x102, 0x103, 0x104, 0x105, 0x106],
+        [0x201, 0x202, 0x203, 0x204, 0x205, 0x206],
+    );
+    let pkh = nockster_core::draft_sign::cheetah_pubkey_pkh_v1(pk_xy).expect("pkh");
+    let tx_types_pkh = SchnorrPubkey {
+        x: F6LT { values: pk_xy.0 },
+        y: F6LT { values: pk_xy.1 },
+        inf: false,
+    }
+    .to_hash()
+    .to_b58();
+    assert_eq!(pkh, tx_types_pkh);
+}
+
+#[test]
 fn sign_draft_v1_inserts_expected_signature() {
     let sk_be = runtime_signer_scalar();
 

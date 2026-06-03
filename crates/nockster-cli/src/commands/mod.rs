@@ -1,7 +1,10 @@
+pub mod address_book;
+pub mod derive;
 pub mod health;
 pub mod info;
 pub mod inspect;
 pub mod pin;
+pub mod ports;
 pub mod reboot;
 pub mod reset;
 pub mod security;

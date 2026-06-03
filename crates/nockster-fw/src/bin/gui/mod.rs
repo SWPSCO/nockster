@@ -687,6 +687,13 @@ impl<'d> Gui<'d> {
         seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
     }
 
+    pub fn show_seed_confirm(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::SeedConfirm;
+        seed::render_seed_confirm(&mut self.display, &self.seed_entry_state);
+    }
+
     pub fn clear_seed_entry_state(&mut self) {
         self.seed_entry_state.reset();
     }
@@ -1196,6 +1203,17 @@ impl<'d> Gui<'d> {
                 self.show_seed_entry();
                 SeedInteraction::EnterSeedRequested
             }
+            SeedButton::GenerateSeed => {
+                // Generate a fresh phrase on-device and jump straight to the
+                // confirm/write-down screen; CONFIRM there feeds the same
+                // EntryCompleted → PIN-setup path as typed entry.
+                if self.seed_entry_state.load_generated() {
+                    self.show_seed_confirm();
+                } else {
+                    self.show_seed_setup();
+                }
+                return None;
+            }
             SeedButton::Key(digit) => {
                 if self.seed_entry_state.push_digit(digit) {
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
@@ -1248,13 +1266,14 @@ impl<'d> Gui<'d> {
                 }
             }
             SeedButton::Cancel => {
-                // If we're in confirm mode, go back to entry
-                if self.mode == GuiMode::SeedConfirm {
+                // From confirm of a typed-in phrase, go back to the keypad to fix
+                // a word. A generated phrase has no keypad state to return to, so
+                // it (and the first-boot screen) goes back to setup.
+                if self.mode == GuiMode::SeedConfirm && !self.seed_entry_state.is_generated() {
                     self.mode = GuiMode::SeedEntry;
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
                     return None;
                 }
-                // Otherwise go back to setup screen
                 self.show_seed_setup();
                 SeedInteraction::EntryCancelled
             }

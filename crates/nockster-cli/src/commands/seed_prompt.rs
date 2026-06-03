@@ -107,9 +107,7 @@ pub fn read_mnemonic() -> anyhow::Result<Option<String>> {
         }
 
         // Ctrl-C cancels (raw mode swallows the usual SIGINT).
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('c'))
-        {
+        if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
             cancelled = true;
             break;
         }
@@ -151,9 +149,7 @@ pub fn read_mnemonic() -> anyhow::Result<Option<String>> {
                         cancelled = false;
                         break;
                     }
-                    error = Some(format!(
-                        "{n} words — need 12, 15, 18, 21, or 24 to finish"
-                    ));
+                    error = Some(format!("{n} words — need 12, 15, 18, 21, or 24 to finish"));
                 } else if let Some(word) = resolve(&buf, shown, sel) {
                     if let Some(msg) = commit(&mut words, &word) {
                         error = Some(msg);
@@ -217,11 +213,29 @@ fn resolve(buf: &str, shown: &[&str], sel: usize) -> Option<String> {
 /// Append a word unless we're already at the 24-word ceiling. Returns an error
 /// message to surface, or `None` on success.
 fn commit(words: &mut Vec<String>, word: &str) -> Option<String> {
+    // Defensive: callers only pass words that came from the wordlist, but pin
+    // that invariant so a future refactor can't smuggle a non-BIP-39 word in.
+    debug_assert!(
+        WL.find_word(word).is_some(),
+        "commit() received a non-BIP-39 word: {word:?}"
+    );
     if words.len() >= 24 {
         return Some("24 words is the maximum".to_string());
     }
     words.push(word.to_string());
     None
+}
+
+/// BIP-39 entropy in bits for a given word count (12→128 … 24→256).
+fn entropy_bits(word_count: usize) -> Option<u32> {
+    match word_count {
+        12 => Some(128),
+        15 => Some(160),
+        18 => Some(192),
+        21 => Some(224),
+        24 => Some(256),
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -255,7 +269,7 @@ fn build_lines(
     sel: usize,
     error: &Option<String>,
 ) -> Vec<String> {
-    let width = ui::width();
+    let width = ui::width_live();
     let mut lines: Vec<String> = Vec::new();
 
     // 1. Words collected so far, wrapped to the terminal width.
@@ -289,12 +303,7 @@ fn build_lines(
     } else {
         ui::strong(buf)
     };
-    lines.push(format!(
-        "  {} {}{}",
-        ui::accent("▌"),
-        body,
-        ui::accent("▏")
-    ));
+    lines.push(format!("  {} {}{}", ui::accent("▌"), body, ui::accent("▏")));
 
     // 3. Suggestions.
     if buf.is_empty() {
@@ -322,16 +331,19 @@ fn build_lines(
         lines.push(format!("  {}", ui::amber(&format!("▲ {msg}"))));
     } else {
         let n = words.len();
-        let count = if VALID_LENGTHS.contains(&n) {
-            ui::good(&format!("✓ {n} words"))
+        if let Some(bits) = entropy_bits(n) {
+            lines.push(format!(
+                "  {}  {}",
+                ui::good(&format!("✓ {n} words")),
+                ui::dim(&format!("{bits}-bit entropy · ⏎ on empty to finish")),
+            ));
         } else {
-            ui::dim(&format!("{n} words"))
-        };
-        lines.push(format!(
-            "  {}  {}",
-            count,
-            ui::dim("lengths 12/15/18/21/24 · ⏎ on empty to finish")
-        ));
+            lines.push(format!(
+                "  {}  {}",
+                ui::dim(&format!("{n} words")),
+                ui::dim("lengths 12/15/18/21/24 · ⏎ on empty to finish"),
+            ));
+        }
     }
 
     lines

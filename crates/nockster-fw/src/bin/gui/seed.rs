@@ -8,6 +8,8 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Alignment, Text};
 use heapless::{String as HString, Vec as HVec};
+use sha2::{Digest, Sha256};
+use zeroize::Zeroize;
 
 use super::constants::*;
 use super::layout::header_height;
@@ -38,6 +40,7 @@ pub enum SeedInteraction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeedButton {
     EnterSeed,
+    GenerateSeed,
     Key(u8),
     Backspace,
     NextSuggestion,
@@ -53,6 +56,9 @@ pub struct SeedEntryState {
     suggestion_index: usize,
     total_matches: usize,
     words: SeedPhrase,
+    /// True when `words` was produced on-device (Generate) rather than typed in.
+    /// Drives the confirm-screen copy and the Cancel destination.
+    generated: bool,
 }
 
 impl SeedEntryState {
@@ -63,6 +69,7 @@ impl SeedEntryState {
             suggestion_index: 0,
             total_matches: 0,
             words: HVec::new(),
+            generated: false,
         }
     }
 
@@ -72,6 +79,33 @@ impl SeedEntryState {
         self.suggestion_index = 0;
         self.total_matches = 0;
         self.words.clear();
+        self.generated = false;
+    }
+
+    pub fn is_generated(&self) -> bool {
+        self.generated
+    }
+
+    /// Generate a fresh 24-word BIP-39 mnemonic on-device from the hardware RNG
+    /// and load it as the committed word list. Returns false if entropy is
+    /// unavailable or word lookup fails (state left reset in that case).
+    pub fn load_generated(&mut self) -> bool {
+        let mut entropy = [0u8; 32];
+        if getrandom::getrandom(&mut entropy).is_err() {
+            entropy.zeroize();
+            return false;
+        }
+        let phrase = mnemonic_from_entropy(&entropy);
+        entropy.zeroize();
+        match phrase {
+            Some(words) => {
+                self.reset();
+                self.words = words;
+                self.generated = true;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn push_digit(&mut self, digit: u8) -> bool {
@@ -172,9 +206,8 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
     render_header(display, "No seeds", COLOR_SURFACE_HIGH);
 
     let mut body = HString::<96>::new();
-    let _ = body.push_str(
-        "Enter your seedphrase. You can enter it from your computer too, via web or nockster-cli.",
-    );
+    let _ = body
+        .push_str("Generate a new seed on-device, or enter an existing one (here, web, or CLI).");
     let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
     let mut y = header_height() + 24;
     // Estimate character width for FONT_6X10 is 6 pixels
@@ -190,8 +223,9 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>) {
         y += (FONT_6X10.character_size.height as i32) + 4;
     }
 
-    let button = enter_seed_button_hit();
-    draw_seed_button(display, GuiMode::SeedFirstBoot, button, None, false);
+    for button in setup_buttons() {
+        draw_seed_button(display, GuiMode::SeedFirstBoot, button, None, false);
+    }
 }
 
 pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
@@ -233,12 +267,9 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
 }
 
 pub fn button_from_point_seed_setup(point: Point) -> Option<ButtonHit> {
-    let hit = enter_seed_button_hit();
-    if within_hit(&hit, point, 0) {
-        Some(hit)
-    } else {
-        None
-    }
+    setup_buttons()
+        .into_iter()
+        .find(|hit| within_hit(hit, point, 4))
 }
 
 pub fn button_from_point_seed_entry(point: Point) -> Option<ButtonHit> {
@@ -270,7 +301,6 @@ pub fn draw_seed_button(
     active: bool,
 ) {
     match hit.button {
-        Button::Seed(SeedButton::EnterSeed) => draw_enter_seed_button(display, hit, active),
         Button::Seed(_) if mode == GuiMode::SeedEntry => {
             if let Some(state) = state {
                 draw_keypad_button(display, hit, state, active);
@@ -279,28 +309,47 @@ pub fn draw_seed_button(
         Button::Seed(_) if mode == GuiMode::SeedConfirm => {
             draw_confirm_button(display, hit, active)
         }
-        Button::Seed(_) if mode == GuiMode::SeedFirstBoot => {
-            draw_enter_seed_button(display, hit, active)
+        Button::Seed(sb) if mode == GuiMode::SeedFirstBoot => {
+            draw_text_button(display, hit, setup_button_label(sb), active)
+        }
+        Button::Seed(SeedButton::EnterSeed) => {
+            draw_text_button(display, hit, "Enter Seed", active)
         }
         _ => {}
     }
 }
 
-fn enter_seed_button_hit() -> ButtonHit {
-    let width = (SCREEN_WIDTH as i32 - 2 * 24).max(80);
-    let height = 40;
+/// The two actions on the no-seed setup screen: generate on-device, or enter an
+/// existing phrase.
+fn setup_buttons() -> [ButtonHit; 2] {
+    let width = (SCREEN_WIDTH as i32 - 2 * 20).max(80);
+    let height = 42;
     let x = ((SCREEN_WIDTH as i32) - width) / 2;
-    let y = header_height() + 72;
-    ButtonHit {
-        button: Button::Seed(SeedButton::EnterSeed),
-        top_left: Point::new(x, y),
-        size: Size::new(width as u32, height as u32),
+    let gap = 14;
+    let y0 = header_height() + 84;
+    [
+        ButtonHit {
+            button: Button::Seed(SeedButton::GenerateSeed),
+            top_left: Point::new(x, y0),
+            size: Size::new(width as u32, height as u32),
+        },
+        ButtonHit {
+            button: Button::Seed(SeedButton::EnterSeed),
+            top_left: Point::new(x, y0 + height + gap),
+            size: Size::new(width as u32, height as u32),
+        },
+    ]
+}
+
+fn setup_button_label(button: SeedButton) -> &'static str {
+    match button {
+        SeedButton::GenerateSeed => "Generate New",
+        _ => "Enter Seed",
     }
 }
 
-fn draw_enter_seed_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool) {
+fn draw_text_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, label: &str, active: bool) {
     draw_button_frame(display, hit, active);
-    let label = "Enter Seed";
     let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
     let center = Point::new(
         hit.top_left.x + hit.size.width as i32 / 2,
@@ -375,6 +424,7 @@ fn draw_keypad_button(
         SeedButton::Finish => draw_label(display, center_x, center_y, "DONE"),
         SeedButton::Cancel => draw_label(display, center_x, center_y, "BACK"),
         SeedButton::EnterSeed => draw_label(display, center_x, center_y, "Start"),
+        SeedButton::GenerateSeed => {}
     }
 }
 
@@ -631,29 +681,77 @@ fn t9_letters(digit: u8) -> &'static str {
     }
 }
 
+/// Build a standard 24-word BIP-39 mnemonic from 256 bits of entropy.
+///
+/// CS = ENT/32 = 8 checksum bits = the first byte of SHA-256(entropy). The
+/// 256 entropy bits followed by the 8 checksum bits make 264 bits = 24 × 11,
+/// and each 11-bit group (MSB-first) indexes the 2048-word English list.
+fn mnemonic_from_entropy(entropy: &[u8; 32]) -> Option<SeedPhrase> {
+    let checksum = Sha256::digest(entropy)[0];
+    let mut bits = [0u8; 33];
+    bits[..32].copy_from_slice(entropy);
+    bits[32] = checksum;
+
+    let mut phrase = SeedPhrase::new();
+    for i in 0..MAX_SEED_WORDS {
+        let index = extract_11_bits(&bits, i * 11);
+        let word = word_at_index(index)?;
+        let mut committed = SeedWord::new();
+        if committed.push_str(word).is_err() || phrase.push(committed).is_err() {
+            bits.zeroize();
+            return None;
+        }
+    }
+    bits.zeroize();
+    Some(phrase)
+}
+
+/// Read 11 bits (MSB-first) starting at bit offset `start` from `bits`.
+fn extract_11_bits(bits: &[u8], start: usize) -> usize {
+    let mut value = 0usize;
+    for i in 0..11 {
+        let bit = start + i;
+        let byte = bits[bit / 8];
+        let set = (byte >> (7 - (bit % 8))) & 1;
+        value = (value << 1) | set as usize;
+    }
+    value
+}
+
+fn word_at_index(index: usize) -> Option<&'static str> {
+    WORDLIST.lines().nth(index)
+}
+
 pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     let _ = display.clear(COLOR_BACKGROUND);
-    render_header(display, "Confirm Seed", COLOR_SURFACE_HIGH);
+    // For a generated seed the user is seeing it for the first time and must
+    // copy it down; for a typed-in seed this is a read-back confirmation.
+    let title = if state.generated {
+        "Write It Down"
+    } else {
+        "Confirm Seed"
+    };
+    render_header(display, title, COLOR_SURFACE_HIGH);
 
-    // Display all words
+    // Two columns (1-12 | 13-24) so the full 24-word phrase fits on screen.
     let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
     let header_h = header_height();
-    let mut y = header_h + 16;
+    let top = header_h + 14;
     let line_height = (FONT_6X10.character_size.height as i32) + 4;
+    let left_x = 4;
+    let right_x = (SCREEN_WIDTH as i32) / 2 + 2;
+    let per_col = MAX_SEED_WORDS / 2;
 
-    // Show up to 24 words in a scrollable fashion
     for (idx, word) in state.words.iter().enumerate() {
-        let mut line_buf = HString::<24>::new();
-        let _ = write!(line_buf, "{:2}. {}", idx + 1, word.as_str());
-
-        let _ = Text::new(line_buf.as_str(), Point::new(8, y), text_style).draw(display);
-
-        y += line_height;
-
-        // Stop if we run out of screen space
-        if y > SCREEN_HEIGHT as i32 - 50 {
-            break;
-        }
+        let (x, row) = if idx < per_col {
+            (left_x, idx as i32)
+        } else {
+            (right_x, (idx - per_col) as i32)
+        };
+        let y = top + row * line_height;
+        let mut line_buf = HString::<20>::new();
+        let _ = write!(line_buf, "{:2}.{}", idx + 1, word.as_str());
+        let _ = Text::new(line_buf.as_str(), Point::new(x, y), text_style).draw(display);
     }
 
     // Draw confirm/cancel buttons at bottom

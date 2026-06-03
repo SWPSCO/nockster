@@ -109,7 +109,10 @@ fn keygen(args: &UpdateKeygenArgs) -> Result<()> {
         "trusted hash",
         ui::accent(&hex::encode(pubkey_sha256(pubkey_bytes))),
     );
-    ui::ok(&format!("wrote release signing key: {}", args.out.display()));
+    ui::ok(&format!(
+        "wrote release signing key: {}",
+        args.out.display()
+    ));
     Ok(())
 }
 
@@ -212,7 +215,10 @@ fn trust(args: &UpdateTrustArgs) -> Result<()> {
         Response::OkUpdateTrust(trust) => {
             ui::header("update trust");
             ui::kv("configured", ui::yesno(trust.configured));
-            ui::kv("trusted hash", ui::accent(&hex::encode(trust.pubkey_sha256)));
+            ui::kv(
+                "trusted hash",
+                ui::accent(&hex::encode(trust.pubkey_sha256)),
+            );
             Ok(())
         }
         other => Err(anyhow!("unexpected update trust response: {other:?}")),
@@ -408,7 +414,10 @@ fn stream_update_to_device(
     }
     ui::kv("release", ui::strong(&finish.release_version.to_string()));
     ui::kv("image size", ui::strong(&finish.image_size.to_string()));
-    ui::kv("bytes received", ui::strong(&finish.bytes_received.to_string()));
+    ui::kv(
+        "bytes received",
+        ui::strong(&finish.bytes_received.to_string()),
+    );
     if write_flash {
         if reboot_after_install {
             request_device_reboot(&mut *sp)?;

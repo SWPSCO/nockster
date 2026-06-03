@@ -56,6 +56,29 @@ pub const ERR_PIN_MISMATCH: u16 = 136;
 pub const ERR_FLASH: u16 = 140;
 pub const ERR_CRYPTO: u16 = 141;
 
+/// Short, human-readable name for a device error code. Single source of truth so
+/// hosts don't drift from these numbers; safe in `no_std` (returns `&'static str`).
+pub fn describe_error(code: u16) -> &'static str {
+    match code {
+        ERR_BAD_COBS_OR_POSTCARD => "malformed message framing (COBS/postcard)",
+        ERR_OVERFLOW => "buffer overflow",
+        ERR_ENCODE_TOO_BIG => "response too large to encode",
+        ERR_UNSUPPORTED_VERSION => "unsupported request or protocol version",
+        ERR_NO_SEED => "no seed available",
+        ERR_WRONG_PUBKEY => "public key mismatch",
+        ERR_DEVICE_LOCKED => "device locked",
+        ERR_WRONG_PIN => "incorrect PIN",
+        ERR_PIN_LOCKED_OUT => "PIN locked out",
+        ERR_ALREADY_INITIALIZED => "device already initialized",
+        ERR_REJECTED_BY_USER => "rejected on device",
+        ERR_BUSY => "device busy",
+        ERR_PIN_MISMATCH => "PIN confirmation mismatch",
+        ERR_FLASH => "device flash/NVS error",
+        ERR_CRYPTO => "device crypto/RNG error",
+        _ => "unknown error",
+    }
+}
+
 pub const FEATURE_CHEETAH: u32 = 1 << 0;
 pub const FEATURE_FRAG: u32 = 1 << 1;
 pub const FEATURE_XPUB: u32 = 1 << 2;

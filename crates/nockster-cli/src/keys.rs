@@ -195,3 +195,133 @@ mod tests {
         assert!(!pubkey_to_b58(&pk, 1).is_empty());
     }
 }
+
+#[cfg(test)]
+mod derivation_tests {
+    use super::*;
+
+    // ---- parse_path ----
+
+    #[test]
+    fn parse_path_master_is_empty() {
+        assert_eq!(parse_path("m").unwrap(), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn parse_path_mixes_hardened_and_soft() {
+        // ' and h and H all mark hardened; bare numbers stay soft.
+        let got = parse_path("m/44'/0h/0H/0/5").unwrap();
+        assert_eq!(got, vec![44 | 0x8000_0000, 0x8000_0000, 0x8000_0000, 0, 5]);
+    }
+
+    #[test]
+    fn parse_path_rejects_missing_m_and_bad_index() {
+        assert!(parse_path("44'/0").is_err());
+        assert!(parse_path("m/oops").is_err());
+        assert!(parse_path("").is_err());
+    }
+
+    // ---- BIP-39 seed: official Trezor known-answer vector ----
+    // mnemonic "abandon x11 about" + passphrase "TREZOR" is a standard BIP-39
+    // test vector; pins our PBKDF2-HMAC-SHA512 against the spec, independent of
+    // the cheetah curve.
+    #[test]
+    fn bip39_seed_matches_trezor_vector() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon \
+                        abandon abandon abandon abandon abandon about";
+        let seed = bip39_seed_from_mnemonic(mnemonic, "TREZOR");
+        let expected = "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e5349553\
+                        1f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
+        assert_eq!(hex::encode(seed), expected);
+    }
+
+    // ---- cheetah derivation: regression goldens ----
+    // These pin the current host derivation + address encoding so a refactor (or
+    // an accidental divergence from firmware/chain) is caught. Values captured
+    // from the implementation; update intentionally if the scheme changes.
+    const SEED7: [u8; 64] = [7u8; 64];
+    const PATH: &str = "m/44'/0'/0'/0/0";
+    const GOLDEN_SK: &str = "3f74fe890b16bf9b431fe2895884fdaf3ede162f637c3cc1ee11ffcc533955ff";
+    const GOLDEN_V0: &str = "2ZF6GhqAmRw9ApTxHsGrVrzox8hVHwLPFZwcpnBEqiyjpsdSMAaVGVnz2wV18MorWLpVF7fkMk6uWcp76SpuPGUbDqQDRtDqYB9wFa5dX2zQaWgPgGZT72MBzGYcaDQWPEhh";
+    const GOLDEN_V1: &str = "Pp8X4LTmpPhxw373eJtNZMogHZ4SJP2nSoKUW5zYn4raVZusZiDb1g";
+
+    #[test]
+    fn import_from_seed_is_stable() {
+        let (k0, _) = import_from_seed(&SEED7, PATH, 0).unwrap();
+        let (k1, _) = import_from_seed(&SEED7, PATH, 1).unwrap();
+        assert_eq!(k0.sk_be32_hex, GOLDEN_SK);
+        assert_eq!(k0.pk_b58, GOLDEN_V0);
+        assert_eq!(k1.pk_b58, GOLDEN_V1);
+    }
+
+    #[test]
+    fn derivation_is_deterministic_and_path_sensitive() {
+        let a = import_from_seed(&SEED7, PATH, 1).unwrap().0;
+        let b = import_from_seed(&SEED7, PATH, 1).unwrap().0;
+        assert_eq!(a.pk_b58, b.pk_b58, "same inputs must derive the same key");
+
+        let other = import_from_seed(&SEED7, "m/44'/0'/0'/0/1", 1).unwrap().0;
+        assert_ne!(
+            a.pk_b58, other.pk_b58,
+            "different path must derive a different key"
+        );
+    }
+}
+
+#[cfg(test)]
+mod fw_mnemonic_gen_check {
+    //! Cross-check the firmware's on-device generation algorithm (gui/seed.rs:
+    //! mnemonic_from_entropy / extract_11_bits) against the `bip39` crate. The fw
+    //! can't be compiled in this environment (pre-existing esp-rom-sys break), so
+    //! this pins the algorithm host-side. Keep in sync with gui/seed.rs.
+    use bip39::{Language, Mnemonic};
+    use sha2::{Digest, Sha256};
+
+    fn extract_11_bits(bits: &[u8], start: usize) -> usize {
+        let mut value = 0usize;
+        for i in 0..11 {
+            let bit = start + i;
+            let byte = bits[bit / 8];
+            let set = (byte >> (7 - (bit % 8))) & 1;
+            value = (value << 1) | set as usize;
+        }
+        value
+    }
+
+    fn fw_mnemonic_from_entropy(entropy: &[u8; 32]) -> String {
+        let checksum = Sha256::digest(entropy)[0];
+        let mut bits = [0u8; 33];
+        bits[..32].copy_from_slice(entropy);
+        bits[32] = checksum;
+        let wl = Language::English.word_list();
+        let mut words: Vec<&str> = Vec::new();
+        for i in 0..24 {
+            words.push(wl[extract_11_bits(&bits, i * 11)]);
+        }
+        words.join(" ")
+    }
+
+    #[test]
+    fn matches_bip39_crate_for_known_entropies() {
+        for entropy in [[0u8; 32], [0x7fu8; 32], [0xffu8; 32], {
+            let mut e = [0u8; 32];
+            for (i, b) in e.iter_mut().enumerate() {
+                *b = (i as u8).wrapping_mul(37).wrapping_add(11);
+            }
+            e
+        }] {
+            let mine = fw_mnemonic_from_entropy(&entropy);
+            let theirs = Mnemonic::from_entropy(&entropy).unwrap().to_string();
+            assert_eq!(mine, theirs, "mismatch for entropy {:?}", &entropy[..4]);
+            // And the phrase we produce must pass full checksum validation.
+            assert!(Mnemonic::parse_in(Language::English, &mine).is_ok());
+        }
+    }
+
+    #[test]
+    fn all_zero_entropy_is_the_canonical_phrase() {
+        let mine = fw_mnemonic_from_entropy(&[0u8; 32]);
+        assert!(mine.starts_with("abandon abandon"));
+        assert!(mine.ends_with(" art"));
+    }
+}

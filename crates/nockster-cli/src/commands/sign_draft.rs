@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-use nockster_core::{draft_sign, FragKind, Request, Response};
+use nockster_core::{describe_error, draft_sign, FragKind, Request, Response};
 
 use crate::serial::{open, send_blob_and_recv_outbound, send_call};
 use crate::ui;
@@ -35,7 +35,12 @@ pub fn run(
     // Select seed slot (defaults to 0).
     match send_call(&mut *sp, 0x5001, Request::SelectSeed { slot })? {
         Response::Ok => {}
-        Response::Err { code } => return Err(anyhow!("SelectSeed failed with code {code}")),
+        Response::Err { code } => {
+            return Err(anyhow!(
+                "SelectSeed failed: {} (code {code})",
+                describe_error(code)
+            ))
+        }
         other => return Err(anyhow!("unexpected SelectSeed response: {other:?}")),
     }
 

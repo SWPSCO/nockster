@@ -1,6 +1,7 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_call};
 use crate::ui;
+use crate::util::format_path;
 use nockster_core::{
     Request, Response, FEATURE_ALL_KNOWN, FEATURE_BUILD_INFO, FEATURE_CHEETAH,
     FEATURE_DEVICE_REBOOT, FEATURE_FRAG, FEATURE_PIN_CHANGE_UI, FEATURE_RELEASE_INFO,
@@ -8,7 +9,6 @@ use nockster_core::{
     FEATURE_TOUCH_CALIBRATION_UI, FEATURE_TOUCH_DIAGNOSTICS, FEATURE_UPDATE_BOOT_STATUS,
     FEATURE_XPUB,
 };
-use std::fmt::Write as _;
 
 pub fn run(port: &str, baud: u32, version: u8) -> anyhow::Result<()> {
     let mut sp = open(port, baud)?;
@@ -170,18 +170,4 @@ mod tests {
         let names = format_features(FEATURE_DEVICE_REBOOT);
         assert_eq!(names, "device-reboot");
     }
-}
-
-fn format_path(path: &[u32]) -> String {
-    let mut out = String::from("m");
-    for &component in path {
-        let hardened = (component & 0x8000_0000) != 0;
-        let index = component & 0x7FFF_FFFF;
-        out.push('/');
-        let _ = write!(out, "{}", index);
-        if hardened {
-            out.push('\'');
-        }
-    }
-    out
 }

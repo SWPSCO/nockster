@@ -18,15 +18,21 @@ fn is_tty() -> bool {
 }
 
 /// Detected terminal width, clamped to a sane range. Falls back to 100 columns
-/// when the width can't be determined (e.g. output is redirected).
+/// when the width can't be determined (e.g. output is redirected). Memoized —
+/// fine for one-shot command output. Interactive redraws that must survive a
+/// terminal resize should call [`width_live`] instead.
 pub fn width() -> usize {
     static W: OnceLock<usize> = OnceLock::new();
-    *W.get_or_init(|| {
-        terminal_size::terminal_size()
-            .map(|(terminal_size::Width(w), _)| w as usize)
-            .unwrap_or(100)
-            .clamp(40, 120)
-    })
+    *W.get_or_init(width_live)
+}
+
+/// Like [`width`] but re-queries the terminal every call, so a resize mid-render
+/// is picked up. Used by the interactive prompts.
+pub fn width_live() -> usize {
+    terminal_size::terminal_size()
+        .map(|(terminal_size::Width(w), _)| w as usize)
+        .unwrap_or(100)
+        .clamp(40, 120)
 }
 
 #[derive(Clone, Copy)]

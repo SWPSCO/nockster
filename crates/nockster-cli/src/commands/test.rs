@@ -1,12 +1,11 @@
 use crate::keys::pubkey_to_b58;
 use crate::serial::{open, send_blob, send_call};
 use crate::ui;
-use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8};
+use crate::util::{fmt_u64x5, fmt_u64x6, fmt_u64x8, format_path};
 use nockster_core::alloc_path as pathmod;
 use nockster_core::FragKind;
 use nockster_core::{Request, Response};
 use sha2::{Digest, Sha512};
-use std::fmt::Write as _;
 
 fn synthetic_smoke_seed64() -> [u8; 64] {
     let digest = Sha512::digest(b"nockster-cli destructive hardware smoke seed v1");
@@ -82,7 +81,10 @@ pub fn run(
             )),
         );
         if let Some(first) = cheetah_pubs.get(0) {
-            ui::kv("key[00] path", ui::strong(&format_path(first.path.as_slice())));
+            ui::kv(
+                "key[00] path",
+                ui::strong(&format_path(first.path.as_slice())),
+            );
             ui::kv("  X", ui::dim(&fmt_u64x6(&first.x)));
             ui::kv("  Y", ui::dim(&fmt_u64x6(&first.y)));
         }
@@ -188,18 +190,4 @@ pub fn run(
     ui::ok("self-test ok");
     ui::note("transaction signing smoke: `nockster-cli smoke --sign-draft <current-bythos.draft>`");
     Ok(())
-}
-
-fn format_path(path: &[u32]) -> String {
-    let mut out = String::from("m");
-    for &component in path {
-        let hardened = (component & 0x8000_0000) != 0;
-        let index = component & 0x7FFF_FFFF;
-        out.push('/');
-        let _ = write!(out, "{}", index);
-        if hardened {
-            out.push('\'');
-        }
-    }
-    out
 }

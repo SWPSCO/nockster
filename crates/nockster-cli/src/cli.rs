@@ -57,6 +57,37 @@ pub enum Cmd {
 
     /// factory reset (clears seed + persistent PIN state)
     Reset(PortArgs),
+
+    /// list serial ports and the nockster HID device (helps pick --port)
+    ListPorts,
+
+    /// read the device's stored address book (label → PKH)
+    AddressBook(PortArgs),
+
+    /// derive addresses from a seed offline, no device (shows v0 and v1 forms)
+    Derive(DeriveArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct DeriveArgs {
+    /// 64-byte seed in hex
+    #[arg(long, conflicts_with = "seedphrase")]
+    pub seed_hex: Option<String>,
+    /// bip39 mnemonic
+    #[arg(long, conflicts_with = "seed_hex")]
+    pub seedphrase: Option<String>,
+    /// optional passphrase (with --seedphrase)
+    #[arg(long, default_value = "")]
+    pub passphrase: String,
+    /// derivation path (base path when --count > 1)
+    #[arg(long, default_value = "m")]
+    pub path: String,
+    /// only show this address version (0 or 1); default shows both
+    #[arg(long)]
+    pub version: Option<u8>,
+    /// derive N consecutive children by appending /0../N-1 to --path
+    #[arg(long, default_value_t = 1)]
+    pub count: u32,
 }
 
 #[derive(Args, Clone)]
@@ -556,5 +587,15 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Lock(args) => commands::unlock::lock(&args.port, args.baud),
         Cmd::Reboot(args) => commands::reboot::run(&args),
         Cmd::Reset(args) => commands::reset::run(&args),
+        Cmd::ListPorts => commands::ports::run(),
+        Cmd::AddressBook(args) => commands::address_book::run(&args.port, args.baud),
+        Cmd::Derive(args) => commands::derive::run(
+            args.seed_hex.as_deref(),
+            args.seedphrase.as_deref(),
+            &args.passphrase,
+            &args.path,
+            args.version,
+            args.count,
+        ),
     }
 }

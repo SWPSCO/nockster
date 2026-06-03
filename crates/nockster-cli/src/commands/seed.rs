@@ -3,13 +3,12 @@ use crate::commands::seed_prompt;
 use crate::keys;
 use crate::serial::{open, send_call, Link};
 use crate::ui;
-use crate::util::parse_64;
+use crate::util::{format_path, parse_64};
 use nockster_core::{
-    Request, Response, SeedSlotLabel, ERR_ALREADY_INITIALIZED, ERR_BAD_COBS_OR_POSTCARD,
-    ERR_CRYPTO, ERR_DEVICE_LOCKED, ERR_FLASH, ERR_NO_SEED, ERR_OVERFLOW, ERR_PIN_LOCKED_OUT,
-    ERR_REJECTED_BY_USER, ERR_WRONG_PIN, MAX_SEED_LABEL_LEN,
+    describe_error, Request, Response, SeedSlotLabel, ERR_ALREADY_INITIALIZED,
+    ERR_BAD_COBS_OR_POSTCARD, ERR_CRYPTO, ERR_DEVICE_LOCKED, ERR_FLASH, ERR_NO_SEED, ERR_OVERFLOW,
+    ERR_PIN_LOCKED_OUT, ERR_REJECTED_BY_USER, ERR_WRONG_PIN, MAX_SEED_LABEL_LEN,
 };
-use std::fmt::Write as _;
 
 pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
     let labeling = args.label.is_some();
@@ -87,7 +86,9 @@ pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
             Response::Err { code: ERR_NO_SEED } => {
                 anyhow::bail!("seed slot {slot} is not available")
             }
-            Response::Err { code } => anyhow::bail!("select-seed failed with code {code}"),
+            Response::Err { code } => {
+                anyhow::bail!("select-seed failed: {} (code {code})", describe_error(code))
+            }
             other => anyhow::bail!("unexpected select-seed response: {other:?}"),
         }
     }
@@ -116,7 +117,9 @@ pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
             Response::Err { code } if code == ERR_FLASH => {
                 anyhow::bail!("delete failed: device flash error (code {code})")
             }
-            Response::Err { code } => anyhow::bail!("delete-seed failed with code {code}"),
+            Response::Err { code } => {
+                anyhow::bail!("delete-seed failed: {} (code {code})", describe_error(code))
+            }
             other => anyhow::bail!("unexpected delete-seed response: {other:?}"),
         }
     }
@@ -212,7 +215,9 @@ fn initialize_or_add_seed(sp: &mut dyn Link, pin: &str, seed64: [u8; 64]) -> any
         Response::Err { code } if code == ERR_CRYPTO => {
             anyhow::bail!("initialize failed: device crypto/RNG error (code {code})")
         }
-        Response::Err { code } => anyhow::bail!("initialize failed with code {code}"),
+        Response::Err { code } => {
+            anyhow::bail!("initialize failed: {} (code {code})", describe_error(code))
+        }
         other => anyhow::bail!("unexpected initialize response: {other:?}"),
     }
 }
@@ -261,7 +266,9 @@ fn unlock_and_add_seed(sp: &mut dyn Link, pin: &str, seed64: [u8; 64]) -> anyhow
         Response::Err { code } if code == ERR_CRYPTO => {
             anyhow::bail!("add-seed failed: device crypto/RNG error (code {code})")
         }
-        Response::Err { code } => anyhow::bail!("add-seed failed with code {code}"),
+        Response::Err { code } => {
+            anyhow::bail!("add-seed failed: {} (code {code})", describe_error(code))
+        }
         other => anyhow::bail!("unexpected add-seed response: {other:?}"),
     }
 }
@@ -327,7 +334,10 @@ fn read_seed_labels(sp: &mut dyn Link) -> anyhow::Result<Vec<SeedSlotLabel>> {
         Response::Err { code } if code == ERR_FLASH => {
             anyhow::bail!("read seed labels failed: device flash error (code {code})")
         }
-        Response::Err { code } => anyhow::bail!("read seed labels failed with code {code}"),
+        Response::Err { code } => anyhow::bail!(
+            "read seed labels failed: {} (code {code})",
+            describe_error(code)
+        ),
         other => anyhow::bail!("unexpected seed-label response: {other:?}"),
     }
 }
@@ -366,7 +376,9 @@ fn set_seed_label(sp: &mut dyn Link, slot: u8, label: &str) -> anyhow::Result<()
         Response::Err { code } if code == ERR_FLASH => {
             anyhow::bail!("label failed: device flash error (code {code})")
         }
-        Response::Err { code } => anyhow::bail!("label failed with code {code}"),
+        Response::Err { code } => {
+            anyhow::bail!("label failed: {} (code {code})", describe_error(code))
+        }
         other => anyhow::bail!("unexpected seed-label response: {other:?}"),
     }
 }
@@ -389,18 +401,4 @@ fn label_for_slot(labels: &[SeedSlotLabel], slot: u8) -> Option<&str> {
         .iter()
         .find(|entry| entry.slot == slot)
         .map(|entry| entry.label.as_str())
-}
-
-fn format_path(path: &[u32]) -> String {
-    let mut out = String::from("m");
-    for &component in path {
-        let hardened = (component & 0x8000_0000) != 0;
-        let index = component & 0x7FFF_FFFF;
-        out.push('/');
-        let _ = write!(out, "{}", index);
-        if hardened {
-            out.push('\'');
-        }
-    }
-    out
 }

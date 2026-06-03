@@ -5,8 +5,11 @@ use hex;
 use nockapp::AtomExt;
 use nockvm::noun::{Atom, Noun};
 use noun_serde::NounDecode;
-use tx_types::transaction_types::SpendBody;
-use tx_types::transaction_types_v1::{compute_tx_id_v1, RawTransactionV1};
+use tx_types::transaction_types::{SpendBody, TimelockRange};
+use tx_types::transaction_types_v1::{
+    compute_tx_id_v1, LockMerkleProof, LockPrimitive, LockPrimitiveBody, RawTransactionV1,
+    SpendCondition,
+};
 
 fn is_printable_ascii(bytes: &[u8]) -> bool {
     bytes
@@ -87,7 +90,10 @@ pub fn print_raw_v1_details(raw: &RawTransactionV1) {
     } else {
         ui::dot(ui::Health::Warn, "id mismatch")
     };
-    ui::kv("tx id", format!("{}  {}", ui::accent(&raw.id.to_b58()), badge));
+    ui::kv(
+        "tx id",
+        format!("{}  {}", ui::accent(&raw.id.to_b58()), badge),
+    );
     if !verified {
         ui::kv("computed", ui::dim(&computed.to_b58()));
     }
@@ -96,7 +102,10 @@ pub fn print_raw_v1_details(raw: &RawTransactionV1) {
     ui::kv("spends", ui::strong(&stats.num_spends.to_string()));
     ui::kv("outputs", ui::strong(&stats.total_seeds.to_string()));
     ui::kv("fee", ui::strong(&group_u64(stats.total_fee)));
-    ui::kv("output value", ui::strong(&group_u64(stats.total_output_value)));
+    ui::kv(
+        "output value",
+        ui::strong(&group_u64(stats.total_output_value)),
+    );
     ui::kv(
         "total",
         ui::strong(&group_u64(stats.total_output_value + stats.total_fee)),
@@ -118,6 +127,18 @@ pub fn print_raw_v1_details(raw: &RawTransactionV1) {
         match &spend.body {
             SpendBody::V1(v1) => {
                 ui::kv("fee", ui::strong(&group_u64(v1.fee.value)));
+
+                // The lock leaf revealed by this spend (Taproot-style: only the
+                // executed branch is shown; sibling branches stay hidden).
+                let condition = describe_spend_condition(v1.witness.lmp.spend_condition());
+                let proof_kind = match v1.witness.lmp {
+                    LockMerkleProof::Full(_) => "full",
+                    LockMerkleProof::Stub(_) => "stub",
+                };
+                ui::kv(
+                    "lock",
+                    format!("{}  {}", ui::strong(&condition), ui::dim(proof_kind)),
+                );
 
                 let signers: Vec<String> = v1
                     .witness
@@ -154,6 +175,46 @@ pub fn print_raw_v1_details(raw: &RawTransactionV1) {
                 ui::kv("fee", ui::strong(&group_u64(fee)));
                 ui::note(&format!("body: {kind} (outputs not decoded)"));
             }
+        }
+    }
+}
+
+/// Summarize a revealed spend condition (the lock leaf used to spend an input)
+/// as a compact `a + b` of its primitives — `pkh 1-of-1`, `timelock …`, etc.
+fn describe_spend_condition(sc: &SpendCondition) -> String {
+    if sc.p.is_empty() {
+        return "(empty)".to_string();
+    }
+    sc.p.iter()
+        .map(describe_lock_primitive)
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+fn describe_lock_primitive(lp: &LockPrimitive) -> String {
+    match &lp.body {
+        LockPrimitiveBody::Pkh(pkh) => format!("pkh {}-of-{}", pkh.m, pkh.h.tap().len()),
+        LockPrimitiveBody::Tim(t) => {
+            format!(
+                "timelock rel={} abs={}",
+                fmt_timelock_range(&t.rel),
+                fmt_timelock_range(&t.abs)
+            )
+        }
+        LockPrimitiveBody::Hax(h) => format!("hashlock ({} hashes)", h.set.tap().len()),
+        LockPrimitiveBody::Brn(_) => "burn".to_string(),
+    }
+}
+
+fn fmt_timelock_range(r: &TimelockRange) -> String {
+    match (&r.min, &r.max) {
+        (None, None) => "any".to_string(),
+        (min, max) => {
+            let show = |p: &Option<_>| match p {
+                Some(v) => format!("{v:?}"),
+                None => "_".to_string(),
+            };
+            format!("{}..{}", show(min), show(max))
         }
     }
 }
@@ -267,6 +328,22 @@ pub fn parse_64(s: &str) -> anyhow::Result<[u8; 64]> {
     let mut out = [0u8; 64];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+/// Render a BIP-32 derivation path (`[u32]` with the high bit marking hardened
+/// components) as a human path like `m/44'/0'/0'/0/0`.
+pub fn format_path(path: &[u32]) -> String {
+    let mut out = String::from("m");
+    for &component in path {
+        let hardened = (component & 0x8000_0000) != 0;
+        let index = component & 0x7FFF_FFFF;
+        out.push('/');
+        out.push_str(&index.to_string());
+        if hardened {
+            out.push('\'');
+        }
+    }
+    out
 }
 
 pub fn fmt_u64x5(v: &[u64; 5]) -> String {

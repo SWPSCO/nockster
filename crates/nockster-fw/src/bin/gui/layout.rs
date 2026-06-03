@@ -9,6 +9,7 @@ use super::constants::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use super::state::{Button, ButtonHit};
 
 const KEYPAD_PADDING: i32 = 6;
+const HEADER_ICON_TOUCH_WIDTH: i32 = 56;
 pub(crate) const TX_REVIEW_PADDING: i32 = 6;
 pub(crate) const TX_REVIEW_LINE_GAP: i32 = 2;
 pub(crate) const TX_REVIEW_ITEM_GAP: i32 = 8;
@@ -213,9 +214,16 @@ pub(crate) fn row_height() -> i32 {
     SCREEN_HEIGHT as i32 / 5
 }
 
+/// Touch target for the settings gear (generous, top-right of header).
+pub(crate) fn point_in_header_settings_gear(point: Point) -> bool {
+    let h = header_height();
+    let left = SCREEN_WIDTH as i32 - HEADER_ICON_TOUCH_WIDTH;
+    point.x >= left && point.x < SCREEN_WIDTH as i32 && point.y >= 0 && point.y < h
+}
+
 pub(crate) fn lock_button_rect() -> Rectangle {
     Rectangle::new(
         Point::new(0, 0),
-        Size::new(SCREEN_WIDTH.into(), header_height() as u32),
+        Size::new(HEADER_ICON_TOUCH_WIDTH as u32, header_height() as u32),
     )
 }

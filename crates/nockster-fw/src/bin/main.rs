@@ -29,8 +29,8 @@ use esp_hal::system::{software_reset, CpuControl, Stack};
 use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
-    Gui, GuiInteraction, SeedInteraction, TxReviewSummary, TX_REVIEW_FLAG_HIGH_FEE,
-    TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    Gui, GuiInteraction, MenuItem, SeedInteraction, TxReviewSummary, WalletRow, WalletRows,
+    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 use heapless::{String as HString, Vec as HVec};
 use jobs::{
@@ -725,6 +725,11 @@ fn main() -> ! {
     let mut pending_seed_pin: Option<HString<16>> = None;
     let mut pending_pin_change: Option<PendingPinChange> = None;
     let mut pending_touch_calibration_id: Option<u32> = None;
+    // Settings-menu destination to route to after the user unlocks (Wallets /
+    // AddSeed require the master key), and whether the seed-entry flow currently
+    // in progress should add to an unlocked device instead of first-boot setup.
+    let mut pending_menu_dest: Option<MenuItem> = None;
+    let mut adding_seed_while_unlocked = false;
 
     // USB-OTG + HID (WebHID-friendly).
     let usb = Usb::new(p.USB0, p.GPIO20, p.GPIO19);
@@ -1004,14 +1009,47 @@ fn main() -> ! {
                     }
                     GuiInteraction::Seed(seed_interaction) => match seed_interaction {
                         SeedInteraction::EntryCompleted(phrase) => {
+                            // PBKDF2 below blocks for ~2s; show a splash first so
+                            // the screen doesn't look frozen.
+                            ui.show_deriving();
                             match seed_store::bip39_seed_from_words(
                                 phrase.iter().map(|word| word.as_str()),
                             ) {
                                 Ok(mut seed64) => {
-                                    pending_seed_pin = None;
-                                    pending_seed_setup.store_from(&mut seed64);
-                                    ui.clear_seed_entry_state();
-                                    ui.begin_pin_entry("Set PIN", Some(4));
+                                    if adding_seed_while_unlocked {
+                                        adding_seed_while_unlocked = false;
+                                        ui.clear_seed_entry_state();
+                                        if let Some(mut master_key) = master_key_copy() {
+                                            ui.show_unlocking_stage("Adding seed");
+                                            let request = SeedOpRequest {
+                                                msg_id: 0,
+                                                op: SeedOp::Add { seed64, master_key },
+                                            };
+                                            let outcome =
+                                                seed_store::compute_seed_op_outcome(request);
+                                            seed64.zeroize();
+                                            master_key.zeroize();
+                                            let _ = handle_seed_op_outcome(
+                                                outcome,
+                                                Some(&mut *ui),
+                                                &mut hid,
+                                            );
+                                        } else {
+                                            seed64.zeroize();
+                                            ui.show_seed_setup();
+                                        }
+                                    } else if !session::has_seed() {
+                                        pending_seed_pin = None;
+                                        pending_seed_setup.store_from(&mut seed64);
+                                        ui.clear_seed_entry_state();
+                                        ui.begin_pin_entry("Set PIN", Some(4));
+                                    } else {
+                                        // Defensive: never re-run first-boot PIN
+                                        // setup on an already-initialized device.
+                                        seed64.zeroize();
+                                        ui.clear_seed_entry_state();
+                                        ui.show_unlock_success();
+                                    }
                                 }
                                 Err(()) => {
                                     ui.show_seed_setup();
@@ -1022,6 +1060,7 @@ fn main() -> ! {
                         SeedInteraction::EntryCancelled => {
                             pending_seed_pin = None;
                             pending_seed_setup.clear();
+                            adding_seed_while_unlocked = false;
                         }
                         _ => {}
                     },
@@ -1037,6 +1076,33 @@ fn main() -> ! {
                             send_response(&mut hid, msg_id, response, &mut plain, &mut enc);
                         }
                         set_device_busy(false);
+                    }
+                    GuiInteraction::Menu(item) => match item {
+                        MenuItem::Diagnostics => {
+                            let build = dispatch::diagnostics_build_label();
+                            ui.show_touch_diagnostics(build.as_str());
+                        }
+                        MenuItem::Wallets => {
+                            if session::is_locked() {
+                                pending_menu_dest = Some(MenuItem::Wallets);
+                                ui.begin_unlock(None);
+                            } else {
+                                ui.show_wallets(&build_wallet_rows());
+                            }
+                        }
+                        MenuItem::AddSeed => {
+                            if session::is_locked() {
+                                pending_menu_dest = Some(MenuItem::AddSeed);
+                                ui.begin_unlock(None);
+                            } else {
+                                adding_seed_while_unlocked = true;
+                                ui.show_add_seed();
+                            }
+                        }
+                        MenuItem::Calibrate | MenuItem::Back => {}
+                    },
+                    GuiInteraction::ExitDiagnostics => {
+                        ui.hide_touch_diagnostics(session::is_locked());
                     }
                 }
             }
@@ -1057,10 +1123,28 @@ fn main() -> ! {
             } else {
                 handle_unlock_outcome(outcome, None, &mut hid)
             };
+            let unlock_ok = matches!(resp, Response::Ok);
             if let Some(id) = take_pending_usb_unlock_id() {
                 send_response(&mut hid, id, resp, &mut plain, &mut enc);
             }
             set_device_busy(false);
+            // Route to the settings destination the user picked before unlocking.
+            if unlock_ok {
+                if let Some(dest) = pending_menu_dest.take() {
+                    if let Some(ui_ref) = ui.as_mut() {
+                        match dest {
+                            MenuItem::Wallets => ui_ref.show_wallets(&build_wallet_rows()),
+                            MenuItem::AddSeed => {
+                                adding_seed_while_unlocked = true;
+                                ui_ref.show_add_seed();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            } else {
+                pending_menu_dest = None;
+            }
         }
         if let Some(outcome) = initpin_controller.poll() {
             let resp = if let Some(ui_ref) = ui.as_mut() {
@@ -2164,6 +2248,31 @@ fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
             (msg_id, Response::Err { code: ERR_NO_SEED })
         }
     }
+}
+
+/// Gathers the (non-secret) seed-slot summary for the read-only Wallets view.
+fn build_wallet_rows() -> WalletRows {
+    let count = session::seed_slot_count();
+    let active = session::active_slot_index().unwrap_or(0);
+    let labels = NvsStore::new().read_seed_labels().unwrap_or_default();
+    let mut rows: WalletRows = HVec::new();
+    for i in 0..count {
+        let mut label = HString::<32>::new();
+        if let Some(found) = labels.iter().find(|l| l.slot as usize == i) {
+            let _ = label.push_str(found.label.as_str());
+        }
+        if rows
+            .push(WalletRow {
+                index: i as u8,
+                active: i == active,
+                label,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+    rows
 }
 
 fn handle_seed_op_outcome<B: usb_device::bus::UsbBus>(

@@ -166,6 +166,97 @@ pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
     .draw(display);
 }
 
+/// Centre of the settings gear, in the top-right of the header.
+pub fn settings_gear_center() -> Point {
+    Point::new(SCREEN_WIDTH as i32 - 28, header_height() / 2)
+}
+
+/// Draws a small cog icon used as the settings entry point.
+/// `header_bg` must match the colour the header was filled with so the hub
+/// "hole" blends in.
+pub fn draw_settings_gear(display: &mut GuiDisplay<'_>, active: bool, header_bg: Rgb565) {
+    let color = if active {
+        COLOR_KEYPAD_ACTIVE_LIGHT
+    } else {
+        COLOR_TEXT
+    };
+    let center = settings_gear_center();
+
+    let teeth = [
+        (0, -13),
+        (0, 13),
+        (-13, 0),
+        (13, 0),
+        (-9, -9),
+        (9, -9),
+        (-9, 9),
+        (9, 9),
+    ];
+    for (dx, dy) in teeth {
+        let tooth =
+            Rectangle::with_center(Point::new(center.x + dx, center.y + dy), Size::new(5, 5));
+        let _ = tooth
+            .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
+            .draw(display);
+    }
+    let _ = Circle::with_center(center, 22)
+        .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
+        .draw(display);
+    let _ = Circle::with_center(center, 10)
+        .into_styled(PrimitiveStyleBuilder::new().fill_color(header_bg).build())
+        .draw(display);
+}
+
+fn draw_header_lock_icon(display: &mut GuiDisplay<'_>, active: bool, header_bg: Rgb565) {
+    let color = if active {
+        COLOR_KEYPAD_ACTIVE_LIGHT
+    } else {
+        COLOR_TEXT
+    };
+    let center = Point::new(28, header_height() / 2);
+    let stroke = PrimitiveStyleBuilder::new()
+        .stroke_color(color)
+        .stroke_width(4)
+        .build();
+    let fill = PrimitiveStyleBuilder::new()
+        .fill_color(color)
+        .stroke_width(0)
+        .build();
+    let cutout = PrimitiveStyleBuilder::new()
+        .fill_color(header_bg)
+        .stroke_width(0)
+        .build();
+
+    let shackle_top = center.y - 20;
+    let shackle_bottom = center.y - 4;
+    let _ = Line::new(
+        Point::new(center.x - 10, shackle_top),
+        Point::new(center.x - 10, shackle_bottom),
+    )
+    .into_styled(stroke)
+    .draw(display);
+    let _ = Line::new(
+        Point::new(center.x + 10, shackle_top),
+        Point::new(center.x + 10, shackle_bottom),
+    )
+    .into_styled(stroke)
+    .draw(display);
+    let _ = Line::new(
+        Point::new(center.x - 10, shackle_top),
+        Point::new(center.x + 10, shackle_top),
+    )
+    .into_styled(stroke)
+    .draw(display);
+
+    let body = Rectangle::new(Point::new(center.x - 15, center.y - 2), Size::new(30, 22));
+    let _ = body.into_styled(fill).draw(display);
+    let _ = Circle::with_center(Point::new(center.x, center.y + 7), 7)
+        .into_styled(cutout)
+        .draw(display);
+    let key_slot = Rectangle::new(Point::new(center.x - 2, center.y + 7), Size::new(5, 10));
+    let _ = key_slot.into_styled(cutout).draw(display);
+}
+
 pub fn draw_centered_message(display: &mut GuiDisplay<'_>, text: &str) {
     let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
     let baseline = (BOOT_LOGO_HEIGHT / 2) as i32;
@@ -878,11 +969,7 @@ pub fn render_tx_review_overlay(
 pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
     let header_h = header_height();
     let width = SCREEN_WIDTH as i32;
-    let base = if active {
-        COLOR_KEYPAD_ACTIVE
-    } else {
-        COLOR_SURFACE_HIGH
-    };
+    let base = COLOR_SURFACE_HIGH;
 
     let header_rect = Rectangle::new(Point::new(0, 0), Size::new(width as u32, header_h as u32));
     let _ = header_rect
@@ -925,15 +1012,8 @@ pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
             .draw(display);
     }
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-    let baseline = header_h / 2 + FONT_10X20.character_size.height as i32 / 3;
-    let _ = Text::with_alignment(
-        "Tap to Lock",
-        Point::new(width / 2, baseline),
-        style,
-        Alignment::Center,
-    )
-    .draw(display);
+    draw_header_lock_icon(display, active, base);
+    draw_settings_gear(display, false, base);
 }
 
 fn draw_button_skeuo(
@@ -1021,6 +1101,7 @@ fn button_label(button: Button) -> &'static str {
         Button::Clear => "X",
         Button::Ok => "OK",
         Button::Seed(_) => "",
+        Button::Menu(_) => "",
     }
 }
 
@@ -1030,6 +1111,7 @@ fn confirm_button_label(button: Button) -> &'static str {
         Button::Clear => "Deny",
         Button::Digit(_) => "",
         Button::Seed(_) => "",
+        Button::Menu(_) => "",
     }
 }
 

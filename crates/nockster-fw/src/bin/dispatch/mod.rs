@@ -327,7 +327,7 @@ pub fn firmware_build_info() -> BuildInfo {
     }
 }
 
-fn diagnostics_build_label() -> heapless::String<64> {
+pub fn diagnostics_build_label() -> heapless::String<64> {
     let info = firmware_build_info();
     let mut out = heapless::String::<64>::new();
     let _ = write!(

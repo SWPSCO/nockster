@@ -3,14 +3,16 @@ use core::fmt::Write as _;
 mod constants;
 pub mod demo;
 mod layout;
+mod menu;
 mod render;
 mod seed;
 mod state;
 mod touch;
 
+pub use menu::{WalletRow, WalletRows};
 pub use seed::SeedInteraction;
 pub use state::{
-    GuiInteraction, GuiMode, TxReviewSummary, TX_REVIEW_FLAG_HIGH_FEE,
+    GuiInteraction, GuiMode, MenuItem, TxReviewSummary, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 pub use touch::{default_touch_calibration, touch_calibration_valid, ScreenPoint};
@@ -36,8 +38,8 @@ use esp_hal::{
 use heapless::{String as HString, Vec as HVec};
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review,
-    header_height, lock_button_rect, tx_review_detail_rect, tx_review_list_rect,
-    tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_PADDING,
+    header_height, lock_button_rect, point_in_header_settings_gear, tx_review_detail_rect,
+    tx_review_list_rect, tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_PADDING,
 };
 use mipidsi::{
     error::InitError as DisplayInitError, models::ST7789, options::Orientation,
@@ -119,6 +121,9 @@ pub struct Gui<'d> {
     touch_diagnostics_last_render: Option<Instant>,
     touch_calibration_points: HVec<Coordinates, TOUCH_CALIBRATION_POINTS>,
     touch_calibration_last_raw: Option<Coordinates>,
+    /// True when the seed-entry flow was launched to add a wallet to an unlocked
+    /// device (vs first-boot setup). Drives where Cancel returns to.
+    seed_flow_is_add: bool,
 }
 
 impl<'d> Gui<'d> {
@@ -231,6 +236,7 @@ impl<'d> Gui<'d> {
             touch_diagnostics_last_render: None,
             touch_calibration_points: HVec::new(),
             touch_calibration_last_raw: None,
+            seed_flow_is_add: false,
         };
 
         blit_boot_logo(&mut gui.display);
@@ -264,7 +270,7 @@ impl<'d> Gui<'d> {
         let _ = self.touch_diagnostics_build.push_str(build);
         self.touch_diagnostics_last_render = None;
         let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Diagnostics", COLOR_SURFACE_HIGH);
+        render_header(&mut self.display, "Diag (tap top)", COLOR_SURFACE_HIGH);
         self.render_touch_diagnostics_now();
         self.refresh_auto_lock(Instant::now());
     }
@@ -300,7 +306,11 @@ impl<'d> Gui<'d> {
         }
         if matches!(
             self.mode,
-            GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview | GuiMode::Diagnostics
+            GuiMode::Unlocked
+                | GuiMode::Confirm
+                | GuiMode::TxReview
+                | GuiMode::Diagnostics
+                | GuiMode::Wallets
         ) {
             match self.auto_lock_deadline {
                 Some(deadline) => {
@@ -550,7 +560,11 @@ impl<'d> Gui<'d> {
     fn refresh_auto_lock(&mut self, now: Instant) {
         if matches!(
             self.mode,
-            GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview | GuiMode::Diagnostics
+            GuiMode::Unlocked
+                | GuiMode::Confirm
+                | GuiMode::TxReview
+                | GuiMode::Diagnostics
+                | GuiMode::Wallets
         ) {
             self.auto_lock_deadline = Some(now + AUTO_LOCK_TIMEOUT);
         }
@@ -676,8 +690,68 @@ impl<'d> Gui<'d> {
         self.disarm_active();
         self.stop_unlock_demo();
         self.seed_entry_state.reset();
+        self.seed_flow_is_add = false;
         self.mode = GuiMode::SeedFirstBoot;
-        seed::render_seed_setup(&mut self.display);
+        seed::render_seed_setup(&mut self.display, "No seeds");
+    }
+
+    /// Same generate/enter chooser as first boot, but framed as adding a wallet
+    /// to an already-unlocked device.
+    pub fn show_add_seed(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.seed_entry_state.reset();
+        self.seed_flow_is_add = true;
+        self.mode = GuiMode::SeedFirstBoot;
+        seed::render_seed_setup(&mut self.display, "Add seed");
+    }
+
+    /// Blocking-work splash shown before the ~2s BIP-39 PBKDF2 derivation so the
+    /// screen doesn't appear frozen.
+    pub fn show_deriving(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::Unlocking;
+        self.unlocking_started_at = Some(Instant::now());
+        self.current_spinner_frame = 0;
+        let _ = self.display.clear(COLOR_BACKGROUND);
+        render_header(&mut self.display, "Deriving...", COLOR_SURFACE_HIGH);
+        draw_unlock_spinner_frame(&mut self.display, 0);
+    }
+
+    pub fn show_menu(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::Menu;
+        menu::render_menu(&mut self.display);
+    }
+
+    pub fn show_wallets(&mut self, rows: &[WalletRow]) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::Wallets;
+        menu::render_wallets(&mut self.display, rows);
+    }
+
+    fn handle_menu_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        let Button::Menu(item) = button else {
+            return None;
+        };
+        match item {
+            MenuItem::Calibrate => {
+                self.begin_touch_calibration();
+                None
+            }
+            MenuItem::Back => {
+                self.show_unlock_success();
+                None
+            }
+            // These need host-side context (build string, master key, slot list),
+            // so the main loop handles them.
+            MenuItem::Wallets | MenuItem::AddSeed | MenuItem::Diagnostics => {
+                Some(GuiInteraction::Menu(item))
+            }
+        }
     }
 
     pub fn show_seed_entry(&mut self) {
@@ -696,6 +770,7 @@ impl<'d> Gui<'d> {
 
     pub fn clear_seed_entry_state(&mut self) {
         self.seed_entry_state.reset();
+        self.seed_flow_is_add = false;
     }
 
     pub fn poll_confirmation_result(&mut self) -> Option<bool> {
@@ -891,8 +966,14 @@ impl<'d> Gui<'d> {
             self.tx_review_drag_active = false;
         }
         if self.mode == GuiMode::Unlocked {
-            let rect = lock_button_rect();
             let pt = Point::new(point.x as i32, point.y as i32);
+            if self.lock_button_pressed_at.is_none() && point_in_header_settings_gear(pt) {
+                self.disarm_active();
+                self.show_menu();
+                return;
+            }
+
+            let rect = lock_button_rect();
             if rect.contains(pt) {
                 if !self.lock_button_active {
                     self.lock_button_active = true;
@@ -915,6 +996,12 @@ impl<'d> Gui<'d> {
 
         let candidate = match self.mode {
             GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
+            GuiMode::Menu => {
+                menu::button_from_point_menu(Point::new(point.x as i32, point.y as i32))
+            }
+            GuiMode::Wallets => {
+                menu::button_from_point_wallets(Point::new(point.x as i32, point.y as i32))
+            }
             GuiMode::Confirm => {
                 button_from_point_confirm(Point::new(point.x as i32, point.y as i32))
             }
@@ -1062,6 +1149,7 @@ impl<'d> Gui<'d> {
                     GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
                         self.handle_seed_button(hit.button)
                     }
+                    GuiMode::Menu | GuiMode::Wallets => self.handle_menu_button(hit.button),
                     _ => None,
                 };
             }
@@ -1095,6 +1183,18 @@ impl<'d> Gui<'d> {
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
             }
+            GuiMode::Menu => {
+                menu::draw_menu_button(&mut self.display, hit, true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
+            GuiMode::Wallets => {
+                menu::draw_wallets_back(&mut self.display, true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
             _ => {
                 draw_button(&mut self.display, self.mode, hit, true);
                 self.interaction.active_button = Some(hit);
@@ -1120,6 +1220,8 @@ impl<'d> Gui<'d> {
                         false,
                     );
                 }
+                GuiMode::Menu => menu::draw_menu_button(&mut self.display, old, false),
+                GuiMode::Wallets => menu::draw_wallets_back(&mut self.display, false),
                 _ => draw_button(&mut self.display, self.mode, old, false),
             }
         }
@@ -1171,7 +1273,7 @@ impl<'d> Gui<'d> {
                 }
                 Some(GuiInteraction::PinComplete(self.pin_entered.clone()))
             }
-            Button::Seed(_) => None,
+            Button::Seed(_) | Button::Menu(_) => None,
         }
     }
 
@@ -1186,7 +1288,7 @@ impl<'d> Gui<'d> {
                 Some(GuiInteraction::ConfirmRejected)
             }
             Button::Digit(_) => None,
-            Button::Seed(_) => None,
+            Button::Seed(_) | Button::Menu(_) => None,
         }
     }
 
@@ -1274,7 +1376,14 @@ impl<'d> Gui<'d> {
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
                     return None;
                 }
-                self.show_seed_setup();
+                if self.seed_flow_is_add {
+                    // Aborting an add returns to the unlocked home, never the
+                    // first-boot setup chooser (which would imply re-init).
+                    self.seed_flow_is_add = false;
+                    self.show_unlock_success();
+                } else {
+                    self.show_seed_setup();
+                }
                 SeedInteraction::EntryCancelled
             }
         };
@@ -1347,6 +1456,11 @@ impl<'d> Gui<'d> {
             self.interaction.last_touch_sample_at = Some(now);
             match self.read_touch_sample() {
                 Ok(Some(sample)) => {
+                    // Tapping the header row leaves the diagnostics screen — it's
+                    // the only on-device way back out (USB toggle aside).
+                    if (sample.screen.y as i32) < header_height() {
+                        return Some(GuiInteraction::ExitDiagnostics);
+                    }
                     self.touch_diagnostics.record_sample(
                         sample.raw,
                         sample.screen,

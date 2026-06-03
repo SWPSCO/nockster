@@ -146,6 +146,11 @@ pub fn wipe() {
 }
 
 #[inline]
+pub fn seed_slot_count() -> usize {
+    critical_section::with(|cs| SESSION.borrow_ref(cs).slots.len())
+}
+
+#[inline]
 pub fn seed_slots_copy() -> HVec<[u8; 64], MAX_SEED_SLOTS> {
     critical_section::with(|cs| {
         let state = SESSION.borrow_ref(cs);

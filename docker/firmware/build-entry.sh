@@ -27,11 +27,13 @@ fi
 
 export NOCKSTER_UPDATE_PUBKEY_SHA256_HEX
 
-# Chains fw (--release) -> save-image -> sign -> verify.
+# Chains fw (--release) -> save-image -> sign -> verify. The production guard
+# is bypassed here because this release-only path signs immediately afterward.
 make signed-update \
   FW_PROFILE="$FW_PROFILE" \
   NOCKSTER_RELEASE_VERSION="$RELEASE_VERSION" \
-  UPDATE_SIGNING_KEY_FILE="$KEY_FILE"
+  UPDATE_SIGNING_KEY_FILE="$KEY_FILE" \
+  ALLOW_UNSIGNED_PRODUCTION=1
 
 # OTA release index with relative asset URLs (served from my.nockster.com/updates/).
 cargo run -q -p nockster-cli --bin nockster-cli -- update index \

@@ -28,6 +28,14 @@
 # (i.e. matching a known-good local setup) — do NOT vendor/patch esp-rom-sys into the repo.
 FROM espressif/idf-rust:esp32s3_latest
 
+# The repo Makefile intentionally runs recipes under /bin/zsh; keep the
+# container entrypoint on bash, but provide zsh for make.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zsh \
+    && rm -rf /var/lib/apt/lists/*
+USER esp
+
 # espflash turns the ELF into a flashable/OTA image (make update-firmware-image).
 # The idf-rust base usually ships espflash already, so only install if missing.
 RUN command -v espflash >/dev/null 2>&1 || cargo install espflash --locked

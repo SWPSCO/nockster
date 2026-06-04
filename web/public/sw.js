@@ -5,8 +5,7 @@
 //   - hashed assets (/assets/*, content-hashed + immutable) -> cache-first.
 //   - other same-origin GETs -> stale-while-revalidate.
 //   - cross-origin (OTA index/bundle/firmware on R2, Nockblocks API, GitHub, etc.)
-//     -> bypass the SW entirely (freshness / no CORS interference). The legacy
-//     same-origin /updates/* bypass is kept as a belt-and-suspenders no-op.
+//     -> bypass the SW entirely (freshness / no CORS interference).
 // Bump CACHE to force old caches out on the next activate.
 const CACHE = 'nockster-v1';
 

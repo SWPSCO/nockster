@@ -68,7 +68,6 @@ jobs:
             exit 1
           fi
           printf '%s' "$UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/signing.key"
-          chmod 600 "$RUNNER_TEMP/signing.key"
 
       - name: Build firmware builder image
         run: docker build -t nockster-fw -f docker/firmware/Dockerfile .

@@ -17,10 +17,10 @@
 .composer-sidebar,
 .composer-inspector,
 .composer-canvas {
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius);
   background: var(--color-panel);
-  box-shadow: var(--shadow-panel);
+  box-shadow: var(--shadow-pop-sm);
 }
 
 .composer-sidebar,
@@ -38,7 +38,10 @@
 }
 
 .composer-canvas .react-flow__pane {
-  background: var(--color-panel-soft);
+  background-color: var(--color-panel-soft);
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(17, 17, 16, 0.07) 1px, transparent 0);
+  background-size: 20px 20px;
 }
 
 .composer-group,
@@ -93,7 +96,8 @@
 .composer-item:hover,
 .composer-item.selected {
   border-color: var(--color-border);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-pop-xs);
+  transform: translate(-1px, -1px);
 }
 
 .composer-item[draggable="true"]:active,
@@ -170,8 +174,8 @@
   gap: 4px;
   padding: 4px;
   margin-bottom: 8px;
-  border: 1px solid var(--color-border-soft);
-  border-radius: 3px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
   background: var(--color-panel-soft);
 }
 
@@ -257,8 +261,9 @@
 .node-card {
   min-width: 230px;
   overflow: visible;
-  border-color: var(--color-border);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.09);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop-sm);
 }
 
 .node-header {
@@ -266,18 +271,35 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--color-border);
+  padding: 9px 11px;
+  border-bottom: 2px solid var(--color-border);
   background: var(--color-panel);
+  font-family: var(--font-display);
   font-weight: 800;
+  letter-spacing: -0.01em;
 }
 
+/* type-coded headers (monochrome) */
 .node-header.address,
-.node-header.note,
-.node-header.recipient,
-.node-header.tx,
+.node-header.tx {
+  background: var(--color-text);
+  color: var(--color-panel);
+}
+
+.node-header.note {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      transparent 0,
+      transparent 5px,
+      rgba(17, 17, 16, 0.07) 5px,
+      rgba(17, 17, 16, 0.07) 6px
+    ),
+    var(--color-panel);
+}
+
 .node-header.preview {
-  background: var(--color-panel);
+  background: var(--color-panel-soft);
 }
 
 .node-header.address::after,
@@ -289,11 +311,12 @@
   justify-content: center;
   min-width: 26px;
   height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--color-border);
+  padding: 0 7px;
+  border: 1.5px solid currentColor;
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: 0.66rem;
+  font-weight: 700;
 }
 
 .node-header.address::after {
@@ -369,31 +392,44 @@
   font-size: 0.78rem;
 }
 
+/* Large, easy-to-hit connection handles: the element itself is a big transparent
+   hit target (~38px); the visible dot is drawn smaller via ::after. */
 .react-flow__handle {
-  width: 22px;
-  height: 22px;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.react-flow__handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
   border: 2px solid var(--color-border);
   border-radius: 999px;
   background: var(--color-panel);
+  transition: background 0.12s ease, transform 0.1s ease, box-shadow 0.12s ease;
 }
 
 .react-flow__handle-left {
-  left: -11px;
+  left: -19px;
 }
 
 .react-flow__handle-right {
-  right: -11px;
+  right: -19px;
 }
 
-.react-flow__handle:hover,
-.react-flow__handle.connectingfrom,
-.react-flow__handle.connectingto {
+.react-flow__handle:hover::after,
+.react-flow__handle.connectingfrom::after,
+.react-flow__handle.connectingto::after {
   background: var(--color-text);
-}
-
-.react-flow__handle.connectionindicator {
-  width: 24px;
-  height: 24px;
+  transform: translate(-50%, -50%) scale(1.25);
+  box-shadow: 0 0 0 4px rgba(17, 17, 16, 0.1);
 }
 
 .node-actions {

@@ -1,0 +1,111 @@
+name: Deploy web (GitHub Pages)
+
+# Builds the web app and publishes it to GitHub Pages at https://my.nockster.com.
+# It also bundles the latest signed firmware release under /updates so the OTA
+# index (https://my.nockster.com/updates/latest.json) and its bundle/firmware are
+# served same-origin (no CORS). Re-runs when the web changes OR a firmware release
+# is published.
+#
+# One-time setup in repo Settings:
+#   - Pages -> Build and deployment -> Source: "GitHub Actions"
+#   - Pages -> Custom domain: my.nockster.com  (the web/public/CNAME file pins it)
+#   - DNS: CNAME my.nockster.com -> <owner>.github.io
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+      - 'nockster-js/**'
+      - 'crates/nockster-wasm/**'
+      - 'crates/nockster-core/**'
+      - '.github/workflows/deploy-web.yml'
+  release:
+    types: [published]
+  # A release cut by GITHUB_TOKEN won't fire `release: published`, so also redeploy
+  # (to pull the new /updates assets) when the firmware workflow finishes.
+  workflow_run:
+    workflows: ["Firmware release"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust (wasm) + wasm-pack
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked || cargo install wasm-pack
+
+      # Build the local workspace artifacts the web app consumes via file: deps.
+      - name: Build wasm pkg
+        run: wasm-pack build crates/nockster-wasm --target web --out-dir pkg
+
+      - name: Build nockster-js
+        working-directory: nockster-js
+        run: |
+          npm install
+          npm run build
+
+      - name: Build web app
+        working-directory: web
+        env:
+          # Default OTA source; overridable in-app (localStorage / advanced panel).
+          VITE_NOCKSTER_RELEASE_INDEX_URL: https://my.nockster.com/updates/latest.json
+        run: |
+          npm install
+          npm run build
+
+      - name: Bundle latest firmware OTA assets under /updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p web/dist/updates
+          if gh release list --repo "$GITHUB_REPOSITORY" --limit 1 | grep -q .; then
+            gh release download --repo "$GITHUB_REPOSITORY" \
+              --pattern 'latest.json' \
+              --pattern 'nockster-fw.update.json' \
+              --pattern 'nockster-fw.bin' \
+              --dir web/dist/updates --clobber \
+              || echo "latest release has no OTA assets yet; deploying web without /updates"
+          else
+            echo "no releases yet; deploying web without /updates"
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

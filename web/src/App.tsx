@@ -25,7 +25,6 @@ import {
   MAX_DEVICE_ADDRESS_BOOK_ENTRIES,
   MAX_ADDRESS_BOOK_LABEL_LEN,
   MAX_ADDRESS_BOOK_PKH_LEN,
-  formatCheetahPubkey,
 } from 'nockster-js';
 import type {
   BuildInfo,
@@ -262,7 +261,17 @@ function App() {
   const [syncingBalances, setSyncingBalances] = useState(false);
   const lastAutoBalanceRefreshAtRef = useRef(0);
   const [deviceNockblocksKey, setDeviceNockblocksKey] = useState('');
+  const [nockblocksKeyDraft, setNockblocksKeyDraft] = useState('');
   const [selectedSlotState, setSelectedSlotState] = useState<number>(0);
+
+  const saveNockblocksKey = () => {
+    const trimmed = nockblocksKeyDraft.trim();
+    if (!trimmed) return;
+    localStorage.setItem(NOCKBLOCKS_API_KEY_STORAGE_KEY, trimmed);
+    setDeviceNockblocksKey(trimmed);
+    setNockblocksKeyDraft('');
+    setStatus('Saved Nockblocks API key');
+  };
   const selectedSlotRef = useRef(0);
   const setSelectedSlot = (slot: number) => {
     selectedSlotRef.current = slot;
@@ -427,10 +436,6 @@ function App() {
       return null;
     }
   }, [wasm, wasmReady]);
-
-  const formatDeviceAddress = useCallback((pub: DeviceKey): string => {
-    return deriveDevicePkh(pub) ?? formatCheetahPubkey(pub.x, pub.y);
-  }, [deriveDevicePkh]);
 
   const walletAddresses = useMemo<WalletAddress[]>(() => {
     return Array.from(new Map(deviceKeys.map((pub) => [pub.slot, pub])).values())
@@ -621,6 +626,7 @@ function App() {
     preferSlot?: number,
     infoOverride?: InfoResponse,
   ): Promise<DeviceStatusSnapshot | null> => {
+    setLoadingDevice(true);
     try {
       const lockStatus = await device.getLockStatus();
       setLocked(lockStatus.locked);
@@ -777,13 +783,14 @@ function App() {
     } catch (error: any) {
       setStatus(`Status check failed: ${error.message}`);
       return null;
+    } finally {
+      setLoadingDevice(false);
     }
   };
 
-  const [pollMs] = useState(2000);
-  const refreshingRef = useRef(false);
   const deviceBusyRef = useRef(false);
   const [deviceBusy, setDeviceBusy] = useState(false);
+  const [loadingDevice, setLoadingDevice] = useState(false);
   const canSignComposerDraft = connected && locked === false && !deviceBusy && !signing;
   const composerSignDisabledReason = !connected
     ? 'connect device to sign'
@@ -793,45 +800,10 @@ function App() {
         ? 'device is busy'
         : undefined;
 
-  useEffect(() => {
-    if (!connected) return;
-
-    let cancelled = false;
-    let timer: number | undefined;
-
-    const tick = async () => {
-      if (cancelled) return;
-      // Don't poll if device is busy with a long operation
-      if (!refreshingRef.current && !deviceBusyRef.current) {
-        try {
-          refreshingRef.current = true;
-          await refreshStatus();
-        } finally {
-          refreshingRef.current = false;
-        }
-      }
-      if (!cancelled) {
-        timer = window.setTimeout(tick, pollMs);
-      }
-    };
-
-    timer = window.setTimeout(tick, pollMs);
-    const onVis = () => {
-      if (document.hidden) {
-        if (timer) window.clearTimeout(timer);
-      } else {
-        if (timer) window.clearTimeout(timer);
-        timer = window.setTimeout(tick, pollMs);
-      }
-    };
-    document.addEventListener('visibilitychange', onVis);
-
-    return () => {
-      cancelled = true;
-      if (timer) window.clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, [connected, pollMs, refreshStatus]);
+  // No continuous polling. The device re-derives every pubkey on each getInfo, so a
+  // background poll meant constant re-reads (slow over USB) and could race in-flight
+  // writes (briefly rendering un-derivable keys). State is refreshed on demand instead:
+  // after connect / unlock / lock / seed add+remove / reset, and via the refresh button.
 
   const unlock = async () => {
     if (!pin) {
@@ -1844,6 +1816,12 @@ function App() {
               <h2>Device console</h2>
             </div>
             <div className="device-metrics" aria-label="Device summary">
+              {loadingDevice && (
+                <span className="device-pill device-pill-loading" aria-live="polite">
+                  <span className="spinner" aria-hidden="true" />
+                  syncing
+                </span>
+              )}
               <span className={`device-pill ${locked === false && workStateLabel !== 'busy' ? 'device-pill-good' : topStatusLabel !== 'offline' ? 'device-pill-warn' : ''}`}>
                 {topStatusLabel}
               </span>
@@ -1912,16 +1890,67 @@ function App() {
                 </div>
               </div>
               {deviceKeys.length === 0 ? (
-                <div className="device-empty-state">Unlock to view wallet slots.</div>
+                <div className="device-empty-state">
+                  {locked === false && loadingDevice ? (
+                    <span className="device-loading-line">
+                      <span className="spinner" aria-hidden="true" />
+                      Loading wallet…
+                    </span>
+                  ) : (
+                    'Unlock to view wallet slots.'
+                  )}
+                </div>
               ) : walletPanelView === 'slots' ? (
                 <>
+                  {!deviceNockblocksKey.trim() && (
+                    <div className="nb-key-callout">
+                      <div className="nb-key-callout-text">
+                        <strong>Connect Nockblocks to see balances</strong>
+                        <span>
+                          A Nockblocks API key is required to load wallet balances and notes.
+                          Paste yours below, or grab one at nockblocks.com.
+                        </span>
+                      </div>
+                      <div className="nb-key-callout-form">
+                        <input
+                          type="password"
+                          className="input"
+                          value={nockblocksKeyDraft}
+                          onChange={(e) => setNockblocksKeyDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveNockblocksKey();
+                          }}
+                          placeholder="nockblocks api key"
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-small btn-primary"
+                          onClick={saveNockblocksKey}
+                          disabled={!nockblocksKeyDraft.trim()}
+                        >
+                          save key
+                        </button>
+                        <a
+                          className="nb-key-link"
+                          href="https://nockblocks.com"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          get a key ↗
+                        </a>
+                      </div>
+                    </div>
+                  )}
                   <div className="wallet-slot-grid">
                     {slotSummary.map((pub) => {
                       const storedLabel = seedLabelMap.get(pub.slot) ?? '';
                       const draftLabel = labelDrafts[pub.slot] ?? storedLabel;
                       const wallet = walletBySlot.get(pub.slot);
                       const walletAddress = wallet?.address ?? deriveDevicePkh(pub);
-                      const displayAddress = walletAddress ?? formatDeviceAddress(pub);
+                      const addressReady = !!walletAddress;
+                      const displayAddress = walletAddress ?? 'deriving address…';
                       const balance = slotBalances[pub.slot];
                       const balanceText = !deviceNockblocksKey.trim()
                         ? ''
@@ -1951,6 +1980,7 @@ function App() {
                               {selectedSlot === pub.slot ? 'active' : 'select'}
                             </button>
                           </div>
+                          {selectedSlot === pub.slot && (
                           <div className="wallet-slot-label-row">
                             <input
                               className="input wallet-label-input"
@@ -1982,8 +2012,9 @@ function App() {
                               {savingLabelSlot === pub.slot ? 'saving...' : 'save'}
                             </button>
                           </div>
+                          )}
                           <div className="wallet-slot-address">
-                            <span className="pubkey-text">{displayAddress}</span>
+                            <span className={`pubkey-text ${addressReady ? '' : 'pubkey-pending'}`}>{displayAddress}</span>
                             <button
                               type="button"
                               onClick={() => {
@@ -1991,6 +2022,7 @@ function App() {
                                 setStatus(`Copied slot ${pub.slot} address to clipboard`);
                               }}
                               className="btn btn-small copy-btn"
+                              disabled={!addressReady}
                             >
                               copy
                             </button>
@@ -2001,6 +2033,7 @@ function App() {
                               {balance?.status === 'error' && balance.error ? `: ${balance.error}` : ''}
                             </div>
                           )}
+                          {selectedSlot === pub.slot && (
                           <div className="wallet-slot-actions">
                             <button
                               type="button"
@@ -2036,6 +2069,7 @@ function App() {
                               {deletingSlot === pub.slot ? 'removing...' : 'remove'}
                             </button>
                           </div>
+                          )}
                         </div>
                       );
                     })}
@@ -2204,6 +2238,7 @@ function App() {
             </div>
           )}
 
+          <div className="device-controls-row">
           <div className="section device-panel device-overview-panel">
             <h2>Status</h2>
             <div className="status-grid">
@@ -2370,6 +2405,7 @@ function App() {
               </div>
             )}
           </div>
+          </div>{/* device-controls-row */}
 
           <div className="section device-panel device-update-panel">
             <div className="seed-header">
@@ -2715,7 +2751,22 @@ function App() {
             </div>
           </div>
           <div className="section connect-panel device-panel device-connect-panel">
-            <div className="connect-main">
+            <div className="connect-hero-art" aria-hidden="true">
+              <span className="connect-spark connect-spark-a">✦</span>
+              <span className="connect-spark connect-spark-b">✦</span>
+              <span className="connect-spark connect-spark-c">✦</span>
+              <div className="connect-coin">
+                <span className="connect-coin-face">N</span>
+                <span className="connect-status-dot">offline</span>
+              </div>
+            </div>
+            <div className="connect-hero-body connect-main">
+              <span className="connect-eyebrow">Hardware wallet</span>
+              <h2 className="connect-hero-title">Plug in your Nockster.</h2>
+              <p className="connect-hero-text">
+                Connect over USB and authorize the serial link to manage seeds, check
+                balances, and sign transactions. Your keys never leave the device.
+              </p>
               {isTauri && availablePorts.length === 0 && (
                 <div className="connect-actions">
                   <button onClick={showPortSelector} className="btn btn-secondary">
@@ -2730,10 +2781,17 @@ function App() {
                   ))}
                 </select>
               )}
-              <div className="connect-actions">
+              <div className="connect-cta-row">
+                <button
+                  onClick={connect}
+                  className="btn btn-primary"
+                  disabled={!isSupported || deviceBusy || updatingFirmware || fetchingRelease || (isTauri && !selectedPort)}
+                >
+                  {deviceBusy ? 'connecting...' : 'connect device'}
+                </button>
                 <button
                   onClick={installLatestUpdate}
-                  className="btn btn-primary"
+                  className="btn btn-secondary"
                   disabled={
                     !isSupported ||
                     updatingFirmware ||
@@ -2744,14 +2802,12 @@ function App() {
                 >
                   {updatingFirmware || fetchingRelease ? 'updating...' : 'update firmware'}
                 </button>
-                <button
-                  onClick={connect}
-                  className="btn btn-secondary"
-                  disabled={!isSupported || deviceBusy || updatingFirmware || fetchingRelease || (isTauri && !selectedPort)}
-                >
-                  connect
-                </button>
               </div>
+              <span className={`connect-hint ${isSupported ? 'ready' : ''}`}>
+                {isSupported
+                  ? 'Web Serial ready · Chrome, Edge, or Opera'
+                  : 'Requires Chrome, Edge, or Opera (Web Serial).'}
+              </span>
             </div>
           </div>
         </div>

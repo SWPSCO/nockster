@@ -1,0 +1,112 @@
+name: Firmware release
+
+# Builds + signs a Nockster firmware release INSIDE a container (docker/firmware/
+# Dockerfile) for portability/reproducibility, then publishes a GitHub Release with:
+#   - nockster-fw.bin            (raw OTA image, built --release)
+#   - nockster-fw.update.json    (signed update bundle/manifest)
+#   - latest.json                (OTA release index; relative asset URLs)
+#
+# The deploy-web workflow (on `release: published`) pulls these into the Pages site
+# under /updates, so https://my.nockster.com/updates/latest.json serves them.
+#
+# Trigger: push a tag `fw-v<N>` (N = integer release version baked into the image,
+# e.g. `fw-v7`), or run manually.
+#
+# Required repo secret:
+#   UPDATE_SIGNING_KEY  — firmware update signing key (hex or raw, per nockster-cli).
+#                         Its public-key SHA-256 becomes the on-device trust anchor.
+
+on:
+  push:
+    tags: ['fw-v*']
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'Integer firmware release version (u32)'
+        required: true
+      build_profile:
+        description: 'Build profile'
+        type: choice
+        default: production
+        options: [production, chip-security, dev]
+
+permissions:
+  contents: write
+
+jobs:
+  build-sign-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version + profile
+        id: meta
+        run: |
+          if [ -n "${{ github.event.inputs.release_version }}" ]; then
+            VER="${{ github.event.inputs.release_version }}"
+            PROFILE="${{ github.event.inputs.build_profile }}"
+            TAG="fw-v${VER}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VER="${TAG#fw-v}"
+            PROFILE="production"
+          fi
+          if ! [[ "$VER" =~ ^[0-9]+$ ]]; then
+            echo "::error::release version must be an integer (got '$VER' from tag '$TAG')"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Write signing key (host, outside repo)
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::missing repo secret UPDATE_SIGNING_KEY"
+            exit 1
+          fi
+          printf '%s' "$UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/signing.key"
+          chmod 600 "$RUNNER_TEMP/signing.key"
+
+      - name: Build firmware builder image
+        run: docker build -t nockster-fw -f docker/firmware/Dockerfile .
+
+      - name: Derive on-device trust anchor (in container)
+        id: trust
+        run: |
+          OUT=$(docker run --rm \
+            -v "$RUNNER_TEMP/signing.key:/keys/signing.key:ro" \
+            --entrypoint bash nockster-fw -lc \
+            'source "$HOME/export-esp.sh"; cargo run -q -p nockster-cli --bin nockster-cli -- update pubkey --signing-key-file /keys/signing.key')
+          echo "$OUT"
+          SHA=$(printf '%s' "$OUT" | grep -oiE '[0-9a-f]{64}' | head -1)
+          if [ -z "$SHA" ]; then
+            echo "::error::could not derive pubkey SHA-256 from signing key"
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build + sign firmware (in container, --release)
+        run: |
+          mkdir -p out && chmod 777 out
+          docker run --rm \
+            -e RELEASE_VERSION="${{ steps.meta.outputs.version }}" \
+            -e FW_PROFILE="${{ steps.meta.outputs.profile }}" \
+            -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="${{ steps.trust.outputs.sha }}" \
+            -v "$RUNNER_TEMP/signing.key:/keys/signing.key:ro" \
+            -v "$PWD/out:/out" \
+            nockster-fw
+
+      - name: Publish GitHub Release (host)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            out/nockster-fw.bin \
+            out/nockster-fw.update.json \
+            out/latest.json \
+            --title "Firmware ${{ steps.meta.outputs.tag }}" \
+            --notes "Signed Nockster firmware — release version ${{ steps.meta.outputs.version }}, profile ${{ steps.meta.outputs.profile }}, trust anchor ${{ steps.trust.outputs.sha }}." \
+            --generate-notes

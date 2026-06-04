@@ -1,10 +1,16 @@
 name: Deploy web (GitHub Pages)
 
 # Builds the web app and publishes it to GitHub Pages at https://my.nockster.com.
-# It also bundles the latest signed firmware release under /updates so the OTA
-# index (https://my.nockster.com/updates/latest.json) and its bundle/firmware are
-# served same-origin (no CORS). Re-runs when the web changes OR a firmware release
-# is published.
+#
+# The OTA release index + firmware assets are NOT bundled here — they live on
+# Cloudflare R2 (published by the firmware-release workflow) and the app fetches
+# them at runtime from https://bin.aeroe.io/nockster/updates/latest.json. That
+# keeps web deploys (this workflow) from ever overwriting the release channel, so
+# this only needs to run when the web sources change.
+#
+# NOTE: because the index/firmware are now fetched cross-origin, the R2 public
+# domain (bin.aeroe.io) must send CORS headers allowing https://my.nockster.com
+# (GET + the relevant headers). Configure a CORS rule on the swpsco bucket once.
 #
 # One-time setup in repo Settings:
 #   - Pages -> Build and deployment -> Source: "GitHub Actions"
@@ -20,13 +26,6 @@ on:
       - 'crates/nockster-wasm/**'
       - 'crates/nockster-core/**'
       - '.github/workflows/deploy-web.yml'
-  release:
-    types: [published]
-  # A release cut by GITHUB_TOKEN won't fire `release: published`, so also redeploy
-  # (to pull the new /updates assets) when the firmware workflow finishes.
-  workflow_run:
-    workflows: ["Firmware release"]
-    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -90,27 +89,12 @@ jobs:
       - name: Build web app
         working-directory: web
         env:
-          # Default OTA source; overridable in-app (localStorage / advanced panel).
-          VITE_NOCKSTER_RELEASE_INDEX_URL: https://my.nockster.com/updates/latest.json
+          # OTA index lives on R2 (published by the firmware-release workflow).
+          # Overridable in-app (localStorage / advanced panel).
+          VITE_NOCKSTER_RELEASE_INDEX_URL: https://bin.aeroe.io/nockster/updates/latest.json
         run: |
           npm install
           npm run build
-
-      - name: Bundle latest firmware OTA assets under /updates
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p web/dist/updates
-          if gh release list --repo "$GITHUB_REPOSITORY" --limit 1 | grep -q .; then
-            gh release download --repo "$GITHUB_REPOSITORY" \
-              --pattern 'latest.json' \
-              --pattern 'nockster-fw.update.json' \
-              --pattern 'nockster-fw.bin' \
-              --dir web/dist/updates --clobber \
-              || echo "latest release has no OTA assets yet; deploying web without /updates"
-          else
-            echo "no releases yet; deploying web without /updates"
-          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

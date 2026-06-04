@@ -6,15 +6,19 @@ name: Firmware release
 #   - nockster-fw.update.json    (signed update bundle/manifest)
 #   - latest.json                (OTA release index; relative asset URLs)
 #
-# The deploy-web workflow (on `release: published`) pulls these into the Pages site
-# under /updates, so https://my.nockster.com/updates/latest.json serves them.
+# These are ALSO published to Cloudflare R2 (r2:swpsco/nockster/updates/) and served
+# at https://bin.aeroe.io/nockster/updates/latest.json. The web app fetches the index
+# from there at runtime, so the OTA channel is decoupled from the GitHub Pages deploy
+# (web commits to master no longer overwrite the release index).
 #
 # Trigger: push a tag `fw-v<N>` (N = integer release version baked into the image,
 # e.g. `fw-v7`), or run manually.
 #
-# Required repo secret:
+# Required repo secrets:
 #   UPDATE_SIGNING_KEY  — firmware update signing key (hex or raw, per nockster-cli).
 #                         Must match the fixed on-device trust anchor below.
+#   RCLONE_B64          — base64-encoded rclone.conf with an `r2:` remote for the
+#                         swpsco bucket (same secret used by other SWPSCO repos).
 
 env:
   NOCKSTER_UPDATE_PUBKEY_SHA256_HEX: 5aa46209222080a2ce107e25d427c3d9ada6cb77be25d7d2a3df8959b7fa2602
@@ -100,3 +104,20 @@ jobs:
             --title "Firmware ${{ steps.meta.outputs.tag }}" \
             --notes "Signed Nockster firmware — release version ${{ steps.meta.outputs.version }}, profile ${{ steps.meta.outputs.profile }}, trust anchor ${NOCKSTER_UPDATE_PUBKEY_SHA256_HEX}." \
             --generate-notes
+
+      - name: Publish OTA assets to R2
+        env:
+          RCLONE_B64: ${{ secrets.RCLONE_B64 }}
+        run: |
+          if [ -z "$RCLONE_B64" ]; then
+            echo "::error::missing repo secret RCLONE_B64"
+            exit 1
+          fi
+          curl https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_B64" | base64 -d > ~/.config/rclone/rclone.conf
+          # Upload the assets first, then the index last, so the index never
+          # references an object that hasn't landed yet.
+          rclone copy out/nockster-fw.bin         r2:swpsco/nockster/updates/ --progress
+          rclone copy out/nockster-fw.update.json r2:swpsco/nockster/updates/ --progress
+          rclone copy out/latest.json             r2:swpsco/nockster/updates/ --progress

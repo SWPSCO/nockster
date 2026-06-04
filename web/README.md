@@ -35,12 +35,16 @@ npm install
 npm run dev
 ```
 
-The default release index path is `/updates/latest.json`. To point a dev or
+The default release index is `https://bin.aeroe.io/nockster/updates/latest.json`
+(published to Cloudflare R2 by the firmware-release workflow). To point a dev or
 hosted build at a different index:
 
 ```bash
 VITE_NOCKSTER_RELEASE_INDEX_URL=https://example.com/updates/latest.json npm run build
 ```
+
+Because the index and firmware are fetched cross-origin, the R2 public domain
+must serve CORS headers allowing the web app's origin (GET).
 
 The composer stores the Nockblocks API key in browser local storage from the
 Nockblocks panel.

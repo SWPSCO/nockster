@@ -14,7 +14,10 @@ name: Firmware release
 #
 # Required repo secret:
 #   UPDATE_SIGNING_KEY  — firmware update signing key (hex or raw, per nockster-cli).
-#                         Its public-key SHA-256 becomes the on-device trust anchor.
+#                         Must match the fixed on-device trust anchor below.
+
+env:
+  NOCKSTER_UPDATE_PUBKEY_SHA256_HEX: 5aa46209222080a2ce107e25d427c3d9ada6cb77be25d7d2a3df8959b7fa2602
 
 on:
   push:
@@ -72,30 +75,6 @@ jobs:
       - name: Build firmware builder image
         run: docker build -t nockster-fw -f docker/firmware/Dockerfile .
 
-      - name: Derive on-device trust anchor (in container)
-        id: trust
-        env:
-          GIT_AUTH_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
-        run: |
-          OUT=$(docker run --rm \
-            -e GIT_AUTH_TOKEN \
-            -v "$RUNNER_TEMP/signing.key:/keys/signing.key:ro" \
-            --entrypoint bash nockster-fw -lc '
-              set -e
-              if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
-                git config --global url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
-              fi
-              export CARGO_NET_GIT_FETCH_WITH_CLI=true
-              source "$HOME/export-esp.sh"
-              cargo run -q -p nockster-cli --bin nockster-cli -- update pubkey --signing-key-file /keys/signing.key')
-          echo "$OUT"
-          SHA=$(printf '%s' "$OUT" | grep -oiE '[0-9a-f]{64}' | head -1)
-          if [ -z "$SHA" ]; then
-            echo "::error::could not derive pubkey SHA-256 from signing key"
-            exit 1
-          fi
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
       - name: Build + sign firmware (in container, --release)
         env:
           GIT_AUTH_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
@@ -105,7 +84,7 @@ jobs:
             -e GIT_AUTH_TOKEN \
             -e RELEASE_VERSION="${{ steps.meta.outputs.version }}" \
             -e FW_PROFILE="${{ steps.meta.outputs.profile }}" \
-            -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="${{ steps.trust.outputs.sha }}" \
+            -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX \
             -v "$RUNNER_TEMP/signing.key:/keys/signing.key:ro" \
             -v "$PWD/out:/out" \
             nockster-fw
@@ -119,5 +98,5 @@ jobs:
             out/nockster-fw.update.json \
             out/latest.json \
             --title "Firmware ${{ steps.meta.outputs.tag }}" \
-            --notes "Signed Nockster firmware — release version ${{ steps.meta.outputs.version }}, profile ${{ steps.meta.outputs.profile }}, trust anchor ${{ steps.trust.outputs.sha }}." \
+            --notes "Signed Nockster firmware — release version ${{ steps.meta.outputs.version }}, profile ${{ steps.meta.outputs.profile }}, trust anchor ${NOCKSTER_UPDATE_PUBKEY_SHA256_HEX}." \
             --generate-notes

@@ -4,6 +4,15 @@
 # (outside the repo root, as nockster-cli requires).
 set -euo pipefail
 
+# Authenticate cargo to private SWPSCO git deps (tx-types, nockchain, ...).
+# GIT_AUTH_TOKEN is a scoped token with read access, injected at `docker run`.
+if [[ -n "${GIT_AUTH_TOKEN:-}" ]]; then
+  git config --global \
+    url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf \
+    "https://github.com/"
+fi
+export CARGO_NET_GIT_FETCH_WITH_CLI=true
+
 source "$HOME/export-esp.sh"
 
 : "${RELEASE_VERSION:?set RELEASE_VERSION (integer u32)}"

@@ -66,6 +66,17 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked || cargo install wasm-pack
 
+      # The wasm crate pulls private SWPSCO git deps (tx-types, ...). Authenticate
+      # cargo's git fetch with a scoped token (falls back to the default token).
+      - name: Authenticate cargo to private git deps
+        env:
+          GH_DEPS_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
       # Build the local workspace artifacts the web app consumes via file: deps.
       - name: Build wasm pkg
         run: wasm-pack build crates/nockster-wasm --target web --out-dir pkg

@@ -75,11 +75,20 @@ jobs:
 
       - name: Derive on-device trust anchor (in container)
         id: trust
+        env:
+          GIT_AUTH_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
         run: |
           OUT=$(docker run --rm \
+            -e GIT_AUTH_TOKEN \
             -v "$RUNNER_TEMP/signing.key:/keys/signing.key:ro" \
-            --entrypoint bash nockster-fw -lc \
-            'source "$HOME/export-esp.sh"; cargo run -q -p nockster-cli --bin nockster-cli -- update pubkey --signing-key-file /keys/signing.key')
+            --entrypoint bash nockster-fw -lc '
+              set -e
+              if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
+                git config --global url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
+              fi
+              export CARGO_NET_GIT_FETCH_WITH_CLI=true
+              source "$HOME/export-esp.sh"
+              cargo run -q -p nockster-cli --bin nockster-cli -- update pubkey --signing-key-file /keys/signing.key')
           echo "$OUT"
           SHA=$(printf '%s' "$OUT" | grep -oiE '[0-9a-f]{64}' | head -1)
           if [ -z "$SHA" ]; then
@@ -89,9 +98,12 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Build + sign firmware (in container, --release)
+        env:
+          GIT_AUTH_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
         run: |
           mkdir -p out && chmod 777 out
           docker run --rm \
+            -e GIT_AUTH_TOKEN \
             -e RELEASE_VERSION="${{ steps.meta.outputs.version }}" \
             -e FW_PROFILE="${{ steps.meta.outputs.profile }}" \
             -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="${{ steps.trust.outputs.sha }}" \

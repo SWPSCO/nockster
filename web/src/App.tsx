@@ -93,7 +93,7 @@ type DeviceStatusSnapshot = {
   buildInfo: BuildInfo | null;
   updateBootStatus: UpdateBootStatus | null;
 };
-const DEFAULT_RELEASE_INDEX_PATH = '/updates/latest.json';
+const DEFAULT_RELEASE_INDEX_PATH = 'https://bin.aeroe.io/nockster/updates/latest.json';
 const RELEASE_INDEX_STORAGE_KEY = 'nockster.update.releaseIndexUrl.v1';
 const MAX_SEED_LABEL_LEN = 32;
 const AUTO_BALANCE_REFRESH_MS = 60_000;

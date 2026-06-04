@@ -35,7 +35,8 @@ make signed-update \
   UPDATE_SIGNING_KEY_FILE="$KEY_FILE" \
   ALLOW_UNSIGNED_PRODUCTION=1
 
-# OTA release index with relative asset URLs (served from my.nockster.com/updates/).
+# OTA release index with relative asset URLs (published to R2 at
+# bin.aeroe.io/nockster/updates/ by the firmware-release workflow).
 cargo run -q -p nockster-cli --bin nockster-cli -- update index \
   --bundle target/update/nockster-fw.update.json \
   --firmware target/update/nockster-fw.bin \

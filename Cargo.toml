@@ -102,10 +102,4 @@ ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "fede30fa63ad555d
 murmur3 = { git = "https://github.com/SWPSCO/tx-types.git", rev = "fede30fa63ad555d1125cf2131dadc2e8e62e983" }
 nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "fede30fa63ad555d1125cf2131dadc2e8e62e983" }
 
-# Patched copy of esp-rom-sys 0.1.3 — upstream calls `to_ascii_lowercase()` on an i8
-# c_char, which the esp toolchain's rustc rejects, breaking all firmware builds.
-# See third_party/esp-rom-sys/PATCH-NOTES.md.
-[patch.crates-io]
-esp-rom-sys = { path = "third_party/esp-rom-sys" }
-
 [workspace.lints.rust]

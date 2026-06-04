@@ -23,6 +23,9 @@
 #        update pubkey --signing-key-file /keys/signing.key'
 #
 # Pin the base tag (e.g. esp32s3_1.88.0.0) once a build is green for reproducibility.
+# Note: if a build ever fails on esp-rom-sys's `to_ascii_lowercase()` (a c_char/i8 vs u8
+# strictness quirk in some rustc builds), pin this tag to an esp toolchain that compiles it
+# (i.e. matching a known-good local setup) — do NOT vendor/patch esp-rom-sys into the repo.
 FROM espressif/idf-rust:esp32s3_latest
 
 # espflash turns the ELF into a flashable/OTA image (make update-firmware-image).

@@ -137,6 +137,24 @@ function shortHash(h: string, keep = 4): string {
   return `${s.slice(0, keep)}...${s.slice(-keep)}`;
 }
 
+// Label a wallet slot as "<nickname or abcd...wxyz> · slot N".
+// Falls back to a truncated address when the alias is just the default "wallet slot N".
+function walletSlotLabel(wallet: WalletAddress): string {
+  const nick = wallet.alias?.trim();
+  const isDefault = !nick || /^wallet slot \d+$/i.test(nick);
+  const base = isDefault ? shortHash(wallet.address, 4) : nick;
+  return `${base} · slot ${wallet.slot}`;
+}
+
+// Display label for any address-book entry. Rewrites a stale default "wallet slot N"
+// alias into "<abcd...wxyz> · slot N" so persisted entries read well without re-import.
+function entryDisplayLabel(entry: { alias?: string; address: string }): string {
+  const alias = (entry.alias ?? '').trim();
+  const slotMatch = alias.match(/^wallet slot (\d+)$/i);
+  if (slotMatch) return `${shortHash(entry.address, 4)} · slot ${slotMatch[1]}`;
+  return alias || shortHash(entry.address, 4);
+}
+
 function parsePkhListText(text: string): string[] {
   return (text ?? '')
     .split(/[\s,]+/g)
@@ -1395,6 +1413,11 @@ export function Composer({
     () => addressBook.filter((entry) => (entry.kind ?? 'pkh') === 'pkh'),
     [addressBook]
   );
+  // Saved address-book recipients, minus any that are already shown as live wallet slots.
+  const savedRecipients = useMemo(
+    () => addressBook.filter((entry) => !walletAddresses.some((w) => w.address.trim() === entry.address)),
+    [addressBook, walletAddresses]
+  );
   const quickSourceId =
     selectedEntry && (selectedEntry.kind ?? 'pkh') === 'pkh' ? selectedEntryId : pkhEntries[0]?.id ?? '';
   const quickSourceEntry = quickSourceId ? entryById(quickSourceId) : null;
@@ -1691,7 +1714,7 @@ export function Composer({
       let firstAddedId = '';
 
       for (const wallet of walletPkhs) {
-        const alias = wallet.alias?.trim() || `wallet slot ${wallet.slot}`;
+        const alias = walletSlotLabel(wallet);
         const existingIndex = next.findIndex((entry) => entry.address === wallet.address);
         if (existingIndex >= 0) {
           const existing = next[existingIndex];
@@ -2057,7 +2080,7 @@ export function Composer({
                     ) : (
                       pkhEntries.map((entry) => (
                         <option key={entry.id} value={entry.id}>
-                          {entry.alias} · {(entry.notes ?? []).length} notes
+                          {entryDisplayLabel(entry)} · {(entry.notes ?? []).length} notes
                         </option>
                       ))
                     )}
@@ -2065,11 +2088,50 @@ export function Composer({
                 </label>
                 <label className="composer-field">
                   <span>Recipient</span>
+                  {(walletAddresses.length > 0 || savedRecipients.length > 0 || deviceAddressBook.length > 0) && (
+                    <select
+                      className="node-input"
+                      value=""
+                      onChange={(event) => {
+                        const next = event.target.value;
+                        if (next) setQuickRecipient(next);
+                      }}
+                    >
+                      <option value="">pick a slot or saved address…</option>
+                      {walletAddresses.length > 0 && (
+                        <optgroup label="wallet slots">
+                          {walletAddresses.map((wallet) => (
+                            <option key={`slot-${wallet.slot}-${wallet.address}`} value={wallet.address}>
+                              {walletSlotLabel(wallet)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {savedRecipients.length > 0 && (
+                        <optgroup label="saved addresses">
+                          {savedRecipients.map((entry) => (
+                            <option key={`saved-${entry.id}`} value={entry.address}>
+                              {entryDisplayLabel(entry)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {deviceAddressBook.length > 0 && (
+                        <optgroup label="device address book">
+                          {deviceAddressBook.map((entry, index) => (
+                            <option key={`abk-${index}-${entry.pkh}`} value={entry.pkh}>
+                              {entry.label} · {shortHash(entry.pkh, 4)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  )}
                   <input
                     className="node-input"
                     value={quickRecipient}
                     onChange={(event) => setQuickRecipient(event.target.value)}
-                    placeholder="recipient pkh"
+                    placeholder="recipient pkh — pick above or paste"
                     spellCheck={false}
                   />
                 </label>

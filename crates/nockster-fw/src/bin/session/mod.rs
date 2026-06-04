@@ -10,6 +10,9 @@ struct State {
     master_key_set: bool,
     slots: HVec<[u8; 64], MAX_SEED_SLOTS>,
     active: usize,
+    // Bumped on every change to the seed set. Lets derived data (e.g. root pubkeys)
+    // be cached and invalidated without re-deriving on every read.
+    seed_gen: u64,
 }
 
 impl State {
@@ -20,7 +23,13 @@ impl State {
             master_key_set: false,
             slots: HVec::new(),
             active: 0,
+            seed_gen: 0,
         }
+    }
+
+    #[inline]
+    fn bump_seed_gen(&mut self) {
+        self.seed_gen = self.seed_gen.wrapping_add(1);
     }
 
     fn zeroize_seed_slots(&mut self) {
@@ -49,6 +58,13 @@ pub fn set_locked(locked: bool) {
 #[inline]
 pub fn has_seed() -> bool {
     critical_section::with(|cs| !SESSION.borrow_ref(cs).slots.is_empty())
+}
+
+/// Monotonic counter bumped on every change to the seed set. Consumers can cache
+/// derived data (root pubkeys, etc.) keyed by this value and recompute only when it moves.
+#[inline]
+pub fn seed_generation() -> u64 {
+    critical_section::with(|cs| SESSION.borrow_ref(cs).seed_gen)
 }
 
 #[inline]
@@ -92,6 +108,7 @@ pub fn update_seed_store_from_slice(seeds: &[[u8; 64]]) {
         }
         state.active = 0;
         state.locked = state.slots.is_empty();
+        state.bump_seed_gen();
     });
 }
 
@@ -101,6 +118,7 @@ pub fn append_seed_slot(seed64: &[u8; 64]) {
         let mut state = SESSION.borrow_ref_mut(cs);
         if state.slots.len() < MAX_SEED_SLOTS {
             let _ = state.slots.push(*seed64);
+            state.bump_seed_gen();
         }
     });
 }
@@ -130,6 +148,7 @@ pub fn remove_seed_slot(index: usize) {
             state.master_key.zeroize();
             state.master_key_set = false;
         }
+        state.bump_seed_gen();
     });
 }
 
@@ -142,6 +161,7 @@ pub fn wipe() {
         state.locked = true;
         state.master_key.zeroize();
         state.master_key_set = false;
+        state.bump_seed_gen();
     });
 }
 

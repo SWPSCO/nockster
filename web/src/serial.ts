@@ -129,10 +129,14 @@ class TauriSerialTransport implements SerialTransport {
           const data = await invoke<number[]>('serial_read');
           if (data.length > 0) {
             onData(new Uint8Array(data));
+            // Bytes are flowing — keep draining immediately instead of waiting.
+            continue;
           }
-          await new Promise(resolve => setTimeout(resolve, 10));
+          // Idle: brief backoff so we don't spin the IPC bridge.
+          await new Promise(resolve => setTimeout(resolve, 2));
         } catch (err) {
           console.error('Read error:', err);
+          await new Promise(resolve => setTimeout(resolve, 10));
         }
       }
     };

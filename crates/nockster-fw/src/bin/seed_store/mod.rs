@@ -14,7 +14,18 @@ use zeroize::Zeroize;
 
 use crate::jobs::{SeedOp, SeedOpOutcome, SeedOpRequest};
 use crate::session;
+use core::cell::RefCell;
+use critical_section::Mutex;
 use nockster_fw::nvs_store::{NvsError, NvsStore};
+
+// Cache of the per-slot root pubkeys returned by GetInfo, keyed by the session's
+// seed generation. Deriving these (HMAC-SHA512 + a Cheetah scalar multiply per slot)
+// is expensive on-device, and the host used to read them repeatedly. We now derive
+// once per seed-set change and serve the cache otherwise. Pubkeys are public, so the
+// cache holds no secret material.
+#[allow(clippy::declare_interior_mutable_const)]
+static INFO_PUBS_CACHE: Mutex<RefCell<Option<(u64, Vec<CheetahPub>)>>> =
+    Mutex::new(RefCell::new(None));
 
 const BIP39_WORD_COUNT: usize = 24;
 const BIP39_MAX_SENTENCE_LEN: usize = 320;
@@ -332,6 +343,19 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
 }
 
 pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
+    let generation = session::seed_generation();
+
+    // Fast path: serve the cached pubkeys while the seed set is unchanged.
+    if let Some(cached) = critical_section::with(|cs| {
+        match INFO_PUBS_CACHE.borrow_ref(cs).as_ref() {
+            Some((gen, pubs)) if *gen == generation => Some(pubs.clone()),
+            _ => None,
+        }
+    }) {
+        return cached;
+    }
+
+    // Slow path: derive once for this generation, then cache.
     let mut out = Vec::new();
     for (idx, seed) in session::seed_slots_copy().into_iter().enumerate() {
         let pub_xy = root_pub_from_seed(&seed);
@@ -343,6 +367,11 @@ pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
             y: pub_xy.1,
         });
     }
+
+    let cache_entry = out.clone();
+    critical_section::with(|cs| {
+        *INFO_PUBS_CACHE.borrow_ref_mut(cs) = Some((generation, cache_entry));
+    });
     out
 }
 

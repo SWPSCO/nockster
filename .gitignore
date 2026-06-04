@@ -22,7 +22,7 @@ target
 *.tx
 /*.bin
 /*.json
-
+*.pdf
 # Local hardware test artifacts and secrets.
 /.envrc
 /.envrc.secret

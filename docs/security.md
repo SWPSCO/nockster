@@ -3,10 +3,7 @@
 Nockster is a hardware signer built on a Waveshare ESP32-S3-Touch-LCD-1.47 class
 board. This document describes how the device protects seeds and signing keys,
 which mechanisms are active today, and the reasoning behind each choice. The
-security-relevant behavior comes from the ESP32-S3 itself; the datasheets and
-the LCD datasheet checked into the repo (`Esp32-s3_datasheet_en.pdf`,
-`Esp32-s3_technical_reference_manual_en.pdf`, `1.47inch_LCD_Datasheet.pdf`)
-are the primary references.
+security-relevant behavior comes from the ESP32-S3 chipset.
 
 ## What the device defends against
 
@@ -47,22 +44,22 @@ first salt or nonce is needed.
 
 ### Why the key derivation matters
 
-AES-GCM is not the weak point — a low-entropy PIN is. The salt and the encrypted
+A low-entropy PIN is the weakpoint. The salt and the encrypted
 seed both sit in flash, so an attacker who dumps flash can attack
 `PBKDF2(PIN, salt)` offline, and that is only as strong as the PIN plus the cost
 of the KDF.
 
-The ESP32-S3 has a better primitive: a read-protected eFuse key block with
+The ESP32-S3 has a a read-protected eFuse key block with
 purpose `HMAC_UP`. Firmware can ask the HMAC peripheral for
 `HMAC-SHA256(efuse_key, message)` without the key ever being readable by
 software. The storage key mixes that output into the derivation, so it can only
-be reproduced on that specific chip — turning an offline flash attack back into
+be reproduced on that specific chip, turning an offline flash attack back into
 an on-device one. With fixed domain-separation labels, the derivation is:
 
 ```text
 pin_key = PBKDF2-HMAC-SHA256(pin, salt, rounds)
-pepper  = HMAC-SHA256(efuse_key, domain || salt || mac)
-key     = SHA256(domain || pin_key || pepper)
+pepper = HMAC-SHA256(efuse_key, domain || salt || mac)
+key = SHA256(domain || pin_key || pepper)
 ```
 
 The pepper source depends on the build:
@@ -77,14 +74,11 @@ The pepper source depends on the build:
   the pepper source differs, which is why the hardware-bound guarantee is
   something production validation has to assert separately.
 
-During early hardware testing the device is wiped and reseeded rather than
-preserving stored data across firmware changes.
-
 ## Boot integrity and signed updates
 
 Secure boot v2 ensures only signed images run, which is what stops a thief from
 replacing the firmware with a modified signer. It does not replace PIN/NVS
-protection — it complements it.
+protection.
 
 The same release trust boundary covers self-updates. The host may transport an
 update bundle, but the firmware verifies the manifest signature on-device
@@ -111,19 +105,13 @@ flashing. The signing and provisioning tooling exists today:
 - `make provision-secure-boot-v2-digest` burns the digest behind an explicit
   `CONFIRM_IRREVERSIBLE=burn-secure-boot-v2` token and an interactive prompt.
 
-Status: secure boot still needs sacrificial-board validation before production —
-confirming the exact bootloader/app image generation flow on this board and that
-the bootloader actually rejects unsigned/incorrectly-signed images — before any
-broader provisioning.
 
 ## Flash encryption
 
 Flash encryption is for release devices; application-level NVS AES-GCM stays in
-place even when it is enabled, so storage is protected at two layers. App flash
-encryption is worthwhile on its own even if the custom NVS partition is left
-protected only at the application layer.
+place even when it is enabled, so storage is protected at two layers.
 
-The key-handling and provisioning tooling exists:
+The key-handling and provisioning tooling:
 
 - `make generate-flash-encryption-key` creates a local 32-byte XTS key with the
   same path/permission guards as the other key generators; it touches no eFuses.
@@ -138,9 +126,6 @@ The key-handling and provisioning tooling exists:
   after board-specific raw NVS read/write testing, factory stays at `0x10000`,
   and the app image limit fits the OTA slot.
 
-Status: before marking the custom NVS partition encrypted, raw reads/writes
-through `esp-storage` must be tested on this exact partition layout, then
-preflight re-run with `NVS_PARTITION_ENCRYPTION_VALIDATED=1`.
 
 ## Production lockdown
 
@@ -222,9 +207,6 @@ them impossible to trigger by accident:
   read-protection, storage initialization, secure boot, flash encryption,
   production lockdown, and OTA layout readiness (`VALIDATE_DRY_RUN=1` prints the
   commands first).
-- **Keep at least one unprovisioned development board**, treat signing keys and
-  HMAC key files as secrets, and wipe-and-reseed during early hardware testing
-  rather than preserving stored data across firmware changes.
 
 ### Provisioning reference
 

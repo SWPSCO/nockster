@@ -29,8 +29,8 @@
 FROM espressif/idf-rust:esp32s3_latest
 
 # espflash turns the ELF into a flashable/OTA image (make update-firmware-image).
-# Runs as the image's default `esp` user so it lands on that user's PATH.
-RUN cargo install espflash --locked
+# The idf-rust base usually ships espflash already, so only install if missing.
+RUN command -v espflash >/dev/null 2>&1 || cargo install espflash --locked
 
 WORKDIR /work
 COPY --chown=esp:esp . /work

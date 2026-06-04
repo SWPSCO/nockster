@@ -14,6 +14,7 @@ import {
   updateOtaStateName,
   fetchUpdateReleaseArtifacts,
   fetchLatestUpdateRelease as fetchLatestUpdateReleaseFromIndex,
+  parseUpdateReleaseIndexJson,
   FEATURE_SECURITY_STATUS,
   FEATURE_BUILD_INFO,
   FEATURE_SEED_LABELS,
@@ -95,6 +96,18 @@ type DeviceStatusSnapshot = {
 };
 const DEFAULT_RELEASE_INDEX_PATH = 'https://bin.aeroe.io/nockster/updates/latest.json';
 const RELEASE_INDEX_STORAGE_KEY = 'nockster.update.releaseIndexUrl.v1';
+
+type ConfirmOptions = {
+  title?: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+};
+
+// The official SWPSCo firmware-update signing key (SHA-256 of the public key).
+// When the device's configured trust anchor matches this, we show a verified badge.
+const OFFICIAL_TRUST_ANCHOR = '5aa46209222080a2ce107e25d427c3d9ada6cb77be25d7d2a3df8959b7fa2602';
 const MAX_SEED_LABEL_LEN = 32;
 const AUTO_BALANCE_REFRESH_MS = 60_000;
 const NICKS_PER_NOCK = 1n << 16n;
@@ -307,6 +320,13 @@ function App() {
   const [releaseIndexDraft, setReleaseIndexDraft] = useState(releaseIndexSource);
   const [fetchingRelease, setFetchingRelease] = useState(false);
   const [advancedUpdateExpanded, setAdvancedUpdateExpanded] = useState(false);
+  // Latest release version advertised by the update index, fetched index-only
+  // (no firmware download) so we can compare against the device before offering
+  // an install. null = unknown / not checked yet.
+  const [latestReleaseVersion, setLatestReleaseVersion] = useState<number | null>(null);
+  const [checkingLatestRelease, setCheckingLatestRelease] = useState(false);
+  const [latestReleaseError, setLatestReleaseError] = useState<string | null>(null);
+  const [updatesModalOpen, setUpdatesModalOpen] = useState(false);
 
   // Transaction signing state
   const [wasmReady, setWasmReady] = useState(false);
@@ -385,6 +405,17 @@ function App() {
     buildInfo: firmwareBuildInfo,
   });
   const updateBlocked = updateBlockReason !== null;
+  // Compare the device's installed release against the index. We only know the
+  // answer once both numbers are in hand; otherwise treat it as "unknown" and
+  // let the install-time check be the backstop.
+  const updateIsNewer =
+    latestReleaseVersion !== null &&
+    firmwareReleaseVersion !== null &&
+    latestReleaseVersion > firmwareReleaseVersion;
+  const updateUpToDate =
+    latestReleaseVersion !== null &&
+    firmwareReleaseVersion !== null &&
+    latestReleaseVersion <= firmwareReleaseVersion;
   const updatePercent = updateProgress && updateProgress.image_size > 0
     ? Math.min(100, Math.round((updateProgress.bytes_received / updateProgress.image_size) * 100))
     : 0;
@@ -411,6 +442,45 @@ function App() {
       setSeedPin('');
     }
   }, [isInitialSeed]);
+
+  // Read just the release index (not the firmware) so we can show the latest
+  // available version and gate the install button without a device attached.
+  const checkLatestReleaseVersion = useCallback(async () => {
+    let url: URL;
+    try {
+      url = configuredReleaseIndexUrl(releaseIndexSource);
+    } catch (error: any) {
+      setLatestReleaseError(error?.message ?? 'invalid release index URL');
+      setLatestReleaseVersion(null);
+      return;
+    }
+    setCheckingLatestRelease(true);
+    setLatestReleaseError(null);
+    try {
+      const res = await fetch(url.href, { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const text = await res.text();
+      const index = parseUpdateReleaseIndexJson(text, url);
+      const version = index.metadata.releaseVersion;
+      setLatestReleaseVersion(version ?? null);
+      if (version === undefined) {
+        setLatestReleaseError('index has no release_version');
+      }
+    } catch (error: any) {
+      setLatestReleaseVersion(null);
+      setLatestReleaseError(error?.message ?? 'could not reach update server');
+    } finally {
+      setCheckingLatestRelease(false);
+    }
+  }, [releaseIndexSource]);
+
+  // Check once on load and whenever the configured index changes, so the splash
+  // and the device panel both know the latest available version.
+  useEffect(() => {
+    void checkLatestReleaseVersion();
+  }, [checkLatestReleaseVersion]);
 
   const formatDerivationPath = (path: number[]) => {
     if (!path || path.length === 0) {
@@ -791,6 +861,23 @@ function App() {
   const deviceBusyRef = useRef(false);
   const [deviceBusy, setDeviceBusy] = useState(false);
   const [loadingDevice, setLoadingDevice] = useState(false);
+
+  // In-app confirmation dialog (replaces window.confirm). Promise-based so call
+  // sites stay `const ok = await askConfirm({...})`.
+  const [confirmState, setConfirmState] = useState<ConfirmOptions | null>(null);
+  const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
+  const askConfirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
+    return new Promise((resolve) => {
+      confirmResolver.current = resolve;
+      setConfirmState(opts);
+    });
+  }, []);
+  const resolveConfirm = useCallback((ok: boolean) => {
+    setConfirmState(null);
+    const resolve = confirmResolver.current;
+    confirmResolver.current = null;
+    resolve?.(ok);
+  }, []);
   const canSignComposerDraft = connected && locked === false && !deviceBusy && !signing;
   const composerSignDisabledReason = !connected
     ? 'connect device to sign'
@@ -843,9 +930,12 @@ function App() {
     if (!connected) {
       return;
     }
-    const confirmed = window.confirm(
-      'This will erase the seed and PIN from the device. Continue?'
-    );
+    const confirmed = await askConfirm({
+      title: 'Reset device',
+      message: 'This will erase the seed and PIN from the device. This cannot be undone.',
+      confirmLabel: 'Erase device',
+      danger: true,
+    });
     if (!confirmed) {
       return;
     }
@@ -1170,7 +1260,12 @@ function App() {
     }
 
     if (!options.autoReboot) {
-      const rebootNow = window.confirm(`${installStatus}\n\nReboot now to start it?`);
+      const rebootNow = await askConfirm({
+        title: 'Firmware installed',
+        message: `${installStatus}\n\nReboot now to start it?`,
+        confirmLabel: 'Reboot now',
+        cancelLabel: 'Later',
+      });
       if (!rebootNow) {
         setStatus(`${installStatus}; reboot when ready to start it.`);
         return;
@@ -1194,7 +1289,11 @@ function App() {
       setStatus('Reboot command is not available on this firmware');
       return;
     }
-    if (!window.confirm('Reboot the device now?')) {
+    if (!(await askConfirm({
+      title: 'Reboot device',
+      message: 'Reboot the device now?',
+      confirmLabel: 'Reboot',
+    }))) {
       return;
     }
 
@@ -1225,9 +1324,11 @@ function App() {
         setStatus('Firmware install requires update boot status support');
         return;
       }
-      const confirmed = window.confirm(
-        'Install this firmware into the inactive OTA slot and activate it for next boot?'
-      );
+      const confirmed = await askConfirm({
+        title: 'Install firmware',
+        message: 'Install this firmware into the inactive OTA slot and activate it for next boot?',
+        confirmLabel: 'Install',
+      });
       if (!confirmed) {
         return;
       }
@@ -1271,6 +1372,7 @@ function App() {
       setStatus('WebHID/Web Serial API not supported in this browser');
       return;
     }
+    setUpdatesModalOpen(false);
 
     try {
       setFetchingRelease(true);
@@ -1289,9 +1391,22 @@ function App() {
         throw new Error('Firmware install requires update boot status support');
       }
 
-      const confirmed = window.confirm(
-        'Fetch the latest signed firmware from this site and install it into the inactive OTA slot?'
-      );
+      // Now that the device version is known, refuse to "update" to the same or
+      // an older release instead of surprising the user with a rollback error.
+      if (
+        latestReleaseVersion !== null &&
+        snapshot.releaseVersion !== null &&
+        latestReleaseVersion <= snapshot.releaseVersion
+      ) {
+        setStatus(`Already on the latest firmware (release ${snapshot.releaseVersion})`);
+        return;
+      }
+
+      const confirmed = await askConfirm({
+        title: 'Update firmware',
+        message: 'Fetch the latest signed firmware and install it into the inactive OTA slot?',
+        confirmLabel: 'Fetch & install',
+      });
       if (!confirmed) {
         setStatus('Firmware update cancelled');
         return;
@@ -1330,9 +1445,12 @@ function App() {
       setStatus('Unlock the device before deleting a seed');
       return;
     }
-    const confirmed = window.confirm(
-      `Remove seed slot ${slot}? This cannot be undone.`
-    );
+    const confirmed = await askConfirm({
+      title: 'Remove seed slot',
+      message: `Remove seed slot ${slot}? This cannot be undone.`,
+      confirmLabel: 'Remove',
+      danger: true,
+    });
     if (!confirmed) {
       return;
     }
@@ -1756,6 +1874,116 @@ function App() {
           </div>
         )}
       </div>
+      {confirmState && (
+        <div className="modal-overlay" onClick={() => resolveConfirm(false)}>
+          <div className="modal-card modal-card-confirm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">{confirmState.title ?? 'Confirm'}</div>
+              <button
+                type="button"
+                className="toast-close"
+                onClick={() => resolveConfirm(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-note confirm-message">{confirmState.message}</p>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-small btn-secondary"
+                onClick={() => resolveConfirm(false)}
+              >
+                {confirmState.cancelLabel ?? 'Cancel'}
+              </button>
+              <button
+                type="button"
+                className={`btn btn-small ${confirmState.danger ? 'btn-danger' : 'btn-primary'}`}
+                onClick={() => resolveConfirm(true)}
+              >
+                {confirmState.confirmLabel ?? 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {updatesModalOpen && (
+        <div className="modal-overlay" onClick={() => setUpdatesModalOpen(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">Firmware updates</div>
+              <button
+                type="button"
+                className="toast-close"
+                onClick={() => setUpdatesModalOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="status-item full-width">
+                <span className="label">latest available:</span>
+                <span className="value">
+                  {checkingLatestRelease
+                    ? 'checking...'
+                    : latestReleaseVersion !== null
+                    ? `release ${latestReleaseVersion}`
+                    : latestReleaseError ?? 'unknown'}
+                </span>
+              </div>
+              {connected && releaseInfoAvailable && (
+                <div className="status-item full-width">
+                  <span className="label">installed:</span>
+                  <span className="value">
+                    {firmwareReleaseVersion === null ? '...' : `release ${firmwareReleaseVersion}`}
+                  </span>
+                </div>
+              )}
+              <p className="modal-note">
+                {connected && updateUpToDate
+                  ? 'Your device is already on the latest release.'
+                  : connected && updateIsNewer
+                  ? 'A newer release is available. Installing writes it to the inactive OTA slot and verifies it on-device before activation.'
+                  : 'Connecting reads the version installed on your device and installs the latest signed firmware only if it is newer.'}
+              </p>
+            </div>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-small btn-secondary"
+                onClick={() => void checkLatestReleaseVersion()}
+                disabled={checkingLatestRelease}
+              >
+                recheck
+              </button>
+              <button
+                type="button"
+                className="btn btn-small btn-primary"
+                onClick={installLatestUpdate}
+                disabled={
+                  !isSupported ||
+                  updatingFirmware ||
+                  fetchingRelease ||
+                  deviceBusy ||
+                  (connected && updateUpToDate)
+                }
+              >
+                {updatingFirmware || fetchingRelease
+                  ? 'updating...'
+                  : connected && updateUpToDate
+                  ? 'up to date'
+                  : connected
+                  ? 'install latest'
+                  : 'connect & install latest'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="header-img">
         <img src="assets/nockster.png" width="400px"/>
       </div>
@@ -2443,11 +2671,18 @@ function App() {
                     updatingFirmware ||
                     fetchingRelease ||
                     !secureUpdateAvailable ||
-                    !updateBootStatusAvailable
+                    !updateBootStatusAvailable ||
+                    updateUpToDate
                   }
                   className="btn btn-small btn-primary seed-toggle"
                 >
-                  {updatingFirmware || fetchingRelease ? 'updating...' : 'update firmware'}
+                  {updatingFirmware || fetchingRelease
+                    ? 'updating...'
+                    : updateUpToDate
+                    ? 'up to date'
+                    : updateIsNewer
+                    ? `update to rel ${latestReleaseVersion}`
+                    : 'update firmware'}
                 </button>
                 <button
                   type="button"
@@ -2472,6 +2707,16 @@ function App() {
                   </span>
                 </div>
               )}
+              <div className="status-item full-width">
+                <span className="label">latest available:</span>
+                <span className="value">
+                  {checkingLatestRelease
+                    ? 'checking...'
+                    : latestReleaseVersion !== null
+                    ? `release ${latestReleaseVersion}${updateUpToDate ? ' (up to date)' : updateIsNewer ? ' (newer)' : ''}`
+                    : latestReleaseError ?? 'unknown'}
+                </span>
+              </div>
               {buildInfoAvailable && (
                 <div className="status-item full-width">
                   <span className="label">device build:</span>
@@ -2505,7 +2750,20 @@ function App() {
               <div className="status-item full-width">
                 <span className="label">trust anchor:</span>
                 <span className="value update-hash">
-                  {secureUpdateAvailable ? updateTrustHash ?? 'not configured' : 'unavailable'}
+                  {!secureUpdateAvailable
+                    ? 'unavailable'
+                    : !updateTrustHash
+                      ? 'not configured'
+                      : (
+                        <>
+                          {updateTrustHash.toLowerCase() === OFFICIAL_TRUST_ANCHOR && (
+                            <span className="trust-verified" title="Official SWPSCo signing key">
+                              ✓ SWPSCo!
+                            </span>
+                          )}
+                          {updateTrustHash}
+                        </>
+                      )}
                 </span>
               </div>
               {updateBundle && (
@@ -2764,8 +3022,8 @@ function App() {
               <span className="connect-eyebrow">Hardware wallet</span>
               <h2 className="connect-hero-title">Plug in your Nockster.</h2>
               <p className="connect-hero-text">
-                Connect over USB and authorize the serial link to manage seeds, check
-                balances, and sign transactions. Your keys never leave the device.
+                Connect over USB to manage seeds, check
+                balances, and sign transactions.
               </p>
               {isTauri && availablePorts.length === 0 && (
                 <div className="connect-actions">
@@ -2790,17 +3048,14 @@ function App() {
                   {deviceBusy ? 'connecting...' : 'connect device'}
                 </button>
                 <button
-                  onClick={installLatestUpdate}
+                  onClick={() => {
+                    setUpdatesModalOpen(true);
+                    void checkLatestReleaseVersion();
+                  }}
                   className="btn btn-secondary"
-                  disabled={
-                    !isSupported ||
-                    updatingFirmware ||
-                    fetchingRelease ||
-                    deviceBusy ||
-                    (isTauri && !selectedPort)
-                  }
+                  disabled={updatingFirmware || fetchingRelease || deviceBusy}
                 >
-                  {updatingFirmware || fetchingRelease ? 'updating...' : 'update firmware'}
+                  {updatingFirmware || fetchingRelease ? 'updating...' : 'firmware updates'}
                 </button>
               </div>
               <span className={`connect-hint ${isSupported ? 'ready' : ''}`}>

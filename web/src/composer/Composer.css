@@ -3,7 +3,7 @@
   grid-template-columns: clamp(300px, 21vw, 390px) minmax(640px, 1fr);
   gap: 8px;
   align-items: stretch;
-  min-height: calc(100vh - 138px);
+  min-height: calc(100vh - 142px);
 }
 
 .composer-layout.sidebar-collapsed {
@@ -25,14 +25,14 @@
 
 .composer-sidebar,
 .composer-inspector {
-  max-height: calc(100vh - 138px);
+  max-height: calc(100vh - 142px);
   overflow: auto;
   padding: 8px;
 }
 
 .composer-canvas {
   position: relative;
-  height: calc(100vh - 138px);
+  height: calc(100vh - 142px);
   min-height: 650px;
   overflow: hidden;
 }

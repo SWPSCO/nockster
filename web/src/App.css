@@ -49,8 +49,16 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Reserve the scrollbar gutter so toggling tabs (one tall, one short) doesn't
+   shift the centered header/navbar sideways. */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Keep the top padding + sides identical to app-device so the logo and tab bar
+   don't jump when switching tabs (only the bottom is tighter for the canvas). */
 body.app-composer {
-  padding: 8px 10px;
+  padding: 10px 12px;
 }
 
 .container {
@@ -62,11 +70,11 @@ body.app-composer {
 }
 
 body.app-composer .header-img {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 body.app-composer .header-img img {
-  width: min(150px, 32vw);
+  width: min(168px, 34vw);
 }
 
 .header-img {

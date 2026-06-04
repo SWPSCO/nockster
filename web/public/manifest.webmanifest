@@ -1,0 +1,17 @@
+{
+  "name": "Nockster Wallet",
+  "short_name": "Nockster",
+  "description": "Nockster hardware-wallet console — manage seeds, check balances, and sign transactions over USB.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ecece8",
+  "theme_color": "#ecece8",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

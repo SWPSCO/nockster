@@ -201,7 +201,7 @@ impl SeedEntryState {
     }
 }
 
-pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str) {
+pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str, show_back: bool) {
     let _ = display.clear(COLOR_BACKGROUND);
     render_header(display, title, COLOR_SURFACE_HIGH);
 
@@ -223,7 +223,7 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str) {
         y += (FONT_6X10.character_size.height as i32) + 4;
     }
 
-    for button in setup_buttons() {
+    for button in setup_buttons(show_back) {
         draw_seed_button(display, GuiMode::SeedFirstBoot, button, None, false);
     }
 }
@@ -266,8 +266,8 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     draw_corner_buttons(display, state);
 }
 
-pub fn button_from_point_seed_setup(point: Point) -> Option<ButtonHit> {
-    setup_buttons()
+pub fn button_from_point_seed_setup(point: Point, show_back: bool) -> Option<ButtonHit> {
+    setup_buttons(show_back)
         .into_iter()
         .find(|hit| within_hit(hit, point, 4))
 }
@@ -317,31 +317,39 @@ pub fn draw_seed_button(
     }
 }
 
-/// The two actions on the no-seed setup screen: generate on-device, or enter an
-/// existing phrase.
-fn setup_buttons() -> [ButtonHit; 2] {
+/// The actions on the setup screen: generate on-device, enter an existing phrase,
+/// and (only when adding to an already-set-up device) a Back to the settings menu.
+fn setup_buttons(show_back: bool) -> HVec<ButtonHit, 3> {
     let width = (SCREEN_WIDTH as i32 - 2 * 20).max(80);
     let height = 42;
     let x = ((SCREEN_WIDTH as i32) - width) / 2;
     let gap = 14;
     let y0 = header_height() + 84;
-    [
-        ButtonHit {
-            button: Button::Seed(SeedButton::GenerateSeed),
-            top_left: Point::new(x, y0),
+    let mut out: HVec<ButtonHit, 3> = HVec::new();
+    let _ = out.push(ButtonHit {
+        button: Button::Seed(SeedButton::GenerateSeed),
+        top_left: Point::new(x, y0),
+        size: Size::new(width as u32, height as u32),
+    });
+    let _ = out.push(ButtonHit {
+        button: Button::Seed(SeedButton::EnterSeed),
+        top_left: Point::new(x, y0 + height + gap),
+        size: Size::new(width as u32, height as u32),
+    });
+    if show_back {
+        let _ = out.push(ButtonHit {
+            button: Button::Seed(SeedButton::Cancel),
+            top_left: Point::new(x, y0 + 2 * (height + gap)),
             size: Size::new(width as u32, height as u32),
-        },
-        ButtonHit {
-            button: Button::Seed(SeedButton::EnterSeed),
-            top_left: Point::new(x, y0 + height + gap),
-            size: Size::new(width as u32, height as u32),
-        },
-    ]
+        });
+    }
+    out
 }
 
 fn setup_button_label(button: SeedButton) -> &'static str {
     match button {
         SeedButton::GenerateSeed => "Generate New",
+        SeedButton::Cancel => "Back to menu",
         _ => "Enter Seed",
     }
 }

@@ -5,6 +5,7 @@ pub mod demo;
 mod layout;
 mod menu;
 mod render;
+mod scroll;
 mod seed;
 mod state;
 mod touch;
@@ -124,6 +125,9 @@ pub struct Gui<'d> {
     /// True when the seed-entry flow was launched to add a wallet to an unlocked
     /// device (vs first-boot setup). Drives where Cancel returns to.
     seed_flow_is_add: bool,
+    /// Wallet list being displayed, plus its scroll position (drag-scrollable).
+    wallet_rows: WalletRows,
+    wallets_scroll: scroll::ScrollState,
 }
 
 impl<'d> Gui<'d> {
@@ -237,6 +241,8 @@ impl<'d> Gui<'d> {
             touch_calibration_points: HVec::new(),
             touch_calibration_last_raw: None,
             seed_flow_is_add: false,
+            wallet_rows: HVec::new(),
+            wallets_scroll: scroll::ScrollState::new(menu::wallets_viewport()),
         };
 
         blit_boot_logo(&mut gui.display);
@@ -690,7 +696,7 @@ impl<'d> Gui<'d> {
         self.seed_entry_state.reset();
         self.seed_flow_is_add = false;
         self.mode = GuiMode::SeedFirstBoot;
-        seed::render_seed_setup(&mut self.display, "No seeds");
+        seed::render_seed_setup(&mut self.display, "No seeds", false);
     }
 
     /// Same generate/enter chooser as first boot, but framed as adding a wallet
@@ -701,7 +707,7 @@ impl<'d> Gui<'d> {
         self.seed_entry_state.reset();
         self.seed_flow_is_add = true;
         self.mode = GuiMode::SeedFirstBoot;
-        seed::render_seed_setup(&mut self.display, "Add seed");
+        seed::render_seed_setup(&mut self.display, "Add seed", true);
     }
 
     /// Progress splash shown while BIP-39 PBKDF2 runs on the worker core.
@@ -726,8 +732,15 @@ impl<'d> Gui<'d> {
     pub fn show_wallets(&mut self, rows: &[WalletRow]) {
         self.disarm_active();
         self.stop_unlock_demo();
+        self.wallet_rows.clear();
+        for row in rows {
+            if self.wallet_rows.push(row.clone()).is_err() {
+                break;
+            }
+        }
+        self.wallets_scroll.reset();
         self.mode = GuiMode::Wallets;
-        menu::render_wallets(&mut self.display, rows);
+        menu::render_wallets(&mut self.display, &self.wallet_rows, &mut self.wallets_scroll);
     }
 
     fn handle_menu_button(&mut self, button: Button) -> Option<GuiInteraction> {
@@ -991,6 +1004,24 @@ impl<'d> Gui<'d> {
             return;
         }
 
+        // Dragging within the wallet list scrolls it; touches below (the Back
+        // button) fall through to the normal press handling.
+        if self.mode == GuiMode::Wallets {
+            let pt = Point::new(point.x as i32, point.y as i32);
+            if self.wallets_scroll.contains(pt) {
+                self.clear_pending();
+                self.deactivate_button();
+                if self.wallets_scroll.drag_to(pt.y) {
+                    menu::render_wallets_viewport(
+                        &mut self.display,
+                        &self.wallet_rows,
+                        &mut self.wallets_scroll,
+                    );
+                }
+                return;
+            }
+        }
+
         let candidate = match self.mode {
             GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
             GuiMode::Menu => {
@@ -1008,9 +1039,10 @@ impl<'d> Gui<'d> {
                 self.tx_review_drag_active = false;
                 button_from_point_tx_review(Point::new(point.x as i32, point.y as i32))
             }
-            GuiMode::SeedFirstBoot => {
-                seed::button_from_point_seed_setup(Point::new(point.x as i32, point.y as i32))
-            }
+            GuiMode::SeedFirstBoot => seed::button_from_point_seed_setup(
+                Point::new(point.x as i32, point.y as i32),
+                self.seed_flow_is_add,
+            ),
             GuiMode::SeedEntry => {
                 seed::button_from_point_seed_entry(Point::new(point.x as i32, point.y as i32))
             }
@@ -1083,6 +1115,7 @@ impl<'d> Gui<'d> {
                     self.interaction.finger_down = false;
                     self.interaction.last_touch_sample_at = None;
                     self.tx_review_ignore_until_release = false;
+                    self.wallets_scroll.drag_end();
                     let open_tx_review_detail = if self.mode == GuiMode::TxReview
                         && self.interaction.active_button.is_none()
                         && self.tx_review_expanded_index.is_none()
@@ -1374,10 +1407,11 @@ impl<'d> Gui<'d> {
                     return None;
                 }
                 if self.seed_flow_is_add {
-                    // Aborting an add returns to the unlocked home, never the
-                    // first-boot setup chooser (which would imply re-init).
+                    // Aborting an add returns to the settings menu it was launched
+                    // from — never the first-boot setup chooser (which would imply
+                    // re-init).
                     self.seed_flow_is_add = false;
-                    self.show_unlock_success();
+                    self.show_menu();
                 } else {
                     self.show_seed_setup();
                 }

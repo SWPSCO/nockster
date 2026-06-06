@@ -22,6 +22,7 @@ pub enum GuiMode {
     TouchCalibration,
     Menu,
     Wallets,
+    LabelEntry,
 }
 
 /// Items on the settings menu reachable from the unlocked header gear.
@@ -55,6 +56,7 @@ pub struct TxReviewSummary {
     pub flags: u8,
 }
 
+use super::label::{LabelButton, LabelInteraction};
 use super::seed::SeedButton;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +66,8 @@ pub enum Button {
     Ok,
     Seed(SeedButton),
     Menu(MenuItem),
+    WalletRow(u8),
+    Label(LabelButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +89,7 @@ pub enum GuiInteraction {
     Seed(SeedInteraction),
     TouchCalibrationComplete(nockster_core::TouchCalibration),
     Menu(MenuItem),
+    Label(LabelInteraction),
     ExitDiagnostics,
 }
 

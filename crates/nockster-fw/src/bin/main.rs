@@ -29,8 +29,9 @@ use esp_hal::system::{software_reset, CpuControl, Stack};
 use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
-    Gui, GuiInteraction, MenuItem, SeedInteraction, TxReviewSummary, WalletRow, WalletRows,
-    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
+    TxReviewSummary, WalletRow, WalletRows, TX_REVIEW_FLAG_HIGH_FEE,
+    TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 use heapless::{String as HString, Vec as HVec};
 use jobs::{
@@ -746,6 +747,7 @@ fn main() -> ! {
     // in progress should add to an unlocked device instead of first-boot setup.
     let mut pending_menu_dest: Option<MenuItem> = None;
     let mut adding_seed_while_unlocked = false;
+    let mut prompt_label_after_initpin = false;
 
     // USB-OTG + HID (WebHID-friendly).
     let usb = Usb::new(p.USB0, p.GPIO20, p.GPIO19);
@@ -796,7 +798,7 @@ fn main() -> ! {
                                     },
                                 };
                                 let outcome = seed_store::compute_seed_op_outcome(request);
-                                let (msg_id, response) =
+                                let (msg_id, response, _) =
                                     handle_seed_op_outcome(outcome, Some(&mut *ui), &mut hid);
                                 return_response_msg(msg_id, response)
                             } else {
@@ -815,7 +817,7 @@ fn main() -> ! {
                             let outcome = seed_store::compute_seed_op_outcome(request);
                             wipe_seed();
                             clear_master_key();
-                            let (msg_id, response) =
+                            let (msg_id, response, _) =
                                 handle_seed_op_outcome(outcome, Some(&mut *ui), &mut hid);
                             return_response_msg(msg_id, response)
                         } else if is_direct_sign_frame(&pending.frame) {
@@ -1042,6 +1044,7 @@ fn main() -> ! {
                             pending_seed_pin = None;
                             pending_seed_setup.clear();
                             adding_seed_while_unlocked = false;
+                            prompt_label_after_initpin = false;
                         }
                         _ => {}
                     },
@@ -1082,6 +1085,9 @@ fn main() -> ! {
                         }
                         MenuItem::Calibrate | MenuItem::Back => {}
                     },
+                    GuiInteraction::Label(interaction) => {
+                        handle_label_interaction(interaction, ui, &mut hid);
+                    }
                     GuiInteraction::ExitDiagnostics => {
                         ui.hide_touch_diagnostics(session::is_locked());
                     }
@@ -1104,7 +1110,7 @@ fn main() -> ! {
             } else {
                 handle_unlock_outcome(outcome, None, &mut hid)
             };
-            let unlock_ok = matches!(resp, Response::Ok);
+            let unlock_ok = matches!(&resp, Response::Ok);
             if let Some(id) = take_pending_usb_unlock_id() {
                 send_response(&mut hid, id, resp, &mut plain, &mut enc);
             }
@@ -1133,12 +1139,19 @@ fn main() -> ! {
             } else {
                 handle_initpin_outcome(outcome, None, &mut hid)
             };
+            let init_ok = matches!(&resp, Response::Ok);
             if let Some(id) = take_pending_usb_initpin_id() {
                 send_response(&mut hid, id, resp, &mut plain, &mut enc);
             }
             set_device_busy(false);
             set_initpin_progress(InitPinProgress::Idle);
             displayed_initpin_progress = InitPinProgress::Idle;
+            if init_ok && prompt_label_after_initpin {
+                if let Some(ui_ref) = ui.as_mut() {
+                    ui_ref.show_new_seed_label_entry(0, LabelEntryContext::FirstSeed);
+                }
+            }
+            prompt_label_after_initpin = false;
         }
         if let Some(outcome) = seed_derive_controller.poll() {
             match outcome {
@@ -1160,7 +1173,16 @@ fn main() -> ! {
                             seed64.zeroize();
                             master_key.zeroize();
                             if let Some(ui_ref) = ui.as_mut() {
-                                let _ = handle_seed_op_outcome(outcome, Some(ui_ref), &mut hid);
+                                let (_, response, added_slot) =
+                                    handle_seed_op_outcome(outcome, Some(ui_ref), &mut hid);
+                                if matches!(&response, Response::Ok) {
+                                    if let Some(slot) = added_slot {
+                                        ui_ref.show_new_seed_label_entry(
+                                            slot,
+                                            LabelEntryContext::AddedSeed,
+                                        );
+                                    }
+                                }
                             } else {
                                 let _ = handle_seed_op_outcome(outcome, None, &mut hid);
                             }
@@ -1173,6 +1195,7 @@ fn main() -> ! {
                     } else if !session::has_seed() {
                         pending_seed_pin = None;
                         pending_seed_setup.store_from(&mut seed64);
+                        prompt_label_after_initpin = true;
                         if let Some(ui_ref) = ui.as_mut() {
                             ui_ref.clear_seed_entry_state();
                             ui_ref.begin_pin_entry("Set PIN", None);
@@ -1181,6 +1204,7 @@ fn main() -> ! {
                         // Defensive: never re-run first-boot PIN setup on an
                         // already-initialized device.
                         seed64.zeroize();
+                        prompt_label_after_initpin = false;
                         if let Some(ui_ref) = ui.as_mut() {
                             ui_ref.clear_seed_entry_state();
                             ui_ref.show_unlock_success();
@@ -1189,6 +1213,7 @@ fn main() -> ! {
                 }
                 SeedDeriveOutcome::Failed => {
                     adding_seed_while_unlocked = false;
+                    prompt_label_after_initpin = false;
                     if let Some(ui_ref) = ui.as_mut() {
                         ui_ref.show_seed_setup();
                     }
@@ -1427,7 +1452,7 @@ fn main() -> ! {
                                                 }
                                                 let outcome =
                                                     seed_store::compute_seed_op_outcome(request);
-                                                let (msg_id, body) = {
+                                                let (msg_id, body, _) = {
                                                     let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
                                                     handle_seed_op_outcome(
                                                         outcome, ui_ref, &mut hid,
@@ -2321,11 +2346,51 @@ fn build_wallet_rows() -> WalletRows {
     rows
 }
 
+fn finish_label_entry(ui: &mut Gui<'_>, context: LabelEntryContext) {
+    match context {
+        LabelEntryContext::WalletMenu | LabelEntryContext::AddedSeed => {
+            ui.show_wallets(&build_wallet_rows());
+        }
+        LabelEntryContext::FirstSeed => {
+            ui.show_unlock_success();
+        }
+    }
+}
+
+fn handle_label_interaction<B: usb_device::bus::UsbBus>(
+    interaction: LabelInteraction,
+    ui: &mut Gui<'_>,
+    hid: &mut HIDClass<'_, B>,
+) {
+    match interaction {
+        LabelInteraction::Saved {
+            slot,
+            label,
+            context,
+        } => {
+            let saved = NvsStore::new().write_seed_label(slot as usize, label.as_str());
+            match saved {
+                Ok(()) => {
+                    usb_debug(hid, b"seed label saved\r\n");
+                    finish_label_entry(ui, context);
+                }
+                Err(_) => {
+                    usb_debug(hid, b"seed label save failed\r\n");
+                    ui.show_idle_message_timed("Label failed", Duration::from_millis(3_000));
+                }
+            }
+        }
+        LabelInteraction::Cancelled { context, .. } => {
+            finish_label_entry(ui, context);
+        }
+    }
+}
+
 fn handle_seed_op_outcome<B: usb_device::bus::UsbBus>(
     outcome: SeedOpOutcome,
     ui: Option<&mut Gui<'_>>,
     hid: &mut HIDClass<'_, B>,
-) -> (u32, Response) {
+) -> (u32, Response, Option<u8>) {
     let applied = seed_store::apply_seed_op_outcome(outcome);
     if let Some(ui) = ui {
         match applied.ui_effect {
@@ -2346,5 +2411,5 @@ fn handle_seed_op_outcome<B: usb_device::bus::UsbBus>(
         }
     }
     usb_debug(hid, applied.debug);
-    (applied.msg_id, applied.response)
+    (applied.msg_id, applied.response, applied.added_slot)
 }

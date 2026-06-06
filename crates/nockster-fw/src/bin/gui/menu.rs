@@ -1,6 +1,6 @@
-//! Settings menu reachable from the unlocked header gear, plus the read-only
-//! wallet list. Rendering only — all decisions (what needs an unlock, etc.)
-//! live in the main event loop.
+//! Settings menu reachable from the unlocked header gear, plus the wallet list.
+//! Rendering only — all decisions (what needs an unlock, etc.) live in the main
+//! event loop.
 
 use core::fmt::Write as _;
 
@@ -8,7 +8,7 @@ use embedded_graphics::mono_font::ascii::{FONT_6X10, FONT_8X13};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::Rectangle;
+use embedded_graphics::primitives::{Line, PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Alignment, Text};
 use heapless::{String as HString, Vec as HVec};
 use nockster_core::MAX_SEED_SLOTS;
@@ -112,19 +112,26 @@ fn wallets_back_button() -> ButtonHit {
     }
 }
 
-pub fn button_from_point_wallets(point: Point) -> Option<ButtonHit> {
+pub fn button_from_point_wallets(
+    point: Point,
+    rows: &[WalletRow],
+    scroll: &ScrollState,
+) -> Option<ButtonHit> {
     let back = wallets_back_button();
-    within(&back, point, 8).then_some(back)
+    if within(&back, point, 8) {
+        return Some(back);
+    }
+    wallet_row_hit(point, rows, scroll)
 }
 
 /// The scrollable region of the wallet screen (between the slot-count summary and
 /// the Back button).
 pub fn wallets_viewport() -> Rectangle {
-    let top = header_height() + 28;
+    let top = header_height() + 48;
     let bottom = SCREEN_HEIGHT as i32 - MENU_BUTTON_HEIGHT - 14;
     Rectangle::new(
-        Point::new(0, top),
-        Size::new(SCREEN_WIDTH as u32, (bottom - top).max(0) as u32),
+        Point::new(6, top),
+        Size::new((SCREEN_WIDTH - 12) as u32, (bottom - top).max(0) as u32),
     )
 }
 
@@ -138,12 +145,13 @@ pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow], scroll: 
     let _ = write!(summary, "{} of {} slots", rows.len(), MAX_SEED_SLOTS);
     let _ = Text::with_alignment(
         summary.as_str(),
-        Point::new(MENU_MARGIN, header_height() + 18),
+        Point::new(8, header_height() + 16),
         subtle,
         Alignment::Left,
     )
     .draw(display);
 
+    draw_wallet_table_header(display);
     draw_text_button(display, wallets_back_button(), "Back", false);
     render_wallets_viewport(display, rows, scroll);
 }
@@ -163,73 +171,126 @@ struct WalletList<'a> {
 
 impl ScrollContent for WalletList<'_> {
     fn content_height(&self) -> i32 {
-        let mut h = 20;
-        for row in self.rows {
-            h += wallet_row_height(row);
+        if self.rows.is_empty() {
+            wallets_viewport().size.height as i32
+        } else {
+            self.rows.len() as i32 * WALLET_ROW_HEIGHT
         }
-        h
     }
 
     fn draw_content<D>(&self, target: &mut D)
     where
         D: DrawTarget<Color = Rgb565>,
     {
-        let style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
-        let left = MENU_MARGIN;
-        let mut y = 13;
+        let primary = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
+        let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+        let active_style = MonoTextStyle::new(&FONT_6X10, COLOR_ACCENT_WARNING);
+        if self.rows.is_empty() {
+            let _ = Text::with_alignment(
+                "No wallets",
+                Point::new((wallets_viewport().size.width / 2) as i32, 54),
+                primary,
+                Alignment::Center,
+            )
+            .draw(target);
+            return;
+        }
+
+        let mut y = 0;
         for row in self.rows {
-            let mut short_pkh = HString::<16>::new();
+            let row_rect = Rectangle::new(
+                Point::new(0, y),
+                Size::new(wallets_viewport().size.width, WALLET_ROW_HEIGHT as u32),
+            );
+            if row.active {
+                let _ = row_rect
+                    .into_styled(
+                        PrimitiveStyleBuilder::new()
+                            .fill_color(COLOR_SURFACE_LOW)
+                            .stroke_width(0)
+                            .build(),
+                    )
+                    .draw(target);
+                let _ = Rectangle::new(Point::new(0, y + 4), Size::new(3, 30))
+                    .into_styled(
+                        PrimitiveStyleBuilder::new()
+                            .fill_color(COLOR_KEYPAD_ACTIVE_LIGHT)
+                            .stroke_width(0)
+                            .build(),
+                    )
+                    .draw(target);
+            }
+
+            let mut slot = HString::<6>::new();
+            let _ = write!(slot, "{}", row.index);
+            let _ = Text::with_alignment(
+                slot.as_str(),
+                Point::new(10, y + 15),
+                primary,
+                Alignment::Left,
+            )
+            .draw(target);
+
+            let mut name = HString::<18>::new();
+            if row.label.is_empty() {
+                let _ = name.push_str("Wallet");
+            } else {
+                push_truncated(
+                    &mut name,
+                    row.label.as_str(),
+                    if row.active { 10 } else { 15 },
+                );
+            }
+            let _ = Text::with_alignment(
+                name.as_str(),
+                Point::new(38, y + 15),
+                primary,
+                Alignment::Left,
+            )
+            .draw(target);
+
+            if row.active {
+                let _ = Text::with_alignment(
+                    "ACTIVE",
+                    Point::new(wallets_viewport().size.width as i32 - 4, y + 13),
+                    active_style,
+                    Alignment::Right,
+                )
+                .draw(target);
+            }
+
+            let mut short_pkh = HString::<24>::new();
             if !row.pkh.is_empty() {
                 push_short_pkh(&mut short_pkh, row.pkh.as_str());
             }
-
-            let mut line = HString::<56>::new();
-            let name = if row.label.is_empty() {
-                short_pkh.as_str()
+            let address = if short_pkh.is_empty() {
+                "address unavailable"
             } else {
-                row.label.as_str()
+                short_pkh.as_str()
             };
-            let marker = if row.active { "*" } else { " " };
-            let _ = write!(line, "{}slot {} {}", marker, row.index, name);
-            let _ = Text::with_alignment(line.as_str(), Point::new(left, y), style, Alignment::Left)
+            let _ = Text::with_alignment(address, Point::new(38, y + 31), subtle, Alignment::Left)
                 .draw(target);
-            y += WALLET_LINE_H;
 
-            if row.pkh.is_empty() && row.label.is_empty() {
-                let _ = Text::with_alignment(
-                    "pkh unavailable",
-                    Point::new(left, y),
-                    style,
-                    Alignment::Left,
-                )
-                .draw(target);
-                y += WALLET_SUBLINE_H;
-            } else if !row.label.is_empty() && !short_pkh.is_empty() {
-                let _ = Text::with_alignment(
-                    short_pkh.as_str(),
-                    Point::new(left, y),
-                    style,
-                    Alignment::Left,
-                )
-                .draw(target);
-                y += WALLET_SUBLINE_H;
-            }
-            y += WALLET_ROW_GAP;
+            let _ = Line::new(
+                Point::new(0, y + WALLET_ROW_HEIGHT - 1),
+                Point::new(
+                    wallets_viewport().size.width as i32,
+                    y + WALLET_ROW_HEIGHT - 1,
+                ),
+            )
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .stroke_color(COLOR_DIVIDER)
+                    .stroke_width(1)
+                    .build(),
+            )
+            .draw(target);
+            y += WALLET_ROW_HEIGHT;
         }
     }
 }
 
-const WALLET_LINE_H: i32 = 18;
-const WALLET_SUBLINE_H: i32 = 16;
-const WALLET_ROW_GAP: i32 = 4;
-
-fn wallet_has_second_line(row: &WalletRow) -> bool {
-    (row.pkh.is_empty() && row.label.is_empty()) || (!row.label.is_empty() && !row.pkh.is_empty())
-}
-
-fn wallet_row_height(row: &WalletRow) -> i32 {
-    WALLET_LINE_H + if wallet_has_second_line(row) { WALLET_SUBLINE_H } else { 0 } + WALLET_ROW_GAP
-}
+const WALLET_ROW_HEIGHT: i32 = 42;
 
 pub fn draw_wallets_back(display: &mut GuiDisplay<'_>, active: bool) {
     draw_text_button(display, wallets_back_button(), "Back", active);
@@ -243,14 +304,69 @@ fn within(hit: &ButtonHit, point: Point, slack: i32) -> bool {
     point.x >= left && point.x < right && point.y >= top && point.y < bottom
 }
 
-fn push_short_pkh(out: &mut HString<16>, pkh: &str) {
+fn draw_wallet_table_header(display: &mut GuiDisplay<'_>) {
+    let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let y = header_height() + 38;
+    let _ = Text::with_alignment("Slot", Point::new(16, y), style, Alignment::Left).draw(display);
+    let _ = Text::with_alignment("Nick", Point::new(44, y), style, Alignment::Left).draw(display);
+    let _ = Text::with_alignment(
+        "Address",
+        Point::new(SCREEN_WIDTH as i32 - 8, y),
+        style,
+        Alignment::Right,
+    )
+    .draw(display);
+    let _ = Line::new(
+        Point::new(6, y + 6),
+        Point::new(SCREEN_WIDTH as i32 - 7, y + 6),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(COLOR_DIVIDER)
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+}
+
+fn wallet_row_hit(point: Point, rows: &[WalletRow], scroll: &ScrollState) -> Option<ButtonHit> {
+    let viewport = scroll.viewport();
+    if !viewport.contains(point) || rows.is_empty() {
+        return None;
+    }
+    let content_y = point.y - viewport.top_left.y + scroll.offset_y();
+    if content_y < 0 {
+        return None;
+    }
+    let index = (content_y / WALLET_ROW_HEIGHT) as usize;
+    let row = rows.get(index)?;
+    let row_top = viewport.top_left.y + index as i32 * WALLET_ROW_HEIGHT - scroll.offset_y();
+    Some(ButtonHit {
+        button: Button::WalletRow(row.index),
+        top_left: Point::new(viewport.top_left.x, row_top),
+        size: Size::new(viewport.size.width, WALLET_ROW_HEIGHT as u32),
+    })
+}
+
+fn push_short_pkh(out: &mut HString<24>, pkh: &str) {
     let bytes = pkh.as_bytes();
-    if bytes.len() <= 12 {
+    if bytes.len() <= 20 {
         let _ = out.push_str(pkh);
         return;
     }
 
-    let _ = out.push_str(core::str::from_utf8(&bytes[..4]).unwrap_or(""));
+    let _ = out.push_str(core::str::from_utf8(&bytes[..8]).unwrap_or(""));
     let _ = out.push_str("...");
-    let _ = out.push_str(core::str::from_utf8(&bytes[bytes.len() - 4..]).unwrap_or(""));
+    let _ = out.push_str(core::str::from_utf8(&bytes[bytes.len() - 8..]).unwrap_or(""));
+}
+
+fn push_truncated<const N: usize>(out: &mut HString<N>, value: &str, max_chars: usize) {
+    let bytes = value.as_bytes();
+    if bytes.len() <= max_chars {
+        let _ = out.push_str(value);
+        return;
+    }
+    let take = max_chars.saturating_sub(2);
+    let _ = out.push_str(core::str::from_utf8(&bytes[..take]).unwrap_or(""));
+    let _ = out.push_str("..");
 }

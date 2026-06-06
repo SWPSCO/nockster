@@ -204,8 +204,9 @@ pub fn compute_seed_op_outcome(mut request: SeedOpRequest) -> SeedOpOutcome {
             let mut nvs = NvsStore::new();
             let pub_xy = root_pub_from_seed(seed64);
             let outcome = match nvs.add_seed_with_key(master_key, seed64, pub_xy) {
-                Ok(_) => SeedOpOutcome::Added {
+                Ok(slot) => SeedOpOutcome::Added {
                     msg_id,
+                    slot,
                     seed64: *seed64,
                 },
                 Err(NvsError::WrongPin) => SeedOpOutcome::WrongPin { msg_id },
@@ -261,18 +262,24 @@ pub struct SeedOpApplied {
     pub msg_id: u32,
     pub response: Response,
     pub ui_effect: SeedOpUiEffect,
+    pub added_slot: Option<u8>,
     pub debug: &'static [u8],
 }
 
 pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
     match outcome {
-        SeedOpOutcome::Added { msg_id, mut seed64 } => {
+        SeedOpOutcome::Added {
+            msg_id,
+            slot,
+            mut seed64,
+        } => {
             append_seed_slot(&seed64);
             seed64.zeroize();
             SeedOpApplied {
                 msg_id,
                 response: Response::Ok,
                 ui_effect: SeedOpUiEffect::Added,
+                added_slot: Some(slot),
                 debug: b"seed added\r\n",
             }
         }
@@ -282,6 +289,7 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
                 msg_id,
                 response: Response::Ok,
                 ui_effect: SeedOpUiEffect::Deleted,
+                added_slot: None,
                 debug: b"seed deleted\r\n",
             }
         }
@@ -289,6 +297,7 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
             msg_id,
             response: Response::Ok,
             ui_effect: SeedOpUiEffect::Reset,
+            added_slot: None,
             debug: b"factory reset\r\n",
         },
         SeedOpOutcome::WrongPin { msg_id } => SeedOpApplied {
@@ -297,6 +306,7 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
                 code: ERR_WRONG_PIN,
             },
             ui_effect: SeedOpUiEffect::None,
+            added_slot: None,
             debug: b"seed op wrong pin\r\n",
         },
         SeedOpOutcome::LockedOut { msg_id } => SeedOpApplied {
@@ -305,12 +315,14 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
                 code: ERR_PIN_LOCKED_OUT,
             },
             ui_effect: SeedOpUiEffect::None,
+            added_slot: None,
             debug: b"seed op locked out\r\n",
         },
         SeedOpOutcome::Full { msg_id } => SeedOpApplied {
             msg_id,
             response: Response::Err { code: ERR_OVERFLOW },
             ui_effect: SeedOpUiEffect::None,
+            added_slot: None,
             debug: b"seed op full\r\n",
         },
         SeedOpOutcome::InvalidSlot { msg_id } | SeedOpOutcome::NotInitialized { msg_id } => {
@@ -318,6 +330,7 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
                 msg_id,
                 response: Response::Err { code: ERR_NO_SEED },
                 ui_effect: SeedOpUiEffect::None,
+                added_slot: None,
                 debug: b"seed op no seed\r\n",
             }
         }
@@ -325,18 +338,21 @@ pub fn apply_seed_op_outcome(outcome: SeedOpOutcome) -> SeedOpApplied {
             msg_id,
             response: Response::Err { code: ERR_FLASH },
             ui_effect: SeedOpUiEffect::None,
+            added_slot: None,
             debug: b"seed op flash error\r\n",
         },
         SeedOpOutcome::Crypto { msg_id } => SeedOpApplied {
             msg_id,
             response: Response::Err { code: ERR_CRYPTO },
             ui_effect: SeedOpUiEffect::None,
+            added_slot: None,
             debug: b"seed op crypto error\r\n",
         },
         SeedOpOutcome::Failed { msg_id } => SeedOpApplied {
             msg_id,
             response: Response::Err { code: ERR_NO_SEED },
             ui_effect: SeedOpUiEffect::None,
+            added_slot: None,
             debug: b"seed op failed\r\n",
         },
     }
@@ -346,12 +362,12 @@ pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
     let generation = session::seed_generation();
 
     // Fast path: serve the cached pubkeys while the seed set is unchanged.
-    if let Some(cached) = critical_section::with(|cs| {
-        match INFO_PUBS_CACHE.borrow_ref(cs).as_ref() {
+    if let Some(cached) =
+        critical_section::with(|cs| match INFO_PUBS_CACHE.borrow_ref(cs).as_ref() {
             Some((gen, pubs)) if *gen == generation => Some(pubs.clone()),
             _ => None,
-        }
-    }) {
+        })
+    {
         return cached;
     }
 

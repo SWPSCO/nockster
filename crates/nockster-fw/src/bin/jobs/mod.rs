@@ -133,17 +133,42 @@ pub enum ChangePinOutcome {
 }
 
 pub enum SeedOpOutcome {
-    Added { msg_id: u32, seed64: [u8; 64] },
-    Deleted { msg_id: u32, slot: u8 },
-    Reset { msg_id: u32 },
-    WrongPin { msg_id: u32 },
-    LockedOut { msg_id: u32 },
-    Full { msg_id: u32 },
-    InvalidSlot { msg_id: u32 },
-    NotInitialized { msg_id: u32 },
-    Flash { msg_id: u32 },
-    Crypto { msg_id: u32 },
-    Failed { msg_id: u32 },
+    Added {
+        msg_id: u32,
+        slot: u8,
+        seed64: [u8; 64],
+    },
+    Deleted {
+        msg_id: u32,
+        slot: u8,
+    },
+    Reset {
+        msg_id: u32,
+    },
+    WrongPin {
+        msg_id: u32,
+    },
+    LockedOut {
+        msg_id: u32,
+    },
+    Full {
+        msg_id: u32,
+    },
+    InvalidSlot {
+        msg_id: u32,
+    },
+    NotInitialized {
+        msg_id: u32,
+    },
+    Flash {
+        msg_id: u32,
+    },
+    Crypto {
+        msg_id: u32,
+    },
+    Failed {
+        msg_id: u32,
+    },
 }
 
 #[allow(clippy::declare_interior_mutable_const)]

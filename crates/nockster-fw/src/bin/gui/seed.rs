@@ -1,11 +1,11 @@
 use core::cmp::max;
 use core::fmt::Write;
 
-use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10};
+use embedded_graphics::mono_font::ascii::{FONT_10X20, FONT_6X10, FONT_8X13};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
+use embedded_graphics::primitives::{Line, PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Alignment, Text};
 use heapless::{String as HString, Vec as HVec};
 use sha2::{Digest, Sha256};
@@ -361,12 +361,7 @@ pub(crate) fn draw_text_button(
     active: bool,
 ) {
     draw_button_frame(display, hit, active);
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-    let center = Point::new(
-        hit.top_left.x + hit.size.width as i32 / 2,
-        hit.top_left.y + hit.size.height as i32 / 2 + 4,
-    );
-    let _ = Text::with_alignment(label, center, style, Alignment::Center).draw(display);
+    draw_fitted_button_label(display, hit, label);
 }
 
 fn draw_keypad(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
@@ -466,33 +461,47 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         .draw(display);
 
     if hit.size.height > 6 && hit.size.width > 6 {
-        let highlight = Rectangle::new(
+        let right = hit.top_left.x + hit.size.width as i32 - 2;
+        let bottom = hit.top_left.y + hit.size.height as i32 - 2;
+        let _ = Line::new(
             Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
-            Size::new(hit.size.width.saturating_sub(2), hit.size.height / 3),
-        );
-        let _ = highlight
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(light)
-                    .stroke_width(0)
-                    .build(),
-            )
-            .draw(display);
-
-        let shadow_height = hit.size.height / 3;
-        let shadow_top = hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
-        let shadow = Rectangle::new(
-            Point::new(hit.top_left.x + 1, shadow_top),
-            Size::new(hit.size.width.saturating_sub(2), shadow_height),
-        );
-        let _ = shadow
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(dark)
-                    .stroke_width(0)
-                    .build(),
-            )
-            .draw(display);
+            Point::new(right, hit.top_left.y + 1),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(light)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let _ = Line::new(
+            Point::new(hit.top_left.x + 1, bottom),
+            Point::new(right, bottom),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(dark)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        if active && hit.size.width > 8 {
+            let bar = Rectangle::new(
+                Point::new(
+                    hit.top_left.x + 4,
+                    hit.top_left.y + hit.size.height as i32 - 4,
+                ),
+                Size::new(hit.size.width.saturating_sub(8), 2),
+            );
+            let _ = bar
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(COLOR_TEXT)
+                        .stroke_width(0)
+                        .build(),
+                )
+                .draw(display);
+        }
     }
 }
 
@@ -781,7 +790,7 @@ pub fn button_from_point_seed_confirm(point: Point) -> Option<ButtonHit> {
 }
 
 fn confirm_buttons() -> [ButtonHit; 2] {
-    let button_width = 60i32;
+    let button_width = 70i32;
     let button_height = 40i32;
     let margin = 8i32;
     let y = SCREEN_HEIGHT as i32 - button_height - margin;
@@ -816,10 +825,35 @@ fn draw_confirm_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: boo
         _ => "",
     };
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    draw_fitted_button_label(display, hit, label);
+}
+
+fn draw_fitted_button_label(display: &mut GuiDisplay<'_>, hit: ButtonHit, label: &str) {
+    let available = hit.size.width.saturating_sub(8) as usize;
+    let large_width = label.len() * FONT_10X20.character_size.width as usize;
     let center = Point::new(
         hit.top_left.x + hit.size.width as i32 / 2,
-        hit.top_left.y + hit.size.height as i32 / 2 + 4,
+        hit.top_left.y + hit.size.height as i32 / 2,
     );
-    let _ = Text::with_alignment(label, center, style, Alignment::Center).draw(display);
+    if large_width <= available {
+        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            label,
+            Point::new(center.x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(display);
+    } else {
+        let style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
+        let baseline = center.y + FONT_8X13.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            label,
+            Point::new(center.x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(display);
+    }
 }

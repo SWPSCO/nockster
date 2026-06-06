@@ -1,7 +1,7 @@
 use core::fmt::Write as _;
 
 use embedded_graphics::mono_font::{
-    ascii::{FONT_10X20, FONT_6X10},
+    ascii::{FONT_10X20, FONT_6X10, FONT_8X13},
     MonoTextStyle,
 };
 use embedded_graphics::pixelcolor::{raw::RawU16, Rgb565};
@@ -82,35 +82,30 @@ pub fn draw_button(display: &mut GuiDisplay<'_>, mode: GuiMode, hit: ButtonHit, 
         .draw(display);
 
     if hit.size.height > 6 && hit.size.width > 6 {
-        // Top highlight
-        let highlight = Rectangle::new(
+        let right = hit.top_left.x + hit.size.width as i32 - 2;
+        let bottom = hit.top_left.y + hit.size.height as i32 - 2;
+        let _ = Line::new(
             Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
-            Size::new(hit.size.width.saturating_sub(2), hit.size.height / 3),
-        );
-        let _ = highlight
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(light)
-                    .stroke_width(0)
-                    .build(),
-            )
-            .draw(display);
-
-        // Bottom shadow
-        let shadow_height = hit.size.height / 3;
-        let shadow_top = hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
-        let shadow = Rectangle::new(
-            Point::new(hit.top_left.x + 1, shadow_top),
-            Size::new(hit.size.width.saturating_sub(2), shadow_height),
-        );
-        let _ = shadow
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(dark)
-                    .stroke_width(0)
-                    .build(),
-            )
-            .draw(display);
+            Point::new(right, hit.top_left.y + 1),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(light)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let _ = Line::new(
+            Point::new(hit.top_left.x + 1, bottom),
+            Point::new(right, bottom),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(dark)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
     }
 
     let label = match mode {
@@ -118,19 +113,7 @@ pub fn draw_button(display: &mut GuiDisplay<'_>, mode: GuiMode, hit: ButtonHit, 
         _ => button_label(hit.button),
     };
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-    let center = Point::new(
-        hit.top_left.x + hit.size.width as i32 / 2,
-        hit.top_left.y + hit.size.height as i32 / 2,
-    );
-    let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
-    let _ = Text::with_alignment(
-        label,
-        Point::new(center.x, baseline),
-        style,
-        Alignment::Center,
-    )
-    .draw(display);
+    draw_fitted_button_label(display, hit, label);
 }
 
 pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
@@ -142,11 +125,23 @@ pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
     let _ = header_rect
         .into_styled(PrimitiveStyleBuilder::new().fill_color(bg).build())
         .draw(display);
-    let underline = Rectangle::new(
+    let top_edge = Rectangle::new(
         Point::new(0, header_h - 2),
-        Size::new(BOOT_LOGO_WIDTH.into(), 2),
+        Size::new(BOOT_LOGO_WIDTH.into(), 1),
     );
-    let _ = underline
+    let _ = top_edge
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(COLOR_PANEL_SHADOW)
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+    let divider = Rectangle::new(
+        Point::new(0, header_h - 1),
+        Size::new(BOOT_LOGO_WIDTH.into(), 1),
+    );
+    let _ = divider
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .fill_color(COLOR_DIVIDER)
@@ -471,12 +466,35 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
         .draw(display);
 
     if size.width > 4 && size.height > 4 {
-        let highlight_height = (size.height / 5).clamp(4, 12);
-        let highlight = Rectangle::new(
+        let right = top_left.x + size.width as i32 - 2;
+        let bottom = top_left.y + size.height as i32 - 2;
+        let _ = Line::new(
             Point::new(top_left.x + 1, top_left.y + 1),
-            Size::new(size.width.saturating_sub(2), highlight_height),
+            Point::new(right, top_left.y + 1),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(COLOR_PANEL_HIGHLIGHT)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let _ = Line::new(
+            Point::new(top_left.x + 1, bottom),
+            Point::new(right, bottom),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(COLOR_PANEL_SHADOW)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let accent = Rectangle::new(
+            Point::new(top_left.x + 2, top_left.y + 2),
+            Size::new(size.width.min(44).saturating_sub(4), 2),
         );
-        let _ = highlight
+        let _ = accent
             .into_styled(
                 PrimitiveStyleBuilder::new()
                     .fill_color(COLOR_PANEL_HIGHLIGHT)
@@ -484,17 +502,11 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
                     .build(),
             )
             .draw(display);
-
-        let shadow_height = highlight_height;
-        let shadow_top = top_left.y + size.height as i32 - shadow_height as i32 - 1;
-        let shadow = Rectangle::new(
-            Point::new(top_left.x + 1, shadow_top),
-            Size::new(size.width.saturating_sub(2), shadow_height),
-        );
-        let _ = shadow
+        let corner = Rectangle::new(Point::new(top_left.x + 2, top_left.y + 2), Size::new(2, 10));
+        let _ = corner
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_SHADOW)
+                    .fill_color(COLOR_PANEL_HIGHLIGHT)
                     .stroke_width(0)
                     .build(),
             )
@@ -655,19 +667,7 @@ pub fn render_confirm_overlay(
 
         let label = confirm_button_label(hit.button);
         if !label.is_empty() {
-            let label_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-            let center = Point::new(
-                hit.top_left.x + hit.size.width as i32 / 2,
-                hit.top_left.y + hit.size.height as i32 / 2,
-            );
-            let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
-            let _ = Text::with_alignment(
-                label,
-                Point::new(center.x, baseline),
-                label_style,
-                Alignment::Center,
-            )
-            .draw(display);
+            draw_fitted_button_label(display, hit, label);
         }
     }
 }
@@ -949,19 +949,7 @@ pub fn render_tx_review_overlay(
         draw_button_skeuo(display, hit, base, light, dark, is_active);
 
         if !label.is_empty() {
-            let label_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-            let center = Point::new(
-                hit.top_left.x + hit.size.width as i32 / 2,
-                hit.top_left.y + hit.size.height as i32 / 2,
-            );
-            let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
-            let _ = Text::with_alignment(
-                label,
-                Point::new(center.x, baseline),
-                label_style,
-                Alignment::Center,
-            )
-            .draw(display);
+            draw_fitted_button_label(display, hit, label);
         }
     }
 }
@@ -1024,64 +1012,95 @@ fn draw_button_skeuo(
     dark: Rgb565,
     active: bool,
 ) {
-    let shadow_offset = 2;
-    let shadow_rect = Rectangle::new(
-        Point::new(
-            hit.top_left.x + shadow_offset,
-            hit.top_left.y + shadow_offset,
-        ),
-        hit.size,
-    );
-    let _ = shadow_rect
-        .into_styled(
-            PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_PANEL_SHADOW)
-                .stroke_width(0)
-                .build(),
-        )
-        .draw(display);
-
     let main_rect = Rectangle::new(hit.top_left, hit.size);
     let base_color = if active { light } else { base };
     let _ = main_rect
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .fill_color(base_color)
-                .stroke_color(COLOR_PANEL_BORDER)
+                .stroke_color(if active { light } else { COLOR_PANEL_BORDER })
                 .stroke_width(1)
                 .build(),
         )
         .draw(display);
 
     if hit.size.height > 6 {
-        let highlight = Rectangle::new(
+        let right = hit.top_left.x + hit.size.width as i32 - 2;
+        let bottom = hit.top_left.y + hit.size.height as i32 - 2;
+        let _ = Line::new(
             Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
-            Size::new(hit.size.width.saturating_sub(2), hit.size.height / 3),
-        );
-        let _ = highlight
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(light)
-                    .stroke_width(0)
-                    .build(),
-            )
-            .draw(display);
-
-        let shadow_height = hit.size.height / 4;
-        let shadow_top = hit.top_left.y + hit.size.height as i32 - shadow_height as i32 - 1;
-        let shadow = Rectangle::new(
-            Point::new(hit.top_left.x + 1, shadow_top),
-            Size::new(hit.size.width.saturating_sub(2), shadow_height),
-        );
+            Point::new(right, hit.top_left.y + 1),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(light)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
         let shadow_color = if active { base } else { dark };
-        let _ = shadow
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(shadow_color)
-                    .stroke_width(0)
-                    .build(),
-            )
-            .draw(display);
+        let _ = Line::new(
+            Point::new(hit.top_left.x + 1, bottom),
+            Point::new(right, bottom),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(shadow_color)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        if active && hit.size.width > 8 {
+            let bar = Rectangle::new(
+                Point::new(
+                    hit.top_left.x + 4,
+                    hit.top_left.y + hit.size.height as i32 - 4,
+                ),
+                Size::new(hit.size.width.saturating_sub(8), 2),
+            );
+            let _ = bar
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(COLOR_TEXT)
+                        .stroke_width(0)
+                        .build(),
+                )
+                .draw(display);
+        }
+    }
+}
+
+fn draw_fitted_button_label(display: &mut GuiDisplay<'_>, hit: ButtonHit, label: &str) {
+    if label.is_empty() {
+        return;
+    }
+    let available = hit.size.width.saturating_sub(8) as usize;
+    let large_width = label.len() * FONT_10X20.character_size.width as usize;
+    let center = Point::new(
+        hit.top_left.x + hit.size.width as i32 / 2,
+        hit.top_left.y + hit.size.height as i32 / 2,
+    );
+
+    if large_width <= available {
+        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            label,
+            Point::new(center.x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(display);
+    } else {
+        let style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
+        let baseline = center.y + FONT_8X13.character_size.height as i32 / 3;
+        let _ = Text::with_alignment(
+            label,
+            Point::new(center.x, baseline),
+            style,
+            Alignment::Center,
+        )
+        .draw(display);
     }
 }
 
@@ -1102,6 +1121,8 @@ fn button_label(button: Button) -> &'static str {
         Button::Ok => "OK",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
+        Button::WalletRow(_) => "",
+        Button::Label(_) => "",
     }
 }
 
@@ -1112,6 +1133,8 @@ fn confirm_button_label(button: Button) -> &'static str {
         Button::Digit(_) => "",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
+        Button::WalletRow(_) => "",
+        Button::Label(_) => "",
     }
 }
 

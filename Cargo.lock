@@ -3759,6 +3759,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "nockster-fw-emu"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "embedded-graphics",
+ "embedded-graphics-core",
+ "getrandom 0.2.16",
+ "heapless",
+ "image",
+ "js-sys",
+ "nockster-core",
+ "sha2",
+ "wasm-bindgen",
+ "web-sys",
+ "zeroize",
+]
+
+[[package]]
 name = "nockster-pc"
 version = "0.1.0"
 dependencies = [

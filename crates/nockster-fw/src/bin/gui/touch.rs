@@ -1,5 +1,14 @@
 use nockster_core::TouchCalibration;
-use nockster_fw::axs5106l::Coordinates;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use nockster_fw::axs5106l::Coordinates;
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Coordinates {
+    pub x: u16,
+    pub y: u16,
+}
 
 use super::constants::{
     MIRROR_X, RAW_X_MAX, RAW_X_MIN, RAW_Y_MAX, RAW_Y_MIN, SCREEN_HEIGHT, SCREEN_WIDTH,

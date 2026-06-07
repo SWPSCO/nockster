@@ -4,7 +4,6 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Alignment, Text};
-use esp_hal::time::{Duration, Instant};
 use heapless::String as HString;
 use nockster_core::MAX_SEED_LABEL_LEN;
 
@@ -12,6 +11,7 @@ use super::constants::*;
 use super::layout::header_height;
 use super::render::render_header;
 use super::state::{Button, ButtonHit};
+use super::time::{Duration, Instant};
 use super::GuiDisplay;
 
 const MULTITAP_TIMEOUT: Duration = Duration::from_millis(900);

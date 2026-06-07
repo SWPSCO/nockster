@@ -47,3 +47,4 @@ dist
 node_modules
 pkg
 pkg-fw/
+.DS_Store

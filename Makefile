@@ -6,7 +6,7 @@ PARTITION_TABLE ?= partitions.csv
 NOCKSTER_APP_SLOT_SIZE_BYTES ?= 3145728
 ESP_CHIP ?= esp32s3
 ESP_FLASH_SIZE ?= 16mb
-WASM_TOOLCHAIN := nightly
+WASM_TOOLCHAIN := nightly-2026-06-06
 WASM_TARGET := wasm32-unknown-unknown
 FLASH_PORT ?=
 WIPE_PORT ?=
@@ -57,7 +57,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm js js-test web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-lockdown-rom-print provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw js js-test web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
 
 all: build
 
@@ -252,6 +252,13 @@ wasm-setup:
 wasm: wasm-setup
 	@RUSTUP_TOOLCHAIN=$(WASM_TOOLCHAIN) \
 	wasm-pack build crates/nockster-wasm --target web --out-dir pkg
+
+fw-wasm: wasm-setup
+	@RUSTUP_TOOLCHAIN=$(WASM_TOOLCHAIN) \
+	wasm-pack build crates/nockster-fw-emu --target web --out-dir ../../pkg-fw --out-name siger_fw
+
+serve-fw: fw-wasm
+	@python3 -m http.server 8000
 
 js:
 	@cd nockster-js; \

@@ -1,5 +1,6 @@
 use embedded_graphics::pixelcolor::Rgb565;
-use esp_hal::time::Duration;
+
+use super::time::Duration;
 
 pub const SCREEN_WIDTH: u16 = 172;
 pub const SCREEN_HEIGHT: u16 = 320;

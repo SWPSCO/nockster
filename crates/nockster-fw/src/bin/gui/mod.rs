@@ -9,6 +9,7 @@ mod render;
 mod scroll;
 mod seed;
 mod state;
+mod time;
 mod touch;
 
 pub use label::{LabelEntryContext, LabelInteraction};
@@ -35,7 +36,6 @@ use esp_hal::{
         master::{Config as SpiConfig, ConfigError as SpiConfigError, Spi},
         Mode,
     },
-    time::{Duration, Instant},
     Blocking,
 };
 use heapless::{String as HString, Vec as HVec};
@@ -60,6 +60,7 @@ use render::{
 use state::{
     Button, ButtonHit, InteractionState, TouchDiagnostics, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS,
 };
+use time::{Duration, Instant};
 use touch::{default_touch_calibration as default_calibration, transform_raw_touch, TouchSample};
 
 const UNLOCK_DEMO_MAX_FRAMES: Option<u32> = None; // you can limit demo frames here eg Some(180)

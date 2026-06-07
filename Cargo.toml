@@ -4,6 +4,7 @@ members = [
     "crates/nockster-fw",
     "crates/nockster-cli",
     "crates/nockster-wasm",
+    "crates/nockster-fw-emu",
     "src-tauri",
 ]
 resolver = "2"

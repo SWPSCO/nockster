@@ -1,10 +1,9 @@
 use embedded_graphics::prelude::{Point, Size};
-use esp_hal::time::Instant;
 use heapless::{String as HString, Vec as HVec};
-use nockster_fw::axs5106l::Coordinates;
 
 use super::constants::PIN_BUFFER_LEN;
-use super::touch::ScreenPoint;
+use super::time::Instant;
+use super::touch::{Coordinates, ScreenPoint};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiMode {

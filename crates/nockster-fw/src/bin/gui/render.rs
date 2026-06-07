@@ -959,6 +959,14 @@ pub fn render_tx_review_overlay(
 }
 
 pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
+    draw_unlock_header_with_menu(display, active, false);
+}
+
+pub fn draw_unlock_header_with_menu(
+    display: &mut GuiDisplay<'_>,
+    lock_active: bool,
+    menu_active: bool,
+) {
     let header_h = header_height();
     let width = SCREEN_WIDTH as i32;
     let base = COLOR_SURFACE_HIGH;
@@ -1004,18 +1012,18 @@ pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
             .draw(display);
     }
 
-    draw_header_action_well(display, Point::new(28, header_h / 2), active);
-    draw_header_action_well(display, settings_menu_center(), false);
+    draw_header_action_well(display, Point::new(28, header_h / 2), lock_active);
+    draw_header_action_well(display, settings_menu_center(), menu_active);
     draw_header_lock_icon(
         display,
-        active,
-        if active {
+        lock_active,
+        if lock_active {
             COLOR_SURFACE_LOW
         } else {
             COLOR_PANEL_BASE
         },
     );
-    draw_settings_menu_icon(display, false);
+    draw_settings_menu_icon(display, menu_active);
 }
 
 fn draw_button_skeuo(

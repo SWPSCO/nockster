@@ -23,12 +23,12 @@ use super::state::{Button, ButtonHit, MenuItem};
 use super::GuiDisplay;
 
 const MENU_MARGIN: i32 = 16;
-const MENU_BUTTON_HEIGHT: i32 = 34;
+const MENU_BUTTON_HEIGHT: i32 = 40;
 const MENU_BUTTON_GAP: i32 = 10;
 const MENU_CONTENT_TOP: i32 = 4;
 const MENU_CONTENT_BOTTOM: i32 = 8;
-const THEME_BUTTON_HEIGHT: i32 = 28;
-const THEME_BUTTON_GAP: i32 = 5;
+const THEME_BUTTON_HEIGHT: i32 = 34;
+const THEME_BUTTON_GAP: i32 = 2;
 
 /// One row in the wallet list (a seed slot the user can examine).
 #[derive(Clone)]
@@ -180,7 +180,7 @@ fn menu_hit_to_screen(hit: ButtonHit, viewport: Rectangle, offset_y: i32) -> But
 
 fn theme_button(index: usize, theme: Theme) -> ButtonHit {
     let width = (SCREEN_WIDTH as i32 - 2 * MENU_MARGIN).max(80);
-    let y = header_height() + 9 + index as i32 * (THEME_BUTTON_HEIGHT + THEME_BUTTON_GAP);
+    let y = header_height() + 3 + index as i32 * (THEME_BUTTON_HEIGHT + THEME_BUTTON_GAP);
     ButtonHit {
         button: Button::Theme(theme),
         top_left: Point::new(MENU_MARGIN, y),
@@ -190,7 +190,7 @@ fn theme_button(index: usize, theme: Theme) -> ButtonHit {
 
 fn theme_back_button(index: usize) -> ButtonHit {
     let width = (SCREEN_WIDTH as i32 - 2 * MENU_MARGIN).max(80);
-    let y = header_height() + 9 + index as i32 * (THEME_BUTTON_HEIGHT + THEME_BUTTON_GAP);
+    let y = header_height() + 3 + index as i32 * (THEME_BUTTON_HEIGHT + THEME_BUTTON_GAP);
     ButtonHit {
         button: Button::Menu(MenuItem::Back),
         top_left: Point::new(MENU_MARGIN, y),

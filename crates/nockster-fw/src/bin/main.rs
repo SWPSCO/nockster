@@ -30,7 +30,7 @@ use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
     AboutInfo, Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
-    TxReviewSummary, WalletRow, WalletRows, TX_REVIEW_FLAG_HIGH_FEE,
+    TxReviewSummary, WalletInteraction, WalletRow, WalletRows, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 use heapless::{String as HString, Vec as HVec};
@@ -117,6 +117,19 @@ static PENDING_USB_INITPIN_ID: Mutex<RefCell<Option<u32>>> = Mutex::new(RefCell:
 static INITPIN_PROGRESS: Mutex<RefCell<u8>> = Mutex::new(RefCell::new(InitPinProgress::Idle as u8));
 #[allow(clippy::declare_interior_mutable_const)]
 static PENDING_SOFT_REBOOT: Mutex<RefCell<bool>> = Mutex::new(RefCell::new(false));
+
+struct WalletRowsCache {
+    seed_generation: u64,
+    label_generation: u64,
+    active_slot: u8,
+    rows: WalletRows,
+}
+
+#[allow(clippy::declare_interior_mutable_const)]
+static WALLET_ROWS_CACHE: Mutex<RefCell<Option<WalletRowsCache>>> = Mutex::new(RefCell::new(None));
+
+#[allow(clippy::declare_interior_mutable_const)]
+static WALLET_LABEL_GENERATION: Mutex<RefCell<u64>> = Mutex::new(RefCell::new(0));
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1086,10 +1099,13 @@ fn main() -> ! {
                                 ui.show_add_seed();
                             }
                         }
-                        MenuItem::Theme | MenuItem::Calibrate | MenuItem::Back => {}
+                        MenuItem::Theme | MenuItem::Calibrate => {}
                     },
                     GuiInteraction::Label(interaction) => {
                         handle_label_interaction(interaction, ui, &mut hid);
+                    }
+                    GuiInteraction::Wallet(interaction) => {
+                        handle_wallet_interaction(interaction, ui, &mut hid);
                     }
                     GuiInteraction::ExitDiagnostics => {
                         ui.hide_touch_diagnostics(session::is_locked());
@@ -1939,9 +1955,13 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
             Response::Ok
         }
         Request::SetSeed { .. } | Request::Wipe | Request::Lock | Request::SelectSeed { .. } => {
-            seed_store::handle_session_request(req).unwrap_or(Response::Err {
+            let response = seed_store::handle_session_request(req).unwrap_or(Response::Err {
                 code: ERR_UNSUPPORTED_VERSION,
-            })
+            });
+            if matches!(response, Response::Ok) {
+                warm_wallet_rows_cache();
+            }
+            response
         }
         Request::GetFingerprint
         | Request::GetPubkey { .. }
@@ -1994,9 +2014,16 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
             })
         }
         Request::GetSeedLabels | Request::SetSeedLabel { .. } => {
-            dispatch::handle_seed_label_request(req, is_device_locked()).unwrap_or(Response::Err {
-                code: ERR_UNSUPPORTED_VERSION,
-            })
+            let response = dispatch::handle_seed_label_request(req, is_device_locked()).unwrap_or(
+                Response::Err {
+                    code: ERR_UNSUPPORTED_VERSION,
+                },
+            );
+            if matches!(req, Request::SetSeedLabel { .. }) && matches!(response, Response::Ok) {
+                bump_wallet_label_generation();
+                warm_wallet_rows_cache();
+            }
+            response
         }
         Request::GetAddressBook => Response::Err {
             code: ERR_UNSUPPORTED_VERSION,
@@ -2028,6 +2055,7 @@ fn apply_unlock_success(seeds: &[[u8; 64]], master_key: &[u8; 32]) {
     update_seed_store_from_slice(seeds);
     store_master_key(master_key);
     session::set_locked(false);
+    warm_wallet_rows_cache();
 }
 
 fn zeroize_seed_vec_runtime(seeds: &mut [[u8; 64]]) {
@@ -2160,6 +2188,7 @@ fn handle_initpin_outcome<B: usb_device::bus::UsbBus>(
             store_master_key(&master_key);
             set_seed(&seed64);
             session::set_locked(false);
+            warm_wallet_rows_cache();
             if let Some(ui) = ui.as_mut() {
                 ui.show_unlock_success();
             }
@@ -2316,8 +2345,57 @@ fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
     }
 }
 
-/// Gathers the (non-secret) seed-slot summary for the read-only Wallets view.
+fn wallet_label_generation() -> u64 {
+    critical_section::with(|cs| *WALLET_LABEL_GENERATION.borrow_ref(cs))
+}
+
+fn bump_wallet_label_generation() {
+    critical_section::with(|cs| {
+        let mut generation = WALLET_LABEL_GENERATION.borrow_ref_mut(cs);
+        *generation = generation.wrapping_add(1);
+    });
+}
+
+fn warm_wallet_rows_cache() {
+    let _ = build_wallet_rows();
+}
+
+/// Gathers the (non-secret) seed-slot summary for the Wallets view, using a
+/// cache so expensive pubkey/address derivation happens when slots change rather
+/// than on first screen open.
 fn build_wallet_rows() -> WalletRows {
+    let seed_generation = session::seed_generation();
+    let label_generation = wallet_label_generation();
+    let active_slot = session::active_slot_index().unwrap_or(0) as u8;
+
+    if let Some(rows) = critical_section::with(|cs| {
+        WALLET_ROWS_CACHE
+            .borrow_ref(cs)
+            .as_ref()
+            .filter(|cache| {
+                cache.seed_generation == seed_generation
+                    && cache.label_generation == label_generation
+                    && cache.active_slot == active_slot
+            })
+            .map(|cache| cache.rows.clone())
+    }) {
+        return rows;
+    }
+
+    let rows = build_wallet_rows_uncached();
+    let cache_rows = rows.clone();
+    critical_section::with(|cs| {
+        *WALLET_ROWS_CACHE.borrow_ref_mut(cs) = Some(WalletRowsCache {
+            seed_generation,
+            label_generation,
+            active_slot,
+            rows: cache_rows,
+        });
+    });
+    rows
+}
+
+fn build_wallet_rows_uncached() -> WalletRows {
     let count = session::seed_slot_count();
     let active = session::active_slot_index().unwrap_or(0);
     let labels = NvsStore::new().read_seed_labels().unwrap_or_default();
@@ -2363,10 +2441,13 @@ fn build_about_info() -> AboutInfo {
     }
 }
 
-fn finish_label_entry(ui: &mut Gui<'_>, context: LabelEntryContext) {
+fn finish_label_entry(ui: &mut Gui<'_>, slot: u8, context: LabelEntryContext) {
     match context {
         LabelEntryContext::WalletMenu | LabelEntryContext::AddedSeed => {
             ui.show_wallets(&build_wallet_rows());
+        }
+        LabelEntryContext::WalletDetail => {
+            ui.show_wallet_detail(slot, &build_wallet_rows());
         }
         LabelEntryContext::FirstSeed => {
             ui.show_unlock_success();
@@ -2388,8 +2469,10 @@ fn handle_label_interaction<B: usb_device::bus::UsbBus>(
             let saved = NvsStore::new().write_seed_label(slot as usize, label.as_str());
             match saved {
                 Ok(()) => {
+                    bump_wallet_label_generation();
+                    warm_wallet_rows_cache();
                     usb_debug(hid, b"seed label saved\r\n");
-                    finish_label_entry(ui, context);
+                    finish_label_entry(ui, slot, context);
                 }
                 Err(_) => {
                     usb_debug(hid, b"seed label save failed\r\n");
@@ -2397,8 +2480,45 @@ fn handle_label_interaction<B: usb_device::bus::UsbBus>(
                 }
             }
         }
-        LabelInteraction::Cancelled { context } => {
-            finish_label_entry(ui, context);
+        LabelInteraction::Cancelled { slot, context } => {
+            finish_label_entry(ui, slot, context);
+        }
+    }
+}
+
+fn handle_wallet_interaction<B: usb_device::bus::UsbBus>(
+    interaction: WalletInteraction,
+    ui: &mut Gui<'_>,
+    hid: &mut HIDClass<'_, B>,
+) {
+    match interaction {
+        WalletInteraction::DeleteConfirmed { slot } => {
+            if session::is_locked() {
+                ui.begin_unlock(None);
+                return;
+            }
+            let Some(master_key) = master_key_copy() else {
+                ui.show_idle_message_timed("Delete failed", Duration::from_millis(3_000));
+                return;
+            };
+            ui.show_unlocking_stage("Deleting seed");
+            let request = SeedOpRequest {
+                msg_id: 0,
+                op: SeedOp::Delete { slot, master_key },
+            };
+            let outcome = seed_store::compute_seed_op_outcome(request);
+            let applied = seed_store::apply_seed_op_outcome(outcome);
+            usb_debug(hid, applied.debug);
+            if matches!(applied.response, Response::Ok) {
+                warm_wallet_rows_cache();
+                if session::has_seed() {
+                    ui.show_wallets(&build_wallet_rows());
+                } else {
+                    ui.show_seed_setup();
+                }
+            } else {
+                ui.show_idle_message_timed("Delete failed", Duration::from_millis(3_000));
+            }
         }
     }
 }
@@ -2409,6 +2529,12 @@ fn handle_seed_op_outcome<B: usb_device::bus::UsbBus>(
     hid: &mut HIDClass<'_, B>,
 ) -> (u32, Response, Option<u8>) {
     let applied = seed_store::apply_seed_op_outcome(outcome);
+    if matches!(
+        applied.ui_effect,
+        SeedOpUiEffect::Added | SeedOpUiEffect::Deleted | SeedOpUiEffect::Reset
+    ) {
+        warm_wallet_rows_cache();
+    }
     if let Some(ui) = ui {
         match applied.ui_effect {
             SeedOpUiEffect::None => {}

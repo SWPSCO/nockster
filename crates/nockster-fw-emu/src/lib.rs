@@ -11,7 +11,6 @@ use core::fmt::Write as _;
 use embedded_graphics::mono_font::ascii::FONT_6X10;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
-use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
 use heapless::{String as HString, Vec as HVec};
 use nockster_core::{BuildInfo, UpdateTrust, MAX_SEED_LABEL_LEN, MAX_SEED_SLOTS, PROTO_V1};
@@ -35,6 +34,7 @@ const SPLASH_DURATION: Duration = Duration::from_millis(1_200);
 enum ActiveTarget {
     HeaderLock,
     HeaderMenu,
+    HeaderBack,
     Calibration,
     Diagnostics,
     Button { mode: GuiMode, hit: ButtonHit },
@@ -98,8 +98,11 @@ pub struct SigerGui {
     seed_entry_state: SeedEntryState,
     seed_flow_is_add: bool,
     menu_scroll: gui::scroll::ScrollState,
+    menu_drag: gui::scroll::DragState,
     wallet_rows: WalletRows,
     wallets_scroll: gui::scroll::ScrollState,
+    wallet_drag: gui::scroll::DragState,
+    selected_wallet_slot: Option<u8>,
     label_entry_state: gui::label::LabelEntryState,
     unlock_demo_state: Option<gui::demo::AnimationState>,
     unlock_demo_last_frame_start: Option<Instant>,
@@ -121,8 +124,11 @@ impl SigerGui {
             seed_entry_state: SeedEntryState::new(),
             seed_flow_is_add: false,
             menu_scroll: gui::scroll::ScrollState::new(gui::menu::menu_viewport()),
+            menu_drag: gui::scroll::DragState::new(),
             wallet_rows: HVec::new(),
             wallets_scroll: gui::scroll::ScrollState::new(gui::menu::wallets_viewport()),
+            wallet_drag: gui::scroll::DragState::new(),
+            selected_wallet_slot: None,
             label_entry_state: gui::label::LabelEntryState::new(),
             unlock_demo_state: None,
             unlock_demo_last_frame_start: None,
@@ -151,7 +157,9 @@ impl SigerGui {
 
     pub fn release_touch(&mut self) {
         self.menu_scroll.drag_end();
+        self.menu_drag.reset();
         self.wallets_scroll.drag_end();
+        self.wallet_drag.reset();
         let active = self.active_target.take();
         if let Some(active) = active {
             self.draw_active_target(active, false);
@@ -166,26 +174,32 @@ impl SigerGui {
             return Ok(());
         }
 
-        if self.mode == GuiMode::Wallets
-            && self.wallets_scroll.contains(point)
-            && self.wallets_scroll.drag_to(point.y)
-        {
-            self.clear_active_target();
-            gui::menu::render_wallets_viewport(
-                &mut self.display,
-                &self.wallet_rows,
-                &mut self.wallets_scroll,
-            );
-            return Ok(());
+        if self.mode == GuiMode::Wallets {
+            if let gui::scroll::DragUpdate::Dragging { moved } =
+                self.wallet_drag.update(point, &mut self.wallets_scroll)
+            {
+                self.clear_active_target();
+                if moved {
+                    gui::menu::render_wallets_viewport(
+                        &mut self.display,
+                        &self.wallet_rows,
+                        &mut self.wallets_scroll,
+                    );
+                }
+                return Ok(());
+            }
         }
 
-        if self.mode == GuiMode::Menu
-            && self.menu_scroll.contains(point)
-            && self.menu_scroll.drag_to(point.y)
-        {
-            self.clear_active_target();
-            gui::menu::render_menu_viewport(&mut self.display, &mut self.menu_scroll);
-            return Ok(());
+        if self.mode == GuiMode::Menu {
+            if let gui::scroll::DragUpdate::Dragging { moved } =
+                self.menu_drag.update(point, &mut self.menu_scroll)
+            {
+                self.clear_active_target();
+                if moved {
+                    gui::menu::render_menu_viewport(&mut self.display, &mut self.menu_scroll);
+                }
+                return Ok(());
+            }
         }
 
         let target = self.target_from_point(point);
@@ -230,6 +244,7 @@ impl SigerGui {
         self.stop_unlock_animation();
         self.clear_active_target();
         self.menu_scroll.reset();
+        self.menu_drag.reset();
         self.mode = GuiMode::Menu;
         gui::menu::render_menu(&mut self.display, &mut self.menu_scroll);
     }
@@ -252,12 +267,40 @@ impl SigerGui {
         self.stop_unlock_animation();
         self.clear_active_target();
         self.mode = GuiMode::Wallets;
+        self.selected_wallet_slot = None;
         self.wallets_scroll.reset();
+        self.wallet_drag.reset();
         gui::menu::render_wallets(
             &mut self.display,
             &self.wallet_rows,
             &mut self.wallets_scroll,
         );
+    }
+
+    fn show_wallet_detail(&mut self, slot: u8) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::WalletDetail;
+        self.selected_wallet_slot = Some(slot);
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        gui::menu::render_wallet_detail(&mut self.display, row.as_ref());
+    }
+
+    fn show_wallet_delete_confirm(&mut self, slot: u8) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::WalletDeleteConfirm;
+        self.selected_wallet_slot = Some(slot);
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        gui::menu::render_wallet_delete_confirm(&mut self.display, row.as_ref());
     }
 
     fn show_add_seed(&mut self) {
@@ -291,7 +334,48 @@ impl SigerGui {
         gui::label::render_label_entry(&mut self.display, &self.label_entry_state);
     }
 
+    fn header_back_enabled(&self) -> bool {
+        matches!(
+            self.mode,
+            GuiMode::Menu
+                | GuiMode::About
+                | GuiMode::Themes
+                | GuiMode::Wallets
+                | GuiMode::WalletDetail
+                | GuiMode::WalletDeleteConfirm
+                | GuiMode::Diagnostics
+                | GuiMode::TouchCalibration
+        ) || (self.mode == GuiMode::SeedFirstBoot && self.seed_flow_is_add)
+    }
+
+    fn handle_header_back(&mut self) {
+        match self.mode {
+            GuiMode::Menu => self.show_unlocked(""),
+            GuiMode::About
+            | GuiMode::Themes
+            | GuiMode::Wallets
+            | GuiMode::Diagnostics
+            | GuiMode::TouchCalibration => self.show_menu(),
+            GuiMode::WalletDetail => self.show_wallets(),
+            GuiMode::WalletDeleteConfirm => {
+                if let Some(slot) = self.selected_wallet_slot {
+                    self.show_wallet_detail(slot);
+                } else {
+                    self.show_wallets();
+                }
+            }
+            GuiMode::SeedFirstBoot if self.seed_flow_is_add => {
+                self.seed_flow_is_add = false;
+                self.show_menu();
+            }
+            _ => {}
+        }
+    }
+
     fn target_from_point(&self, point: Point) -> Option<ActiveTarget> {
+        if self.header_back_enabled() && gui::layout::point_in_header_back(point) {
+            return Some(ActiveTarget::HeaderBack);
+        }
         match self.mode {
             GuiMode::Unlocked => {
                 if gui::layout::lock_button_rect().contains(point) {
@@ -334,6 +418,22 @@ impl SigerGui {
                         mode: self.mode,
                         hit,
                     })
+            }
+            GuiMode::WalletDetail => {
+                gui::menu::button_from_point_wallet_detail(point, self.selected_wallet_slot).map(
+                    |hit| ActiveTarget::Button {
+                        mode: self.mode,
+                        hit,
+                    },
+                )
+            }
+            GuiMode::WalletDeleteConfirm => {
+                gui::menu::button_from_point_wallet_delete(point, self.selected_wallet_slot).map(
+                    |hit| ActiveTarget::Button {
+                        mode: self.mode,
+                        hit,
+                    },
+                )
             }
             GuiMode::LabelEntry => {
                 gui::label::button_from_point_label_entry(point).map(|hit| ActiveTarget::Button {
@@ -394,6 +494,9 @@ impl SigerGui {
             ActiveTarget::HeaderMenu => {
                 gui::render::draw_unlock_header_with_menu(&mut self.display, false, active);
             }
+            ActiveTarget::HeaderBack => {
+                gui::render::draw_header_back_button(&mut self.display, active);
+            }
             ActiveTarget::Calibration => {}
             ActiveTarget::Diagnostics => {}
             ActiveTarget::Button { mode, hit } => match mode {
@@ -401,9 +504,12 @@ impl SigerGui {
                     gui::render::draw_button(&mut self.display, GuiMode::Locked, hit, active)
                 }
                 GuiMode::Menu => gui::menu::draw_menu_button(&mut self.display, hit, active),
-                GuiMode::About => gui::menu::draw_about_button(&mut self.display, active),
+                GuiMode::About => {}
                 GuiMode::Themes => gui::menu::draw_theme_button(&mut self.display, hit, active),
                 GuiMode::Wallets => self.draw_wallet_active_target(hit, active),
+                GuiMode::WalletDetail | GuiMode::WalletDeleteConfirm => {
+                    gui::menu::draw_wallet_detail_button(&mut self.display, hit, active)
+                }
                 GuiMode::LabelEntry => gui::label::draw_label_button(
                     &mut self.display,
                     hit,
@@ -426,22 +532,12 @@ impl SigerGui {
 
     fn draw_wallet_active_target(&mut self, hit: ButtonHit, active: bool) {
         match hit.button {
-            Button::Menu(MenuItem::Back) => gui::menu::draw_wallets_back(&mut self.display, active),
-            Button::WalletRow(_) if active => {
-                let rect = Rectangle::new(hit.top_left, hit.size);
-                let _ = rect
-                    .into_styled(
-                        PrimitiveStyleBuilder::new()
-                            .stroke_color(palette::keypad_active_light())
-                            .stroke_width(2)
-                            .build(),
-                    )
-                    .draw(&mut self.display);
-            }
-            Button::WalletRow(_) => gui::menu::render_wallets_viewport(
+            Button::WalletRow(_) => gui::menu::draw_wallet_row_press(
                 &mut self.display,
+                hit,
                 &self.wallet_rows,
                 &mut self.wallets_scroll,
+                active,
             ),
             _ => {}
         }
@@ -454,6 +550,7 @@ impl SigerGui {
                 self.show_locked("PIN");
             }
             ActiveTarget::HeaderMenu => self.show_menu(),
+            ActiveTarget::HeaderBack => self.handle_header_back(),
             ActiveTarget::Calibration => self.advance_calibration(),
             ActiveTarget::Diagnostics => self.show_menu(),
             ActiveTarget::Button { mode, hit } => {
@@ -464,6 +561,8 @@ impl SigerGui {
                     GuiMode::About => self.handle_about(point),
                     GuiMode::Themes => self.handle_themes(point),
                     GuiMode::Wallets => self.handle_wallets(point),
+                    GuiMode::WalletDetail => self.handle_wallet_detail(point),
+                    GuiMode::WalletDeleteConfirm => self.handle_wallet_delete_confirm(point),
                     GuiMode::LabelEntry => self.handle_label_entry(point),
                     GuiMode::SeedFirstBoot => self.handle_seed_setup(point),
                     GuiMode::SeedEntry => self.handle_seed_entry(point),
@@ -523,19 +622,11 @@ impl SigerGui {
             Button::Menu(MenuItem::About) => self.show_about(),
             Button::Menu(MenuItem::Diagnostics) => self.show_diagnostics(),
             Button::Menu(MenuItem::Calibrate) => self.show_calibration_demo(),
-            Button::Menu(MenuItem::Back) => self.show_unlocked(""),
             _ => {}
         }
     }
 
-    fn handle_about(&mut self, point: Point) {
-        let Some(hit) = gui::menu::button_from_point_about(point) else {
-            return;
-        };
-        if matches!(hit.button, Button::Menu(MenuItem::Back)) {
-            self.show_menu();
-        }
-    }
+    fn handle_about(&mut self, _point: Point) {}
 
     fn handle_themes(&mut self, point: Point) {
         let Some(hit) = gui::menu::button_from_point_themes(point) else {
@@ -546,34 +637,58 @@ impl SigerGui {
                 gui::palette::set_theme(theme);
                 gui::menu::render_themes(&mut self.display);
             }
-            Button::Menu(MenuItem::Back) => self.show_menu(),
             _ => {}
         }
     }
 
     fn handle_wallets(&mut self, point: Point) {
-        if self.wallets_scroll.contains(point) && self.wallets_scroll.drag_to(point.y) {
-            gui::menu::render_wallets_viewport(
-                &mut self.display,
-                &self.wallet_rows,
-                &mut self.wallets_scroll,
-            );
-            return;
-        }
-
         let Some(hit) =
             gui::menu::button_from_point_wallets(point, &self.wallet_rows, &self.wallets_scroll)
         else {
             return;
         };
         match hit.button {
-            Button::Menu(MenuItem::Back) => self.show_menu(),
             Button::WalletRow(slot) => {
+                self.show_wallet_detail(slot);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_wallet_detail(&mut self, point: Point) {
+        let Some(hit) =
+            gui::menu::button_from_point_wallet_detail(point, self.selected_wallet_slot)
+        else {
+            return;
+        };
+        match hit.button {
+            Button::WalletEdit(slot) => {
                 let mut current = HString::<MAX_SEED_LABEL_LEN>::new();
                 if let Some(row) = self.wallet_rows.iter().find(|row| row.index == slot) {
                     let _ = current.push_str(row.label.as_str());
                 }
-                self.show_label_entry(slot, current.as_str(), LabelEntryContext::WalletMenu);
+                self.show_label_entry(slot, current.as_str(), LabelEntryContext::WalletDetail);
+            }
+            Button::WalletDelete(slot) => self.show_wallet_delete_confirm(slot),
+            _ => {}
+        }
+    }
+
+    fn handle_wallet_delete_confirm(&mut self, point: Point) {
+        let Some(hit) =
+            gui::menu::button_from_point_wallet_delete(point, self.selected_wallet_slot)
+        else {
+            return;
+        };
+        match hit.button {
+            Button::WalletDeleteCancel(slot) => self.show_wallet_detail(slot),
+            Button::WalletDeleteConfirm(slot) => {
+                self.delete_demo_wallet(slot);
+                if self.wallet_rows.is_empty() {
+                    self.show_unlocked("Wallet deleted");
+                } else {
+                    self.show_wallets();
+                }
             }
             _ => {}
         }
@@ -607,6 +722,7 @@ impl SigerGui {
                     LabelEntryContext::WalletMenu | LabelEntryContext::AddedSeed => {
                         self.show_wallets()
                     }
+                    LabelEntryContext::WalletDetail => self.show_wallet_detail(slot),
                     LabelEntryContext::FirstSeed => self.show_unlocked("Wallet named"),
                 }
             }
@@ -615,6 +731,9 @@ impl SigerGui {
                 match self.label_entry_state.context() {
                     LabelEntryContext::WalletMenu | LabelEntryContext::AddedSeed => {
                         self.show_wallets()
+                    }
+                    LabelEntryContext::WalletDetail => {
+                        self.show_wallet_detail(self.label_entry_state.slot())
                     }
                     LabelEntryContext::FirstSeed => self.show_unlocked("Wallet ready"),
                 }
@@ -730,7 +849,12 @@ impl SigerGui {
         self.clear_active_target();
         self.mode = GuiMode::Diagnostics;
         let _ = self.display.clear(palette::background());
-        gui::render::render_header(&mut self.display, "Diagnostics", palette::surface_high());
+        gui::render::render_header_with_back(
+            &mut self.display,
+            "Diagnostics",
+            palette::surface_high(),
+            false,
+        );
         draw_left_lines(
             &mut self.display,
             &[
@@ -802,6 +926,23 @@ impl SigerGui {
         }
     }
 
+    fn delete_demo_wallet(&mut self, slot: u8) {
+        let mut next: WalletRows = HVec::new();
+        for row in self.wallet_rows.iter() {
+            if row.index == slot {
+                continue;
+            }
+            let mut row = row.clone();
+            if row.index > slot {
+                row.index -= 1;
+            }
+            row.active = next.is_empty();
+            let _ = next.push(row);
+        }
+        self.wallet_rows = next;
+        self.selected_wallet_slot = None;
+    }
+
     fn advance_unlock_animation(&mut self) {
         if self.mode != GuiMode::Unlocked {
             return;
@@ -871,10 +1012,11 @@ impl SigerGui {
             .calibration_step
             .min(CALIBRATION_POINTS.len().saturating_sub(1));
         let _ = self.display.clear(palette::background());
-        gui::render::render_header(
+        gui::render::render_header_with_back(
             &mut self.display,
             "Calibrate Touch",
             palette::surface_high(),
+            false,
         );
         gui::render::render_touch_calibration_target(
             &mut self.display,

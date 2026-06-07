@@ -17,7 +17,7 @@ pub use label::{LabelEntryContext, LabelInteraction};
 pub use menu::{AboutInfo, WalletRow, WalletRows};
 pub use seed::{SeedInteraction, SeedPhrase};
 pub use state::{
-    GuiInteraction, GuiMode, MenuItem, TxReviewSummary, TX_REVIEW_FLAG_HIGH_FEE,
+    GuiInteraction, GuiMode, MenuItem, TxReviewSummary, WalletInteraction, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 pub use touch::{default_touch_calibration, touch_calibration_valid, ScreenPoint};
@@ -42,8 +42,9 @@ use esp_hal::{
 use heapless::{String as HString, Vec as HVec};
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review,
-    header_height, lock_button_rect, point_in_header_settings_menu, tx_review_detail_rect,
-    tx_review_list_rect, tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_PADDING,
+    header_back_button, header_height, lock_button_rect, point_in_header_back,
+    point_in_header_settings_menu, tx_review_detail_rect, tx_review_list_rect,
+    tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_PADDING,
 };
 use mipidsi::{
     error::InitError as DisplayInitError, models::ST7789, options::Orientation,
@@ -53,10 +54,10 @@ use nockster_core::TouchCalibration;
 use nockster_fw::axs5106l::{Axs5106l, Coordinates, Rotation};
 use nockster_fw::nvs_store::NvsStore;
 use render::{
-    blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message, draw_keypad,
-    draw_unlock_header, draw_unlock_spinner_frame, render_confirm_overlay, render_header,
-    render_idle_overlay, render_touch_calibration_target, render_touch_diagnostics,
-    render_tx_review_overlay,
+    blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message,
+    draw_header_back_button, draw_keypad, draw_unlock_header, draw_unlock_spinner_frame,
+    render_confirm_overlay, render_header, render_header_with_back, render_idle_overlay,
+    render_touch_calibration_target, render_touch_diagnostics, render_tx_review_overlay,
 };
 use state::{
     Button, ButtonHit, InteractionState, TouchDiagnostics, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS,
@@ -131,13 +132,12 @@ pub struct Gui<'d> {
     seed_flow_is_add: bool,
     /// Scroll state for the settings menu.
     menu_scroll: scroll::ScrollState,
-    menu_touch_start: Option<ScreenPoint>,
-    menu_drag_active: bool,
+    menu_drag: scroll::DragState,
     /// Wallet list being displayed, plus its scroll position (drag-scrollable).
     wallet_rows: WalletRows,
     wallets_scroll: scroll::ScrollState,
-    wallet_touch_start: Option<ScreenPoint>,
-    wallet_drag_active: bool,
+    wallet_drag: scroll::DragState,
+    selected_wallet_slot: Option<u8>,
     label_entry_state: label::LabelEntryState,
 }
 
@@ -261,12 +261,11 @@ impl<'d> Gui<'d> {
             touch_calibration_last_raw: None,
             seed_flow_is_add: false,
             menu_scroll: scroll::ScrollState::new(menu::menu_viewport()),
-            menu_touch_start: None,
-            menu_drag_active: false,
+            menu_drag: scroll::DragState::new(),
             wallet_rows: HVec::new(),
             wallets_scroll: scroll::ScrollState::new(menu::wallets_viewport()),
-            wallet_touch_start: None,
-            wallet_drag_active: false,
+            wallet_drag: scroll::DragState::new(),
+            selected_wallet_slot: None,
             label_entry_state: label::LabelEntryState::new(),
         };
 
@@ -288,10 +287,11 @@ impl<'d> Gui<'d> {
         self.interaction.finger_down = false;
         self.interaction.last_touch_sample_at = None;
         let _ = self.display.clear(palette::background());
-        render_header(
+        render_header_with_back(
             &mut self.display,
             "Calibrate Touch",
             palette::surface_high(),
+            false,
         );
         self.render_touch_calibration_target();
     }
@@ -305,7 +305,12 @@ impl<'d> Gui<'d> {
         let _ = self.touch_diagnostics_build.push_str(build);
         self.touch_diagnostics_last_render = None;
         let _ = self.display.clear(palette::background());
-        render_header(&mut self.display, "Diag (tap top)", palette::surface_high());
+        render_header_with_back(
+            &mut self.display,
+            "Diagnostics",
+            palette::surface_high(),
+            false,
+        );
         self.render_touch_diagnostics_now();
         self.refresh_auto_lock(Instant::now());
     }
@@ -594,6 +599,8 @@ impl<'d> Gui<'d> {
                 | GuiMode::Diagnostics
                 | GuiMode::Menu
                 | GuiMode::Wallets
+                | GuiMode::WalletDetail
+                | GuiMode::WalletDeleteConfirm
                 | GuiMode::LabelEntry
         )
     }
@@ -756,8 +763,7 @@ impl<'d> Gui<'d> {
         self.disarm_active();
         self.stop_unlock_demo();
         self.menu_scroll.reset();
-        self.menu_touch_start = None;
-        self.menu_drag_active = false;
+        self.menu_drag.reset();
         self.mode = GuiMode::Menu;
         menu::render_menu(&mut self.display, &mut self.menu_scroll);
     }
@@ -779,6 +785,7 @@ impl<'d> Gui<'d> {
     pub fn show_wallets(&mut self, rows: &[WalletRow]) {
         self.disarm_active();
         self.stop_unlock_demo();
+        self.selected_wallet_slot = None;
         self.wallet_rows.clear();
         for row in rows {
             if self.wallet_rows.push(row.clone()).is_err() {
@@ -786,8 +793,7 @@ impl<'d> Gui<'d> {
             }
         }
         self.wallets_scroll.reset();
-        self.wallet_touch_start = None;
-        self.wallet_drag_active = false;
+        self.wallet_drag.reset();
         self.mode = GuiMode::Wallets;
         menu::render_wallets(
             &mut self.display,
@@ -796,8 +802,53 @@ impl<'d> Gui<'d> {
         );
     }
 
-    pub fn show_wallet_label_entry(&mut self, slot: u8, current: &str) {
-        self.show_label_entry(slot, current, label::LabelEntryContext::WalletMenu);
+    pub fn show_wallet_detail(&mut self, slot: u8, rows: &[WalletRow]) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.wallet_rows.clear();
+        for row in rows {
+            if self.wallet_rows.push(row.clone()).is_err() {
+                break;
+            }
+        }
+        self.selected_wallet_slot = Some(slot);
+        self.mode = GuiMode::WalletDetail;
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        menu::render_wallet_detail(&mut self.display, row.as_ref());
+    }
+
+    fn show_wallet_detail_current(&mut self, slot: u8) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.selected_wallet_slot = Some(slot);
+        self.mode = GuiMode::WalletDetail;
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        menu::render_wallet_detail(&mut self.display, row.as_ref());
+    }
+
+    fn show_wallet_delete_confirm(&mut self, slot: u8) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.selected_wallet_slot = Some(slot);
+        self.mode = GuiMode::WalletDeleteConfirm;
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        menu::render_wallet_delete_confirm(&mut self.display, row.as_ref());
+    }
+
+    fn show_wallet_detail_label_entry(&mut self, slot: u8, current: &str) {
+        self.show_label_entry(slot, current, label::LabelEntryContext::WalletDetail);
     }
 
     pub fn show_new_seed_label_entry(&mut self, slot: u8, context: label::LabelEntryContext) {
@@ -825,10 +876,6 @@ impl<'d> Gui<'d> {
                 self.begin_touch_calibration();
                 None
             }
-            MenuItem::Back => {
-                self.show_unlock_success();
-                None
-            }
             // These need host-side context (build string, master key, slot list),
             // so the main loop handles them.
             MenuItem::Wallets | MenuItem::AddSeed | MenuItem::Diagnostics | MenuItem::About => {
@@ -837,12 +884,53 @@ impl<'d> Gui<'d> {
         }
     }
 
-    fn handle_about_button(&mut self, button: Button) -> Option<GuiInteraction> {
-        match button {
-            Button::Menu(MenuItem::Back) => {
+    fn header_back_enabled(&self) -> bool {
+        matches!(
+            self.mode,
+            GuiMode::Menu
+                | GuiMode::About
+                | GuiMode::Themes
+                | GuiMode::Wallets
+                | GuiMode::WalletDetail
+                | GuiMode::WalletDeleteConfirm
+        ) || (self.mode == GuiMode::SeedFirstBoot && self.seed_flow_is_add)
+    }
+
+    fn handle_header_back(&mut self) -> Option<GuiInteraction> {
+        match self.mode {
+            GuiMode::Menu => {
+                self.show_unlock_success();
+                None
+            }
+            GuiMode::About | GuiMode::Themes | GuiMode::Wallets => {
                 self.show_menu();
                 None
             }
+            GuiMode::WalletDetail => {
+                let rows = self.wallet_rows.clone();
+                self.show_wallets(&rows);
+                None
+            }
+            GuiMode::WalletDeleteConfirm => {
+                if let Some(slot) = self.selected_wallet_slot {
+                    self.show_wallet_detail_current(slot);
+                } else {
+                    let rows = self.wallet_rows.clone();
+                    self.show_wallets(&rows);
+                }
+                None
+            }
+            GuiMode::SeedFirstBoot if self.seed_flow_is_add => {
+                self.seed_flow_is_add = false;
+                self.show_menu();
+                Some(GuiInteraction::Seed(seed::SeedInteraction::EntryCancelled))
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_about_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
             _ => None,
         }
     }
@@ -855,10 +943,6 @@ impl<'d> Gui<'d> {
                 menu::render_themes(&mut self.display);
                 None
             }
-            Button::Menu(MenuItem::Back) => {
-                self.show_menu();
-                None
-            }
             _ => None,
         }
     }
@@ -867,12 +951,41 @@ impl<'d> Gui<'d> {
         match button {
             Button::Menu(_) => self.handle_menu_button(button),
             Button::WalletRow(slot) => {
+                self.show_wallet_detail_current(slot);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_wallet_detail_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::WalletEdit(slot) => {
                 let mut current = HString::<32>::new();
                 if let Some(row) = self.wallet_rows.iter().find(|row| row.index == slot) {
                     let _ = current.push_str(row.label.as_str());
                 }
-                self.show_wallet_label_entry(slot, current.as_str());
+                self.show_wallet_detail_label_entry(slot, current.as_str());
                 None
+            }
+            Button::WalletDelete(slot) => {
+                self.show_wallet_delete_confirm(slot);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_wallet_delete_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::WalletDeleteCancel(slot) => {
+                self.show_wallet_detail_current(slot);
+                None
+            }
+            Button::WalletDeleteConfirm(slot) => {
+                Some(GuiInteraction::Wallet(WalletInteraction::DeleteConfirmed {
+                    slot,
+                }))
             }
             _ => None,
         }
@@ -907,6 +1020,7 @@ impl<'d> Gui<'d> {
             label::LabelButton::Cancel => {
                 self.label_entry_state.clear_multitap();
                 Some(GuiInteraction::Label(label::LabelInteraction::Cancelled {
+                    slot: self.label_entry_state.slot(),
                     context: self.label_entry_state.context(),
                 }))
             }
@@ -1155,34 +1269,15 @@ impl<'d> Gui<'d> {
 
         if self.mode == GuiMode::Menu {
             let pt = Point::new(point.x as i32, point.y as i32);
-            if self.menu_scroll.contains(pt) {
-                const DRAG_THRESHOLD: i32 = 6;
-                if self.menu_touch_start.is_none() {
-                    self.menu_touch_start = Some(point);
-                    self.menu_drag_active = false;
-                } else if let Some(start) = self.menu_touch_start {
-                    let dx = point.x as i32 - start.x as i32;
-                    let dy = point.y as i32 - start.y as i32;
-                    if !self.menu_drag_active
-                        && (dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD)
-                    {
-                        self.menu_drag_active = true;
-                        self.clear_pending();
-                        self.deactivate_button();
-                    }
+            if let scroll::DragUpdate::Dragging { moved } =
+                self.menu_drag.update(pt, &mut self.menu_scroll)
+            {
+                self.clear_pending();
+                self.deactivate_button();
+                if moved {
+                    menu::render_menu_viewport(&mut self.display, &mut self.menu_scroll);
                 }
-
-                if self.menu_drag_active {
-                    self.clear_pending();
-                    self.deactivate_button();
-                    if self.menu_scroll.drag_to(pt.y) {
-                        menu::render_menu_viewport(&mut self.display, &mut self.menu_scroll);
-                    }
-                    return;
-                }
-            } else {
-                self.menu_touch_start = None;
-                self.menu_drag_active = false;
+                return;
             }
         }
 
@@ -1190,81 +1285,55 @@ impl<'d> Gui<'d> {
         // into a scroll gesture before the press can complete.
         if self.mode == GuiMode::Wallets {
             let pt = Point::new(point.x as i32, point.y as i32);
-            if self.wallets_scroll.contains(pt) {
-                const DRAG_THRESHOLD: i32 = 6;
-                if self.wallet_touch_start.is_none() {
-                    self.wallet_touch_start = Some(point);
-                    self.wallet_drag_active = false;
-                } else if let Some(start) = self.wallet_touch_start {
-                    let dx = point.x as i32 - start.x as i32;
-                    let dy = point.y as i32 - start.y as i32;
-                    if !self.wallet_drag_active
-                        && (dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD)
-                    {
-                        self.wallet_drag_active = true;
-                        self.clear_pending();
-                        self.deactivate_button();
-                    }
+            if let scroll::DragUpdate::Dragging { moved } =
+                self.wallet_drag.update(pt, &mut self.wallets_scroll)
+            {
+                self.clear_pending();
+                self.deactivate_button();
+                if moved {
+                    menu::render_wallets_viewport(
+                        &mut self.display,
+                        &self.wallet_rows,
+                        &mut self.wallets_scroll,
+                    );
                 }
-
-                if self.wallet_drag_active {
-                    self.clear_pending();
-                    self.deactivate_button();
-                    if self.wallets_scroll.drag_to(pt.y) {
-                        menu::render_wallets_viewport(
-                            &mut self.display,
-                            &self.wallet_rows,
-                            &mut self.wallets_scroll,
-                        );
-                    }
-                    return;
-                }
-            } else {
-                self.wallet_touch_start = None;
-                self.wallet_drag_active = false;
+                return;
             }
         }
 
-        let candidate = match self.mode {
-            GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
-            GuiMode::Menu => menu::button_from_point_menu(
-                Point::new(point.x as i32, point.y as i32),
-                &self.menu_scroll,
-            ),
-            GuiMode::About => {
-                menu::button_from_point_about(Point::new(point.x as i32, point.y as i32))
+        let pt = Point::new(point.x as i32, point.y as i32);
+        let candidate = if self.header_back_enabled() && point_in_header_back(pt) {
+            Some(header_back_button(Button::Back))
+        } else {
+            match self.mode {
+                GuiMode::Locked => button_from_point_keypad(pt),
+                GuiMode::Menu => menu::button_from_point_menu(pt, &self.menu_scroll),
+                GuiMode::About => menu::button_from_point_about(pt),
+                GuiMode::Themes => menu::button_from_point_themes(pt),
+                GuiMode::Wallets => {
+                    menu::button_from_point_wallets(pt, &self.wallet_rows, &self.wallets_scroll)
+                }
+                GuiMode::WalletDetail => {
+                    menu::button_from_point_wallet_detail(pt, self.selected_wallet_slot)
+                }
+                GuiMode::WalletDeleteConfirm => {
+                    menu::button_from_point_wallet_delete(pt, self.selected_wallet_slot)
+                }
+                GuiMode::LabelEntry => label::button_from_point_label_entry(pt),
+                GuiMode::Confirm => button_from_point_confirm(pt),
+                GuiMode::TxReview => {
+                    self.tx_review_touch_start = None;
+                    self.tx_review_tap_index = None;
+                    self.tx_review_drag_active = false;
+                    button_from_point_tx_review(pt)
+                }
+                GuiMode::SeedFirstBoot => {
+                    seed::button_from_point_seed_setup(pt, self.seed_flow_is_add)
+                }
+                GuiMode::SeedEntry => seed::button_from_point_seed_entry(pt),
+                GuiMode::SeedConfirm => seed::button_from_point_seed_confirm(pt),
+                _ => None,
             }
-            GuiMode::Themes => {
-                menu::button_from_point_themes(Point::new(point.x as i32, point.y as i32))
-            }
-            GuiMode::Wallets => menu::button_from_point_wallets(
-                Point::new(point.x as i32, point.y as i32),
-                &self.wallet_rows,
-                &self.wallets_scroll,
-            ),
-            GuiMode::LabelEntry => {
-                label::button_from_point_label_entry(Point::new(point.x as i32, point.y as i32))
-            }
-            GuiMode::Confirm => {
-                button_from_point_confirm(Point::new(point.x as i32, point.y as i32))
-            }
-            GuiMode::TxReview => {
-                self.tx_review_touch_start = None;
-                self.tx_review_tap_index = None;
-                self.tx_review_drag_active = false;
-                button_from_point_tx_review(Point::new(point.x as i32, point.y as i32))
-            }
-            GuiMode::SeedFirstBoot => seed::button_from_point_seed_setup(
-                Point::new(point.x as i32, point.y as i32),
-                self.seed_flow_is_add,
-            ),
-            GuiMode::SeedEntry => {
-                seed::button_from_point_seed_entry(Point::new(point.x as i32, point.y as i32))
-            }
-            GuiMode::SeedConfirm => {
-                seed::button_from_point_seed_confirm(Point::new(point.x as i32, point.y as i32))
-            }
-            _ => None,
         };
 
         if let Some(active) = self.interaction.active_button {
@@ -1331,11 +1400,9 @@ impl<'d> Gui<'d> {
                     self.interaction.last_touch_sample_at = None;
                     self.tx_review_ignore_until_release = false;
                     self.menu_scroll.drag_end();
-                    self.menu_touch_start = None;
-                    self.menu_drag_active = false;
+                    self.menu_drag.reset();
                     self.wallets_scroll.drag_end();
-                    self.wallet_touch_start = None;
-                    self.wallet_drag_active = false;
+                    self.wallet_drag.reset();
                     let open_tx_review_detail = if self.mode == GuiMode::TxReview
                         && self.interaction.active_button.is_none()
                         && self.tx_review_expanded_index.is_none()
@@ -1393,6 +1460,9 @@ impl<'d> Gui<'d> {
         if let (Some(hit), Some(start)) = (active, started) {
             if now - start >= MIN_PRESS_DURATION {
                 self.interaction.cooldown_until = Some(now + PRESS_COOLDOWN);
+                if hit.button == Button::Back {
+                    return self.handle_header_back();
+                }
                 return match self.mode {
                     GuiMode::Locked => self.handle_pin_button(hit.button),
                     GuiMode::Confirm | GuiMode::TxReview => self.handle_confirm_button(hit.button),
@@ -1403,6 +1473,8 @@ impl<'d> Gui<'d> {
                     GuiMode::About => self.handle_about_button(hit.button),
                     GuiMode::Themes => self.handle_theme_button(hit.button),
                     GuiMode::Wallets => self.handle_wallet_button(hit.button),
+                    GuiMode::WalletDetail => self.handle_wallet_detail_button(hit.button),
+                    GuiMode::WalletDeleteConfirm => self.handle_wallet_delete_button(hit.button),
                     GuiMode::LabelEntry => self.handle_label_button(hit.button, now),
                     _ => None,
                 };
@@ -1417,6 +1489,13 @@ impl<'d> Gui<'d> {
             return;
         }
         self.deactivate_button();
+        if hit.button == Button::Back {
+            draw_header_back_button(&mut self.display, true);
+            self.interaction.active_button = Some(hit);
+            self.interaction.active_seen_at = Some(now);
+            self.interaction.press_started_at = Some(now);
+            return;
+        }
         match self.mode {
             GuiMode::Confirm | GuiMode::TxReview => {
                 self.interaction.active_button = Some(hit);
@@ -1443,12 +1522,7 @@ impl<'d> Gui<'d> {
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
             }
-            GuiMode::About => {
-                menu::draw_about_button(&mut self.display, true);
-                self.interaction.active_button = Some(hit);
-                self.interaction.active_seen_at = Some(now);
-                self.interaction.press_started_at = Some(now);
-            }
+            GuiMode::About => {}
             GuiMode::Themes => {
                 menu::draw_theme_button(&mut self.display, hit, true);
                 self.interaction.active_button = Some(hit);
@@ -1456,9 +1530,19 @@ impl<'d> Gui<'d> {
                 self.interaction.press_started_at = Some(now);
             }
             GuiMode::Wallets => {
-                if matches!(hit.button, Button::Menu(_)) {
-                    menu::draw_wallets_back(&mut self.display, true);
-                }
+                menu::draw_wallet_row_press(
+                    &mut self.display,
+                    hit,
+                    &self.wallet_rows,
+                    &mut self.wallets_scroll,
+                    true,
+                );
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
+            GuiMode::WalletDetail | GuiMode::WalletDeleteConfirm => {
+                menu::draw_wallet_detail_button(&mut self.display, hit, true);
                 self.interaction.active_button = Some(hit);
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
@@ -1480,6 +1564,10 @@ impl<'d> Gui<'d> {
 
     fn deactivate_button(&mut self) {
         if let Some(old) = self.interaction.active_button.take() {
+            if old.button == Button::Back {
+                draw_header_back_button(&mut self.display, false);
+                return;
+            }
             match self.mode {
                 GuiMode::Confirm | GuiMode::TxReview => {
                     self.mark_overlay_dirty();
@@ -1495,12 +1583,17 @@ impl<'d> Gui<'d> {
                     );
                 }
                 GuiMode::Menu => menu::draw_menu_button(&mut self.display, old, false),
-                GuiMode::About => menu::draw_about_button(&mut self.display, false),
+                GuiMode::About => {}
                 GuiMode::Themes => menu::draw_theme_button(&mut self.display, old, false),
-                GuiMode::Wallets => {
-                    if matches!(old.button, Button::Menu(_)) {
-                        menu::draw_wallets_back(&mut self.display, false);
-                    }
+                GuiMode::Wallets => menu::draw_wallet_row_press(
+                    &mut self.display,
+                    old,
+                    &self.wallet_rows,
+                    &mut self.wallets_scroll,
+                    false,
+                ),
+                GuiMode::WalletDetail | GuiMode::WalletDeleteConfirm => {
+                    menu::draw_wallet_detail_button(&mut self.display, old, false)
                 }
                 GuiMode::LabelEntry => {
                     label::draw_label_button(&mut self.display, old, &self.label_entry_state, false)
@@ -1519,10 +1612,8 @@ impl<'d> Gui<'d> {
         self.clear_lock_button();
         self.tx_review_last_drag_y = None;
         self.menu_scroll.drag_end();
-        self.menu_touch_start = None;
-        self.menu_drag_active = false;
-        self.wallet_touch_start = None;
-        self.wallet_drag_active = false;
+        self.menu_drag.reset();
+        self.wallet_drag.reset();
     }
 
     fn clear_pending(&mut self) {
@@ -1562,9 +1653,14 @@ impl<'d> Gui<'d> {
                 Some(GuiInteraction::PinComplete(self.pin_entered.clone()))
             }
             Button::Seed(_)
+            | Button::Back
             | Button::Menu(_)
             | Button::Theme(_)
             | Button::WalletRow(_)
+            | Button::WalletEdit(_)
+            | Button::WalletDelete(_)
+            | Button::WalletDeleteCancel(_)
+            | Button::WalletDeleteConfirm(_)
             | Button::Label(_) => None,
         }
     }
@@ -1581,9 +1677,14 @@ impl<'d> Gui<'d> {
             }
             Button::Digit(_) => None,
             Button::Seed(_)
+            | Button::Back
             | Button::Menu(_)
             | Button::Theme(_)
             | Button::WalletRow(_)
+            | Button::WalletEdit(_)
+            | Button::WalletDelete(_)
+            | Button::WalletDeleteCancel(_)
+            | Button::WalletDeleteConfirm(_)
             | Button::Label(_) => None,
         }
     }
@@ -1697,6 +1798,13 @@ impl<'d> Gui<'d> {
             self.interaction.finger_down = true;
             self.interaction.last_touch_sample_at = Some(now);
             if let Ok(Some(sample)) = self.read_touch_sample() {
+                let point = Point::new(sample.screen.x as i32, sample.screen.y as i32);
+                if point_in_header_back(point) {
+                    self.touch_calibration_points.clear();
+                    self.touch_calibration_last_raw = None;
+                    self.show_menu();
+                    return None;
+                }
                 self.touch_calibration_last_raw = Some(sample.raw);
             }
             return None;
@@ -1753,9 +1861,8 @@ impl<'d> Gui<'d> {
             match self.read_touch_sample() {
                 Ok(Some(sample)) => {
                     self.refresh_auto_lock(now);
-                    // Tapping the header row leaves the diagnostics screen — it's
-                    // the only on-device way back out (USB toggle aside).
-                    if (sample.screen.y as i32) < header_height() {
+                    let point = Point::new(sample.screen.x as i32, sample.screen.y as i32);
+                    if point_in_header_back(point) {
                         return Some(GuiInteraction::ExitDiagnostics);
                     }
                     self.touch_diagnostics.record_sample(

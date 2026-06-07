@@ -10,6 +10,7 @@ use super::state::{Button, ButtonHit};
 
 const KEYPAD_PADDING: i32 = 6;
 const HEADER_ICON_TOUCH_WIDTH: i32 = 56;
+const HEADER_BACK_TOUCH_WIDTH: i32 = 40;
 pub(crate) const TX_REVIEW_PADDING: i32 = 6;
 pub(crate) const TX_REVIEW_LINE_GAP: i32 = 2;
 pub(crate) const TX_REVIEW_ITEM_GAP: i32 = 8;
@@ -219,6 +220,19 @@ pub(crate) fn point_in_header_settings_menu(point: Point) -> bool {
     let h = header_height();
     let left = SCREEN_WIDTH as i32 - HEADER_ICON_TOUCH_WIDTH;
     point.x >= left && point.x < SCREEN_WIDTH as i32 && point.y >= 0 && point.y < h
+}
+
+pub(crate) fn point_in_header_back(point: Point) -> bool {
+    let hit = header_back_button(Button::Back);
+    Rectangle::new(hit.top_left, hit.size).contains(point)
+}
+
+pub(crate) fn header_back_button(button: Button) -> ButtonHit {
+    ButtonHit {
+        button,
+        top_left: Point::new(0, 0),
+        size: Size::new(HEADER_BACK_TOUCH_WIDTH as u32, header_height() as u32),
+    }
 }
 
 pub(crate) fn lock_button_rect() -> Rectangle {

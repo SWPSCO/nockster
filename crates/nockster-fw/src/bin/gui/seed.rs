@@ -12,9 +12,9 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use super::constants::*;
-use super::layout::header_height;
+use super::layout::{header_back_button, header_height, point_in_header_back};
 use super::palette;
-use super::render::render_header;
+use super::render::{render_header, render_header_with_back};
 use super::state::{Button, ButtonHit, GuiMode};
 use super::GuiDisplay;
 
@@ -204,7 +204,11 @@ impl SeedEntryState {
 
 pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str, show_back: bool) {
     let _ = display.clear(palette::background());
-    render_header(display, title, palette::surface_high());
+    if show_back {
+        render_header_with_back(display, title, palette::surface_high(), false);
+    } else {
+        render_header(display, title, palette::surface_high());
+    }
 
     let mut body = HString::<96>::new();
     let _ = body
@@ -268,6 +272,9 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
 }
 
 pub fn button_from_point_seed_setup(point: Point, show_back: bool) -> Option<ButtonHit> {
+    if show_back && point_in_header_back(point) {
+        return Some(header_back_button(Button::Back));
+    }
     setup_buttons(show_back)
         .into_iter()
         .find(|hit| within_hit(hit, point, 4))
@@ -320,7 +327,7 @@ pub fn draw_seed_button(
 
 /// The actions on the setup screen: generate on-device, enter an existing phrase,
 /// and (only when adding to an already-set-up device) a Back to the settings menu.
-fn setup_buttons(show_back: bool) -> HVec<ButtonHit, 3> {
+fn setup_buttons(_show_back: bool) -> HVec<ButtonHit, 3> {
     let width = (SCREEN_WIDTH as i32 - 2 * 20).max(80);
     let height = 42;
     let x = ((SCREEN_WIDTH as i32) - width) / 2;
@@ -337,13 +344,6 @@ fn setup_buttons(show_back: bool) -> HVec<ButtonHit, 3> {
         top_left: Point::new(x, y0 + height + gap),
         size: Size::new(width as u32, height as u32),
     });
-    if show_back {
-        let _ = out.push(ButtonHit {
-            button: Button::Seed(SeedButton::Cancel),
-            top_left: Point::new(x, y0 + 2 * (height + gap)),
-            size: Size::new(width as u32, height as u32),
-        });
-    }
     out
 }
 

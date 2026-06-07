@@ -16,7 +16,7 @@ use nockster_core::{BuildInfo, UpdateTrust, MAX_SEED_SLOTS};
 use super::constants::*;
 use super::layout::header_height;
 use super::palette::{self, Theme};
-use super::render::render_header;
+use super::render::render_header_with_back;
 use super::scroll::{self, ScrollContent, ScrollState};
 use super::seed::draw_text_button;
 use super::state::{Button, ButtonHit, MenuItem};
@@ -49,50 +49,65 @@ pub struct AboutInfo {
     pub trust: UpdateTrust,
 }
 
-fn menu_order() -> [MenuItem; 7] {
-    [
-        MenuItem::Wallets,
-        MenuItem::AddSeed,
-        MenuItem::Theme,
-        MenuItem::Calibrate,
-        MenuItem::Diagnostics,
-        MenuItem::About,
-        MenuItem::Back,
-    ]
+#[derive(Clone, Copy)]
+struct MenuDefinition {
+    item: MenuItem,
+    label: &'static str,
 }
+
+const SETTINGS_MENU: [MenuDefinition; 6] = [
+    MenuDefinition {
+        item: MenuItem::Wallets,
+        label: "Wallets",
+    },
+    MenuDefinition {
+        item: MenuItem::AddSeed,
+        label: "Add Seed",
+    },
+    MenuDefinition {
+        item: MenuItem::Theme,
+        label: "Theme",
+    },
+    MenuDefinition {
+        item: MenuItem::Calibrate,
+        label: "Calibrate",
+    },
+    MenuDefinition {
+        item: MenuItem::Diagnostics,
+        label: "Diagnostics",
+    },
+    MenuDefinition {
+        item: MenuItem::About,
+        label: "About",
+    },
+];
 
 fn menu_label(item: MenuItem) -> &'static str {
-    match item {
-        MenuItem::Wallets => "Wallets",
-        MenuItem::AddSeed => "Add Seed",
-        MenuItem::Theme => "Theme",
-        MenuItem::About => "About",
-        MenuItem::Calibrate => "Calibrate",
-        MenuItem::Diagnostics => "Diagnostics",
-        MenuItem::Back => "Back",
-    }
+    SETTINGS_MENU
+        .iter()
+        .find(|definition| definition.item == item)
+        .map(|definition| definition.label)
+        .unwrap_or("")
 }
 
-fn menu_button(index: usize, item: MenuItem) -> ButtonHit {
+fn menu_button(index: usize, definition: MenuDefinition) -> ButtonHit {
     let width = (SCREEN_WIDTH as i32 - 2 * MENU_MARGIN).max(80);
     let y = MENU_CONTENT_TOP + index as i32 * (MENU_BUTTON_HEIGHT + MENU_BUTTON_GAP);
     ButtonHit {
-        button: Button::Menu(item),
+        button: Button::Menu(definition.item),
         top_left: Point::new(MENU_MARGIN, y),
         size: Size::new(width as u32, MENU_BUTTON_HEIGHT as u32),
     }
 }
 
-fn menu_buttons() -> [ButtonHit; 7] {
-    let order = menu_order();
+fn menu_buttons() -> [ButtonHit; 6] {
     [
-        menu_button(0, order[0]),
-        menu_button(1, order[1]),
-        menu_button(2, order[2]),
-        menu_button(3, order[3]),
-        menu_button(4, order[4]),
-        menu_button(5, order[5]),
-        menu_button(6, order[6]),
+        menu_button(0, SETTINGS_MENU[0]),
+        menu_button(1, SETTINGS_MENU[1]),
+        menu_button(2, SETTINGS_MENU[2]),
+        menu_button(3, SETTINGS_MENU[3]),
+        menu_button(4, SETTINGS_MENU[4]),
+        menu_button(5, SETTINGS_MENU[5]),
     ]
 }
 
@@ -109,7 +124,7 @@ pub fn menu_viewport() -> Rectangle {
 
 pub fn render_menu(display: &mut GuiDisplay<'_>, scroll: &mut ScrollState) {
     let _ = display.clear(palette::background());
-    render_header(display, "Settings", palette::surface_high());
+    render_header_with_back(display, "Settings", palette::surface_high(), false);
     render_menu_viewport(display, scroll);
 }
 
@@ -188,17 +203,7 @@ fn theme_button(index: usize, theme: Theme) -> ButtonHit {
     }
 }
 
-fn theme_back_button(index: usize) -> ButtonHit {
-    let width = (SCREEN_WIDTH as i32 - 2 * MENU_MARGIN).max(80);
-    let y = header_height() + 3 + index as i32 * (THEME_BUTTON_HEIGHT + THEME_BUTTON_GAP);
-    ButtonHit {
-        button: Button::Menu(MenuItem::Back),
-        top_left: Point::new(MENU_MARGIN, y),
-        size: Size::new(width as u32, THEME_BUTTON_HEIGHT as u32),
-    }
-}
-
-pub fn theme_buttons() -> [ButtonHit; 7] {
+pub fn theme_buttons() -> [ButtonHit; 6] {
     [
         theme_button(0, palette::THEMES[0]),
         theme_button(1, palette::THEMES[1]),
@@ -206,13 +211,12 @@ pub fn theme_buttons() -> [ButtonHit; 7] {
         theme_button(3, palette::THEMES[3]),
         theme_button(4, palette::THEMES[4]),
         theme_button(5, palette::THEMES[5]),
-        theme_back_button(6),
     ]
 }
 
 pub fn render_themes(display: &mut GuiDisplay<'_>) {
     let _ = display.clear(palette::background());
-    render_header(display, "Theme", palette::surface_high());
+    render_header_with_back(display, "Theme", palette::surface_high(), false);
     for hit in theme_buttons() {
         draw_theme_button(display, hit, false);
     }
@@ -224,10 +228,6 @@ pub fn draw_theme_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: b
             draw_text_button(display, hit, theme.name(), active);
             draw_theme_marker(display, hit, theme, active);
         }
-        Button::Menu(MenuItem::Back) => {
-            draw_text_button(display, hit, "Back", active);
-            draw_menu_affordance(display, hit, active);
-        }
         _ => {}
     }
 }
@@ -238,89 +238,171 @@ pub fn button_from_point_themes(point: Point) -> Option<ButtonHit> {
         .find(|hit| within(hit, point, 6))
 }
 
-fn about_back_button() -> ButtonHit {
-    let width = (SCREEN_WIDTH as i32 - 2 * MENU_MARGIN).max(80);
-    let y = SCREEN_HEIGHT as i32 - MENU_BUTTON_HEIGHT - 8;
-    ButtonHit {
-        button: Button::Menu(MenuItem::Back),
-        top_left: Point::new(MENU_MARGIN, y),
-        size: Size::new(width as u32, MENU_BUTTON_HEIGHT as u32),
-    }
-}
-
 pub fn render_about(display: &mut GuiDisplay<'_>, info: &AboutInfo) {
     let _ = display.clear(palette::background());
-    render_header(display, "About", palette::surface_high());
+    render_header_with_back(display, "About", palette::surface_high(), false);
 
-    let text = MonoTextStyle::new(&FONT_8X13, palette::text());
-    let subtle = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
-    let left = 10;
-    let mut y = header_height() + 24;
-    let _ = Text::new("Nockster FW", Point::new(left, y), text).draw(display);
-    y += 17;
+    let mut y = draw_about_intro(display, header_height() + 7);
 
-    let mut line = HString::<40>::new();
+    let mut fw = HString::<40>::new();
     let _ = write!(
-        line,
-        "firmware {}.{} r{}",
+        fw,
+        "fw {}.{} release {}",
         info.fw_major, info.fw_minor, info.release_version
     );
-    draw_about_line(display, left, &mut y, line.as_str(), subtle);
 
-    line.clear();
+    let mut profile = HString::<40>::new();
     let _ = write!(
-        line,
-        "profile {} proto {}",
+        profile,
+        "{} proto {}",
         info.build.build_profile.as_str(),
         info.build.protocol_v
     );
-    draw_about_line(display, left, &mut y, line.as_str(), subtle);
 
-    line.clear();
-    let _ = line.push_str("commit ");
-    push_short_ascii(&mut line, info.build.git_commit.as_str(), 10);
+    let mut theme = HString::<40>::new();
+    let _ = write!(theme, "theme {}", palette::current_theme().name());
+    y = draw_about_card(
+        display,
+        y,
+        "Firmware",
+        &[fw.as_str(), profile.as_str(), theme.as_str()],
+    );
+
+    let mut commit = HString::<40>::new();
+    let _ = commit.push_str("commit ");
+    push_short_ascii(&mut commit, info.build.git_commit.as_str(), 10);
     if info.build.git_dirty {
-        let _ = line.push('*');
+        let _ = commit.push('*');
     }
-    draw_about_line(display, left, &mut y, line.as_str(), subtle);
 
-    line.clear();
-    let _ = line.push_str("tx-types ");
-    push_short_ascii(&mut line, info.build.tx_types_rev.as_str(), 10);
-    draw_about_line(display, left, &mut y, line.as_str(), subtle);
+    let mut tx = HString::<40>::new();
+    let _ = tx.push_str("tx ");
+    push_short_ascii(&mut tx, info.build.tx_types_rev.as_str(), 14);
+    y = draw_about_card(display, y, "Build", &[commit.as_str(), tx.as_str()]);
 
-    line.clear();
-    let _ = write!(line, "theme {}", palette::current_theme().name());
-    draw_about_line(display, left, &mut y, line.as_str(), subtle);
-
-    y += 5;
-    draw_about_line(display, left, &mut y, "trust root", subtle);
     if info.trust.configured {
-        line.clear();
-        let _ = line.push_str("sha256 ");
-        push_hex_bytes(&mut line, &info.trust.pubkey_sha256[..8]);
-        draw_about_line(display, left, &mut y, line.as_str(), subtle);
+        let mut first = HString::<40>::new();
+        let _ = first.push_str("sha256 ");
+        push_hex_bytes(&mut first, &info.trust.pubkey_sha256[..8]);
 
-        line.clear();
-        let _ = line.push_str("       ");
-        push_hex_bytes(&mut line, &info.trust.pubkey_sha256[24..]);
-        draw_about_line(display, left, &mut y, line.as_str(), subtle);
+        let mut last = HString::<40>::new();
+        let _ = last.push_str("       ");
+        push_hex_bytes(&mut last, &info.trust.pubkey_sha256[24..]);
+        let _ = draw_about_card(display, y, "Trust Root", &[first.as_str(), last.as_str()]);
     } else {
-        draw_about_line(display, left, &mut y, "not configured", subtle);
+        let _ = draw_about_card(display, y, "Trust Root", &["not configured"]);
     }
-
-    draw_about_button(display, false);
 }
 
-fn draw_about_line(
-    display: &mut GuiDisplay<'_>,
-    left: i32,
-    y: &mut i32,
-    line: &str,
-    style: MonoTextStyle<'_, Rgb565>,
-) {
-    let _ = Text::new(line, Point::new(left, *y), style).draw(display);
-    *y += 13;
+fn draw_about_intro(display: &mut GuiDisplay<'_>, top: i32) -> i32 {
+    let x = 8;
+    let width = SCREEN_WIDTH as i32 - x * 2;
+    let height = 54;
+    let panel = Rectangle::new(Point::new(x, top), Size::new(width as u32, height as u32));
+    let _ = panel
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::surface_low())
+                .stroke_color(palette::divider())
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+    let _ = Line::new(
+        Point::new(x + 2, top + 2),
+        Point::new(x + width - 3, top + 2),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(palette::panel_highlight())
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+    let _ = Rectangle::new(Point::new(x + 5, top + 7), Size::new(3, 38))
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::keypad_active_light())
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+
+    let style = MonoTextStyle::new(&FONT_6X10, palette::text());
+    let subtle = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
+    let lines = [
+        ("Nockster hardware wallet", style),
+        ("for Nockchain by", subtle),
+        ("Southwestern Pool", subtle),
+        ("Supply Co - swps.io", subtle),
+    ];
+    let mut y = top + 13;
+    for (line, text_style) in lines {
+        let _ = Text::new(line, Point::new(x + 13, y), text_style).draw(display);
+        y += 11;
+    }
+
+    top + height + 5
+}
+
+fn draw_about_card(display: &mut GuiDisplay<'_>, top: i32, title: &str, lines: &[&str]) -> i32 {
+    let x = 8;
+    let width = SCREEN_WIDTH as i32 - x * 2;
+    let height = 26 + lines.len() as i32 * 12;
+    let shadow = Rectangle::new(
+        Point::new(x + 2, top + 2),
+        Size::new(width as u32, height as u32),
+    );
+    let _ = shadow
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::panel_shadow())
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+
+    let card = Rectangle::new(Point::new(x, top), Size::new(width as u32, height as u32));
+    let _ = card
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::surface_low())
+                .stroke_color(palette::divider())
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+    let _ = Line::new(
+        Point::new(x + 2, top + 2),
+        Point::new(x + width - 3, top + 2),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(palette::panel_highlight())
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+    let _ = Rectangle::new(Point::new(x + 5, top + 8), Size::new(3, 14))
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::keypad_active_light())
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+
+    let title_style = MonoTextStyle::new(&FONT_6X10, palette::text());
+    let line_style = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
+    let _ = Text::new(title, Point::new(x + 13, top + 16), title_style).draw(display);
+
+    let mut y = top + 29;
+    for line in lines {
+        let _ = Text::new(line, Point::new(x + 13, y), line_style).draw(display);
+        y += 12;
+    }
+
+    top + height + 5
 }
 
 fn push_short_ascii<const N: usize>(out: &mut HString<N>, value: &str, max: usize) {
@@ -342,26 +424,8 @@ fn push_hex_bytes<const N: usize>(out: &mut HString<N>, bytes: &[u8]) {
     }
 }
 
-pub fn draw_about_button(display: &mut GuiDisplay<'_>, active: bool) {
-    let back = about_back_button();
-    draw_text_button(display, back, "Back", active);
-    draw_menu_affordance(display, back, active);
-}
-
-pub fn button_from_point_about(point: Point) -> Option<ButtonHit> {
-    let back = about_back_button();
-    within(&back, point, 8).then_some(back)
-}
-
-/// Bottom "Back" button shared by the wallet view.
-fn wallets_back_button() -> ButtonHit {
-    let width = (SCREEN_WIDTH as i32 - 2 * MENU_MARGIN).max(80);
-    let y = SCREEN_HEIGHT as i32 - MENU_BUTTON_HEIGHT - 8;
-    ButtonHit {
-        button: Button::Menu(MenuItem::Back),
-        top_left: Point::new(MENU_MARGIN, y),
-        size: Size::new(width as u32, MENU_BUTTON_HEIGHT as u32),
-    }
+pub fn button_from_point_about(_point: Point) -> Option<ButtonHit> {
+    None
 }
 
 pub fn button_from_point_wallets(
@@ -369,28 +433,23 @@ pub fn button_from_point_wallets(
     rows: &[WalletRow],
     scroll: &ScrollState,
 ) -> Option<ButtonHit> {
-    let back = wallets_back_button();
-    if within(&back, point, 8) {
-        return Some(back);
-    }
     wallet_row_hit(point, rows, scroll)
 }
 
-/// The scrollable region of the wallet screen (between the slot-count summary and
-/// the Back button).
+/// The scrollable region of the wallet screen, below the slot-count summary.
 pub fn wallets_viewport() -> Rectangle {
     let top = header_height() + 48;
-    let bottom = SCREEN_HEIGHT as i32 - MENU_BUTTON_HEIGHT - 14;
+    let bottom = SCREEN_HEIGHT as i32 - 7;
     Rectangle::new(
         Point::new(6, top),
         Size::new((SCREEN_WIDTH - 12) as u32, (bottom - top).max(0) as u32),
     )
 }
 
-/// Full wallet screen: header, slot count, Back, and the scrollable slot list.
+/// Full wallet screen: header, slot count, and the scrollable slot list.
 pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow], scroll: &mut ScrollState) {
     let _ = display.clear(palette::background());
-    render_header(display, "Wallets", palette::surface_high());
+    render_header_with_back(display, "Wallets", palette::surface_high(), false);
 
     let subtle = MonoTextStyle::new(&FONT_6X10, palette::text());
     let mut summary = HString::<32>::new();
@@ -404,9 +463,6 @@ pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow], scroll: 
     .draw(display);
 
     draw_wallet_table_header(display);
-    let back = wallets_back_button();
-    draw_text_button(display, back, "Back", false);
-    draw_menu_affordance(display, back, false);
     render_wallets_viewport(display, rows, scroll);
 }
 
@@ -417,6 +473,210 @@ pub fn render_wallets_viewport(
     scroll: &mut ScrollState,
 ) {
     scroll::render(display, scroll, &WalletList { rows });
+}
+
+pub fn render_wallet_detail(display: &mut GuiDisplay<'_>, row: Option<&WalletRow>) {
+    let _ = display.clear(palette::background());
+    render_header_with_back(display, "Wallet", palette::surface_high(), false);
+
+    let Some(row) = row else {
+        let _ = draw_about_card(display, header_height() + 18, "Wallet", &["not found"]);
+        return;
+    };
+
+    let mut slot_line = HString::<32>::new();
+    let _ = write!(slot_line, "slot {}", row.index);
+    let mut name_line = HString::<40>::new();
+    let _ = name_line.push_str("nick ");
+    if row.label.is_empty() {
+        let _ = name_line.push_str("(unnamed)");
+    } else {
+        push_truncated(&mut name_line, row.label.as_str(), 26);
+    }
+    let status = if row.active {
+        "status active"
+    } else {
+        "status standby"
+    };
+    let y = draw_about_card(
+        display,
+        header_height() + 8,
+        "Slot",
+        &[slot_line.as_str(), name_line.as_str(), status, "path m"],
+    );
+    let _ = draw_wallet_address_card(display, y, row.pkh.as_str());
+
+    for hit in wallet_detail_buttons(row.index) {
+        draw_wallet_detail_button(display, hit, false);
+    }
+}
+
+pub fn render_wallet_delete_confirm(display: &mut GuiDisplay<'_>, row: Option<&WalletRow>) {
+    let _ = display.clear(palette::background());
+    render_header_with_back(display, "Delete", palette::surface_high(), false);
+
+    let Some(row) = row else {
+        let _ = draw_about_card(
+            display,
+            header_height() + 18,
+            "Delete",
+            &["wallet not found"],
+        );
+        return;
+    };
+
+    let mut slot_line = HString::<32>::new();
+    let _ = write!(slot_line, "delete slot {}?", row.index);
+    let name = if row.label.is_empty() {
+        "(unnamed)"
+    } else {
+        row.label.as_str()
+    };
+    let _ = draw_about_card(
+        display,
+        header_height() + 24,
+        "Confirm",
+        &[
+            slot_line.as_str(),
+            name,
+            "seed will be removed",
+            "cannot be undone",
+        ],
+    );
+
+    for hit in wallet_delete_buttons(row.index) {
+        draw_wallet_detail_button(display, hit, false);
+    }
+}
+
+pub fn button_from_point_wallet_detail(point: Point, slot: Option<u8>) -> Option<ButtonHit> {
+    let slot = slot?;
+    wallet_detail_buttons(slot)
+        .into_iter()
+        .find(|hit| within(hit, point, 6))
+}
+
+pub fn button_from_point_wallet_delete(point: Point, slot: Option<u8>) -> Option<ButtonHit> {
+    let slot = slot?;
+    wallet_delete_buttons(slot)
+        .into_iter()
+        .find(|hit| within(hit, point, 6))
+}
+
+pub fn draw_wallet_detail_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool) {
+    let label = match hit.button {
+        Button::WalletEdit(_) => "Edit Nick",
+        Button::WalletDelete(_) => "Delete",
+        Button::WalletDeleteCancel(_) => "Cancel",
+        Button::WalletDeleteConfirm(_) => "Delete",
+        _ => "",
+    };
+    draw_text_button(display, hit, label, active);
+}
+
+pub fn draw_wallet_row_press(
+    display: &mut GuiDisplay<'_>,
+    hit: ButtonHit,
+    rows: &[WalletRow],
+    scroll: &mut ScrollState,
+    active: bool,
+) {
+    if active {
+        let rect = Rectangle::new(hit.top_left, hit.size);
+        let _ = rect
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .stroke_color(palette::keypad_active_light())
+                    .stroke_width(2)
+                    .build(),
+            )
+            .draw(display);
+    } else {
+        render_wallets_viewport(display, rows, scroll);
+    }
+}
+
+fn wallet_detail_buttons(slot: u8) -> [ButtonHit; 2] {
+    let margin = 8;
+    let gap = 8;
+    let top = SCREEN_HEIGHT as i32 - 50;
+    let height = 42;
+    let width = (SCREEN_WIDTH as i32 - margin * 2 - gap) / 2;
+    [
+        ButtonHit {
+            button: Button::WalletEdit(slot),
+            top_left: Point::new(margin, top),
+            size: Size::new(width as u32, height as u32),
+        },
+        ButtonHit {
+            button: Button::WalletDelete(slot),
+            top_left: Point::new(margin + width + gap, top),
+            size: Size::new(width as u32, height as u32),
+        },
+    ]
+}
+
+fn wallet_delete_buttons(slot: u8) -> [ButtonHit; 2] {
+    let margin = 8;
+    let gap = 8;
+    let top = SCREEN_HEIGHT as i32 - 50;
+    let height = 42;
+    let width = (SCREEN_WIDTH as i32 - margin * 2 - gap) / 2;
+    [
+        ButtonHit {
+            button: Button::WalletDeleteCancel(slot),
+            top_left: Point::new(margin, top),
+            size: Size::new(width as u32, height as u32),
+        },
+        ButtonHit {
+            button: Button::WalletDeleteConfirm(slot),
+            top_left: Point::new(margin + width + gap, top),
+            size: Size::new(width as u32, height as u32),
+        },
+    ]
+}
+
+fn draw_wallet_address_card(display: &mut GuiDisplay<'_>, top: i32, pkh: &str) -> i32 {
+    if pkh.is_empty() {
+        return draw_about_card(display, top, "Address", &["address unavailable"]);
+    }
+
+    let mut line0 = HString::<32>::new();
+    let mut line1 = HString::<32>::new();
+    let mut line2 = HString::<32>::new();
+    let count = wrapped_address_lines(pkh, &mut line0, &mut line1, &mut line2);
+    match count {
+        0 => draw_about_card(display, top, "Address", &["address unavailable"]),
+        1 => draw_about_card(display, top, "Address", &[line0.as_str()]),
+        2 => draw_about_card(display, top, "Address", &[line0.as_str(), line1.as_str()]),
+        _ => draw_about_card(
+            display,
+            top,
+            "Address",
+            &[line0.as_str(), line1.as_str(), line2.as_str()],
+        ),
+    }
+}
+
+fn wrapped_address_lines(
+    value: &str,
+    line0: &mut HString<32>,
+    line1: &mut HString<32>,
+    line2: &mut HString<32>,
+) -> usize {
+    let bytes = value.as_bytes();
+    let mut start = 0usize;
+    let mut count = 0usize;
+    for line in [line0, line1, line2] {
+        if start >= bytes.len() {
+            break;
+        }
+        let end = (start + 23).min(bytes.len());
+        let _ = line.push_str(core::str::from_utf8(&bytes[start..end]).unwrap_or(""));
+        start = end;
+        count += 1;
+    }
+    count
 }
 
 struct WalletList<'a> {
@@ -607,12 +867,6 @@ impl ScrollContent for WalletList<'_> {
 
 const WALLET_ROW_HEIGHT: i32 = 42;
 
-pub fn draw_wallets_back(display: &mut GuiDisplay<'_>, active: bool) {
-    let back = wallets_back_button();
-    draw_text_button(display, back, "Back", active);
-    draw_menu_affordance(display, back, active);
-}
-
 fn within(hit: &ButtonHit, point: Point, slack: i32) -> bool {
     let left = hit.top_left.x - slack;
     let right = hit.top_left.x + hit.size.width as i32 + slack;
@@ -713,20 +967,33 @@ fn draw_menu_text_button<D>(display: &mut D, hit: ButtonHit, label: &str, active
 where
     D: DrawTarget<Color = Rgb565>,
 {
+    let press_offset = if active { 1 } else { 0 };
     let shadow = Rectangle::new(
         Point::new(hit.top_left.x + 2, hit.top_left.y + 2),
-        Size::new(hit.size.width, hit.size.height),
+        Size::new(
+            hit.size.width.saturating_sub(press_offset as u32),
+            hit.size.height.saturating_sub(press_offset as u32),
+        ),
     );
     let _ = shadow
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(palette::panel_shadow())
+                .fill_color(if active {
+                    palette::background()
+                } else {
+                    palette::panel_shadow()
+                })
                 .stroke_width(0)
                 .build(),
         )
         .draw(display);
 
-    let face = Rectangle::new(hit.top_left, hit.size);
+    let face_top_left = Point::new(hit.top_left.x + press_offset, hit.top_left.y + press_offset);
+    let face_size = Size::new(
+        hit.size.width.saturating_sub(press_offset as u32),
+        hit.size.height.saturating_sub(press_offset as u32),
+    );
+    let face = Rectangle::new(face_top_left, face_size);
     let _ = face
         .into_styled(
             PrimitiveStyleBuilder::new()
@@ -736,20 +1003,20 @@ where
                     palette::surface_low()
                 })
                 .stroke_color(if active {
-                    palette::keypad_active_light()
+                    palette::text()
                 } else {
                     palette::divider()
                 })
-                .stroke_width(1)
+                .stroke_width(if active { 2 } else { 1 })
                 .build(),
         )
         .draw(display);
 
-    let right = hit.top_left.x + hit.size.width as i32 - 2;
-    let bottom = hit.top_left.y + hit.size.height as i32 - 2;
+    let right = face_top_left.x + face_size.width as i32 - 2;
+    let bottom = face_top_left.y + face_size.height as i32 - 2;
     let _ = Line::new(
-        Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
-        Point::new(right, hit.top_left.y + 1),
+        Point::new(face_top_left.x + 1, face_top_left.y + 1),
+        Point::new(right, face_top_left.y + 1),
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
@@ -763,7 +1030,7 @@ where
     )
     .draw(display);
     let _ = Line::new(
-        Point::new(hit.top_left.x + 1, bottom),
+        Point::new(face_top_left.x + 1, bottom),
         Point::new(right, bottom),
     )
     .into_styled(
@@ -778,11 +1045,26 @@ where
     )
     .draw(display);
 
+    if active {
+        let accent = Rectangle::new(
+            Point::new(face_top_left.x + 4, face_top_left.y + 5),
+            Size::new(4, face_size.height.saturating_sub(10)),
+        );
+        let _ = accent
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(palette::text())
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
+    }
+
     if !label.is_empty() {
         let style = MonoTextStyle::new(&FONT_10X20, palette::text());
         let center = Point::new(
-            hit.top_left.x + hit.size.width as i32 / 2,
-            hit.top_left.y + hit.size.height as i32 / 2,
+            face_top_left.x + face_size.width as i32 / 2,
+            face_top_left.y + face_size.height as i32 / 2,
         );
         let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
@@ -816,10 +1098,6 @@ where
                 .build(),
         )
         .draw(display);
-
-    if matches!(hit.button, Button::Menu(MenuItem::Back)) {
-        return;
-    }
 
     let x = hit.top_left.x + hit.size.width as i32 - 18;
     let y = hit.top_left.y + hit.size.height as i32 / 2;

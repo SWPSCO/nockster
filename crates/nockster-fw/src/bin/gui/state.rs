@@ -24,6 +24,8 @@ pub enum GuiMode {
     About,
     Themes,
     Wallets,
+    WalletDetail,
+    WalletDeleteConfirm,
     LabelEntry,
 }
 
@@ -36,7 +38,6 @@ pub enum MenuItem {
     About,
     Calibrate,
     Diagnostics,
-    Back,
 }
 
 pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
@@ -65,6 +66,7 @@ use super::seed::SeedButton;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
+    Back,
     Digit(u8),
     Clear,
     Ok,
@@ -72,6 +74,10 @@ pub enum Button {
     Menu(MenuItem),
     Theme(Theme),
     WalletRow(u8),
+    WalletEdit(u8),
+    WalletDelete(u8),
+    WalletDeleteCancel(u8),
+    WalletDeleteConfirm(u8),
     Label(LabelButton),
 }
 
@@ -94,8 +100,14 @@ pub enum GuiInteraction {
     Seed(SeedInteraction),
     TouchCalibrationComplete(nockster_core::TouchCalibration),
     Menu(MenuItem),
+    Wallet(WalletInteraction),
     Label(LabelInteraction),
     ExitDiagnostics,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WalletInteraction {
+    DeleteConfirmed { slot: u8 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

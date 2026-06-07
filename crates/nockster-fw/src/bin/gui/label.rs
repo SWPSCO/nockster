@@ -20,6 +20,7 @@ const MULTITAP_TIMEOUT: Duration = Duration::from_millis(900);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LabelEntryContext {
     WalletMenu,
+    WalletDetail,
     AddedSeed,
     FirstSeed,
 }
@@ -40,6 +41,7 @@ pub enum LabelInteraction {
         context: LabelEntryContext,
     },
     Cancelled {
+        slot: u8,
         context: LabelEntryContext,
     },
 }
@@ -178,7 +180,7 @@ pub fn draw_label_button(
         LabelButton::Key(digit) => draw_key_label(display, center_x, center_y, digit),
         LabelButton::Cancel => {
             let label = match state.context {
-                LabelEntryContext::WalletMenu => "BACK",
+                LabelEntryContext::WalletMenu | LabelEntryContext::WalletDetail => "BACK",
                 LabelEntryContext::AddedSeed | LabelEntryContext::FirstSeed => "SKIP",
             };
             draw_action_label(display, center_x, center_y, label);
@@ -296,7 +298,7 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
 
 fn label_header(context: LabelEntryContext) -> &'static str {
     match context {
-        LabelEntryContext::WalletMenu => "Rename",
+        LabelEntryContext::WalletMenu | LabelEntryContext::WalletDetail => "Rename",
         LabelEntryContext::AddedSeed | LabelEntryContext::FirstSeed => "Name Wallet",
     }
 }

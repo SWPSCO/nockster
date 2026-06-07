@@ -82,6 +82,20 @@ pub fn draw_button(display: &mut GuiDisplay<'_>, mode: GuiMode, hit: ButtonHit, 
 }
 
 pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
+    draw_header_background(display, bg);
+
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
+    let baseline = header_height() / 2 + FONT_10X20.character_size.height as i32 / 3;
+    let _ = Text::with_alignment(
+        text,
+        Point::new((BOOT_LOGO_WIDTH / 2) as i32, baseline),
+        style,
+        Alignment::Center,
+    )
+    .draw(display);
+}
+
+fn draw_header_background(display: &mut GuiDisplay<'_>, bg: Rgb565) {
     let header_h = header_height();
     let header_rect = Rectangle::new(
         Point::new(0, 0),
@@ -114,15 +128,107 @@ pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
                 .build(),
         )
         .draw(display);
+}
 
-    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
-    let baseline = header_h / 2 + FONT_10X20.character_size.height as i32 / 3;
+pub fn render_header_with_back(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565, active: bool) {
+    draw_header_background(display, bg);
+    draw_header_back_button(display, active);
+
+    let title_left = 40;
+    let title_right = SCREEN_WIDTH as i32 - 8;
+    let title_width = (title_right - title_left).max(0) as u32;
+    let center_x = title_left + title_width as i32 / 2;
+    let text_width_8x13 = text.chars().count() as u32 * FONT_8X13.character_size.width;
+    let (font, baseline) = if text_width_8x13 <= title_width {
+        (
+            &FONT_8X13,
+            header_height() / 2 + FONT_8X13.character_size.height as i32 / 3,
+        )
+    } else {
+        (
+            &FONT_6X10,
+            header_height() / 2 + FONT_6X10.character_size.height as i32 / 3,
+        )
+    };
+    let style = MonoTextStyle::new(font, palette::text());
     let _ = Text::with_alignment(
         text,
-        Point::new((BOOT_LOGO_WIDTH / 2) as i32, baseline),
+        Point::new(center_x, baseline),
         style,
         Alignment::Center,
     )
+    .draw(display);
+}
+
+pub fn draw_header_back_button(display: &mut GuiDisplay<'_>, active: bool) {
+    let header_h = header_height();
+    let top_left = Point::new(1, (header_h - 40).max(0) / 2);
+    let size = Size::new(34, 40);
+    let rect = Rectangle::new(top_left, size);
+    let _ = rect
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(if active {
+                    palette::surface_low()
+                } else {
+                    palette::panel_base()
+                })
+                .stroke_color(if active {
+                    palette::keypad_active_light()
+                } else {
+                    palette::divider()
+                })
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+
+    let right = top_left.x + size.width as i32 - 2;
+    let bottom = top_left.y + size.height as i32 - 2;
+    let _ = Line::new(
+        Point::new(top_left.x + 1, top_left.y + 1),
+        Point::new(right, top_left.y + 1),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(palette::panel_highlight())
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+    let _ = Line::new(
+        Point::new(top_left.x + 1, bottom),
+        Point::new(right, bottom),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(palette::panel_shadow())
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+
+    let color = if active {
+        palette::keypad_active_light()
+    } else {
+        palette::text()
+    };
+    let center = Point::new(top_left.x + size.width as i32 / 2, header_h / 2);
+    let stroke = PrimitiveStyleBuilder::new()
+        .stroke_color(color)
+        .stroke_width(3)
+        .build();
+    let _ = Line::new(
+        Point::new(center.x + 6, center.y - 11),
+        Point::new(center.x - 5, center.y),
+    )
+    .into_styled(stroke)
+    .draw(display);
+    let _ = Line::new(
+        Point::new(center.x - 5, center.y),
+        Point::new(center.x + 6, center.y + 11),
+    )
+    .into_styled(stroke)
     .draw(display);
 }
 
@@ -1233,10 +1339,15 @@ fn button_label(button: Button) -> &'static str {
         Button::Digit(_) => "?",
         Button::Clear => "X",
         Button::Ok => "OK",
+        Button::Back => "",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
         Button::Theme(_) => "",
         Button::WalletRow(_) => "",
+        Button::WalletEdit(_) => "",
+        Button::WalletDelete(_) => "",
+        Button::WalletDeleteCancel(_) => "",
+        Button::WalletDeleteConfirm(_) => "",
         Button::Label(_) => "",
     }
 }
@@ -1245,11 +1356,16 @@ fn confirm_button_label(button: Button) -> &'static str {
     match button {
         Button::Ok => "Approve",
         Button::Clear => "Deny",
+        Button::Back => "",
         Button::Digit(_) => "",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
         Button::Theme(_) => "",
         Button::WalletRow(_) => "",
+        Button::WalletEdit(_) => "",
+        Button::WalletDelete(_) => "",
+        Button::WalletDeleteCancel(_) => "",
+        Button::WalletDeleteConfirm(_) => "",
         Button::Label(_) => "",
     }
 }

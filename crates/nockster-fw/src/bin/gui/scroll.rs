@@ -8,6 +8,8 @@ use super::constants::SCREEN_WIDTH;
 use super::palette;
 use super::GuiDisplay;
 
+const DRAG_THRESHOLD: i32 = 6;
+
 pub trait ScrollContent {
     fn content_height(&self) -> i32;
 
@@ -69,6 +71,71 @@ impl ScrollState {
     pub fn drag_end(&mut self) {
         self.last_drag_y = None;
     }
+
+    pub fn begin_drag(&mut self, y: i32) {
+        self.last_drag_y = Some(y);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragUpdate {
+    Outside,
+    Tracking,
+    Dragging { moved: bool },
+}
+
+pub struct DragState {
+    start: Option<Point>,
+    active: bool,
+}
+
+impl DragState {
+    pub fn new() -> Self {
+        Self {
+            start: None,
+            active: false,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.start = None;
+        self.active = false;
+    }
+
+    pub fn update(&mut self, point: Point, scroll: &mut ScrollState) -> DragUpdate {
+        if !scroll.contains(point) {
+            self.reset();
+            scroll.drag_end();
+            return DragUpdate::Outside;
+        }
+
+        let Some(start) = self.start else {
+            self.start = Some(point);
+            self.active = false;
+            scroll.begin_drag(point.y);
+            return DragUpdate::Tracking;
+        };
+
+        if !self.active {
+            let dx = point.x - start.x;
+            let dy = point.y - start.y;
+            if dx.abs() <= DRAG_THRESHOLD && dy.abs() <= DRAG_THRESHOLD {
+                return DragUpdate::Tracking;
+            }
+            self.active = true;
+            scroll.begin_drag(start.y);
+        }
+
+        DragUpdate::Dragging {
+            moved: scroll.drag_to(point.y),
+        }
+    }
+}
+
+impl Default for DragState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub fn render<C>(display: &mut GuiDisplay<'_>, scroll: &mut ScrollState, content: &C)
@@ -109,13 +176,13 @@ fn draw_scrollbar(display: &mut GuiDisplay<'_>, scroll: &ScrollState, content_h:
         return;
     }
 
-    let thumb_h = ((track_h * track_h) / content_h).clamp(12, track_h);
+    let thumb_h = ((track_h * track_h) / content_h).clamp(18, track_h);
     let travel = (track_h - thumb_h).max(1);
     let thumb_y = viewport.top_left.y + (scroll.offset_y * travel) / scroll.max_offset_y.max(1);
-    let x = SCREEN_WIDTH as i32 - 4;
+    let x = SCREEN_WIDTH as i32 - 7;
     let track = Rectangle::new(
-        Point::new(x, viewport.top_left.y),
-        Size::new(1, track_h as u32),
+        Point::new(x + 2, viewport.top_left.y + 6),
+        Size::new(2, track_h.saturating_sub(12) as u32),
     );
     let _ = track
         .into_styled(
@@ -125,11 +192,25 @@ fn draw_scrollbar(display: &mut GuiDisplay<'_>, scroll: &ScrollState, content_h:
                 .build(),
         )
         .draw(display);
-    let thumb = Rectangle::new(Point::new(x, thumb_y), Size::new(2, thumb_h as u32));
+    let thumb = Rectangle::new(Point::new(x, thumb_y), Size::new(5, thumb_h as u32));
     let _ = thumb
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(palette::text_subtle())
+                .fill_color(palette::panel_shadow())
+                .stroke_color(palette::keypad_active_light())
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+    let highlight_h = thumb_h.saturating_sub(4).max(1);
+    let highlight = Rectangle::new(
+        Point::new(x + 1, thumb_y + 2),
+        Size::new(1, highlight_h as u32),
+    );
+    let _ = highlight
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::panel_highlight())
                 .stroke_width(0)
                 .build(),
         )

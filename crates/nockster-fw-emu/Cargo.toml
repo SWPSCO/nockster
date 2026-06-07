@@ -1,0 +1,43 @@
+[package]
+name = "nockster-fw-emu"
+authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
+edition.workspace = true
+version.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+console_error_panic_hook = "0.1"
+embedded-graphics = { version = "0.8.1", default-features = false }
+embedded-graphics-core = { version = "0.4", default-features = false }
+getrandom = { version = "0.2", features = ["js"] }
+heapless = { workspace = true, features = ["serde"] }
+js-sys = "0.3"
+nockster-core = { path = "../nockster-core", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+wasm-bindgen = "0.2"
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "CanvasRenderingContext2d",
+  "Document",
+  "Element",
+  "HtmlCanvasElement",
+  "ImageData",
+  "Performance",
+  "Window",
+  "console",
+]
+
+[build-dependencies]
+image = { version = "0.24" }
+
+[lints]
+workspace = true

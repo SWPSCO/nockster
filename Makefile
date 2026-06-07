@@ -35,6 +35,9 @@ UPDATE_BUNDLE_URL ?=
 UPDATE_FIRMWARE_URL ?=
 UPDATE_WEB_DIR ?= web/public/updates
 UPDATE_WEB_INDEX ?= $(UPDATE_WEB_DIR)/latest.json
+NOCKSTER_SITE_DIR ?= ../nockster.com
+NOCKSTER_SITE_FW_DIR ?= $(NOCKSTER_SITE_DIR)/public/pkg-fw
+FW_EMU_WEB_ASSETS := package.json siger_fw.d.ts siger_fw.js siger_fw_bg.wasm siger_fw_bg.wasm.d.ts
 RUN_EFUSE_SUMMARY ?= 0
 RELEASE_PREFLIGHT_STRICT ?=
 NOCKSTER_CLI ?=
@@ -57,7 +60,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
 
 all: build
 
@@ -272,7 +275,15 @@ js-test:
 	npm install; \
 	npm test
 
-web: wasm js
+nockster-site-assets: fw-wasm
+	@mkdir -p "$(NOCKSTER_SITE_FW_DIR)"
+	@for asset in $(FW_EMU_WEB_ASSETS); do \
+		cp "pkg-fw/$$asset" "$(NOCKSTER_SITE_FW_DIR)/$$asset"; \
+	done
+	@rm -f "$(NOCKSTER_SITE_FW_DIR)/.gitignore"
+	@echo "copied firmware emulator assets to $(NOCKSTER_SITE_FW_DIR)"
+
+web: wasm js nockster-site-assets
 	@cd web; \
 	npm install; \
 	npm run build
@@ -658,7 +669,7 @@ help:
 	@echo "    make wasm       - Build WASM package for web"
 	@echo "    make js         - Build nockster-js lib for web"
 	@echo "    make js-test    - Run nockster-js protocol/update parser tests"
-	@echo "    make web        - Build demo UI for web"
+	@echo "    make web        - Build demo UI and copy firmware emulator assets to ../nockster.com"
 	@echo "  make tauri-dev  - Run Tauri desktop app in dev mode"
 	@echo "  make tauri-build- Build Tauri desktop app for production"
 	@echo "  make tauri      - Build Tauri desktop app (alias for tauri-build)"

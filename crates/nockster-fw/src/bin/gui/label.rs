@@ -9,6 +9,7 @@ use nockster_core::MAX_SEED_LABEL_LEN;
 
 use super::constants::*;
 use super::layout::header_height;
+use super::palette;
 use super::render::render_header;
 use super::state::{Button, ButtonHit};
 use super::time::{Duration, Instant};
@@ -141,8 +142,12 @@ impl Default for LabelEntryState {
 }
 
 pub fn render_label_entry(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
-    let _ = display.clear(COLOR_BACKGROUND);
-    render_header(display, label_header(state.context), COLOR_SURFACE_HIGH);
+    let _ = display.clear(palette::background());
+    render_header(
+        display,
+        label_header(state.context),
+        palette::surface_high(),
+    );
     draw_label_preview(display, state);
     for hit in label_buttons() {
         draw_label_button(display, hit, state, false);
@@ -192,7 +197,7 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
     let _ = shadow
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_PANEL_SHADOW)
+                .fill_color(palette::panel_shadow())
                 .stroke_width(0)
                 .build(),
         )
@@ -205,8 +210,8 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
     let _ = panel
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_SURFACE_LOW)
-                .stroke_color(COLOR_DIVIDER)
+                .fill_color(palette::surface_low())
+                .stroke_color(palette::divider())
                 .stroke_width(1)
                 .build(),
         )
@@ -218,7 +223,7 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
-            .stroke_color(COLOR_PANEL_HIGHLIGHT)
+            .stroke_color(palette::panel_highlight())
             .stroke_width(1)
             .build(),
     )
@@ -229,7 +234,7 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
-            .stroke_color(COLOR_PANEL_SHADOW)
+            .stroke_color(palette::panel_shadow())
             .stroke_width(1)
             .build(),
     )
@@ -238,13 +243,13 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
     let _ = accent
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_PANEL_HIGHLIGHT)
+                .fill_color(palette::panel_highlight())
                 .stroke_width(0)
                 .build(),
         )
         .draw(display);
 
-    let meta_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let meta_style = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
     let mut slot_line = HString::<24>::new();
     let _ = core::fmt::write(&mut slot_line, format_args!("slot {}", state.slot()));
     let _ = Text::with_alignment(
@@ -259,9 +264,9 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
     let value_style = MonoTextStyle::new(
         &FONT_10X20,
         if state.label().is_empty() {
-            COLOR_TEXT_SUBTLE
+            palette::text_subtle()
         } else {
-            COLOR_TEXT
+            palette::text()
         },
     );
     let value_x = 18;
@@ -281,7 +286,7 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
         let _ = cursor
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_TEXT)
+                    .fill_color(palette::text())
                     .stroke_width(0)
                     .build(),
             )
@@ -359,8 +364,8 @@ fn label_buttons() -> [ButtonHit; 12] {
 }
 
 fn draw_key_label(display: &mut GuiDisplay<'_>, x: i32, y: i32, digit: u8) {
-    let digit_style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
-    let letters_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let digit_style = MonoTextStyle::new(&FONT_8X13, palette::text());
+    let letters_style = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
     let mut digit_buf = [0u8; 4];
     let digit_ch = char::from(b'0' + digit);
     let digit_str = digit_ch.encode_utf8(&mut digit_buf);
@@ -381,16 +386,16 @@ fn draw_key_label(display: &mut GuiDisplay<'_>, x: i32, y: i32, digit: u8) {
 }
 
 fn draw_action_label(display: &mut GuiDisplay<'_>, x: i32, y: i32, label: &str) {
-    let style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_8X13, palette::text());
     let _ =
         Text::with_alignment(label, Point::new(x, y + 5), style, Alignment::Center).draw(display);
 }
 
 fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool) {
     let (base, border): (Rgb565, Rgb565) = if active {
-        (COLOR_KEYPAD_ACTIVE, COLOR_KEYPAD_ACTIVE_LIGHT)
+        (palette::keypad_active(), palette::keypad_active_light())
     } else {
-        (COLOR_SURFACE_LOW, COLOR_DIVIDER)
+        (palette::surface_low(), palette::divider())
     };
     if hit.size.width > 8 && hit.size.height > 8 {
         let shadow = Rectangle::new(
@@ -403,7 +408,7 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         let _ = shadow
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_SHADOW)
+                    .fill_color(palette::panel_shadow())
                     .stroke_width(0)
                     .build(),
             )
@@ -434,9 +439,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .stroke_color(if active {
-                    COLOR_KEYPAD_ACTIVE_LIGHT
+                    palette::keypad_active_light()
                 } else {
-                    COLOR_SURFACE_HIGH
+                    palette::surface_high()
                 })
                 .stroke_width(1)
                 .build(),
@@ -449,9 +454,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .stroke_color(if active {
-                    COLOR_KEYPAD_ACTIVE_DARK
+                    palette::keypad_active_dark()
                 } else {
-                    COLOR_BACKGROUND
+                    palette::background()
                 })
                 .stroke_width(1)
                 .build(),
@@ -464,9 +469,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .stroke_color(if active {
-                    COLOR_TEXT
+                    palette::text()
                 } else {
-                    COLOR_PANEL_HIGHLIGHT
+                    palette::panel_highlight()
                 })
                 .stroke_width(1)
                 .build(),
@@ -479,9 +484,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .stroke_color(if active {
-                    COLOR_KEYPAD_ACTIVE_DARK
+                    palette::keypad_active_dark()
                 } else {
-                    COLOR_BACKGROUND
+                    palette::background()
                 })
                 .stroke_width(1)
                 .build(),
@@ -495,9 +500,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
             .into_styled(
                 PrimitiveStyleBuilder::new()
                     .fill_color(if active {
-                        COLOR_TEXT
+                        palette::text()
                     } else {
-                        COLOR_PANEL_HIGHLIGHT
+                        palette::panel_highlight()
                     })
                     .stroke_width(0)
                     .build(),
@@ -514,7 +519,7 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
             let _ = bar
                 .into_styled(
                     PrimitiveStyleBuilder::new()
-                        .fill_color(COLOR_TEXT)
+                        .fill_color(palette::text())
                         .stroke_width(0)
                         .build(),
                 )

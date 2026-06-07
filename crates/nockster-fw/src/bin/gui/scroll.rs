@@ -4,7 +4,8 @@ use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 
-use super::constants::{COLOR_BACKGROUND, COLOR_DIVIDER, COLOR_TEXT_SUBTLE, SCREEN_WIDTH};
+use super::constants::SCREEN_WIDTH;
+use super::palette;
 use super::GuiDisplay;
 
 pub trait ScrollContent {
@@ -83,7 +84,7 @@ where
     let _ = viewport
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_BACKGROUND)
+                .fill_color(palette::background())
                 .stroke_width(0)
                 .build(),
         )
@@ -119,7 +120,7 @@ fn draw_scrollbar(display: &mut GuiDisplay<'_>, scroll: &ScrollState, content_h:
     let _ = track
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_DIVIDER)
+                .fill_color(palette::divider())
                 .stroke_width(0)
                 .build(),
         )
@@ -128,7 +129,7 @@ fn draw_scrollbar(display: &mut GuiDisplay<'_>, scroll: &ScrollState, content_h:
     let _ = thumb
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_TEXT_SUBTLE)
+                .fill_color(palette::text_subtle())
                 .stroke_width(0)
                 .build(),
         )

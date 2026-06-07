@@ -29,7 +29,7 @@ use esp_hal::system::{software_reset, CpuControl, Stack};
 use esp_hal::time::Duration;
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
-    Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
+    AboutInfo, Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
     TxReviewSummary, WalletRow, WalletRows, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
@@ -1066,6 +1066,9 @@ fn main() -> ! {
                             let build = dispatch::diagnostics_build_label();
                             ui.show_touch_diagnostics(build.as_str());
                         }
+                        MenuItem::About => {
+                            ui.show_about(&build_about_info());
+                        }
                         MenuItem::Wallets => {
                             if session::is_locked() {
                                 pending_menu_dest = Some(MenuItem::Wallets);
@@ -1083,7 +1086,7 @@ fn main() -> ! {
                                 ui.show_add_seed();
                             }
                         }
-                        MenuItem::Calibrate | MenuItem::Back => {}
+                        MenuItem::Theme | MenuItem::Calibrate | MenuItem::Back => {}
                     },
                     GuiInteraction::Label(interaction) => {
                         handle_label_interaction(interaction, ui, &mut hid);
@@ -2344,6 +2347,20 @@ fn build_wallet_rows() -> WalletRows {
         }
     }
     rows
+}
+
+fn build_about_info() -> AboutInfo {
+    let anchor = update_auth::trusted_pubkey_sha256();
+    AboutInfo {
+        fw_major: FW_MAJOR,
+        fw_minor: FW_MINOR,
+        release_version: update_auth::firmware_release_version(),
+        build: dispatch::firmware_build_info(),
+        trust: UpdateTrust {
+            configured: anchor.is_some(),
+            pubkey_sha256: anchor.unwrap_or([0u8; 32]),
+        },
+    }
 }
 
 fn finish_label_entry(ui: &mut Gui<'_>, context: LabelEntryContext) {

@@ -14,17 +14,17 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::Text;
 use heapless::{String as HString, Vec as HVec};
-use nockster_core::{MAX_SEED_LABEL_LEN, MAX_SEED_SLOTS};
+use nockster_core::{BuildInfo, UpdateTrust, MAX_SEED_LABEL_LEN, MAX_SEED_SLOTS, PROTO_V1};
 use wasm_bindgen::prelude::*;
 
 use display::WasmDisplay;
 use gui::constants::{
-    COLOR_BACKGROUND, COLOR_KEYPAD_ACTIVE_LIGHT, COLOR_SURFACE_HIGH, COLOR_TEXT,
     IDLE_OVERLAY_HEIGHT, IDLE_OVERLAY_MARGIN, MAX_PIN_DIGITS, PIN_BUFFER_LEN, SCREEN_HEIGHT,
     SCREEN_WIDTH,
 };
 use gui::label::{LabelButton, LabelEntryContext};
 use gui::menu::{WalletRow, WalletRows};
+use gui::palette;
 use gui::seed::{SeedButton, SeedEntryState};
 use gui::state::{Button, ButtonHit, GuiMode, MenuItem};
 use gui::time::{Duration, Instant};
@@ -56,6 +56,35 @@ const CALIBRATION_POINTS: [gui::ScreenPoint; 4] = [
     },
 ];
 
+fn copied_string<const N: usize>(value: &str) -> HString<N> {
+    let mut out = HString::new();
+    for ch in value.chars() {
+        if out.push(ch).is_err() {
+            break;
+        }
+    }
+    out
+}
+
+fn demo_about_info() -> gui::menu::AboutInfo {
+    gui::menu::AboutInfo {
+        fw_major: 0,
+        fw_minor: 1,
+        release_version: 0,
+        build: BuildInfo {
+            git_commit: copied_string("browser-demo"),
+            git_dirty: false,
+            build_profile: copied_string("wasm"),
+            protocol_v: PROTO_V1,
+            tx_types_rev: copied_string("shared-gui"),
+        },
+        trust: UpdateTrust {
+            configured: false,
+            pubkey_sha256: [0u8; 32],
+        },
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn init() {
     console_error_panic_hook::set_once();
@@ -68,6 +97,7 @@ pub struct SigerGui {
     pin_entered: HVec<u8, PIN_BUFFER_LEN>,
     seed_entry_state: SeedEntryState,
     seed_flow_is_add: bool,
+    menu_scroll: gui::scroll::ScrollState,
     wallet_rows: WalletRows,
     wallets_scroll: gui::scroll::ScrollState,
     label_entry_state: gui::label::LabelEntryState,
@@ -90,6 +120,7 @@ impl SigerGui {
             pin_entered: HVec::new(),
             seed_entry_state: SeedEntryState::new(),
             seed_flow_is_add: false,
+            menu_scroll: gui::scroll::ScrollState::new(gui::menu::menu_viewport()),
             wallet_rows: HVec::new(),
             wallets_scroll: gui::scroll::ScrollState::new(gui::menu::wallets_viewport()),
             label_entry_state: gui::label::LabelEntryState::new(),
@@ -119,6 +150,7 @@ impl SigerGui {
     }
 
     pub fn release_touch(&mut self) {
+        self.menu_scroll.drag_end();
         self.wallets_scroll.drag_end();
         let active = self.active_target.take();
         if let Some(active) = active {
@@ -147,6 +179,15 @@ impl SigerGui {
             return Ok(());
         }
 
+        if self.mode == GuiMode::Menu
+            && self.menu_scroll.contains(point)
+            && self.menu_scroll.drag_to(point.y)
+        {
+            self.clear_active_target();
+            gui::menu::render_menu_viewport(&mut self.display, &mut self.menu_scroll);
+            return Ok(());
+        }
+
         let target = self.target_from_point(point);
         self.set_active_target(target);
         Ok(())
@@ -170,7 +211,7 @@ impl SigerGui {
         self.unlock_demo_last_frame_start = None;
         self.idle_message.clear();
         let _ = self.idle_message.push_str(message);
-        let _ = self.display.clear(COLOR_BACKGROUND);
+        let _ = self.display.clear(palette::background());
         gui::render::draw_unlock_header(&mut self.display, false);
         if !message.is_empty() {
             gui::render::render_idle_overlay(&mut self.display, message);
@@ -182,14 +223,29 @@ impl SigerGui {
         self.clear_active_target();
         self.mode = GuiMode::Locked;
         gui::render::draw_keypad(&mut self.display);
-        gui::render::render_header(&mut self.display, header, COLOR_SURFACE_HIGH);
+        gui::render::render_header(&mut self.display, header, palette::surface_high());
     }
 
     fn show_menu(&mut self) {
         self.stop_unlock_animation();
         self.clear_active_target();
+        self.menu_scroll.reset();
         self.mode = GuiMode::Menu;
-        gui::menu::render_menu(&mut self.display);
+        gui::menu::render_menu(&mut self.display, &mut self.menu_scroll);
+    }
+
+    fn show_about(&mut self) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::About;
+        gui::menu::render_about(&mut self.display, &demo_about_info());
+    }
+
+    fn show_themes(&mut self) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::Themes;
+        gui::menu::render_themes(&mut self.display);
     }
 
     fn show_wallets(&mut self) {
@@ -253,7 +309,21 @@ impl SigerGui {
                 })
             }
             GuiMode::Menu => {
-                gui::menu::button_from_point_menu(point).map(|hit| ActiveTarget::Button {
+                gui::menu::button_from_point_menu(point, &self.menu_scroll).map(|hit| {
+                    ActiveTarget::Button {
+                        mode: self.mode,
+                        hit,
+                    }
+                })
+            }
+            GuiMode::About => {
+                gui::menu::button_from_point_about(point).map(|hit| ActiveTarget::Button {
+                    mode: self.mode,
+                    hit,
+                })
+            }
+            GuiMode::Themes => {
+                gui::menu::button_from_point_themes(point).map(|hit| ActiveTarget::Button {
                     mode: self.mode,
                     hit,
                 })
@@ -331,6 +401,8 @@ impl SigerGui {
                     gui::render::draw_button(&mut self.display, GuiMode::Locked, hit, active)
                 }
                 GuiMode::Menu => gui::menu::draw_menu_button(&mut self.display, hit, active),
+                GuiMode::About => gui::menu::draw_about_button(&mut self.display, active),
+                GuiMode::Themes => gui::menu::draw_theme_button(&mut self.display, hit, active),
                 GuiMode::Wallets => self.draw_wallet_active_target(hit, active),
                 GuiMode::LabelEntry => gui::label::draw_label_button(
                     &mut self.display,
@@ -360,7 +432,7 @@ impl SigerGui {
                 let _ = rect
                     .into_styled(
                         PrimitiveStyleBuilder::new()
-                            .stroke_color(COLOR_KEYPAD_ACTIVE_LIGHT)
+                            .stroke_color(palette::keypad_active_light())
                             .stroke_width(2)
                             .build(),
                     )
@@ -389,6 +461,8 @@ impl SigerGui {
                 match mode {
                     GuiMode::Locked => self.handle_locked(point),
                     GuiMode::Menu => self.handle_menu(point),
+                    GuiMode::About => self.handle_about(point),
+                    GuiMode::Themes => self.handle_themes(point),
                     GuiMode::Wallets => self.handle_wallets(point),
                     GuiMode::LabelEntry => self.handle_label_entry(point),
                     GuiMode::SeedFirstBoot => self.handle_seed_setup(point),
@@ -435,19 +509,44 @@ impl SigerGui {
                 let _ = header.push('*');
             }
         }
-        gui::render::render_header(&mut self.display, header.as_str(), COLOR_SURFACE_HIGH);
+        gui::render::render_header(&mut self.display, header.as_str(), palette::surface_high());
     }
 
     fn handle_menu(&mut self, point: Point) {
-        let Some(hit) = gui::menu::button_from_point_menu(point) else {
+        let Some(hit) = gui::menu::button_from_point_menu(point, &self.menu_scroll) else {
             return;
         };
         match hit.button {
             Button::Menu(MenuItem::Wallets) => self.show_wallets(),
             Button::Menu(MenuItem::AddSeed) => self.show_add_seed(),
+            Button::Menu(MenuItem::Theme) => self.show_themes(),
+            Button::Menu(MenuItem::About) => self.show_about(),
             Button::Menu(MenuItem::Diagnostics) => self.show_diagnostics(),
             Button::Menu(MenuItem::Calibrate) => self.show_calibration_demo(),
             Button::Menu(MenuItem::Back) => self.show_unlocked(""),
+            _ => {}
+        }
+    }
+
+    fn handle_about(&mut self, point: Point) {
+        let Some(hit) = gui::menu::button_from_point_about(point) else {
+            return;
+        };
+        if matches!(hit.button, Button::Menu(MenuItem::Back)) {
+            self.show_menu();
+        }
+    }
+
+    fn handle_themes(&mut self, point: Point) {
+        let Some(hit) = gui::menu::button_from_point_themes(point) else {
+            return;
+        };
+        match hit.button {
+            Button::Theme(theme) => {
+                gui::palette::set_theme(theme);
+                gui::menu::render_themes(&mut self.display);
+            }
+            Button::Menu(MenuItem::Back) => self.show_menu(),
             _ => {}
         }
     }
@@ -630,8 +729,8 @@ impl SigerGui {
         self.stop_unlock_animation();
         self.clear_active_target();
         self.mode = GuiMode::Diagnostics;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        gui::render::render_header(&mut self.display, "Diagnostics", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        gui::render::render_header(&mut self.display, "Diagnostics", palette::surface_high());
         draw_left_lines(
             &mut self.display,
             &[
@@ -771,8 +870,12 @@ impl SigerGui {
         let step = self
             .calibration_step
             .min(CALIBRATION_POINTS.len().saturating_sub(1));
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        gui::render::render_header(&mut self.display, "Calibrate Touch", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        gui::render::render_header(
+            &mut self.display,
+            "Calibrate Touch",
+            palette::surface_high(),
+        );
         gui::render::render_touch_calibration_target(
             &mut self.display,
             step,
@@ -810,7 +913,7 @@ fn next_slot(rows: &[WalletRow]) -> u8 {
 }
 
 fn draw_left_lines(display: &mut WasmDisplay, lines: &[&str]) {
-    let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_6X10, palette::text());
     let mut y = gui::layout::header_height() + 20;
     for line in lines {
         let _ = Text::new(line, Point::new(8, y), style).draw(display);

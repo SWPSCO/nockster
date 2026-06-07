@@ -2,6 +2,7 @@ use embedded_graphics::prelude::{Point, Size};
 use heapless::{String as HString, Vec as HVec};
 
 use super::constants::PIN_BUFFER_LEN;
+use super::palette::Theme;
 use super::time::Instant;
 use super::touch::{Coordinates, ScreenPoint};
 
@@ -20,6 +21,8 @@ pub enum GuiMode {
     Diagnostics,
     TouchCalibration,
     Menu,
+    About,
+    Themes,
     Wallets,
     LabelEntry,
 }
@@ -29,6 +32,8 @@ pub enum GuiMode {
 pub enum MenuItem {
     Wallets,
     AddSeed,
+    Theme,
+    About,
     Calibrate,
     Diagnostics,
     Back,
@@ -65,6 +70,7 @@ pub enum Button {
     Ok,
     Seed(SeedButton),
     Menu(MenuItem),
+    Theme(Theme),
     WalletRow(u8),
     Label(LabelButton),
 }

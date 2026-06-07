@@ -31,16 +31,19 @@ const SEED_TOTAL_SIZE: usize = HEADER_SIZE + SLOT_SIZE * MAX_SEED_SLOTS;
 const CALIBRATION_SIZE: usize = 64;
 const LABELS_HEADER_SIZE: usize = 8;
 const LABELS_SIZE: usize = LABELS_HEADER_SIZE + MAX_SEED_LABEL_LEN * MAX_SEED_SLOTS;
+const GUI_PREFS_SIZE: usize = 64;
 const ADDRESS_BOOK_HEADER_SIZE: usize = 8;
 const ADDRESS_BOOK_RECORD_SIZE: usize = MAX_ADDRESS_BOOK_LABEL_LEN + MAX_ADDRESS_BOOK_PKH_LEN;
 const ADDRESS_BOOK_SIZE: usize =
     ADDRESS_BOOK_HEADER_SIZE + ADDRESS_BOOK_RECORD_SIZE * MAX_DEVICE_ADDRESS_BOOK_ENTRIES;
-const SEED_CORE_TOTAL_SIZE: usize = SEED_TOTAL_SIZE + CALIBRATION_SIZE + LABELS_SIZE;
+const SEED_CORE_TOTAL_SIZE: usize =
+    SEED_TOTAL_SIZE + CALIBRATION_SIZE + LABELS_SIZE + GUI_PREFS_SIZE;
 const SEED_CORE_STORAGE_SIZE: usize = align_up(SEED_CORE_TOTAL_SIZE, NVS_SECTOR_SIZE);
 const SEED_CORE_STORAGE_END: u32 = NVS_BASE_ADDR + SEED_CORE_STORAGE_SIZE as u32;
 const ADDRESS_BOOK_STORAGE_SIZE: usize = align_up(ADDRESS_BOOK_SIZE, NVS_SECTOR_SIZE);
 const CALIBRATION_ADDR: u32 = NVS_BASE_ADDR + SEED_TOTAL_SIZE as u32;
 const LABELS_ADDR: u32 = CALIBRATION_ADDR + CALIBRATION_SIZE as u32;
+const GUI_PREFS_ADDR: u32 = LABELS_ADDR + LABELS_SIZE as u32;
 const ADDRESS_BOOK_ADDR: u32 = SEED_CORE_STORAGE_END;
 const ADDRESS_BOOK_STORAGE_END: u32 = ADDRESS_BOOK_ADDR + ADDRESS_BOOK_STORAGE_SIZE as u32;
 const NVS_STORAGE_END: u32 = ADDRESS_BOOK_STORAGE_END;
@@ -52,6 +55,7 @@ const CALIBRATION_MAGIC: [u8; 4] = *b"NCTC";
 const LEGACY_CALIBRATION_MAGIC: [u8; 4] = [b'S', b'G', b'T', b'C'];
 const LABELS_MAGIC: [u8; 4] = *b"NCLB";
 const LEGACY_LABELS_MAGIC: [u8; 4] = [b'S', b'G', b'L', b'B'];
+const GUI_PREFS_MAGIC: [u8; 4] = *b"NCUI";
 const ADDRESS_BOOK_MAGIC: [u8; 4] = *b"NCAB";
 const VERSION_V1: u8 = 1;
 const VERSION_V2: u8 = 2;
@@ -62,6 +66,7 @@ pub const NVS_V2_PEPPER_MESSAGE_LEN: usize = 15 + 32 + 6;
 const NVS_V2_SOFTWARE_PEPPER: [u8; 32] = *b"nockster-dev-nvs-v2-pepper-00000";
 const CALIBRATION_VERSION: u8 = 1;
 const LABELS_VERSION: u8 = 1;
+const GUI_PREFS_VERSION: u8 = 1;
 const ADDRESS_BOOK_VERSION: u8 = 1;
 const FLAG_INITIALIZED: u8 = 0x01;
 const SLOT_USED: u8 = 0x01;
@@ -156,6 +161,7 @@ pub struct PreparedSeedRewrite {
     records: Vec<SlotRecord>,
     labels: Vec<SeedSlotLabel>,
     calibration: Option<TouchCalibration>,
+    gui_theme: Option<u8>,
 }
 
 pub trait NvsPepperSource {
@@ -876,6 +882,7 @@ impl NvsStore {
         old_key.zeroize();
         let labels = self.read_seed_labels().unwrap_or_default();
         let calibration = self.read_touch_calibration().ok().flatten();
+        let gui_theme = self.read_gui_theme().ok().flatten();
 
         if seeds.is_empty() {
             return Err(NvsError::NotInitialized);
@@ -886,6 +893,7 @@ impl NvsStore {
             seeds.as_slice(),
             labels.as_slice(),
             calibration,
+            gui_theme,
             pepper_source,
         ) {
             Ok(key) => key,
@@ -903,6 +911,7 @@ impl NvsStore {
         seeds: &[[u8; 64]],
         labels: &[SeedSlotLabel],
         calibration: Option<TouchCalibration>,
+        gui_theme: Option<u8>,
         pepper_source: &mut P,
     ) -> Result<(PreparedSeedRewrite, [u8; 32]), NvsError> {
         if seeds.is_empty() {
@@ -961,6 +970,7 @@ impl NvsStore {
                 records,
                 labels: stored_labels,
                 calibration,
+                gui_theme,
             },
             key,
         ))
@@ -975,6 +985,7 @@ impl NvsStore {
             prepared.records.as_slice(),
             prepared.labels.as_slice(),
             prepared.calibration,
+            prepared.gui_theme,
         )
     }
 
@@ -1185,6 +1196,31 @@ impl NvsStore {
         self.write_seed_core_bytes(CALIBRATION_ADDR, &buf)
     }
 
+    pub fn read_gui_theme(&mut self) -> Result<Option<u8>, NvsError> {
+        let mut buf = [0u8; GUI_PREFS_SIZE];
+        self.flash
+            .read(GUI_PREFS_ADDR, &mut buf)
+            .map_err(|_| NvsError::Flash)?;
+        if buf.iter().all(|b| *b == 0xFF) {
+            return Ok(None);
+        }
+        if &buf[..GUI_PREFS_MAGIC.len()] != GUI_PREFS_MAGIC.as_ref() {
+            return Ok(None);
+        }
+        if buf[4] != GUI_PREFS_VERSION {
+            return Ok(None);
+        }
+        if buf[5] == 0xFF {
+            return Ok(None);
+        }
+        Ok(Some(buf[5]))
+    }
+
+    pub fn write_gui_theme(&mut self, theme_id: u8) -> Result<(), NvsError> {
+        let buf = Self::gui_prefs_bytes(theme_id);
+        self.write_seed_core_bytes(GUI_PREFS_ADDR, &buf)
+    }
+
     fn touch_calibration_bytes(
         calibration: &TouchCalibration,
     ) -> Result<[u8; CALIBRATION_SIZE], NvsError> {
@@ -1208,6 +1244,14 @@ impl NvsStore {
         buf[12..14].copy_from_slice(&calibration.raw_y_min.to_le_bytes());
         buf[14..16].copy_from_slice(&calibration.raw_y_max.to_le_bytes());
         Ok(buf)
+    }
+
+    fn gui_prefs_bytes(theme_id: u8) -> [u8; GUI_PREFS_SIZE] {
+        let mut buf = [0xFFu8; GUI_PREFS_SIZE];
+        buf[..GUI_PREFS_MAGIC.len()].copy_from_slice(&GUI_PREFS_MAGIC);
+        buf[4] = GUI_PREFS_VERSION;
+        buf[5] = theme_id;
+        buf
     }
 
     fn derive_master_key_v1(pin: &str, salt: &[u8; 32]) -> Result<[u8; 32], NvsError> {
@@ -1524,6 +1568,7 @@ impl NvsStore {
         records: &[SlotRecord],
         labels: &[SeedSlotLabel],
         calibration: Option<TouchCalibration>,
+        gui_theme: Option<u8>,
     ) -> Result<(), NvsError> {
         if records.len() > MAX_SEED_SLOTS {
             return Err(NvsError::Crypto);
@@ -1549,6 +1594,12 @@ impl NvsStore {
             let calibration_start = relative_seed_offset(CALIBRATION_ADDR, CALIBRATION_SIZE)?;
             sector[calibration_start..calibration_start + CALIBRATION_SIZE]
                 .copy_from_slice(&calibration);
+        }
+
+        if let Some(theme_id) = gui_theme {
+            let gui_prefs = Self::gui_prefs_bytes(theme_id);
+            let prefs_start = relative_seed_offset(GUI_PREFS_ADDR, GUI_PREFS_SIZE)?;
+            sector[prefs_start..prefs_start + GUI_PREFS_SIZE].copy_from_slice(&gui_prefs);
         }
 
         self.write_seed_core_region(&sector)

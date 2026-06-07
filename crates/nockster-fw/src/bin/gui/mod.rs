@@ -5,6 +5,7 @@ pub mod demo;
 mod label;
 mod layout;
 mod menu;
+pub mod palette;
 mod render;
 mod scroll;
 mod seed;
@@ -13,7 +14,7 @@ mod time;
 mod touch;
 
 pub use label::{LabelEntryContext, LabelInteraction};
-pub use menu::{WalletRow, WalletRows};
+pub use menu::{AboutInfo, WalletRow, WalletRows};
 pub use seed::{SeedInteraction, SeedPhrase};
 pub use state::{
     GuiInteraction, GuiMode, MenuItem, TxReviewSummary, TX_REVIEW_FLAG_HIGH_FEE,
@@ -128,6 +129,10 @@ pub struct Gui<'d> {
     /// True when the seed-entry flow was launched to add a wallet to an unlocked
     /// device (vs first-boot setup). Drives where Cancel returns to.
     seed_flow_is_add: bool,
+    /// Scroll state for the settings menu.
+    menu_scroll: scroll::ScrollState,
+    menu_touch_start: Option<ScreenPoint>,
+    menu_drag_active: bool,
     /// Wallet list being displayed, plus its scroll position (drag-scrollable).
     wallet_rows: WalletRows,
     wallets_scroll: scroll::ScrollState,
@@ -203,6 +208,14 @@ impl<'d> Gui<'d> {
             .ok()
             .flatten()
             .unwrap_or_else(default_calibration);
+        if let Some(theme) = NvsStore::new()
+            .read_gui_theme()
+            .ok()
+            .flatten()
+            .and_then(palette::Theme::from_id)
+        {
+            palette::set_theme(theme);
+        }
 
         let mut gui = Self {
             display,
@@ -247,6 +260,9 @@ impl<'d> Gui<'d> {
             touch_calibration_points: HVec::new(),
             touch_calibration_last_raw: None,
             seed_flow_is_add: false,
+            menu_scroll: scroll::ScrollState::new(menu::menu_viewport()),
+            menu_touch_start: None,
+            menu_drag_active: false,
             wallet_rows: HVec::new(),
             wallets_scroll: scroll::ScrollState::new(menu::wallets_viewport()),
             wallet_touch_start: None,
@@ -271,8 +287,12 @@ impl<'d> Gui<'d> {
         self.touch_calibration_last_raw = None;
         self.interaction.finger_down = false;
         self.interaction.last_touch_sample_at = None;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Calibrate Touch", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(
+            &mut self.display,
+            "Calibrate Touch",
+            palette::surface_high(),
+        );
         self.render_touch_calibration_target();
     }
 
@@ -284,8 +304,8 @@ impl<'d> Gui<'d> {
         self.touch_diagnostics_build.clear();
         let _ = self.touch_diagnostics_build.push_str(build);
         self.touch_diagnostics_last_render = None;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Diag (tap top)", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(&mut self.display, "Diag (tap top)", palette::surface_high());
         self.render_touch_diagnostics_now();
         self.refresh_auto_lock(Instant::now());
     }
@@ -404,8 +424,8 @@ impl<'d> Gui<'d> {
         self.unlock_anim = 0;
         self.unlocking_started_at = Some(Instant::now());
         self.current_spinner_frame = 0;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Unlocking...", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(&mut self.display, "Unlocking...", palette::surface_high());
         draw_unlock_spinner_frame(&mut self.display, 0);
     }
 
@@ -416,8 +436,8 @@ impl<'d> Gui<'d> {
         if self.unlocking_started_at.is_none() {
             self.unlocking_started_at = Some(Instant::now());
         }
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, label, COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(&mut self.display, label, palette::surface_high());
         draw_unlock_spinner_frame(&mut self.display, self.current_spinner_frame);
     }
 
@@ -428,7 +448,7 @@ impl<'d> Gui<'d> {
         self.lock_button_active = false;
         self.lock_button_pressed_at = None;
         self.idle_message_until = None;
-        let _ = self.display.clear(COLOR_BACKGROUND);
+        let _ = self.display.clear(palette::background());
         self.mark_header_dirty();
         self.render_unlock_header();
         self.set_idle_message("");
@@ -654,7 +674,7 @@ impl<'d> Gui<'d> {
         self.mode = GuiMode::Unlocked;
         if self.unlock_demo_state.is_none() {
             self.restart_unlock_demo();
-            let _ = self.display.clear(COLOR_BACKGROUND);
+            let _ = self.display.clear(palette::background());
         }
         self.unlock_demo_paused = false;
         self.mark_header_dirty();
@@ -670,14 +690,14 @@ impl<'d> Gui<'d> {
         self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Locked;
-        let _ = self.display.clear(COLOR_BACKGROUND);
+        let _ = self.display.clear(palette::background());
         draw_keypad(&mut self.display);
         let mut msg = HString::<32>::new();
         let _ = msg.push_str("Bad PIN");
         if let Some(remaining) = attempts_remaining {
             let _ = write!(msg, " ({} left)", remaining);
         }
-        render_header(&mut self.display, msg.as_str(), COLOR_SURFACE_HIGH);
+        render_header(&mut self.display, msg.as_str(), palette::surface_high());
     }
 
     pub fn show_pin_locked_out(&mut self) {
@@ -685,8 +705,8 @@ impl<'d> Gui<'d> {
         self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Locked Out", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(&mut self.display, "Locked Out", palette::surface_high());
         draw_centered_message(&mut self.display, "Lockout :(");
     }
 
@@ -695,8 +715,8 @@ impl<'d> Gui<'d> {
         self.stop_unlock_demo();
         self.pin_entered.clear();
         self.mode = GuiMode::Error;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "PIN Required", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(&mut self.display, "PIN Required", palette::surface_high());
         draw_centered_message(&mut self.display, "PIN Not Set");
     }
 
@@ -727,16 +747,33 @@ impl<'d> Gui<'d> {
         self.mode = GuiMode::Unlocking;
         self.unlocking_started_at = Some(Instant::now());
         self.current_spinner_frame = 0;
-        let _ = self.display.clear(COLOR_BACKGROUND);
-        render_header(&mut self.display, "Deriving...", COLOR_SURFACE_HIGH);
+        let _ = self.display.clear(palette::background());
+        render_header(&mut self.display, "Deriving...", palette::surface_high());
         draw_unlock_spinner_frame(&mut self.display, 0);
     }
 
     pub fn show_menu(&mut self) {
         self.disarm_active();
         self.stop_unlock_demo();
+        self.menu_scroll.reset();
+        self.menu_touch_start = None;
+        self.menu_drag_active = false;
         self.mode = GuiMode::Menu;
-        menu::render_menu(&mut self.display);
+        menu::render_menu(&mut self.display, &mut self.menu_scroll);
+    }
+
+    pub fn show_about(&mut self, info: &AboutInfo) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::About;
+        menu::render_about(&mut self.display, info);
+    }
+
+    pub fn show_themes(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::Themes;
+        menu::render_themes(&mut self.display);
     }
 
     pub fn show_wallets(&mut self, rows: &[WalletRow]) {
@@ -780,6 +817,10 @@ impl<'d> Gui<'d> {
             return None;
         };
         match item {
+            MenuItem::Theme => {
+                self.show_themes();
+                None
+            }
             MenuItem::Calibrate => {
                 self.begin_touch_calibration();
                 None
@@ -790,9 +831,35 @@ impl<'d> Gui<'d> {
             }
             // These need host-side context (build string, master key, slot list),
             // so the main loop handles them.
-            MenuItem::Wallets | MenuItem::AddSeed | MenuItem::Diagnostics => {
+            MenuItem::Wallets | MenuItem::AddSeed | MenuItem::Diagnostics | MenuItem::About => {
                 Some(GuiInteraction::Menu(item))
             }
+        }
+    }
+
+    fn handle_about_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::Menu(MenuItem::Back) => {
+                self.show_menu();
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_theme_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::Theme(theme) => {
+                palette::set_theme(theme);
+                let _ = NvsStore::new().write_gui_theme(theme.id());
+                menu::render_themes(&mut self.display);
+                None
+            }
+            Button::Menu(MenuItem::Back) => {
+                self.show_menu();
+                None
+            }
+            _ => None,
         }
     }
 
@@ -878,10 +945,10 @@ impl<'d> Gui<'d> {
         self.mode = GuiMode::Confirm;
         if self.unlock_demo_state.is_none() {
             self.restart_unlock_demo();
-            let _ = self.display.clear(COLOR_BACKGROUND);
+            let _ = self.display.clear(palette::background());
         }
         self.unlock_demo_paused = true;
-        render_header(&mut self.display, "Confirm", COLOR_SURFACE_HIGH);
+        render_header(&mut self.display, "Confirm", palette::surface_high());
         self.idle_message_until = None;
         self.set_idle_message(details.unwrap_or(""));
         self.render_current_overlay();
@@ -963,10 +1030,10 @@ impl<'d> Gui<'d> {
         self.mode = GuiMode::TxReview;
         if self.unlock_demo_state.is_none() {
             self.restart_unlock_demo();
-            let _ = self.display.clear(COLOR_BACKGROUND);
+            let _ = self.display.clear(palette::background());
         }
         self.unlock_demo_paused = true;
-        render_header(&mut self.display, header, COLOR_SURFACE_HIGH);
+        render_header(&mut self.display, header, palette::surface_high());
         self.set_idle_message("");
         self.render_current_overlay();
         self.refresh_auto_lock(Instant::now());
@@ -1086,6 +1153,39 @@ impl<'d> Gui<'d> {
             return;
         }
 
+        if self.mode == GuiMode::Menu {
+            let pt = Point::new(point.x as i32, point.y as i32);
+            if self.menu_scroll.contains(pt) {
+                const DRAG_THRESHOLD: i32 = 6;
+                if self.menu_touch_start.is_none() {
+                    self.menu_touch_start = Some(point);
+                    self.menu_drag_active = false;
+                } else if let Some(start) = self.menu_touch_start {
+                    let dx = point.x as i32 - start.x as i32;
+                    let dy = point.y as i32 - start.y as i32;
+                    if !self.menu_drag_active
+                        && (dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD)
+                    {
+                        self.menu_drag_active = true;
+                        self.clear_pending();
+                        self.deactivate_button();
+                    }
+                }
+
+                if self.menu_drag_active {
+                    self.clear_pending();
+                    self.deactivate_button();
+                    if self.menu_scroll.drag_to(pt.y) {
+                        menu::render_menu_viewport(&mut self.display, &mut self.menu_scroll);
+                    }
+                    return;
+                }
+            } else {
+                self.menu_touch_start = None;
+                self.menu_drag_active = false;
+            }
+        }
+
         // Wallet rows are tappable, but movement inside the list should turn
         // into a scroll gesture before the press can complete.
         if self.mode == GuiMode::Wallets {
@@ -1127,8 +1227,15 @@ impl<'d> Gui<'d> {
 
         let candidate = match self.mode {
             GuiMode::Locked => button_from_point_keypad(Point::new(point.x as i32, point.y as i32)),
-            GuiMode::Menu => {
-                menu::button_from_point_menu(Point::new(point.x as i32, point.y as i32))
+            GuiMode::Menu => menu::button_from_point_menu(
+                Point::new(point.x as i32, point.y as i32),
+                &self.menu_scroll,
+            ),
+            GuiMode::About => {
+                menu::button_from_point_about(Point::new(point.x as i32, point.y as i32))
+            }
+            GuiMode::Themes => {
+                menu::button_from_point_themes(Point::new(point.x as i32, point.y as i32))
             }
             GuiMode::Wallets => menu::button_from_point_wallets(
                 Point::new(point.x as i32, point.y as i32),
@@ -1223,6 +1330,9 @@ impl<'d> Gui<'d> {
                     self.interaction.finger_down = false;
                     self.interaction.last_touch_sample_at = None;
                     self.tx_review_ignore_until_release = false;
+                    self.menu_scroll.drag_end();
+                    self.menu_touch_start = None;
+                    self.menu_drag_active = false;
                     self.wallets_scroll.drag_end();
                     self.wallet_touch_start = None;
                     self.wallet_drag_active = false;
@@ -1290,6 +1400,8 @@ impl<'d> Gui<'d> {
                         self.handle_seed_button(hit.button)
                     }
                     GuiMode::Menu => self.handle_menu_button(hit.button),
+                    GuiMode::About => self.handle_about_button(hit.button),
+                    GuiMode::Themes => self.handle_theme_button(hit.button),
                     GuiMode::Wallets => self.handle_wallet_button(hit.button),
                     GuiMode::LabelEntry => self.handle_label_button(hit.button, now),
                     _ => None,
@@ -1327,6 +1439,18 @@ impl<'d> Gui<'d> {
             }
             GuiMode::Menu => {
                 menu::draw_menu_button(&mut self.display, hit, true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
+            GuiMode::About => {
+                menu::draw_about_button(&mut self.display, true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
+            GuiMode::Themes => {
+                menu::draw_theme_button(&mut self.display, hit, true);
                 self.interaction.active_button = Some(hit);
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
@@ -1371,6 +1495,8 @@ impl<'d> Gui<'d> {
                     );
                 }
                 GuiMode::Menu => menu::draw_menu_button(&mut self.display, old, false),
+                GuiMode::About => menu::draw_about_button(&mut self.display, false),
+                GuiMode::Themes => menu::draw_theme_button(&mut self.display, old, false),
                 GuiMode::Wallets => {
                     if matches!(old.button, Button::Menu(_)) {
                         menu::draw_wallets_back(&mut self.display, false);
@@ -1392,6 +1518,9 @@ impl<'d> Gui<'d> {
         self.interaction.cooldown_until = None;
         self.clear_lock_button();
         self.tx_review_last_drag_y = None;
+        self.menu_scroll.drag_end();
+        self.menu_touch_start = None;
+        self.menu_drag_active = false;
         self.wallet_touch_start = None;
         self.wallet_drag_active = false;
     }
@@ -1432,7 +1561,11 @@ impl<'d> Gui<'d> {
                 }
                 Some(GuiInteraction::PinComplete(self.pin_entered.clone()))
             }
-            Button::Seed(_) | Button::Menu(_) | Button::WalletRow(_) | Button::Label(_) => None,
+            Button::Seed(_)
+            | Button::Menu(_)
+            | Button::Theme(_)
+            | Button::WalletRow(_)
+            | Button::Label(_) => None,
         }
     }
 
@@ -1447,7 +1580,11 @@ impl<'d> Gui<'d> {
                 Some(GuiInteraction::ConfirmRejected)
             }
             Button::Digit(_) => None,
-            Button::Seed(_) | Button::Menu(_) | Button::WalletRow(_) | Button::Label(_) => None,
+            Button::Seed(_)
+            | Button::Menu(_)
+            | Button::Theme(_)
+            | Button::WalletRow(_)
+            | Button::Label(_) => None,
         }
     }
 
@@ -1702,7 +1839,7 @@ impl<'d> Gui<'d> {
         for _ in 0..self.pin_entered.len() {
             let _ = header.push('*');
         }
-        render_header(&mut self.display, header.as_str(), COLOR_BACKGROUND);
+        render_header(&mut self.display, header.as_str(), palette::background());
     }
 
     fn advance_unlocking(&mut self) {

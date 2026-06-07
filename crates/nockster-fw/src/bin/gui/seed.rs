@@ -13,6 +13,7 @@ use zeroize::Zeroize;
 
 use super::constants::*;
 use super::layout::header_height;
+use super::palette;
 use super::render::render_header;
 use super::state::{Button, ButtonHit, GuiMode};
 use super::GuiDisplay;
@@ -202,13 +203,13 @@ impl SeedEntryState {
 }
 
 pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str, show_back: bool) {
-    let _ = display.clear(COLOR_BACKGROUND);
-    render_header(display, title, COLOR_SURFACE_HIGH);
+    let _ = display.clear(palette::background());
+    render_header(display, title, palette::surface_high());
 
     let mut body = HString::<96>::new();
     let _ = body
         .push_str("Generate a new seed on-device, or enter an existing one (here, web, or CLI).");
-    let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let text_style = MonoTextStyle::new(&FONT_6X10, palette::text());
     let mut y = header_height() + 24;
     // Estimate character width for FONT_6X10 is 6 pixels
     let max_chars = (SCREEN_WIDTH as usize - 32) / 6;
@@ -229,7 +230,7 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str, show_back: b
 }
 
 pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
-    let _ = display.clear(COLOR_BACKGROUND);
+    let _ = display.clear(palette::background());
 
     // Build header text showing current word
     let mut header_text = HString::<48>::new();
@@ -261,7 +262,7 @@ pub fn render_seed_entry(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
         );
     }
 
-    render_header(display, header_text.as_str(), COLOR_SURFACE_HIGH);
+    render_header(display, header_text.as_str(), palette::surface_high());
     draw_keypad(display, state);
     draw_corner_buttons(display, state);
 }
@@ -393,8 +394,8 @@ fn draw_keypad_button(
 
     match button {
         SeedButton::Key(digit) => {
-            let digit_style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-            let letters_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT); // Bright, not subtle!
+            let digit_style = MonoTextStyle::new(&FONT_10X20, palette::text());
+            let letters_style = MonoTextStyle::new(&FONT_6X10, palette::text()); // Bright, not subtle!
             let digit_label = char::from(b'0' + digit);
             let baseline_digit = center_y - 2;
             let mut digit_buf = [0u8; 4];
@@ -435,7 +436,7 @@ fn draw_keypad_button(
 }
 
 fn draw_label(display: &mut GuiDisplay<'_>, x: i32, y: i32, label: &str) {
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
     let baseline = y + FONT_10X20.character_size.height as i32 / 3;
     let _ = Text::with_alignment(label, Point::new(x, baseline), style, Alignment::Center)
         .draw(display);
@@ -460,7 +461,7 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         let _ = shadow
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_SHADOW)
+                    .fill_color(palette::panel_shadow())
                     .stroke_width(0)
                     .build(),
             )
@@ -514,9 +515,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .stroke_color(if active {
-                    COLOR_TEXT
+                    palette::text()
                 } else {
-                    COLOR_PANEL_HIGHLIGHT
+                    palette::panel_highlight()
                 })
                 .stroke_width(1)
                 .build(),
@@ -541,9 +542,9 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
             .into_styled(
                 PrimitiveStyleBuilder::new()
                     .fill_color(if active {
-                        COLOR_TEXT
+                        palette::text()
                     } else {
-                        COLOR_PANEL_HIGHLIGHT
+                        palette::panel_highlight()
                     })
                     .stroke_width(0)
                     .build(),
@@ -560,7 +561,7 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
             let _ = bar
                 .into_styled(
                     PrimitiveStyleBuilder::new()
-                        .fill_color(COLOR_TEXT)
+                        .fill_color(palette::text())
                         .stroke_width(0)
                         .build(),
                 )
@@ -580,17 +581,17 @@ struct Palette {
 fn palette(active: bool) -> Palette {
     if active {
         Palette {
-            base: COLOR_KEYPAD_ACTIVE,
-            light: COLOR_KEYPAD_ACTIVE_LIGHT,
-            dark: COLOR_KEYPAD_ACTIVE_DARK,
-            border: COLOR_KEYPAD_BORDER,
+            base: palette::keypad_active(),
+            light: palette::keypad_active_light(),
+            dark: palette::keypad_active_dark(),
+            border: palette::keypad_border(),
         }
     } else {
         Palette {
-            base: COLOR_KEYPAD_IDLE,
-            light: COLOR_BTN_DISABLED_LIGHT,
-            dark: COLOR_BTN_DISABLED_DARK,
-            border: COLOR_KEYPAD_BORDER,
+            base: palette::keypad_idle(),
+            light: palette::btn_disabled_light(),
+            dark: palette::btn_disabled_dark(),
+            border: palette::keypad_border(),
         }
     }
 }
@@ -807,7 +808,7 @@ fn word_at_index(index: usize) -> Option<&'static str> {
 }
 
 pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
-    let _ = display.clear(COLOR_BACKGROUND);
+    let _ = display.clear(palette::background());
     // For a generated seed the user is seeing it for the first time and must
     // copy it down; for a typed-in seed this is a read-back confirmation.
     let title = if state.generated {
@@ -815,10 +816,10 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
     } else {
         "Confirm Seed"
     };
-    render_header(display, title, COLOR_SURFACE_HIGH);
+    render_header(display, title, palette::surface_high());
 
     // Two columns (1-12 | 13-24) so the full 24-word phrase fits on screen.
-    let text_style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
+    let text_style = MonoTextStyle::new(&FONT_6X10, palette::text());
     let header_h = header_height();
     let top = header_h + 14;
     let line_height = (FONT_6X10.character_size.height as i32) + 4;
@@ -834,7 +835,7 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
     let _ = panel_shadow
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_PANEL_SHADOW)
+                .fill_color(palette::panel_shadow())
                 .stroke_width(0)
                 .build(),
         )
@@ -846,8 +847,8 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
     let _ = panel
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_SURFACE_LOW)
-                .stroke_color(COLOR_DIVIDER)
+                .fill_color(palette::surface_low())
+                .stroke_color(palette::divider())
                 .stroke_width(1)
                 .build(),
         )
@@ -858,7 +859,7 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
-            .stroke_color(COLOR_PANEL_HIGHLIGHT)
+            .stroke_color(palette::panel_highlight())
             .stroke_width(1)
             .build(),
     )
@@ -870,7 +871,7 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
-            .stroke_color(COLOR_DIVIDER)
+            .stroke_color(palette::divider())
             .stroke_width(1)
             .build(),
     )
@@ -950,7 +951,7 @@ fn draw_fitted_button_label(display: &mut GuiDisplay<'_>, hit: ButtonHit, label:
         hit.top_left.y + hit.size.height as i32 / 2,
     );
     if large_width <= available {
-        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let style = MonoTextStyle::new(&FONT_10X20, palette::text());
         let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
             label,
@@ -960,7 +961,7 @@ fn draw_fitted_button_label(display: &mut GuiDisplay<'_>, hit: ButtonHit, label:
         )
         .draw(display);
     } else {
-        let style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
+        let style = MonoTextStyle::new(&FONT_8X13, palette::text());
         let baseline = center.y + FONT_8X13.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
             label,

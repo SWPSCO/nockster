@@ -16,6 +16,7 @@ use super::layout::{
     tx_review_detail_rect, tx_review_list_rect, tx_review_output_item_height,
     tx_review_summary_height, TX_REVIEW_LINE_GAP, TX_REVIEW_PADDING,
 };
+use super::palette;
 use super::state::{
     Button, ButtonHit, GuiMode, TouchDiagnostics, TxReviewOutput, TxReviewSummary,
     TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
@@ -35,7 +36,7 @@ pub fn blit_boot_logo(display: &mut GuiDisplay<'_>) {
 }
 
 pub fn draw_keypad(display: &mut GuiDisplay<'_>) {
-    let _ = display.clear(COLOR_BACKGROUND);
+    let _ = display.clear(palette::background());
 
     let frame = Rectangle::new(
         Point::new(4, header_height()),
@@ -47,8 +48,8 @@ pub fn draw_keypad(display: &mut GuiDisplay<'_>) {
     let _ = frame
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_SURFACE_LOW)
-                .stroke_color(COLOR_DIVIDER)
+                .fill_color(palette::surface_low())
+                .stroke_color(palette::divider())
                 .stroke_width(1)
                 .build(),
         )
@@ -96,7 +97,7 @@ pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
     let _ = top_edge
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_PANEL_SHADOW)
+                .fill_color(palette::panel_shadow())
                 .stroke_width(0)
                 .build(),
         )
@@ -108,13 +109,13 @@ pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
     let _ = divider
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_DIVIDER)
+                .fill_color(palette::divider())
                 .stroke_width(0)
                 .build(),
         )
         .draw(display);
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
     let baseline = header_h / 2 + FONT_10X20.character_size.height as i32 / 3;
     let _ = Text::with_alignment(
         text,
@@ -133,9 +134,9 @@ pub fn settings_menu_center() -> Point {
 /// Draws a hamburger menu icon used as the settings entry point.
 pub fn draw_settings_menu_icon(display: &mut GuiDisplay<'_>, active: bool) {
     let color = if active {
-        COLOR_KEYPAD_ACTIVE_LIGHT
+        palette::keypad_active_light()
     } else {
-        COLOR_TEXT
+        palette::text()
     };
     let center = settings_menu_center();
     let bar_width = 30;
@@ -166,14 +167,14 @@ fn draw_header_action_well(display: &mut GuiDisplay<'_>, center: Point, active: 
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .fill_color(if active {
-                    COLOR_SURFACE_LOW
+                    palette::surface_low()
                 } else {
-                    COLOR_PANEL_BASE
+                    palette::panel_base()
                 })
                 .stroke_color(if active {
-                    COLOR_KEYPAD_ACTIVE_LIGHT
+                    palette::keypad_active_light()
                 } else {
-                    COLOR_DIVIDER
+                    palette::divider()
                 })
                 .stroke_width(1)
                 .build(),
@@ -188,7 +189,7 @@ fn draw_header_action_well(display: &mut GuiDisplay<'_>, center: Point, active: 
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
-            .stroke_color(COLOR_PANEL_HIGHLIGHT)
+            .stroke_color(palette::panel_highlight())
             .stroke_width(1)
             .build(),
     )
@@ -199,7 +200,7 @@ fn draw_header_action_well(display: &mut GuiDisplay<'_>, center: Point, active: 
     )
     .into_styled(
         PrimitiveStyleBuilder::new()
-            .stroke_color(COLOR_PANEL_SHADOW)
+            .stroke_color(palette::panel_shadow())
             .stroke_width(1)
             .build(),
     )
@@ -208,9 +209,9 @@ fn draw_header_action_well(display: &mut GuiDisplay<'_>, center: Point, active: 
 
 fn draw_header_lock_icon(display: &mut GuiDisplay<'_>, active: bool, header_bg: Rgb565) {
     let color = if active {
-        COLOR_KEYPAD_ACTIVE_LIGHT
+        palette::keypad_active_light()
     } else {
-        COLOR_TEXT
+        palette::text()
     };
     let center = Point::new(28, header_height() / 2);
     let stroke = PrimitiveStyleBuilder::new()
@@ -257,7 +258,7 @@ fn draw_header_lock_icon(display: &mut GuiDisplay<'_>, active: bool, header_bg: 
 }
 
 pub fn draw_centered_message(display: &mut GuiDisplay<'_>, text: &str) {
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
     let baseline = (BOOT_LOGO_HEIGHT / 2) as i32;
     let _ = Text::with_alignment(
         text,
@@ -285,13 +286,13 @@ pub fn render_touch_diagnostics(
     let _ = body
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_BACKGROUND)
+                .fill_color(palette::background())
                 .build(),
         )
         .draw(display);
 
-    let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT);
-    let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let style = MonoTextStyle::new(&FONT_6X10, palette::text());
+    let subtle = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
     let left = 6;
     let mut y = top + 14;
 
@@ -389,12 +390,12 @@ pub fn render_touch_calibration_target(
     let _ = body
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_BACKGROUND)
+                .fill_color(palette::background())
                 .build(),
         )
         .draw(display);
 
-    let style = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
+    let style = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
     let mut line = heapless::String::<48>::new();
     let _ = write!(line, "target {}/{}", step.saturating_add(1), total);
     let _ = Text::with_alignment(
@@ -407,11 +408,11 @@ pub fn render_touch_calibration_target(
 
     let center = Point::new(target.x as i32, target.y as i32);
     let cross = PrimitiveStyleBuilder::new()
-        .stroke_color(COLOR_ACCENT_PRIMARY_LIGHT)
+        .stroke_color(palette::accent_primary_light())
         .stroke_width(2)
         .build();
     let ring = PrimitiveStyleBuilder::new()
-        .stroke_color(COLOR_TEXT)
+        .stroke_color(palette::text())
         .stroke_width(1)
         .build();
     let _ = Circle::with_center(center, 24)
@@ -440,13 +441,13 @@ pub fn draw_unlock_spinner_frame(display: &mut GuiDisplay<'_>, frame: u8) {
     let _ = erase
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_BACKGROUND)
+                .fill_color(palette::background())
                 .build(),
         )
         .draw(display);
     let mut buf = [0u8; 4];
     let spinner_str = SPINNER_FRAMES[frame as usize].encode_utf8(&mut buf);
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
     let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
     let _ = Text::with_alignment(
         spinner_str,
@@ -462,8 +463,8 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
     let _ = panel
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_PANEL_BASE)
-                .stroke_color(COLOR_PANEL_BORDER)
+                .fill_color(palette::panel_base())
+                .stroke_color(palette::panel_border())
                 .stroke_width(1)
                 .build(),
         )
@@ -478,7 +479,7 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
         )
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .stroke_color(COLOR_PANEL_HIGHLIGHT)
+                .stroke_color(palette::panel_highlight())
                 .stroke_width(1)
                 .build(),
         )
@@ -489,7 +490,7 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
         )
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .stroke_color(COLOR_PANEL_SHADOW)
+                .stroke_color(palette::panel_shadow())
                 .stroke_width(1)
                 .build(),
         )
@@ -501,7 +502,7 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
         let _ = accent
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_HIGHLIGHT)
+                    .fill_color(palette::panel_highlight())
                     .stroke_width(0)
                     .build(),
             )
@@ -510,7 +511,7 @@ fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
         let _ = corner
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_HIGHLIGHT)
+                    .fill_color(palette::panel_highlight())
                     .stroke_width(0)
                     .build(),
             )
@@ -539,7 +540,7 @@ pub fn render_idle_overlay(display: &mut GuiDisplay<'_>, message: &str) {
     let size = Size::new(width as u32, height as u32);
     draw_panel(display, top_left, size);
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
     let baseline = top + height / 2 + FONT_10X20.character_size.height as i32 / 3;
     let _ = Text::with_alignment(
         message,
@@ -571,7 +572,7 @@ pub fn clear_idle_overlay(display: &mut GuiDisplay<'_>) {
     let _ = rect
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(COLOR_BACKGROUND)
+                .fill_color(palette::background())
                 .stroke_width(0)
                 .build(),
         )
@@ -596,7 +597,7 @@ pub fn render_confirm_overlay(
         let _ = body
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_BACKGROUND)
+                    .fill_color(palette::background())
                     .build(),
             )
             .draw(display);
@@ -613,7 +614,7 @@ pub fn render_confirm_overlay(
     let panel_size = Size::new(panel_width as u32, panel_height as u32);
     draw_panel(display, panel_top_left, panel_size);
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
     let center_x = (SCREEN_WIDTH / 2) as i32;
     let prompt_baseline = panel_top + FONT_10X20.character_size.height as i32 + 2;
     let _ = Text::with_alignment(
@@ -625,7 +626,7 @@ pub fn render_confirm_overlay(
     .draw(display);
 
     if let Some(details) = subtitle.filter(|s| !s.is_empty()) {
-        let subtle = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT_SUBTLE);
+        let subtle = MonoTextStyle::new(&FONT_10X20, palette::text_subtle());
         let line_gap: i32 = 2;
         let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
         let mut baseline = prompt_baseline + line_h + 6;
@@ -651,19 +652,19 @@ pub fn render_confirm_overlay(
     for hit in buttons {
         let (base, light, dark) = match hit.button {
             Button::Ok => (
-                COLOR_BTN_PRIMARY_BASE,
-                COLOR_BTN_PRIMARY_LIGHT,
-                COLOR_BTN_PRIMARY_DARK,
+                palette::btn_primary_base(),
+                palette::btn_primary_light(),
+                palette::btn_primary_dark(),
             ),
             Button::Clear => (
-                COLOR_BTN_SECONDARY_BASE,
-                COLOR_BTN_SECONDARY_LIGHT,
-                COLOR_BTN_SECONDARY_DARK,
+                palette::btn_secondary_base(),
+                palette::btn_secondary_light(),
+                palette::btn_secondary_dark(),
             ),
             _ => (
-                COLOR_BTN_DISABLED_BASE,
-                COLOR_BTN_DISABLED_LIGHT,
-                COLOR_BTN_DISABLED_DARK,
+                palette::btn_disabled_base(),
+                palette::btn_disabled_light(),
+                palette::btn_disabled_dark(),
             ),
         };
         let is_active = active_button == Some(hit.button);
@@ -696,7 +697,7 @@ pub fn render_tx_review_overlay(
         let _ = body
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_BACKGROUND)
+                    .fill_color(palette::background())
                     .build(),
             )
             .draw(display);
@@ -711,10 +712,10 @@ pub fn render_tx_review_overlay(
     let summary_h = tx_review_summary_height(summary.is_some());
     let output_top = (inner_top + summary_h).min(inner_bottom);
 
-    let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-    let subtle = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
-    let summary_style = MonoTextStyle::new(&FONT_10X20, COLOR_ACCENT_INFO);
-    let warning_style = MonoTextStyle::new(&FONT_10X20, COLOR_ACCENT_WARNING);
+    let style = MonoTextStyle::new(&FONT_10X20, palette::text());
+    let subtle = MonoTextStyle::new(&FONT_10X20, palette::text());
+    let summary_style = MonoTextStyle::new(&FONT_10X20, palette::accent_info());
+    let warning_style = MonoTextStyle::new(&FONT_10X20, palette::accent_warning());
 
     fn write_amount(buf: &mut heapless::String<32>, gift_nicks: u64) {
         const NICKS_PER_NOCK: u64 = 1 << 16; // 65536
@@ -930,21 +931,21 @@ pub fn render_tx_review_overlay(
     for hit in tx_review_buttons() {
         let (base, light, dark, label) = match hit.button {
             Button::Ok => (
-                COLOR_BTN_PRIMARY_BASE,
-                COLOR_BTN_PRIMARY_LIGHT,
-                COLOR_BTN_PRIMARY_DARK,
+                palette::btn_primary_base(),
+                palette::btn_primary_light(),
+                palette::btn_primary_dark(),
                 "Approve",
             ),
             Button::Clear => (
-                COLOR_BTN_SECONDARY_BASE,
-                COLOR_BTN_SECONDARY_LIGHT,
-                COLOR_BTN_SECONDARY_DARK,
+                palette::btn_secondary_base(),
+                palette::btn_secondary_light(),
+                palette::btn_secondary_dark(),
                 "Deny",
             ),
             _ => (
-                COLOR_BTN_DISABLED_BASE,
-                COLOR_BTN_DISABLED_LIGHT,
-                COLOR_BTN_DISABLED_DARK,
+                palette::btn_disabled_base(),
+                palette::btn_disabled_light(),
+                palette::btn_disabled_dark(),
                 "",
             ),
         };
@@ -969,14 +970,14 @@ pub fn draw_unlock_header_with_menu(
 ) {
     let header_h = header_height();
     let width = SCREEN_WIDTH as i32;
-    let base = COLOR_SURFACE_HIGH;
+    let base = palette::surface_high();
 
     let header_rect = Rectangle::new(Point::new(0, 0), Size::new(width as u32, header_h as u32));
     let _ = header_rect
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .fill_color(base)
-                .stroke_color(COLOR_DIVIDER)
+                .stroke_color(palette::divider())
                 .stroke_width(1)
                 .build(),
         )
@@ -990,7 +991,7 @@ pub fn draw_unlock_header_with_menu(
         let _ = highlight
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_HIGHLIGHT)
+                    .fill_color(palette::panel_highlight())
                     .stroke_width(0)
                     .build(),
             )
@@ -1005,7 +1006,7 @@ pub fn draw_unlock_header_with_menu(
         let _ = shadow
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_SHADOW)
+                    .fill_color(palette::panel_shadow())
                     .stroke_width(0)
                     .build(),
             )
@@ -1018,9 +1019,9 @@ pub fn draw_unlock_header_with_menu(
         display,
         lock_active,
         if lock_active {
-            COLOR_SURFACE_LOW
+            palette::surface_low()
         } else {
-            COLOR_PANEL_BASE
+            palette::panel_base()
         },
     );
     draw_settings_menu_icon(display, menu_active);
@@ -1041,7 +1042,11 @@ fn draw_button_skeuo(
         base_color,
         light,
         if active { base } else { dark },
-        if active { light } else { COLOR_PANEL_BORDER },
+        if active {
+            light
+        } else {
+            palette::panel_border()
+        },
         active,
     );
 }
@@ -1066,7 +1071,7 @@ fn draw_button_chrome(
         let _ = shadow
             .into_styled(
                 PrimitiveStyleBuilder::new()
-                    .fill_color(COLOR_PANEL_SHADOW)
+                    .fill_color(palette::panel_shadow())
                     .stroke_width(0)
                     .build(),
             )
@@ -1122,9 +1127,9 @@ fn draw_button_chrome(
         .into_styled(
             PrimitiveStyleBuilder::new()
                 .stroke_color(if active {
-                    COLOR_TEXT
+                    palette::text()
                 } else {
-                    COLOR_PANEL_HIGHLIGHT
+                    palette::panel_highlight()
                 })
                 .stroke_width(1)
                 .build(),
@@ -1150,9 +1155,9 @@ fn draw_button_chrome(
             .into_styled(
                 PrimitiveStyleBuilder::new()
                     .fill_color(if active {
-                        COLOR_TEXT
+                        palette::text()
                     } else {
-                        COLOR_PANEL_HIGHLIGHT
+                        palette::panel_highlight()
                     })
                     .stroke_width(0)
                     .build(),
@@ -1170,7 +1175,7 @@ fn draw_button_chrome(
             let _ = rail
                 .into_styled(
                     PrimitiveStyleBuilder::new()
-                        .fill_color(COLOR_TEXT)
+                        .fill_color(palette::text())
                         .stroke_width(0)
                         .build(),
                 )
@@ -1191,7 +1196,7 @@ fn draw_fitted_button_label(display: &mut GuiDisplay<'_>, hit: ButtonHit, label:
     );
 
     if large_width <= available {
-        let style = MonoTextStyle::new(&FONT_10X20, COLOR_TEXT);
+        let style = MonoTextStyle::new(&FONT_10X20, palette::text());
         let baseline = center.y + FONT_10X20.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
             label,
@@ -1201,7 +1206,7 @@ fn draw_fitted_button_label(display: &mut GuiDisplay<'_>, hit: ButtonHit, label:
         )
         .draw(display);
     } else {
-        let style = MonoTextStyle::new(&FONT_8X13, COLOR_TEXT);
+        let style = MonoTextStyle::new(&FONT_8X13, palette::text());
         let baseline = center.y + FONT_8X13.character_size.height as i32 / 3;
         let _ = Text::with_alignment(
             label,
@@ -1230,6 +1235,7 @@ fn button_label(button: Button) -> &'static str {
         Button::Ok => "OK",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
+        Button::Theme(_) => "",
         Button::WalletRow(_) => "",
         Button::Label(_) => "",
     }
@@ -1242,6 +1248,7 @@ fn confirm_button_label(button: Button) -> &'static str {
         Button::Digit(_) => "",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
+        Button::Theme(_) => "",
         Button::WalletRow(_) => "",
         Button::Label(_) => "",
     }
@@ -1259,26 +1266,26 @@ fn button_palette(mode: GuiMode, button: Button, active: bool) -> Palette {
         GuiMode::Confirm => {
             let (base, light, dark) = match button {
                 Button::Ok => (
-                    COLOR_BTN_PRIMARY_BASE,
-                    COLOR_BTN_PRIMARY_LIGHT,
-                    COLOR_BTN_PRIMARY_DARK,
+                    palette::btn_primary_base(),
+                    palette::btn_primary_light(),
+                    palette::btn_primary_dark(),
                 ),
                 Button::Clear => (
-                    COLOR_BTN_SECONDARY_BASE,
-                    COLOR_BTN_SECONDARY_LIGHT,
-                    COLOR_BTN_SECONDARY_DARK,
+                    palette::btn_secondary_base(),
+                    palette::btn_secondary_light(),
+                    palette::btn_secondary_dark(),
                 ),
                 _ => (
-                    COLOR_KEYPAD_IDLE,
-                    COLOR_BTN_DISABLED_LIGHT,
-                    COLOR_BTN_DISABLED_DARK,
+                    palette::keypad_idle(),
+                    palette::btn_disabled_light(),
+                    palette::btn_disabled_dark(),
                 ),
             };
             let base_color = if active { light } else { base };
             let dark_color = if active {
                 match button {
-                    Button::Ok => COLOR_BTN_PRIMARY_DARK,
-                    Button::Clear => COLOR_BTN_SECONDARY_DARK,
+                    Button::Ok => palette::btn_primary_dark(),
+                    Button::Clear => palette::btn_secondary_dark(),
                     _ => dark,
                 }
             } else {
@@ -1288,23 +1295,23 @@ fn button_palette(mode: GuiMode, button: Button, active: bool) -> Palette {
                 base: base_color,
                 light,
                 dark: dark_color,
-                border: COLOR_DIVIDER,
+                border: palette::divider(),
             }
         }
         _ => {
             if active {
                 Palette {
-                    base: COLOR_KEYPAD_ACTIVE,
-                    light: COLOR_KEYPAD_ACTIVE_LIGHT,
-                    dark: COLOR_KEYPAD_ACTIVE_DARK,
-                    border: COLOR_KEYPAD_BORDER,
+                    base: palette::keypad_active(),
+                    light: palette::keypad_active_light(),
+                    dark: palette::keypad_active_dark(),
+                    border: palette::keypad_border(),
                 }
             } else {
                 Palette {
-                    base: COLOR_KEYPAD_IDLE,
-                    light: COLOR_BTN_DISABLED_LIGHT,
-                    dark: COLOR_BTN_DISABLED_DARK,
-                    border: COLOR_KEYPAD_BORDER,
+                    base: palette::keypad_idle(),
+                    light: palette::btn_disabled_light(),
+                    dark: palette::btn_disabled_dark(),
+                    border: palette::keypad_border(),
                 }
             }
         }

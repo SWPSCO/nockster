@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+  <head>
+    <title>Nockster Firmware Emulator</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #0b1012;
+        color: #e8fff1;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+      }
+
+      main {
+        display: grid;
+        gap: 14px;
+        justify-items: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      canvas {
+        width: 344px;
+        height: 640px;
+        max-width: calc(100vw - 32px);
+        max-height: calc(100vh - 82px);
+        border: 1px solid #274045;
+        background: #02080a;
+        box-shadow:
+          0 0 0 6px #111a1d,
+          0 18px 60px rgba(0, 0, 0, 0.55);
+        cursor: pointer;
+        image-rendering: pixelated;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Nockster Firmware Emulator</h1>
+      <canvas id="display"></canvas>
+    </main>
+    <script type="module">
+      import init, { SigerGui } from "./pkg-fw/siger_fw.js";
+
+      function canvasPoint(canvas, event) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: ((event.clientX - rect.left) * canvas.width) / rect.width,
+          y: ((event.clientY - rect.top) * canvas.height) / rect.height,
+        };
+      }
+
+      async function run() {
+        await init();
+        const gui = new SigerGui("display");
+        const canvas = document.getElementById("display");
+        let activePointer = null;
+
+        function press(event) {
+          activePointer = event.pointerId;
+          canvas.setPointerCapture(event.pointerId);
+          const point = canvasPoint(canvas, event);
+          gui.handle_touch(point.x, point.y);
+        }
+
+        function move(event) {
+          if (event.pointerId !== activePointer) {
+            return;
+          }
+          const point = canvasPoint(canvas, event);
+          gui.handle_touch(point.x, point.y);
+        }
+
+        function release(event) {
+          if (event.pointerId !== activePointer) {
+            return;
+          }
+          activePointer = null;
+          gui.release_touch();
+        }
+
+        canvas.addEventListener("pointerdown", press);
+        canvas.addEventListener("pointermove", move);
+        canvas.addEventListener("pointerup", release);
+        canvas.addEventListener("pointercancel", release);
+        canvas.addEventListener("lostpointercapture", () => {
+          activePointer = null;
+          gui.release_touch();
+        });
+
+        function frame() {
+          gui.tick();
+          requestAnimationFrame(frame);
+        }
+
+        requestAnimationFrame(frame);
+      }
+
+      run();
+    </script>
+  </body>
+</html>

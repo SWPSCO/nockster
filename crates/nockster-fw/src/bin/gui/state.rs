@@ -25,7 +25,7 @@ pub enum GuiMode {
     LabelEntry,
 }
 
-/// Items on the settings menu reachable from the unlocked header gear.
+/// Items on the settings menu reachable from the unlocked header menu icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Wallets,

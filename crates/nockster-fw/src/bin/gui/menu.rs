@@ -1,4 +1,4 @@
-//! Settings menu reachable from the unlocked header gear, plus the wallet list.
+//! Settings menu reachable from the unlocked header menu icon, plus the wallet list.
 //! Rendering only — all decisions (what needs an unlock, etc.) live in the main
 //! event loop.
 
@@ -86,6 +86,7 @@ pub fn render_menu(display: &mut GuiDisplay<'_>) {
             _ => "",
         };
         draw_text_button(display, hit, label, false);
+        draw_menu_affordance(display, hit, false);
     }
 }
 
@@ -95,6 +96,7 @@ pub fn draw_menu_button(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bo
         _ => "",
     };
     draw_text_button(display, hit, label, active);
+    draw_menu_affordance(display, hit, active);
 }
 
 pub fn button_from_point_menu(point: Point) -> Option<ButtonHit> {
@@ -152,7 +154,9 @@ pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow], scroll: 
     .draw(display);
 
     draw_wallet_table_header(display);
-    draw_text_button(display, wallets_back_button(), "Back", false);
+    let back = wallets_back_button();
+    draw_text_button(display, back, "Back", false);
+    draw_menu_affordance(display, back, false);
     render_wallets_viewport(display, rows, scroll);
 }
 
@@ -186,9 +190,41 @@ impl ScrollContent for WalletList<'_> {
         let subtle = MonoTextStyle::new(&FONT_6X10, COLOR_TEXT_SUBTLE);
         let active_style = MonoTextStyle::new(&FONT_6X10, COLOR_ACCENT_WARNING);
         if self.rows.is_empty() {
+            let empty = Rectangle::new(
+                Point::new(2, 10),
+                Size::new(wallets_viewport().size.width.saturating_sub(4), 56),
+            );
+            let _ = empty
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(COLOR_SURFACE_LOW)
+                        .stroke_color(COLOR_DIVIDER)
+                        .stroke_width(1)
+                        .build(),
+                )
+                .draw(target);
+            let _ = Line::new(
+                Point::new(4, 12),
+                Point::new(wallets_viewport().size.width as i32 - 6, 12),
+            )
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .stroke_color(COLOR_PANEL_HIGHLIGHT)
+                    .stroke_width(1)
+                    .build(),
+            )
+            .draw(target);
+            let _ = Rectangle::new(Point::new(9, 24), Size::new(3, 28))
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(COLOR_PANEL_HIGHLIGHT)
+                        .stroke_width(0)
+                        .build(),
+                )
+                .draw(target);
             let _ = Text::with_alignment(
                 "No wallets",
-                Point::new((wallets_viewport().size.width / 2) as i32, 54),
+                Point::new((wallets_viewport().size.width / 2) as i32, 44),
                 primary,
                 Alignment::Center,
             )
@@ -198,20 +234,39 @@ impl ScrollContent for WalletList<'_> {
 
         let mut y = 0;
         for row in self.rows {
-            let row_rect = Rectangle::new(
-                Point::new(0, y),
-                Size::new(wallets_viewport().size.width, WALLET_ROW_HEIGHT as u32),
+            let face = Rectangle::new(
+                Point::new(2, y + 2),
+                Size::new(
+                    wallets_viewport().size.width.saturating_sub(4),
+                    (WALLET_ROW_HEIGHT - 4) as u32,
+                ),
             );
+            let _ = face
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(if row.active {
+                            COLOR_SURFACE_LOW
+                        } else {
+                            COLOR_BACKGROUND
+                        })
+                        .stroke_color(COLOR_DIVIDER)
+                        .stroke_width(1)
+                        .build(),
+                )
+                .draw(target);
+            let _ = Line::new(
+                Point::new(4, y + 4),
+                Point::new(wallets_viewport().size.width as i32 - 6, y + 4),
+            )
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .stroke_color(COLOR_PANEL_HIGHLIGHT)
+                    .stroke_width(1)
+                    .build(),
+            )
+            .draw(target);
             if row.active {
-                let _ = row_rect
-                    .into_styled(
-                        PrimitiveStyleBuilder::new()
-                            .fill_color(COLOR_SURFACE_LOW)
-                            .stroke_width(0)
-                            .build(),
-                    )
-                    .draw(target);
-                let _ = Rectangle::new(Point::new(0, y + 4), Size::new(3, 30))
+                let _ = Rectangle::new(Point::new(3, y + 7), Size::new(3, 26))
                     .into_styled(
                         PrimitiveStyleBuilder::new()
                             .fill_color(COLOR_KEYPAD_ACTIVE_LIGHT)
@@ -221,13 +276,23 @@ impl ScrollContent for WalletList<'_> {
                     .draw(target);
             }
 
+            let slot_badge = Rectangle::new(Point::new(8, y + 7), Size::new(18, 18));
+            let _ = slot_badge
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(COLOR_PANEL_SHADOW)
+                        .stroke_color(COLOR_DIVIDER)
+                        .stroke_width(1)
+                        .build(),
+                )
+                .draw(target);
             let mut slot = HString::<6>::new();
             let _ = write!(slot, "{}", row.index);
             let _ = Text::with_alignment(
                 slot.as_str(),
-                Point::new(10, y + 15),
+                Point::new(17, y + 20),
                 primary,
-                Alignment::Left,
+                Alignment::Center,
             )
             .draw(target);
 
@@ -293,7 +358,9 @@ impl ScrollContent for WalletList<'_> {
 const WALLET_ROW_HEIGHT: i32 = 42;
 
 pub fn draw_wallets_back(display: &mut GuiDisplay<'_>, active: bool) {
-    draw_text_button(display, wallets_back_button(), "Back", active);
+    let back = wallets_back_button();
+    draw_text_button(display, back, "Back", active);
+    draw_menu_affordance(display, back, active);
 }
 
 fn within(hit: &ButtonHit, point: Point, slack: i32) -> bool {
@@ -327,6 +394,47 @@ fn draw_wallet_table_header(display: &mut GuiDisplay<'_>) {
             .build(),
     )
     .draw(display);
+}
+
+fn draw_menu_affordance(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool) {
+    let rail_color = if active {
+        COLOR_TEXT
+    } else {
+        COLOR_PANEL_HIGHLIGHT
+    };
+    let rail = Rectangle::new(
+        Point::new(hit.top_left.x + 6, hit.top_left.y + 8),
+        Size::new(2, hit.size.height.saturating_sub(16)),
+    );
+    let _ = rail
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(rail_color)
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+
+    if matches!(hit.button, Button::Menu(MenuItem::Back)) {
+        return;
+    }
+
+    let x = hit.top_left.x + hit.size.width as i32 - 18;
+    let y = hit.top_left.y + hit.size.height as i32 / 2;
+    let style = PrimitiveStyleBuilder::new()
+        .stroke_color(if active {
+            COLOR_TEXT
+        } else {
+            COLOR_TEXT_SUBTLE
+        })
+        .stroke_width(1)
+        .build();
+    let _ = Line::new(Point::new(x, y - 5), Point::new(x + 5, y))
+        .into_styled(style)
+        .draw(display);
+    let _ = Line::new(Point::new(x + 5, y), Point::new(x, y + 5))
+        .into_styled(style)
+        .draw(display);
 }
 
 fn wallet_row_hit(point: Point, rows: &[WalletRow], scroll: &ScrollState) -> Option<ButtonHit> {

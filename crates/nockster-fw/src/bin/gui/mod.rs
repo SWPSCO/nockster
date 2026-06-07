@@ -41,7 +41,7 @@ use esp_hal::{
 use heapless::{String as HString, Vec as HVec};
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review,
-    header_height, lock_button_rect, point_in_header_settings_gear, tx_review_detail_rect,
+    header_height, lock_button_rect, point_in_header_settings_menu, tx_review_detail_rect,
     tx_review_list_rect, tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_PADDING,
 };
 use mipidsi::{
@@ -839,7 +839,6 @@ impl<'d> Gui<'d> {
             label::LabelButton::Cancel => {
                 self.label_entry_state.clear_multitap();
                 Some(GuiInteraction::Label(label::LabelInteraction::Cancelled {
-                    slot: self.label_entry_state.slot(),
                     context: self.label_entry_state.context(),
                 }))
             }
@@ -1059,7 +1058,7 @@ impl<'d> Gui<'d> {
         }
         if self.mode == GuiMode::Unlocked {
             let pt = Point::new(point.x as i32, point.y as i32);
-            if self.lock_button_pressed_at.is_none() && point_in_header_settings_gear(pt) {
+            if self.lock_button_pressed_at.is_none() && point_in_header_settings_menu(pt) {
                 self.disarm_active();
                 self.show_menu();
                 return;

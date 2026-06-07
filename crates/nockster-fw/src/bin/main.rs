@@ -2380,7 +2380,7 @@ fn handle_label_interaction<B: usb_device::bus::UsbBus>(
                 }
             }
         }
-        LabelInteraction::Cancelled { context, .. } => {
+        LabelInteraction::Cancelled { context } => {
             finish_label_entry(ui, context);
         }
     }

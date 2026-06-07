@@ -70,43 +70,7 @@ pub fn draw_button(display: &mut GuiDisplay<'_>, mode: GuiMode, hit: ButtonHit, 
         border,
     } = button_palette(mode, hit.button, active);
 
-    let rect = Rectangle::new(hit.top_left, hit.size);
-    let _ = rect
-        .into_styled(
-            PrimitiveStyleBuilder::new()
-                .fill_color(base)
-                .stroke_color(border)
-                .stroke_width(1)
-                .build(),
-        )
-        .draw(display);
-
-    if hit.size.height > 6 && hit.size.width > 6 {
-        let right = hit.top_left.x + hit.size.width as i32 - 2;
-        let bottom = hit.top_left.y + hit.size.height as i32 - 2;
-        let _ = Line::new(
-            Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
-            Point::new(right, hit.top_left.y + 1),
-        )
-        .into_styled(
-            PrimitiveStyleBuilder::new()
-                .stroke_color(light)
-                .stroke_width(1)
-                .build(),
-        )
-        .draw(display);
-        let _ = Line::new(
-            Point::new(hit.top_left.x + 1, bottom),
-            Point::new(right, bottom),
-        )
-        .into_styled(
-            PrimitiveStyleBuilder::new()
-                .stroke_color(dark)
-                .stroke_width(1)
-                .build(),
-        )
-        .draw(display);
-    }
+    draw_button_chrome(display, hit, base, light, dark, border, active);
 
     let label = match mode {
         GuiMode::Confirm => confirm_button_label(hit.button),
@@ -161,45 +125,85 @@ pub fn render_header(display: &mut GuiDisplay<'_>, text: &str, bg: Rgb565) {
     .draw(display);
 }
 
-/// Centre of the settings gear, in the top-right of the header.
-pub fn settings_gear_center() -> Point {
+/// Centre of the settings menu icon, in the top-right of the header.
+pub fn settings_menu_center() -> Point {
     Point::new(SCREEN_WIDTH as i32 - 28, header_height() / 2)
 }
 
-/// Draws a small cog icon used as the settings entry point.
-/// `header_bg` must match the colour the header was filled with so the hub
-/// "hole" blends in.
-pub fn draw_settings_gear(display: &mut GuiDisplay<'_>, active: bool, header_bg: Rgb565) {
+/// Draws a hamburger menu icon used as the settings entry point.
+pub fn draw_settings_menu_icon(display: &mut GuiDisplay<'_>, active: bool) {
     let color = if active {
         COLOR_KEYPAD_ACTIVE_LIGHT
     } else {
         COLOR_TEXT
     };
-    let center = settings_gear_center();
+    let center = settings_menu_center();
+    let bar_width = 30;
+    let bar_height = 4;
+    let left = center.x - bar_width / 2;
+    let top = center.y - 20;
+    let middle = center.y - 2;
+    let bottom = center.y + 16;
+    let style = PrimitiveStyleBuilder::new()
+        .fill_color(color)
+        .stroke_width(0)
+        .build();
 
-    let teeth = [
-        (0, -16),
-        (0, 16),
-        (-16, 0),
-        (16, 0),
-        (-11, -11),
-        (11, -11),
-        (-11, 11),
-        (11, 11),
-    ];
-    for (dx, dy) in teeth {
-        let tooth =
-            Rectangle::with_center(Point::new(center.x + dx, center.y + dy), Size::new(6, 6));
-        let _ = tooth
-            .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
-            .draw(display);
+    for y in [top, middle, bottom] {
+        let bar = Rectangle::new(
+            Point::new(left, y),
+            Size::new(bar_width as u32, bar_height as u32),
+        );
+        let _ = bar.into_styled(style).draw(display);
     }
-    let _ = Circle::with_center(center, 28)
-        .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
+}
+
+fn draw_header_action_well(display: &mut GuiDisplay<'_>, center: Point, active: bool) {
+    let top_left = Point::new(center.x - 22, center.y - 24);
+    let size = Size::new(44, 48);
+    let rect = Rectangle::new(top_left, size);
+    let _ = rect
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(if active {
+                    COLOR_SURFACE_LOW
+                } else {
+                    COLOR_PANEL_BASE
+                })
+                .stroke_color(if active {
+                    COLOR_KEYPAD_ACTIVE_LIGHT
+                } else {
+                    COLOR_DIVIDER
+                })
+                .stroke_width(1)
+                .build(),
+        )
         .draw(display);
-    let _ = Circle::with_center(center, 12)
-        .into_styled(PrimitiveStyleBuilder::new().fill_color(header_bg).build())
-        .draw(display);
+
+    let right = top_left.x + size.width as i32 - 2;
+    let bottom = top_left.y + size.height as i32 - 2;
+    let _ = Line::new(
+        Point::new(top_left.x + 1, top_left.y + 1),
+        Point::new(right, top_left.y + 1),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(COLOR_PANEL_HIGHLIGHT)
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+    let _ = Line::new(
+        Point::new(top_left.x + 1, bottom),
+        Point::new(right, bottom),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(COLOR_PANEL_SHADOW)
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
 }
 
 fn draw_header_lock_icon(display: &mut GuiDisplay<'_>, active: bool, header_bg: Rgb565) {
@@ -1000,8 +1004,18 @@ pub fn draw_unlock_header(display: &mut GuiDisplay<'_>, active: bool) {
             .draw(display);
     }
 
-    draw_header_lock_icon(display, active, base);
-    draw_settings_gear(display, false, base);
+    draw_header_action_well(display, Point::new(28, header_h / 2), active);
+    draw_header_action_well(display, settings_menu_center(), false);
+    draw_header_lock_icon(
+        display,
+        active,
+        if active {
+            COLOR_SURFACE_LOW
+        } else {
+            COLOR_PANEL_BASE
+        },
+    );
+    draw_settings_menu_icon(display, false);
 }
 
 fn draw_button_skeuo(
@@ -1012,21 +1026,64 @@ fn draw_button_skeuo(
     dark: Rgb565,
     active: bool,
 ) {
-    let main_rect = Rectangle::new(hit.top_left, hit.size);
     let base_color = if active { light } else { base };
+    draw_button_chrome(
+        display,
+        hit,
+        base_color,
+        light,
+        if active { base } else { dark },
+        if active { light } else { COLOR_PANEL_BORDER },
+        active,
+    );
+}
+
+fn draw_button_chrome(
+    display: &mut GuiDisplay<'_>,
+    hit: ButtonHit,
+    base: Rgb565,
+    light: Rgb565,
+    dark: Rgb565,
+    border: Rgb565,
+    active: bool,
+) {
+    if hit.size.width > 8 && hit.size.height > 8 {
+        let shadow = Rectangle::new(
+            Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
+            Size::new(
+                hit.size.width.saturating_sub(1),
+                hit.size.height.saturating_sub(1),
+            ),
+        );
+        let _ = shadow
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_PANEL_SHADOW)
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
+    }
+
+    let main_rect = Rectangle::new(hit.top_left, hit.size);
     let _ = main_rect
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .fill_color(base_color)
-                .stroke_color(if active { light } else { COLOR_PANEL_BORDER })
+                .fill_color(base)
+                .stroke_color(border)
                 .stroke_width(1)
                 .build(),
         )
         .draw(display);
 
-    if hit.size.height > 6 {
+    if hit.size.height > 8 && hit.size.width > 8 {
         let right = hit.top_left.x + hit.size.width as i32 - 2;
         let bottom = hit.top_left.y + hit.size.height as i32 - 2;
+        let inset_left = hit.top_left.x + 3;
+        let inset_right = hit.top_left.x + hit.size.width as i32 - 4;
+        let inset_top = hit.top_left.y + 3;
+        let inset_bottom = hit.top_left.y + hit.size.height as i32 - 4;
+
         let _ = Line::new(
             Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
             Point::new(right, hit.top_left.y + 1),
@@ -1038,27 +1095,71 @@ fn draw_button_skeuo(
                 .build(),
         )
         .draw(display);
-        let shadow_color = if active { base } else { dark };
         let _ = Line::new(
             Point::new(hit.top_left.x + 1, bottom),
             Point::new(right, bottom),
         )
         .into_styled(
             PrimitiveStyleBuilder::new()
-                .stroke_color(shadow_color)
+                .stroke_color(dark)
                 .stroke_width(1)
                 .build(),
         )
         .draw(display);
-        if active && hit.size.width > 8 {
-            let bar = Rectangle::new(
+
+        let _ = Line::new(
+            Point::new(inset_left, inset_top),
+            Point::new(inset_right, inset_top),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(if active {
+                    COLOR_TEXT
+                } else {
+                    COLOR_PANEL_HIGHLIGHT
+                })
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let _ = Line::new(
+            Point::new(inset_left, inset_bottom),
+            Point::new(inset_right, inset_bottom),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(dark)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+
+        let left_notch = Rectangle::new(
+            Point::new(hit.top_left.x + 3, hit.top_left.y + 4),
+            Size::new(2, 5),
+        );
+        let _ = left_notch
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(if active {
+                        COLOR_TEXT
+                    } else {
+                        COLOR_PANEL_HIGHLIGHT
+                    })
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
+
+        if active {
+            let rail = Rectangle::new(
                 Point::new(
-                    hit.top_left.x + 4,
-                    hit.top_left.y + hit.size.height as i32 - 4,
+                    hit.top_left.x + 3,
+                    hit.top_left.y + hit.size.height as i32 - 6,
                 ),
-                Size::new(hit.size.width.saturating_sub(8), 2),
+                Size::new(hit.size.width.saturating_sub(6), 2),
             );
-            let _ = bar
+            let _ = rail
                 .into_styled(
                     PrimitiveStyleBuilder::new()
                         .fill_color(COLOR_TEXT)

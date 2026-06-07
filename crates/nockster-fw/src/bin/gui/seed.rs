@@ -449,6 +449,24 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         border,
     } = palette(active);
 
+    if hit.size.width > 8 && hit.size.height > 8 {
+        let shadow = Rectangle::new(
+            Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
+            Size::new(
+                hit.size.width.saturating_sub(1),
+                hit.size.height.saturating_sub(1),
+            ),
+        );
+        let _ = shadow
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(COLOR_PANEL_SHADOW)
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
+    }
+
     let rect = Rectangle::new(hit.top_left, hit.size);
     let _ = rect
         .into_styled(
@@ -460,9 +478,13 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
         )
         .draw(display);
 
-    if hit.size.height > 6 && hit.size.width > 6 {
+    if hit.size.height > 8 && hit.size.width > 8 {
         let right = hit.top_left.x + hit.size.width as i32 - 2;
         let bottom = hit.top_left.y + hit.size.height as i32 - 2;
+        let inset_left = hit.top_left.x + 3;
+        let inset_right = hit.top_left.x + hit.size.width as i32 - 4;
+        let inset_top = hit.top_left.y + 3;
+        let inset_bottom = hit.top_left.y + hit.size.height as i32 - 4;
         let _ = Line::new(
             Point::new(hit.top_left.x + 1, hit.top_left.y + 1),
             Point::new(right, hit.top_left.y + 1),
@@ -485,6 +507,48 @@ fn draw_button_frame(display: &mut GuiDisplay<'_>, hit: ButtonHit, active: bool)
                 .build(),
         )
         .draw(display);
+        let _ = Line::new(
+            Point::new(inset_left, inset_top),
+            Point::new(inset_right, inset_top),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(if active {
+                    COLOR_TEXT
+                } else {
+                    COLOR_PANEL_HIGHLIGHT
+                })
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let _ = Line::new(
+            Point::new(inset_left, inset_bottom),
+            Point::new(inset_right, inset_bottom),
+        )
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(dark)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+        let notch = Rectangle::new(
+            Point::new(hit.top_left.x + 3, hit.top_left.y + 4),
+            Size::new(2, 5),
+        );
+        let _ = notch
+            .into_styled(
+                PrimitiveStyleBuilder::new()
+                    .fill_color(if active {
+                        COLOR_TEXT
+                    } else {
+                        COLOR_PANEL_HIGHLIGHT
+                    })
+                    .stroke_width(0)
+                    .build(),
+            )
+            .draw(display);
         if active && hit.size.width > 8 {
             let bar = Rectangle::new(
                 Point::new(
@@ -758,9 +822,59 @@ pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState)
     let header_h = header_height();
     let top = header_h + 14;
     let line_height = (FONT_6X10.character_size.height as i32) + 4;
-    let left_x = 4;
-    let right_x = (SCREEN_WIDTH as i32) / 2 + 2;
+    let left_x = 8;
+    let right_x = (SCREEN_WIDTH as i32) / 2 + 5;
     let per_col = MAX_SEED_WORDS / 2;
+    let panel_top = top - 8;
+    let panel_height = (line_height * per_col as i32 + 18) as u32;
+    let panel_shadow = Rectangle::new(
+        Point::new(5, panel_top + 1),
+        Size::new((SCREEN_WIDTH - 9) as u32, panel_height),
+    );
+    let _ = panel_shadow
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(COLOR_PANEL_SHADOW)
+                .stroke_width(0)
+                .build(),
+        )
+        .draw(display);
+    let panel = Rectangle::new(
+        Point::new(4, panel_top),
+        Size::new((SCREEN_WIDTH - 8) as u32, panel_height),
+    );
+    let _ = panel
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(COLOR_SURFACE_LOW)
+                .stroke_color(COLOR_DIVIDER)
+                .stroke_width(1)
+                .build(),
+        )
+        .draw(display);
+    let _ = Line::new(
+        Point::new(6, panel_top + 2),
+        Point::new(SCREEN_WIDTH as i32 - 7, panel_top + 2),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(COLOR_PANEL_HIGHLIGHT)
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
+    let center_x = (SCREEN_WIDTH as i32) / 2;
+    let _ = Line::new(
+        Point::new(center_x, panel_top + 8),
+        Point::new(center_x, panel_top + panel_height as i32 - 8),
+    )
+    .into_styled(
+        PrimitiveStyleBuilder::new()
+            .stroke_color(COLOR_DIVIDER)
+            .stroke_width(1)
+            .build(),
+    )
+    .draw(display);
 
     for (idx, word) in state.words.iter().enumerate() {
         let (x, row) = if idx < per_col {

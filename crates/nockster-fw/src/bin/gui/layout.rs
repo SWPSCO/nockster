@@ -214,8 +214,8 @@ pub(crate) fn row_height() -> i32 {
     SCREEN_HEIGHT as i32 / 5
 }
 
-/// Touch target for the settings gear (generous, top-right of header).
-pub(crate) fn point_in_header_settings_gear(point: Point) -> bool {
+/// Touch target for the settings menu icon (generous, top-right of header).
+pub(crate) fn point_in_header_settings_menu(point: Point) -> bool {
     let h = header_height();
     let left = SCREEN_WIDTH as i32 - HEADER_ICON_TOUCH_WIDTH;
     point.x >= left && point.x < SCREEN_WIDTH as i32 && point.y >= 0 && point.y < h

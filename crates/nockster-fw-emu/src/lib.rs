@@ -41,10 +41,10 @@ enum ActiveTarget {
 }
 
 const CALIBRATION_POINTS: [gui::ScreenPoint; 4] = [
-    gui::ScreenPoint { x: 18, y: 58 },
+    gui::ScreenPoint { x: 18, y: 88 },
     gui::ScreenPoint {
         x: SCREEN_WIDTH - 19,
-        y: 58,
+        y: 88,
     },
     gui::ScreenPoint {
         x: SCREEN_WIDTH - 19,

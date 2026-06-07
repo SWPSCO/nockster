@@ -1799,7 +1799,7 @@ impl<'d> Gui<'d> {
             self.interaction.last_touch_sample_at = Some(now);
             if let Ok(Some(sample)) = self.read_touch_sample() {
                 let point = Point::new(sample.screen.x as i32, sample.screen.y as i32);
-                if point_in_header_back(point) {
+                if point_in_header_back(point) && !self.touch_calibration_point_near_target(point) {
                     self.touch_calibration_points.clear();
                     self.touch_calibration_last_raw = None;
                     self.show_menu();
@@ -1848,6 +1848,18 @@ impl<'d> Gui<'d> {
             TOUCH_CALIBRATION_POINTS,
             touch_calibration_target(step),
         );
+    }
+
+    fn touch_calibration_point_near_target(&self, point: Point) -> bool {
+        let step = self
+            .touch_calibration_points
+            .len()
+            .min(TOUCH_CALIBRATION_POINTS.saturating_sub(1));
+        let target = touch_calibration_target(step);
+        let dx = point.x - target.x as i32;
+        let dy = point.y - target.y as i32;
+        let tolerance = 34;
+        dx * dx + dy * dy <= tolerance * tolerance
     }
 
     fn tick_touch_diagnostics(

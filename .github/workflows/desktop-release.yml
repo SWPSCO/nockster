@@ -1,0 +1,547 @@
+name: Desktop release
+
+# Builds release artifacts for:
+#   - nockster-cli on Linux x64 and macOS ARM64
+#   - the Tauri GUI app on Linux x64 and macOS ARM64
+#
+# macOS signing follows the nockchain release-branch pattern:
+#   - APPLE_P12 / APPLE_P12_PASSWORD for Developer ID Application signing
+#   - APPLE_INSTALLER_P12 / APPLE_INSTALLER_P12_PASSWORD for pkg signing
+#   - KEYCHAIN_PASSWORD for the ephemeral build keychain
+#   - AC_API_KEY_ID / AC_API_ISSUER_ID / AC_API_KEY_PATH for notarization
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to create, e.g. desktop-v0.1.0. Defaults to desktop-<short-sha>.'
+        required: false
+      create_release:
+        description: 'Create or update the GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
+env:
+  RUST_TOOLCHAIN: nightly-2026-06-06
+  WASM_TARGET: wasm32-unknown-unknown
+  LINUX_TARGET: x86_64-unknown-linux-gnu
+  MACOS_TARGET: aarch64-apple-darwin
+  MACOS_APPLICATION_SIGNING_IDENTITY: 'Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)'
+  MACOS_INSTALLER_SIGNING_IDENTITY: 'Developer ID Installer: Southwestern Pool Supply CO INC (484J85QW9N)'
+  MACOS_TEAM_ID: 484J85QW9N
+
+jobs:
+  vars:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      app_version: ${{ steps.set.outputs.app_version }}
+      release_tag: ${{ steps.set.outputs.release_tag }}
+      short_sha: ${{ steps.set.outputs.short_sha }}
+      should_release: ${{ steps.set.outputs.should_release }}
+      version_label: ${{ steps.set.outputs.version_label }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag and versions
+        id: set
+        run: |
+          set -euo pipefail
+
+          SHORT_SHA="$(git rev-parse HEAD | cut -c1-7)"
+          APP_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1)"
+          if [[ -z "$APP_VERSION" ]]; then
+            echo "::error::could not read src-tauri/tauri.conf.json version"
+            exit 1
+          fi
+
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            RELEASE_TAG="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.release_tag }}" ]]; then
+            RELEASE_TAG="${{ github.event.inputs.release_tag }}"
+          else
+            RELEASE_TAG="desktop-${SHORT_SHA}"
+          fi
+
+          VERSION_LABEL="${RELEASE_TAG#desktop-v}"
+          if [[ "$VERSION_LABEL" == "$RELEASE_TAG" ]]; then
+            VERSION_LABEL="$RELEASE_TAG"
+          fi
+
+          SHOULD_RELEASE="false"
+          if [[ "${{ github.event_name }}" == "push" || "${{ github.event.inputs.create_release }}" == "true" ]]; then
+            SHOULD_RELEASE="true"
+          fi
+
+          echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "version_label=$VERSION_LABEL" >> "$GITHUB_OUTPUT"
+
+  build-linux-x64:
+    name: Build Linux x64
+    needs: vars
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ env.LINUX_TARGET }},${{ env.WASM_TARGET }}
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          key: desktop-linux-${{ env.LINUX_TARGET }}
+
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          if apt-cache show libfuse2 >/dev/null 2>&1; then
+            FUSE_PACKAGE=libfuse2
+          else
+            FUSE_PACKAGE=libfuse2t64
+          fi
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libssl-dev \
+            libudev-dev \
+            libusb-1.0-0-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            pkg-config \
+            protobuf-compiler \
+            librsvg2-dev \
+            wget \
+            zip \
+            "$FUSE_PACKAGE"
+
+      - name: Authenticate cargo to private git deps
+        env:
+          GH_DEPS_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Install release tools
+        run: |
+          set -euo pipefail
+          cargo install tauri-cli --version 2.8.4 --locked
+          cargo install wasm-pack --locked || cargo install wasm-pack
+
+      - name: Build CLI
+        run: cargo build -p nockster-cli --release --target "$LINUX_TARGET" --locked
+
+      - name: Build Tauri GUI
+        working-directory: src-tauri
+        env:
+          NOCKSTER_SITE_DIR: ${{ runner.temp }}/nockster.com
+        run: cargo tauri build --target "$LINUX_TARGET" --bundles deb,appimage
+
+      - name: Package Linux artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          CLI_BIN="target/${LINUX_TARGET}/release/nockster-cli"
+          if [[ ! -x "$CLI_BIN" ]]; then
+            echo "::error::missing CLI binary at $CLI_BIN"
+            exit 1
+          fi
+          cp "$CLI_BIN" dist/nockster-cli
+          chmod +x dist/nockster-cli
+          (cd dist && zip -9 nockster-cli-linux-x64.zip nockster-cli)
+          rm dist/nockster-cli
+
+          count=0
+          for root in \
+            "target/${LINUX_TARGET}/release/bundle" \
+            "src-tauri/target/${LINUX_TARGET}/release/bundle" \
+            "target/release/bundle" \
+            "src-tauri/target/release/bundle"; do
+            [[ -d "$root" ]] || continue
+            while IFS= read -r bundle; do
+              case "$bundle" in
+                *.deb)
+                  cp "$bundle" dist/nockster-gui-linux-x64.deb
+                  count=$((count + 1))
+                  ;;
+                *.AppImage)
+                  cp "$bundle" dist/nockster-gui-linux-x64.AppImage
+                  chmod +x dist/nockster-gui-linux-x64.AppImage
+                  count=$((count + 1))
+                  ;;
+              esac
+            done < <(find "$root" -type f \( -name '*.deb' -o -name '*.AppImage' \) | sort)
+          done
+
+          if [[ "$count" -eq 0 ]]; then
+            echo "::error::no Linux Tauri bundle artifacts were found"
+            find target src-tauri/target -maxdepth 6 -type f 2>/dev/null || true
+            exit 1
+          fi
+
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-x64
+          path: dist/*
+
+  build-macos-aarch64:
+    name: Build macOS ARM64
+    needs: vars
+    runs-on: [self-hosted, macOS, ARM64]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ env.MACOS_TARGET }},${{ env.WASM_TARGET }}
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          key: desktop-macos-${{ env.MACOS_TARGET }}
+
+      - name: Authenticate cargo to private git deps
+        env:
+          GH_DEPS_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Install release tools
+        run: |
+          set -euo pipefail
+          cargo install tauri-cli --version 2.8.4 --locked
+          cargo install wasm-pack --locked || cargo install wasm-pack
+
+      - name: Build CLI
+        run: cargo build -p nockster-cli --release --target "$MACOS_TARGET" --locked
+
+      - name: Build Tauri app bundle
+        working-directory: src-tauri
+        env:
+          NOCKSTER_SITE_DIR: ${{ runner.temp }}/nockster.com
+        run: cargo tauri build --target "$MACOS_TARGET" --bundles app
+
+      - name: Import Apple certificates
+        env:
+          APPLE_P12: ${{ secrets.APPLE_P12 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          APPLE_INSTALLER_P12: ${{ secrets.APPLE_INSTALLER_P12 }}
+          APPLE_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_INSTALLER_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          for name in APPLE_P12 APPLE_P12_PASSWORD APPLE_INSTALLER_P12 APPLE_INSTALLER_P12_PASSWORD KEYCHAIN_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::missing repo secret $name"
+              exit 1
+            fi
+          done
+
+          decode_b64() {
+            local value="$1"
+            local out="$2"
+            if ! printf '%s' "$value" | base64 --decode > "$out" 2>/dev/null; then
+              printf '%s' "$value" | base64 -D > "$out"
+            fi
+          }
+
+          KEYCHAIN_NAME="build-${{ github.run_id }}.keychain"
+          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain | tr -d '"')"
+          security delete-keychain "$KEYCHAIN_NAME" 2>/dev/null || true
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | sed s/\"//g)
+          security set-keychain-settings -t 3600 -l "$KEYCHAIN_NAME"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+
+          decode_b64 "$APPLE_P12" cert.p12
+          security import cert.p12 -k "$KEYCHAIN_NAME" -P "$APPLE_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,security: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          security default-keychain -s "$KEYCHAIN_NAME"
+          rm cert.p12
+
+          decode_b64 "$APPLE_INSTALLER_P12" installer.p12
+          security import installer.p12 -k "$KEYCHAIN_NAME" -P "$APPLE_INSTALLER_P12_PASSWORD" -T /usr/bin/productsign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,security: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+          rm installer.p12
+
+          security find-identity -v -p codesigning "$KEYCHAIN_NAME"
+          echo "KEYCHAIN_NAME=$KEYCHAIN_NAME" >> "$GITHUB_ENV"
+          echo "ORIGINAL_DEFAULT_KEYCHAIN=$ORIGINAL_DEFAULT_KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Codesign and notarize macOS artifacts
+        env:
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          for name in AC_API_KEY_ID AC_API_ISSUER_ID AC_API_KEY_PATH KEYCHAIN_PASSWORD KEYCHAIN_NAME; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::missing required signing environment $name"
+              exit 1
+            fi
+          done
+
+          decode_b64() {
+            local value="$1"
+            local out="$2"
+            if ! printf '%s' "$value" | base64 --decode > "$out" 2>/dev/null; then
+              printf '%s' "$value" | base64 -D > "$out"
+            fi
+          }
+
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
+
+          cat > Entitlements.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.cs.allow-jit</key>
+              <true/>
+              <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+              <true/>
+              <key>com.apple.security.cs.disable-executable-page-protection</key>
+              <true/>
+              <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          CLI_BIN="target/${MACOS_TARGET}/release/nockster-cli"
+          if [[ ! -x "$CLI_BIN" ]]; then
+            echo "::error::missing CLI binary at $CLI_BIN"
+            exit 1
+          fi
+
+          APP_BUNDLE=""
+          for root in \
+            "target/${MACOS_TARGET}/release/bundle" \
+            "src-tauri/target/${MACOS_TARGET}/release/bundle" \
+            "target/release/bundle" \
+            "src-tauri/target/release/bundle"; do
+            [[ -d "$root" ]] || continue
+            candidate="$(find "$root" -type d -name 'Nockster.app' -print -quit)"
+            if [[ -n "$candidate" ]]; then
+              APP_BUNDLE="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$APP_BUNDLE" ]]; then
+            echo "::error::could not find Nockster.app"
+            find target src-tauri/target -maxdepth 7 -type d 2>/dev/null || true
+            exit 1
+          fi
+
+          codesign --force --options runtime --entitlements ./Entitlements.plist --timestamp \
+            --sign "$MACOS_APPLICATION_SIGNING_IDENTITY" \
+            --keychain "$KEYCHAIN_NAME" \
+            "$CLI_BIN"
+          codesign --verify --strict --verbose=2 "$CLI_BIN"
+
+          codesign --force --deep --options runtime --entitlements ./Entitlements.plist --timestamp \
+            --sign "$MACOS_APPLICATION_SIGNING_IDENTITY" \
+            --keychain "$KEYCHAIN_NAME" \
+            "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+          mkdir -p dist pkgroot
+          tar -czf dist/nockster-cli-macos-aarch64.tar.gz -C "$(dirname "$CLI_BIN")" nockster-cli
+
+          rm -rf pkgroot
+          mkdir -p pkgroot/usr/local/bin
+          cp "$CLI_BIN" pkgroot/usr/local/bin/nockster-cli
+          pkgbuild --root pkgroot \
+            --identifier io.swps.nockster-cli.pkg \
+            --version "${{ needs.vars.outputs.app_version }}" \
+            --install-location / \
+            nockster-cli-unsigned.pkg
+          productsign --sign "$MACOS_INSTALLER_SIGNING_IDENTITY" \
+            nockster-cli-unsigned.pkg \
+            dist/nockster-cli-macos-aarch64.pkg
+
+          hdiutil create \
+            -volname "Nockster" \
+            -srcfolder "$APP_BUNDLE" \
+            -ov \
+            -format UDZO \
+            dist/nockster-gui-macos-aarch64.dmg
+          codesign --force --timestamp \
+            --sign "$MACOS_APPLICATION_SIGNING_IDENTITY" \
+            --keychain "$KEYCHAIN_NAME" \
+            dist/nockster-gui-macos-aarch64.dmg
+
+          decode_b64 "$AC_API_KEY_PATH" key.p8
+          for artifact in dist/nockster-cli-macos-aarch64.pkg dist/nockster-gui-macos-aarch64.dmg; do
+            xcrun notarytool submit "$artifact" \
+              --key key.p8 \
+              --key-id "$AC_API_KEY_ID" \
+              --issuer "$AC_API_ISSUER_ID" \
+              --team-id "$MACOS_TEAM_ID" \
+              --wait
+            xcrun stapler staple "$artifact"
+          done
+          rm -rf key.p8 pkgroot nockster-cli-unsigned.pkg Entitlements.plist
+
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-aarch64
+          path: dist/*
+
+      - name: Cleanup signing keychain
+        if: always()
+        run: |
+          if [[ -n "${ORIGINAL_DEFAULT_KEYCHAIN:-}" ]]; then
+            security default-keychain -s "$ORIGINAL_DEFAULT_KEYCHAIN" 2>/dev/null || true
+          fi
+          if [[ -n "${KEYCHAIN_NAME:-}" ]]; then
+            security delete-keychain "$KEYCHAIN_NAME" 2>/dev/null || true
+          fi
+
+  package:
+    name: Package release artifacts
+    needs: [vars, build-linux-x64, build-macos-aarch64]
+    runs-on: ubuntu-latest
+    outputs:
+      content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-linux-x64
+          path: ./linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-macos-aarch64
+          path: ./macos
+
+      - name: Collate artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          cp linux/* out/
+          cp macos/* out/
+          ls -la out
+
+      - name: Compute content hashes
+        id: content-hash
+        run: |
+          set -euo pipefail
+          files="$(find out -type f | sort)"
+          if [[ -z "$files" ]]; then
+            echo "::error::no packaged artifacts found"
+            exit 1
+          fi
+          echo "content_hashes=$(sha256sum $files | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packaged-desktop-release
+          path: out/*
+
+  provenance:
+    name: Generate SLSA provenance
+    needs: package
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    with:
+      base64-subjects: ${{ needs.package.outputs.content_hashes }}
+      upload-assets: false
+
+  release:
+    name: Publish GitHub release
+    if: needs.vars.outputs.should_release == 'true'
+    needs: [vars, package, provenance]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: packaged-desktop-release
+          path: ./out
+
+      - name: Download provenance
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.provenance.outputs.provenance-name }}
+          path: ./prov
+
+      - name: Create release notes
+        run: |
+          cat > README.md <<'EOF'
+          ## Artifacts
+
+          - `nockster-cli-linux-x64.zip`: Linux x64 CLI binary.
+          - `nockster-gui-linux-x64.deb`: Linux x64 Tauri desktop app for Debian/Ubuntu.
+          - `nockster-gui-linux-x64.AppImage`: Linux x64 Tauri desktop app.
+          - `nockster-cli-macos-aarch64.pkg`: signed and notarized macOS ARM64 CLI installer.
+          - `nockster-cli-macos-aarch64.tar.gz`: signed macOS ARM64 CLI binary.
+          - `nockster-gui-macos-aarch64.dmg`: signed and notarized macOS ARM64 Tauri desktop app.
+
+          ## Verification
+
+          SLSA provenance for the packaged artifacts is attached as `multiple.intoto.jsonl`.
+          EOF
+
+      - uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.vars.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: Desktop ${{ needs.vars.outputs.version_label }}
+          draft: false
+          files: |
+            out/*
+            prov/${{ needs.provenance.outputs.provenance-name }}
+            README.md

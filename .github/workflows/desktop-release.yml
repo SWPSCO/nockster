@@ -125,6 +125,7 @@ jobs:
             librsvg2-dev \
             unzip \
             wget \
+            xdg-utils \
             zip \
             "$FUSE_PACKAGE"
 
@@ -306,7 +307,8 @@ jobs:
 
           for name in APPLE_P12 APPLE_P12_PASSWORD APPLE_INSTALLER_P12 APPLE_INSTALLER_P12_PASSWORD KEYCHAIN_PASSWORD; do
             if [[ -z "${!name}" ]]; then
-              echo "::error::missing repo secret $name"
+              echo "::error::missing GitHub Actions secret $name"
+              echo "::error::if this is an organization secret, confirm it grants access to this repository and this workflow trigger"
               exit 1
             fi
           done

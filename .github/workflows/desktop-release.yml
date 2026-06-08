@@ -2,7 +2,7 @@ name: Desktop release
 
 # Builds release artifacts for:
 #   - nockster-cli on Linux x64 and macOS ARM64
-#   - the Tauri GUI app on Linux x64 and macOS ARM64
+#   - the Tauri GUI app on Linux x64, Linux ARM64, and macOS ARM64
 #
 # macOS signing follows the nockchain release-branch pattern:
 #   - APPLE_P12 / APPLE_P12_PASSWORD for Developer ID Application signing
@@ -33,6 +33,7 @@ env:
   WASM_TOOLCHAIN: nightly-2026-06-06
   WASM_TARGET: wasm32-unknown-unknown
   LINUX_TARGET: x86_64-unknown-linux-gnu
+  LINUX_ARM64_TARGET: aarch64-unknown-linux-gnu
   MACOS_TARGET: aarch64-apple-darwin
   MACOS_APPLICATION_SIGNING_IDENTITY: 'Developer ID Application: Southwestern Pool Supply CO INC (484J85QW9N)'
   MACOS_INSTALLER_SIGNING_IDENTITY: 'Developer ID Installer: Southwestern Pool Supply CO INC (484J85QW9N)'
@@ -234,6 +235,136 @@ jobs:
           name: desktop-linux-x64
           path: dist/*
 
+  build-linux-aarch64:
+    name: Build Linux ARM64 AppImage
+    runs-on: ['self-hosted', 'Linux', 'ARM64']
+    container:
+      image: ubuntu:22.04
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          apt-get update
+          if apt-cache show libfuse2 >/dev/null 2>&1; then
+            FUSE_PACKAGE=libfuse2
+          else
+            FUSE_PACKAGE=libfuse2t64
+          fi
+          apt-get install -y \
+            build-essential \
+            ca-certificates \
+            curl \
+            file \
+            git \
+            libayatana-appindicator3-dev \
+            libclang-dev \
+            libssl-dev \
+            libudev-dev \
+            libusb-1.0-0-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            pkg-config \
+            protobuf-compiler \
+            librsvg2-dev \
+            unzip \
+            wget \
+            xdg-utils \
+            zip \
+            "$FUSE_PACKAGE"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.WASM_TOOLCHAIN }}
+          targets: ${{ env.LINUX_ARM64_TARGET }},${{ env.WASM_TARGET }}
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          key: desktop-linux-${{ env.LINUX_ARM64_TARGET }}
+
+      - name: Authenticate cargo to private git deps
+        env:
+          GH_DEPS_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          git config --global \
+            url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Install release tools
+        run: |
+          set -euo pipefail
+          cargo install tauri-cli --version 2.8.4 --locked
+          cargo install wasm-pack --locked || cargo install wasm-pack
+
+      - name: Build web assets
+        run: |
+          set -euo pipefail
+          wasm-pack build crates/nockster-wasm --target web --out-dir pkg
+          npm ci --prefix nockster-js
+          npm run build --prefix nockster-js
+          npm ci --prefix web
+          npm run build --prefix web
+
+      - name: Build Tauri AppImage
+        working-directory: src-tauri
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: |
+          cargo tauri build \
+            --target "$LINUX_ARM64_TARGET" \
+            --bundles appimage \
+            --config '{"build":{"beforeBuildCommand":"true","frontendDist":"../web/dist"}}'
+
+      - name: Package Linux ARM64 artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          count=0
+          for root in \
+            "target/${LINUX_ARM64_TARGET}/release/bundle" \
+            "src-tauri/target/${LINUX_ARM64_TARGET}/release/bundle" \
+            "target/release/bundle" \
+            "src-tauri/target/release/bundle"; do
+            [[ -d "$root" ]] || continue
+            while IFS= read -r bundle; do
+              case "$bundle" in
+                *.AppImage)
+                  cp "$bundle" dist/nockster-gui-linux-aarch64.AppImage
+                  chmod +x dist/nockster-gui-linux-aarch64.AppImage
+                  count=$((count + 1))
+                  ;;
+              esac
+            done < <(find "$root" -type f -name '*.AppImage' | sort)
+          done
+
+          if [[ "$count" -eq 0 ]]; then
+            echo "::error::no Linux ARM64 AppImage artifact was found"
+            find target src-tauri/target -maxdepth 6 -type f 2>/dev/null || true
+            exit 1
+          fi
+
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux-aarch64
+          path: dist/*
+
   build-macos-aarch64:
     name: Build macOS ARM64
     runs-on: [self-hosted, macOS, ARM64]
@@ -320,7 +451,7 @@ jobs:
           }
 
           KEYCHAIN_NAME="build-${{ github.run_id }}.keychain"
-          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain | tr -d '"' | xargs)"
+          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain 2>/dev/null | tr -d '"' | xargs || true)"
           security delete-keychain "$KEYCHAIN_NAME" 2>/dev/null || true
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
           security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | sed s/\"//g)
@@ -484,7 +615,7 @@ jobs:
 
   package:
     name: Package release artifacts
-    needs: [vars, build-linux-x64, build-macos-aarch64]
+    needs: [vars, build-linux-x64, build-linux-aarch64, build-macos-aarch64]
     runs-on: ubuntu-latest
     outputs:
       content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
@@ -496,6 +627,11 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: desktop-linux-aarch64
+          path: ./linux-arm64
+
+      - uses: actions/download-artifact@v4
+        with:
           name: desktop-macos-aarch64
           path: ./macos
 
@@ -504,6 +640,7 @@ jobs:
           set -euo pipefail
           mkdir -p out
           cp linux/* out/
+          cp linux-arm64/* out/
           cp macos/* out/
           ls -la out
 
@@ -562,6 +699,7 @@ jobs:
           - `nockster-cli-linux-x64.zip`: Linux x64 CLI binary.
           - `nockster-gui-linux-x64.deb`: Linux x64 Tauri desktop app for Debian/Ubuntu.
           - `nockster-gui-linux-x64.AppImage`: Linux x64 Tauri desktop app.
+          - `nockster-gui-linux-aarch64.AppImage`: Linux ARM64 Tauri desktop app.
           - `nockster-cli-macos-aarch64.pkg`: signed and notarized macOS ARM64 CLI installer.
           - `nockster-cli-macos-aarch64.tar.gz`: signed macOS ARM64 CLI binary.
           - `nockster-gui-macos-aarch64.dmg`: signed and notarized macOS ARM64 Tauri desktop app.

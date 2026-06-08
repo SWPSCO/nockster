@@ -22,6 +22,11 @@ on:
         required: false
         default: true
         type: boolean
+      generate_provenance:
+        description: 'Generate SLSA provenance. Keep disabled while this repo is private.'
+        required: false
+        default: false
+        type: boolean
       build_linux_x64:
         description: 'Build Linux x64 CLI, deb, and AppImage'
         required: false
@@ -682,6 +687,7 @@ jobs:
 
   provenance:
     name: Generate SLSA provenance
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.generate_provenance }}
     needs: package
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     permissions:
@@ -694,7 +700,7 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: needs.vars.outputs.should_release == 'true'
+    if: ${{ always() && needs.vars.outputs.should_release == 'true' && needs.package.result == 'success' && (needs.provenance.result == 'success' || needs.provenance.result == 'skipped') }}
     needs: [vars, package, provenance]
     runs-on: ubuntu-latest
     permissions:
@@ -706,13 +712,17 @@ jobs:
           path: ./out
 
       - name: Download provenance
+        if: ${{ needs.provenance.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.provenance.outputs.provenance-name }}
           path: ./prov
 
       - name: Create release notes
+        env:
+          PROVENANCE_ATTACHED: ${{ needs.provenance.result == 'success' }}
         run: |
+          set -euo pipefail
           cat > README.md <<'EOF'
           ## Artifacts
 
@@ -745,8 +755,23 @@ jobs:
 
           ## Verification
 
-          SLSA provenance for the packaged artifacts is attached as `multiple.intoto.jsonl`.
           EOF
+          if [[ "$PROVENANCE_ATTACHED" == "true" ]]; then
+            echo 'SLSA provenance for the packaged artifacts is attached as `multiple.intoto.jsonl`.' >> README.md
+          else
+            echo 'SLSA provenance was not generated for this release.' >> README.md
+          fi
+
+      - name: Stage release files
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          cp out/* release-files/
+          cp README.md release-files/
+          if compgen -G "prov/*" >/dev/null; then
+            cp prov/* release-files/
+          fi
+          ls -la release-files
 
       - uses: softprops/action-gh-release@v2
         env:
@@ -756,7 +781,4 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Desktop ${{ needs.vars.outputs.version_label }}
           draft: false
-          files: |
-            out/*
-            prov/${{ needs.provenance.outputs.provenance-name }}
-            README.md
+          files: release-files/*

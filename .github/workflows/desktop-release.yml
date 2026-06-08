@@ -156,11 +156,24 @@ jobs:
       - name: Build CLI
         run: cargo build -p nockster-cli --release --target "$LINUX_TARGET" --locked
 
+      - name: Build web assets
+        run: |
+          set -euo pipefail
+          wasm-pack build crates/nockster-wasm --target web --out-dir pkg
+          npm ci --prefix nockster-js
+          npm run build --prefix nockster-js
+          npm ci --prefix web
+          npm run build --prefix web
+
       - name: Build Tauri GUI
         working-directory: src-tauri
         env:
           NOCKSTER_SITE_DIR: ${{ runner.temp }}/nockster.com
-        run: cargo tauri build --target "$LINUX_TARGET" --bundles deb,appimage
+        run: |
+          cargo tauri build \
+            --target "$LINUX_TARGET" \
+            --bundles deb,appimage \
+            --config '{"build":{"beforeBuildCommand":"true"}}'
 
       - name: Package Linux artifacts
         run: |
@@ -255,11 +268,24 @@ jobs:
       - name: Build CLI
         run: cargo build -p nockster-cli --release --target "$MACOS_TARGET" --locked
 
+      - name: Build web assets
+        run: |
+          set -euo pipefail
+          wasm-pack build crates/nockster-wasm --target web --out-dir pkg
+          npm ci --prefix nockster-js
+          npm run build --prefix nockster-js
+          npm ci --prefix web
+          npm run build --prefix web
+
       - name: Build Tauri app bundle
         working-directory: src-tauri
         env:
           NOCKSTER_SITE_DIR: ${{ runner.temp }}/nockster.com
-        run: cargo tauri build --target "$MACOS_TARGET" --bundles app
+        run: |
+          cargo tauri build \
+            --target "$MACOS_TARGET" \
+            --bundles app \
+            --config '{"build":{"beforeBuildCommand":"true"}}'
 
       - name: Import Apple certificates
         env:

@@ -30,7 +30,7 @@ permissions:
   id-token: write
 
 env:
-  RUST_TOOLCHAIN: nightly-2026-06-06
+  WASM_TOOLCHAIN: nightly-2026-06-06
   WASM_TARGET: wasm32-unknown-unknown
   LINUX_TARGET: x86_64-unknown-linux-gnu
   MACOS_TARGET: aarch64-apple-darwin
@@ -138,7 +138,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          toolchain: ${{ env.WASM_TOOLCHAIN }}
           targets: ${{ env.LINUX_TARGET }},${{ env.WASM_TARGET }}
 
       - name: Cache Rust dependencies
@@ -177,7 +177,7 @@ jobs:
       - name: Build Tauri GUI
         working-directory: src-tauri
         env:
-          NOCKSTER_SITE_DIR: ${{ runner.temp }}/nockster.com
+          APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
           cargo tauri build \
             --target "$LINUX_TARGET" \
@@ -249,7 +249,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          toolchain: ${{ env.WASM_TOOLCHAIN }}
           targets: ${{ env.MACOS_TARGET }},${{ env.WASM_TARGET }}
 
       - name: Cache Rust dependencies
@@ -287,8 +287,6 @@ jobs:
 
       - name: Build Tauri app bundle
         working-directory: src-tauri
-        env:
-          NOCKSTER_SITE_DIR: ${{ runner.temp }}/nockster.com
         run: |
           cargo tauri build \
             --target "$MACOS_TARGET" \
@@ -322,7 +320,7 @@ jobs:
           }
 
           KEYCHAIN_NAME="build-${{ github.run_id }}.keychain"
-          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain | tr -d '"')"
+          ORIGINAL_DEFAULT_KEYCHAIN="$(security default-keychain | tr -d '"' | xargs)"
           security delete-keychain "$KEYCHAIN_NAME" 2>/dev/null || true
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_NAME"
           security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | sed s/\"//g)
@@ -430,9 +428,14 @@ jobs:
           rm -rf pkgroot
           mkdir -p pkgroot/usr/local/bin
           cp "$CLI_BIN" pkgroot/usr/local/bin/nockster-cli
+          APP_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json | head -1)"
+          if [[ -z "$APP_VERSION" ]]; then
+            echo "::error::could not read src-tauri/tauri.conf.json version"
+            exit 1
+          fi
           pkgbuild --root pkgroot \
             --identifier io.swps.nockster-cli.pkg \
-            --version "${{ needs.vars.outputs.app_version }}" \
+            --version "$APP_VERSION" \
             --install-location / \
             nockster-cli-unsigned.pkg
           productsign --sign "$MACOS_INSTALLER_SIGNING_IDENTITY" \

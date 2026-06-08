@@ -89,7 +89,6 @@ jobs:
 
   build-linux-x64:
     name: Build Linux x64
-    needs: vars
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -227,7 +226,6 @@ jobs:
 
   build-macos-aarch64:
     name: Build macOS ARM64
-    needs: vars
     runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read

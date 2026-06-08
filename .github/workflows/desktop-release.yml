@@ -23,6 +23,21 @@ on:
         required: false
         default: true
         type: boolean
+      build_linux_x64:
+        description: 'Build Linux x64 CLI, deb, and AppImage'
+        required: false
+        default: true
+        type: boolean
+      build_linux_aarch64:
+        description: 'Build Linux ARM64 AppImage'
+        required: false
+        default: true
+        type: boolean
+      build_macos_aarch64:
+        description: 'Build macOS ARM64 signed artifacts'
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -90,6 +105,7 @@ jobs:
 
   build-linux-x64:
     name: Build Linux x64
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_linux_x64 }}
     runs-on: ['self-hosted', 'Linux', 'X64']
     container:
       image: ubuntu:22.04
@@ -237,7 +253,8 @@ jobs:
 
   build-linux-aarch64:
     name: Build Linux ARM64 AppImage
-    runs-on: ['self-hosted', 'Linux', 'ARM64']
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_linux_aarch64 }}
+    runs-on: ubuntu-24.04-arm
     container:
       image: ubuntu:22.04
     defaults:
@@ -367,6 +384,7 @@ jobs:
 
   build-macos-aarch64:
     name: Build macOS ARM64
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_macos_aarch64 }}
     runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read
@@ -616,21 +634,25 @@ jobs:
   package:
     name: Package release artifacts
     needs: [vars, build-linux-x64, build-linux-aarch64, build-macos-aarch64]
+    if: ${{ always() && !cancelled() && !contains(needs.*.result, 'failure') && (needs.build-linux-x64.result == 'success' || needs.build-linux-aarch64.result == 'success' || needs.build-macos-aarch64.result == 'success') }}
     runs-on: ubuntu-latest
     outputs:
       content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
     steps:
       - uses: actions/download-artifact@v4
+        if: ${{ needs.build-linux-x64.result == 'success' }}
         with:
           name: desktop-linux-x64
           path: ./linux
 
       - uses: actions/download-artifact@v4
+        if: ${{ needs.build-linux-aarch64.result == 'success' }}
         with:
           name: desktop-linux-aarch64
           path: ./linux-arm64
 
       - uses: actions/download-artifact@v4
+        if: ${{ needs.build-macos-aarch64.result == 'success' }}
         with:
           name: desktop-macos-aarch64
           path: ./macos
@@ -639,9 +661,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          cp linux/* out/
-          cp linux-arm64/* out/
-          cp macos/* out/
+          for dir in linux linux-arm64 macos; do
+            if compgen -G "$dir/*" >/dev/null; then
+              cp "$dir"/* out/
+            fi
+          done
+          if ! compgen -G "out/*" >/dev/null; then
+            echo "::error::no platform artifacts were downloaded"
+            exit 1
+          fi
           ls -la out
 
       - name: Compute content hashes
@@ -696,13 +724,29 @@ jobs:
           cat > README.md <<'EOF'
           ## Artifacts
 
-          - `nockster-cli-linux-x64.zip`: Linux x64 CLI binary.
-          - `nockster-gui-linux-x64.deb`: Linux x64 Tauri desktop app for Debian/Ubuntu.
-          - `nockster-gui-linux-x64.AppImage`: Linux x64 Tauri desktop app.
-          - `nockster-gui-linux-aarch64.AppImage`: Linux ARM64 Tauri desktop app.
-          - `nockster-cli-macos-aarch64.pkg`: signed and notarized macOS ARM64 CLI installer.
-          - `nockster-cli-macos-aarch64.tar.gz`: signed macOS ARM64 CLI binary.
-          - `nockster-gui-macos-aarch64.dmg`: signed and notarized macOS ARM64 Tauri desktop app.
+          EOF
+          if [[ -f out/nockster-cli-linux-x64.zip ]]; then
+            echo '- `nockster-cli-linux-x64.zip`: Linux x64 CLI binary.' >> README.md
+          fi
+          if [[ -f out/nockster-gui-linux-x64.deb ]]; then
+            echo '- `nockster-gui-linux-x64.deb`: Linux x64 Tauri desktop app for Debian/Ubuntu.' >> README.md
+          fi
+          if [[ -f out/nockster-gui-linux-x64.AppImage ]]; then
+            echo '- `nockster-gui-linux-x64.AppImage`: Linux x64 Tauri desktop app.' >> README.md
+          fi
+          if [[ -f out/nockster-gui-linux-aarch64.AppImage ]]; then
+            echo '- `nockster-gui-linux-aarch64.AppImage`: Linux ARM64 Tauri desktop app.' >> README.md
+          fi
+          if [[ -f out/nockster-cli-macos-aarch64.pkg ]]; then
+            echo '- `nockster-cli-macos-aarch64.pkg`: signed and notarized macOS ARM64 CLI installer.' >> README.md
+          fi
+          if [[ -f out/nockster-cli-macos-aarch64.tar.gz ]]; then
+            echo '- `nockster-cli-macos-aarch64.tar.gz`: signed macOS ARM64 CLI binary.' >> README.md
+          fi
+          if [[ -f out/nockster-gui-macos-aarch64.dmg ]]; then
+            echo '- `nockster-gui-macos-aarch64.dmg`: signed and notarized macOS ARM64 Tauri desktop app.' >> README.md
+          fi
+          cat >> README.md <<'EOF'
 
           ## Verification
 

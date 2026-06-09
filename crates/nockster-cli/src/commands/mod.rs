@@ -15,4 +15,5 @@ pub mod smoke;
 pub mod test;
 pub mod touch;
 pub mod unlock;
+pub mod vault;
 pub mod update;

@@ -6,6 +6,7 @@ pub mod draft_sign;
 pub mod math;
 pub mod noun;
 pub mod update;
+pub mod wallet_keyfile;
 // Re-export crypto types - use conditional compilation for std vs no_std differences
 #[cfg(not(feature = "std"))]
 pub use cheetah::{
@@ -94,6 +95,8 @@ pub const FEATURE_RELEASE_INFO: u32 = 1 << 11;
 pub const FEATURE_UPDATE_BOOT_STATUS: u32 = 1 << 12;
 pub const FEATURE_DEVICE_REBOOT: u32 = 1 << 13;
 pub const FEATURE_DEVICE_ADDRESS_BOOK: u32 = 1 << 14;
+pub const FEATURE_PREIMAGE_VAULT: u32 = 1 << 15;
+pub const FEATURE_MASTER_PUBKEY_EXPORT: u32 = 1 << 16;
 pub const FEATURE_ALL_KNOWN: u32 = FEATURE_CHEETAH
     | FEATURE_FRAG
     | FEATURE_XPUB
@@ -108,7 +111,9 @@ pub const FEATURE_ALL_KNOWN: u32 = FEATURE_CHEETAH
     | FEATURE_RELEASE_INFO
     | FEATURE_UPDATE_BOOT_STATUS
     | FEATURE_DEVICE_REBOOT
-    | FEATURE_DEVICE_ADDRESS_BOOK;
+    | FEATURE_DEVICE_ADDRESS_BOOK
+    | FEATURE_PREIMAGE_VAULT
+    | FEATURE_MASTER_PUBKEY_EXPORT;
 
 pub const HMAC_KEY_PURPOSE_DOWN_ALL: u8 = 5;
 pub const HMAC_KEY_PURPOSE_DOWN_JTAG: u8 = 6;
@@ -235,6 +240,23 @@ pub const MAX_ADDRESS_BOOK_PKH_LEN: usize = 64;
 pub struct DeviceAddressBookEntry {
     pub label: heapless::String<MAX_ADDRESS_BOOK_LABEL_LEN>,
     pub pkh: heapless::String<MAX_ADDRESS_BOOK_PKH_LEN>,
+}
+
+pub const MAX_VAULT_ENTRIES: usize = 8;
+/// Cap chosen so a store request fits a single COBS frame and the record fits
+/// the fixed vault slot layout in NVS.
+pub const MAX_VAULT_PREIMAGE_LEN: usize = 320;
+
+/// Metadata for one preimage vault slot. The commitment is the Tip5
+/// `hash-noun` digest of the stored preimage noun — the value a `%hax` lock
+/// commits to on-chain. Commitments and labels are public; only the preimage
+/// itself is encrypted at rest.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct VaultEntryInfo {
+    pub slot: u8,
+    pub commitment: [u64; 5],
+    pub label: heapless::String<MAX_SEED_LABEL_LEN>,
+    pub preimage_len: u16,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -414,6 +436,28 @@ pub enum Request {
     GetUpdateBootStatus,
     Reboot,
     GetAddressBook,
+    /// Store a jammed preimage noun in the on-device vault. The device cues
+    /// it, computes the Tip5 hash-noun commitment, and asks for on-screen
+    /// confirmation before persisting.
+    VaultStore {
+        label: heapless::String<MAX_SEED_LABEL_LEN>,
+        preimage: alloc::vec::Vec<u8>,
+    },
+    VaultList,
+    /// Return the plaintext preimage for a vault slot after on-screen
+    /// confirmation.
+    VaultReveal {
+        slot: u8,
+    },
+    VaultDelete {
+        slot: u8,
+    },
+    /// Export the master (root) public key and chain code for a seed slot so
+    /// a host wallet can watch and derive unhardened child addresses.
+    /// Confirmed on-screen: it reveals the whole unhardened address tree.
+    GetMasterPubkey {
+        slot: u8,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -481,6 +525,16 @@ pub enum Response {
     OkReleaseInfo(ReleaseInfo),
     OkUpdateBootStatus(UpdateBootStatus),
     OkAddressBook(alloc::vec::Vec<DeviceAddressBookEntry>),
+    OkVaultEntries(alloc::vec::Vec<VaultEntryInfo>),
+    OkVaultPreimage {
+        commitment: [u64; 5],
+        preimage: alloc::vec::Vec<u8>,
+    },
+    OkMasterPubkey {
+        x: [u64; 6],
+        y: [u64; 6],
+        chain_code: [u8; 32],
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

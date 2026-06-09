@@ -11,9 +11,9 @@ use hmac::Hmac;
 use nockster_core::alloc_path as pathmod;
 use nockster_core::cheetah;
 use nockster_core::{
-    CheetahPub, DeviceAddressBookEntry, SeedSlotLabel, TouchCalibration,
+    CheetahPub, DeviceAddressBookEntry, SeedSlotLabel, TouchCalibration, VaultEntryInfo,
     MAX_ADDRESS_BOOK_LABEL_LEN, MAX_ADDRESS_BOOK_PKH_LEN, MAX_DEVICE_ADDRESS_BOOK_ENTRIES,
-    MAX_SEED_LABEL_LEN, MAX_SEED_SLOTS,
+    MAX_SEED_LABEL_LEN, MAX_SEED_SLOTS, MAX_VAULT_ENTRIES, MAX_VAULT_PREIMAGE_LEN,
 };
 use pbkdf2::pbkdf2;
 use sha2::{Digest, Sha256};
@@ -55,7 +55,25 @@ const ATTEMPT_MARKS_ADDR: u32 = ADDRESS_BOOK_STORAGE_END;
 const ATTEMPT_MARKS_STORAGE_SIZE: usize = NVS_SECTOR_SIZE;
 const ATTEMPT_MARKS_END: u32 = ATTEMPT_MARKS_ADDR + ATTEMPT_MARKS_STORAGE_SIZE as u32;
 const ATTEMPT_MARK_SIZE: usize = 32;
-const NVS_STORAGE_END: u32 = ATTEMPT_MARKS_END;
+// Preimage vault: one sector of fixed-size records. Preimages are encrypted
+// under a random vault key (VK); the VK is wrapped under the PIN-derived
+// master key in the header, so a PIN change only re-wraps 48 bytes instead of
+// re-encrypting every record. Commitments and labels are plaintext (the
+// commitment is public on-chain by construction).
+const VAULT_ADDR: u32 = ATTEMPT_MARKS_END;
+const VAULT_STORAGE_SIZE: usize = NVS_SECTOR_SIZE;
+const VAULT_END: u32 = VAULT_ADDR + VAULT_STORAGE_SIZE as u32;
+const VAULT_HEADER_SIZE: usize = 128;
+const VAULT_RECORD_SIZE: usize = 480;
+const VAULT_RECORD_USED: u8 = 0x01;
+const VAULT_MAGIC: [u8; 4] = *b"NCVL";
+const VAULT_VERSION: u8 = 1;
+const VAULT_KEY_DOMAIN: &[u8] = b"nockster-vault-v1";
+const _: () = assert!(VAULT_HEADER_SIZE + MAX_VAULT_ENTRIES * VAULT_RECORD_SIZE <= VAULT_STORAGE_SIZE);
+// flag + label_len + label + commitment + nonce + ct_len + ct(+tag)
+const _: () =
+    assert!(1 + 1 + MAX_SEED_LABEL_LEN + 40 + 12 + 2 + MAX_VAULT_PREIMAGE_LEN + 16 <= VAULT_RECORD_SIZE);
+const NVS_STORAGE_END: u32 = VAULT_END;
 // partitions.csv: nvs, 0x9000, 28K
 const _: () = assert!(NVS_STORAGE_END <= NVS_BASE_ADDR + 28 * 1024);
 const FLASH_PAUSE_TIMEOUT_MS: u16 = 2_000;
@@ -906,7 +924,7 @@ impl NvsStore {
         new_pin: &str,
         pepper_source: &mut P,
     ) -> Result<(), NvsError> {
-        let (prepared, mut seeds, mut new_key) =
+        let (prepared, mut seeds, mut new_key, mut old_key) =
             match self.prepare_change_pin_with_pepper(old_pin, new_pin, pepper_source) {
                 Ok(prepared) => prepared,
                 Err(NvsError::WrongPin) => {
@@ -917,11 +935,15 @@ impl NvsStore {
             };
         if let Err(err) = self.commit_prepared_seed_rewrite(prepared) {
             new_key.zeroize();
+            old_key.zeroize();
             zeroize_seed_vec(&mut seeds);
             return Err(err);
         }
+        let rewrap = self.vault_rewrap(&old_key, &new_key);
         new_key.zeroize();
+        old_key.zeroize();
         zeroize_seed_vec(&mut seeds);
+        rewrap?;
         // The PIN changed successfully; a failed marks clear must not turn
         // that into an error (the marks also clear on the next unlock).
         let _ = self.erase_attempt_marks();
@@ -933,7 +955,7 @@ impl NvsStore {
         old_pin: &str,
         new_pin: &str,
         pepper_source: &mut P,
-    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
+    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32], [u8; 32]), NvsError> {
         self.prepare_change_pin_inner(old_pin, new_pin, pepper_source, true)
     }
 
@@ -944,25 +966,28 @@ impl NvsStore {
         old_pin: &str,
         new_pin: &str,
         pepper_source: &mut P,
-    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
+    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32], [u8; 32]), NvsError> {
         self.prepare_change_pin_inner(old_pin, new_pin, pepper_source, false)
     }
 
+    /// Returns `(prepared, seeds, new_master_key, old_master_key)`. The old
+    /// master key is needed by the committer to re-wrap the preimage vault;
+    /// callers must zeroize it on every path.
     fn prepare_change_pin_inner<P: NvsPepperSource>(
         &mut self,
         old_pin: &str,
         new_pin: &str,
         pepper_source: &mut P,
         enforce_lockout: bool,
-    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
+    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32], [u8; 32]), NvsError> {
         let (mut seeds, mut old_key, _clear_attempts) =
             self.unlock_with_pepper_inner(old_pin, pepper_source, enforce_lockout)?;
-        old_key.zeroize();
         let labels = self.read_seed_labels().unwrap_or_default();
         let calibration = self.read_touch_calibration().ok().flatten();
         let gui_theme = self.read_gui_theme().ok().flatten();
 
         if seeds.is_empty() {
+            old_key.zeroize();
             return Err(NvsError::NotInitialized);
         }
 
@@ -977,10 +1002,11 @@ impl NvsStore {
             Ok(key) => key,
             Err(err) => {
                 zeroize_seed_vec(&mut seeds);
+                old_key.zeroize();
                 return Err(err);
             }
         };
-        Ok((prepared, seeds, new_key))
+        Ok((prepared, seeds, new_key, old_key))
     }
 
     fn prepare_rewrite_seed_storage<P: NvsPepperSource>(
@@ -1787,6 +1813,290 @@ impl NvsStore {
     fn erase_attempt_marks(&mut self) -> Result<(), NvsError> {
         let _pause = FlashPauseGuard::acquire()?;
         self.erase_flash_region(ATTEMPT_MARKS_ADDR, ATTEMPT_MARKS_END)
+    }
+
+    fn read_vault_region(&mut self) -> Result<Vec<u8>, NvsError> {
+        let mut region = vec![0xFFu8; VAULT_STORAGE_SIZE];
+        self.flash
+            .read(VAULT_ADDR, &mut region)
+            .map_err(|_| NvsError::Flash)?;
+        Ok(region)
+    }
+
+    fn write_vault_region(&mut self, region: &[u8]) -> Result<(), NvsError> {
+        self.write_flash_region_defer_first_chunk(VAULT_ADDR, VAULT_END, region)
+    }
+
+    fn vault_header_present(region: &[u8]) -> bool {
+        region[..4] == VAULT_MAGIC && region[4] == VAULT_VERSION
+    }
+
+    fn vault_cipher(key: &[u8; 32]) -> Result<Aes256Gcm, NvsError> {
+        Aes256Gcm::new_from_slice(key).map_err(|_| NvsError::Crypto)
+    }
+
+    /// Domain-separate the wrap key so the master key is never used as a raw
+    /// AES key for two different record formats.
+    fn vault_wrap_key(master_key: &[u8; 32]) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(VAULT_KEY_DOMAIN);
+        h.update(master_key);
+        h.finalize().into()
+    }
+
+    /// Unwrap (or, when the vault is untouched, create and wrap) the vault
+    /// key. Returns the region buffer alongside so callers mutate one copy.
+    fn vault_open(
+        &mut self,
+        master_key: &[u8; 32],
+        create: bool,
+    ) -> Result<(Vec<u8>, [u8; 32]), NvsError> {
+        let mut region = self.read_vault_region()?;
+        let mut wrap_key = Self::vault_wrap_key(master_key);
+        if Self::vault_header_present(&region) {
+            let cipher = Self::vault_cipher(&wrap_key)?;
+            wrap_key.zeroize();
+            let nonce_bytes: [u8; 12] = region[8..20].try_into().map_err(|_| NvsError::Crypto)?;
+            let mut vk = [0u8; 32];
+            vk.copy_from_slice(&region[20..52]);
+            let tag = Tag::from_slice(&region[52..68]);
+            cipher
+                .decrypt_in_place_detached(Nonce::from_slice(&nonce_bytes), b"", &mut vk, tag)
+                .map_err(|_| {
+                    vk.zeroize();
+                    NvsError::Crypto
+                })?;
+            return Ok((region, vk));
+        }
+        if !create {
+            wrap_key.zeroize();
+            return Err(NvsError::NotInitialized);
+        }
+        let mut vk = [0u8; 32];
+        getrandom::getrandom(&mut vk).map_err(|_| NvsError::Crypto)?;
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::getrandom(&mut nonce_bytes).map_err(|_| NvsError::Crypto)?;
+        let cipher = Self::vault_cipher(&wrap_key)?;
+        wrap_key.zeroize();
+        let mut wrapped = vk;
+        let tag = cipher
+            .encrypt_in_place_detached(Nonce::from_slice(&nonce_bytes), b"", &mut wrapped)
+            .map_err(|_| NvsError::Crypto)?;
+        region[..VAULT_HEADER_SIZE].fill(0xFF);
+        region[..4].copy_from_slice(&VAULT_MAGIC);
+        region[4] = VAULT_VERSION;
+        region[5..8].fill(0);
+        region[8..20].copy_from_slice(&nonce_bytes);
+        region[20..52].copy_from_slice(&wrapped);
+        region[52..68].copy_from_slice(tag.as_slice());
+        Ok((region, vk))
+    }
+
+    fn vault_record_range(slot: usize) -> core::ops::Range<usize> {
+        let start = VAULT_HEADER_SIZE + slot * VAULT_RECORD_SIZE;
+        start..start + VAULT_RECORD_SIZE
+    }
+
+    fn vault_parse_record(slot: usize, record: &[u8]) -> Option<VaultEntryInfo> {
+        if record[0] != VAULT_RECORD_USED {
+            return None;
+        }
+        let label_len = (record[1] as usize).min(MAX_SEED_LABEL_LEN);
+        let label_str = core::str::from_utf8(&record[2..2 + label_len]).ok()?;
+        let mut label = heapless::String::new();
+        label.push_str(label_str).ok()?;
+        let mut commitment = [0u64; 5];
+        for (i, limb) in commitment.iter_mut().enumerate() {
+            let off = 34 + i * 8;
+            *limb = u64::from_le_bytes(record[off..off + 8].try_into().ok()?);
+        }
+        let ct_len = u16::from_le_bytes(record[86..88].try_into().ok()?);
+        if ct_len as usize > MAX_VAULT_PREIMAGE_LEN {
+            return None;
+        }
+        Some(VaultEntryInfo {
+            slot: slot as u8,
+            commitment,
+            label,
+            preimage_len: ct_len,
+        })
+    }
+
+    pub fn vault_entries(&mut self) -> Result<Vec<VaultEntryInfo>, NvsError> {
+        let region = self.read_vault_region()?;
+        if !Self::vault_header_present(&region) {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for slot in 0..MAX_VAULT_ENTRIES {
+            if let Some(entry) = Self::vault_parse_record(slot, &region[Self::vault_record_range(slot)])
+            {
+                out.push(entry);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn vault_store(
+        &mut self,
+        master_key: &[u8; 32],
+        label: &str,
+        commitment: [u64; 5],
+        preimage: &[u8],
+    ) -> Result<u8, NvsError> {
+        if preimage.is_empty() || preimage.len() > MAX_VAULT_PREIMAGE_LEN {
+            return Err(NvsError::InvalidSlot);
+        }
+        if label.len() > MAX_SEED_LABEL_LEN || !seed_label_valid(label) {
+            return Err(NvsError::InvalidLabel);
+        }
+        let (mut region, mut vk) = self.vault_open(master_key, true)?;
+
+        let mut free_slot = None;
+        for slot in 0..MAX_VAULT_ENTRIES {
+            match Self::vault_parse_record(slot, &region[Self::vault_record_range(slot)]) {
+                Some(entry) if entry.commitment == commitment => {
+                    vk.zeroize();
+                    return Err(NvsError::AlreadyInitialized);
+                }
+                Some(_) => {}
+                None => {
+                    if free_slot.is_none() {
+                        free_slot = Some(slot);
+                    }
+                }
+            }
+        }
+        let Some(slot) = free_slot else {
+            vk.zeroize();
+            return Err(NvsError::Full);
+        };
+
+        let cipher = Self::vault_cipher(&vk)?;
+        vk.zeroize();
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::getrandom(&mut nonce_bytes).map_err(|_| NvsError::Crypto)?;
+        let mut ct = vec![0u8; preimage.len()];
+        ct.copy_from_slice(preimage);
+        let tag = cipher
+            .encrypt_in_place_detached(Nonce::from_slice(&nonce_bytes), b"", &mut ct)
+            .map_err(|_| NvsError::Crypto)?;
+
+        let range = Self::vault_record_range(slot);
+        let record = &mut region[range];
+        record.fill(0xFF);
+        record[0] = VAULT_RECORD_USED;
+        record[1] = label.len() as u8;
+        record[2..2 + label.len()].copy_from_slice(label.as_bytes());
+        for (i, limb) in commitment.iter().enumerate() {
+            record[34 + i * 8..42 + i * 8].copy_from_slice(&limb.to_le_bytes());
+        }
+        record[74..86].copy_from_slice(&nonce_bytes);
+        record[86..88].copy_from_slice(&(preimage.len() as u16).to_le_bytes());
+        record[88..88 + ct.len()].copy_from_slice(&ct);
+        record[88 + ct.len()..88 + ct.len() + 16].copy_from_slice(tag.as_slice());
+
+        self.write_vault_region(&region)?;
+        Ok(slot as u8)
+    }
+
+    pub fn vault_reveal(
+        &mut self,
+        master_key: &[u8; 32],
+        slot: usize,
+    ) -> Result<Vec<u8>, NvsError> {
+        if slot >= MAX_VAULT_ENTRIES {
+            return Err(NvsError::InvalidSlot);
+        }
+        let (region, mut vk) = self.vault_open(master_key, false)?;
+        let record = &region[Self::vault_record_range(slot)];
+        let Some(entry) = Self::vault_parse_record(slot, record) else {
+            vk.zeroize();
+            return Err(NvsError::InvalidSlot);
+        };
+        let cipher = Self::vault_cipher(&vk)?;
+        vk.zeroize();
+        let len = entry.preimage_len as usize;
+        let mut plain = vec![0u8; len];
+        plain.copy_from_slice(&record[88..88 + len]);
+        let tag = Tag::from_slice(&record[88 + len..88 + len + 16]);
+        cipher
+            .decrypt_in_place_detached(Nonce::from_slice(&record[74..86]), b"", &mut plain, tag)
+            .map_err(|_| {
+                plain.zeroize();
+                NvsError::Crypto
+            })?;
+        Ok(plain)
+    }
+
+    pub fn vault_set_label(&mut self, slot: usize, label: &str) -> Result<(), NvsError> {
+        if slot >= MAX_VAULT_ENTRIES {
+            return Err(NvsError::InvalidSlot);
+        }
+        if label.len() > MAX_SEED_LABEL_LEN || (!label.is_empty() && !seed_label_valid(label)) {
+            return Err(NvsError::InvalidLabel);
+        }
+        let mut region = self.read_vault_region()?;
+        if !Self::vault_header_present(&region) {
+            return Err(NvsError::InvalidSlot);
+        }
+        let range = Self::vault_record_range(slot);
+        if Self::vault_parse_record(slot, &region[range.clone()]).is_none() {
+            return Err(NvsError::InvalidSlot);
+        }
+        let record = &mut region[range];
+        record[1] = label.len() as u8;
+        record[2..34].fill(0xFF);
+        record[2..2 + label.len()].copy_from_slice(label.as_bytes());
+        self.write_vault_region(&region)
+    }
+
+    pub fn vault_delete(&mut self, slot: usize) -> Result<(), NvsError> {
+        if slot >= MAX_VAULT_ENTRIES {
+            return Err(NvsError::InvalidSlot);
+        }
+        let mut region = self.read_vault_region()?;
+        if !Self::vault_header_present(&region) {
+            return Err(NvsError::InvalidSlot);
+        }
+        let range = Self::vault_record_range(slot);
+        if Self::vault_parse_record(slot, &region[range.clone()]).is_none() {
+            return Err(NvsError::InvalidSlot);
+        }
+        region[range].fill(0xFF);
+        self.write_vault_region(&region)
+    }
+
+    /// Re-wrap the vault key after a PIN change. No-op when the vault was
+    /// never initialized.
+    pub fn vault_rewrap(
+        &mut self,
+        old_master_key: &[u8; 32],
+        new_master_key: &[u8; 32],
+    ) -> Result<(), NvsError> {
+        let (mut region, mut vk) = match self.vault_open(old_master_key, false) {
+            Ok(v) => v,
+            Err(NvsError::NotInitialized) => return Ok(()),
+            Err(err) => return Err(err),
+        };
+        let mut wrap_key = Self::vault_wrap_key(new_master_key);
+        let cipher = Self::vault_cipher(&wrap_key);
+        wrap_key.zeroize();
+        let cipher = cipher?;
+        let mut nonce_bytes = [0u8; 12];
+        if getrandom::getrandom(&mut nonce_bytes).is_err() {
+            vk.zeroize();
+            return Err(NvsError::Crypto);
+        }
+        let mut wrapped = vk;
+        vk.zeroize();
+        let tag = cipher
+            .encrypt_in_place_detached(Nonce::from_slice(&nonce_bytes), b"", &mut wrapped)
+            .map_err(|_| NvsError::Crypto)?;
+        region[8..20].copy_from_slice(&nonce_bytes);
+        region[20..52].copy_from_slice(&wrapped);
+        region[52..68].copy_from_slice(tag.as_slice());
+        self.write_vault_region(&region)
     }
 
     fn attempts_used(&mut self, header: &Header) -> Result<u8, NvsError> {

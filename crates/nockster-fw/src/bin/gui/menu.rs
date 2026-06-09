@@ -55,7 +55,7 @@ struct MenuDefinition {
     label: &'static str,
 }
 
-const SETTINGS_MENU: [MenuDefinition; 6] = [
+const SETTINGS_MENU: [MenuDefinition; 7] = [
     MenuDefinition {
         item: MenuItem::Wallets,
         label: "Wallets",
@@ -63,6 +63,10 @@ const SETTINGS_MENU: [MenuDefinition; 6] = [
     MenuDefinition {
         item: MenuItem::AddSeed,
         label: "Add Seed",
+    },
+    MenuDefinition {
+        item: MenuItem::Vault,
+        label: "Vault",
     },
     MenuDefinition {
         item: MenuItem::Theme,
@@ -100,7 +104,7 @@ fn menu_button(index: usize, definition: MenuDefinition) -> ButtonHit {
     }
 }
 
-fn menu_buttons() -> [ButtonHit; 6] {
+fn menu_buttons() -> [ButtonHit; 7] {
     [
         menu_button(0, SETTINGS_MENU[0]),
         menu_button(1, SETTINGS_MENU[1]),
@@ -108,6 +112,7 @@ fn menu_buttons() -> [ButtonHit; 6] {
         menu_button(3, SETTINGS_MENU[3]),
         menu_button(4, SETTINGS_MENU[4]),
         menu_button(5, SETTINGS_MENU[5]),
+        menu_button(6, SETTINGS_MENU[6]),
     ]
 }
 
@@ -448,14 +453,37 @@ pub fn wallets_viewport() -> Rectangle {
 
 /// Full wallet screen: header, slot count, and the scrollable slot list.
 pub fn render_wallets(display: &mut GuiDisplay<'_>, rows: &[WalletRow], scroll: &mut ScrollState) {
-    let _ = display.clear(palette::background());
-    render_header_with_back(display, "Wallets", palette::surface_high(), false);
-
-    let subtle = MonoTextStyle::new(&FONT_6X10, palette::text());
     let mut summary = HString::<32>::new();
     let _ = write!(summary, "{} of {} slots", rows.len(), MAX_SEED_SLOTS);
+    render_row_list(display, "Wallets", summary.as_str(), rows, scroll);
+}
+
+/// Vault screen: same list chrome as Wallets, rows are preimage entries
+/// (label + commitment base58).
+pub fn render_vault(display: &mut GuiDisplay<'_>, rows: &[WalletRow], scroll: &mut ScrollState) {
+    let mut summary = HString::<32>::new();
+    let _ = write!(
+        summary,
+        "{} of {} secrets",
+        rows.len(),
+        nockster_core::MAX_VAULT_ENTRIES
+    );
+    render_row_list(display, "Vault", summary.as_str(), rows, scroll);
+}
+
+fn render_row_list(
+    display: &mut GuiDisplay<'_>,
+    title: &str,
+    summary: &str,
+    rows: &[WalletRow],
+    scroll: &mut ScrollState,
+) {
+    let _ = display.clear(palette::background());
+    render_header_with_back(display, title, palette::surface_high(), false);
+
+    let subtle = MonoTextStyle::new(&FONT_6X10, palette::text());
     let _ = Text::with_alignment(
-        summary.as_str(),
+        summary,
         Point::new(8, header_height() + 16),
         subtle,
         Alignment::Left,
@@ -540,6 +568,77 @@ pub fn render_wallet_delete_confirm(display: &mut GuiDisplay<'_>, row: Option<&W
             slot_line.as_str(),
             name,
             "seed will be removed",
+            "cannot be undone",
+        ],
+    );
+
+    for hit in wallet_delete_buttons(row.index) {
+        draw_wallet_detail_button(display, hit, false);
+    }
+}
+
+/// Vault entry detail: label, slot, and the full Tip5 commitment (the `%hax`
+/// lock value), with the same Edit/Delete buttons as the wallet detail.
+pub fn render_vault_detail(display: &mut GuiDisplay<'_>, row: Option<&WalletRow>) {
+    let _ = display.clear(palette::background());
+    render_header_with_back(display, "Secret", palette::surface_high(), false);
+
+    let Some(row) = row else {
+        let _ = draw_about_card(display, header_height() + 18, "Secret", &["not found"]);
+        return;
+    };
+
+    let mut slot_line = HString::<32>::new();
+    let _ = write!(slot_line, "slot {}", row.index);
+    let mut name_line = HString::<40>::new();
+    let _ = name_line.push_str("nick ");
+    if row.label.is_empty() {
+        let _ = name_line.push_str("(unnamed)");
+    } else {
+        push_truncated(&mut name_line, row.label.as_str(), 26);
+    }
+    let y = draw_about_card(
+        display,
+        header_height() + 8,
+        "Entry",
+        &[slot_line.as_str(), name_line.as_str(), "hax commitment:"],
+    );
+    let _ = draw_wallet_address_card(display, y, row.pkh.as_str());
+
+    for hit in wallet_detail_buttons(row.index) {
+        draw_wallet_detail_button(display, hit, false);
+    }
+}
+
+pub fn render_vault_delete_confirm(display: &mut GuiDisplay<'_>, row: Option<&WalletRow>) {
+    let _ = display.clear(palette::background());
+    render_header_with_back(display, "Delete", palette::surface_high(), false);
+
+    let Some(row) = row else {
+        let _ = draw_about_card(
+            display,
+            header_height() + 18,
+            "Delete",
+            &["secret not found"],
+        );
+        return;
+    };
+
+    let mut slot_line = HString::<32>::new();
+    let _ = write!(slot_line, "delete secret {}?", row.index);
+    let name = if row.label.is_empty() {
+        "(unnamed)"
+    } else {
+        row.label.as_str()
+    };
+    let _ = draw_about_card(
+        display,
+        header_height() + 24,
+        "Confirm",
+        &[
+            slot_line.as_str(),
+            name,
+            "preimage will be erased",
             "cannot be undone",
         ],
     );

@@ -661,3 +661,258 @@ pub fn cheetah_pkh_b58(pubkey_x: Vec<String>, pubkey_y: Vec<String>) -> Result<S
         .map_err(|_| JsValue::from_str("failed to hash pubkey"))?;
     Ok(digest.to_b58())
 }
+
+// --- Wallet keyfile interop (keys.export / master-pubkey.export) and
+// --- preimage-vault noun helpers. Uses the pokenoun codec so the byte-level
+// --- noun encoding matches the firmware and the nockchain wallet.
+mod wallet_keyfile {
+    use super::*;
+    use tx_types::pokenoun::{cue, jam, Arena, Noun};
+
+    fn uncons(noun: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
+        match noun {
+            Noun::Cell(id) => {
+                let cell = arena.cell(id);
+                Some((cell.head, cell.tail))
+            }
+            _ => None,
+        }
+    }
+
+    fn atom_text(noun: Noun, arena: &Arena) -> Option<String> {
+        match noun {
+            Noun::Atom(id) => core::str::from_utf8(arena.atom_bytes(id))
+                .ok()
+                .map(|s| s.to_string()),
+            _ => None,
+        }
+    }
+
+    fn atom_is(noun: Noun, arena: &Arena, tag: &[u8]) -> bool {
+        match noun {
+            Noun::Atom(id) => arena.atom_eq_bytes(id, tag),
+            _ => false,
+        }
+    }
+
+    #[derive(Serialize, Default)]
+    pub struct KeyfileSummary {
+        /// Seed phrases found in the file (the wallet stores the mnemonic as
+        /// a `%seed` entry); usually zero or one.
+        pub seedphrases: Vec<String>,
+        pub coil_pub_count: u32,
+        pub coil_prv_count: u32,
+        pub label_count: u32,
+        pub watch_count: u32,
+        /// Coil versions seen (0 = pre-Oct-2025 addressing, 1 = current).
+        pub versions: Vec<u8>,
+        pub entry_count: u32,
+    }
+
+    /// Walk one `meta` noun: `[%coil coil-v3]`, `[%label @t]`, `[%seed @t]`,
+    /// or `[%watch-key @t]`.
+    fn scan_meta(meta: Noun, arena: &Arena, out: &mut KeyfileSummary) {
+        let Some((tag, payload)) = uncons(meta, arena) else {
+            return;
+        };
+        if atom_is(tag, arena, b"seed") {
+            if let Some(text) = atom_text(payload, arena) {
+                if !text.is_empty() {
+                    out.seedphrases.push(text);
+                }
+            }
+        } else if atom_is(tag, arena, b"label") {
+            out.label_count += 1;
+        } else if atom_is(tag, arena, b"watch-key") {
+            out.watch_count += 1;
+        } else if atom_is(tag, arena, b"coil") {
+            // coil-v3: [%0|%1 [key cc]]; legacy coil-v0 is bare [key cc].
+            let (version, coil_data) = match uncons(payload, arena) {
+                Some((head, tail)) if matches!(head, Noun::Atom(_)) => {
+                    let v = match head {
+                        Noun::Atom(id) => arena.atom_u64(id).unwrap_or(0) as u8,
+                        _ => 0,
+                    };
+                    (v, tail)
+                }
+                _ => (0, payload),
+            };
+            if !out.versions.contains(&version) {
+                out.versions.push(version);
+            }
+            if let Some((key, _cc)) = uncons(coil_data, arena) {
+                if let Some((key_tag, _key_atom)) = uncons(key, arena) {
+                    if atom_is(key_tag, arena, b"pub") {
+                        out.coil_pub_count += 1;
+                    } else if atom_is(key_tag, arena, b"prv") {
+                        out.coil_prv_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn parse(bytes: &[u8]) -> Result<KeyfileSummary, String> {
+        let mut arena = Arena::new();
+        let root = cue(bytes, &mut arena).map_err(|_| "not a valid jammed noun".to_string())?;
+        let mut out = KeyfileSummary::default();
+        // keys.export is `(list [trek meta])`.
+        let mut cursor = root;
+        while let Some((entry, rest)) = uncons(cursor, &arena) {
+            out.entry_count += 1;
+            if let Some((_trek, meta)) = uncons(entry, &arena) {
+                scan_meta(meta, &arena, &mut out);
+            }
+            cursor = rest;
+            if out.entry_count > 4096 {
+                return Err("keyfile too large".to_string());
+            }
+        }
+        if out.entry_count == 0 {
+            return Err("no entries found (is this a keys.export file?)".to_string());
+        }
+        Ok(out)
+    }
+
+
+    /// Affine-point serialization matching `ser-p` on the Hoon side (and
+    /// `tx_types::crypto::cheetah_nostd::ser_a_pt`, which is cfg'd out of std
+    /// builds): 0x01 sentinel, then Y and X limbs big-endian, high limb first.
+    fn ser_a_pt(pk: &([u64; 6], [u64; 6])) -> [u8; 97] {
+        let (x, y) = pk;
+        let mut out = [0u8; 97];
+        out[0] = 0x01;
+        let mut off = 1;
+        for &w in y.iter().rev().chain(x.iter().rev()) {
+            out[off..off + 8].copy_from_slice(&w.to_be_bytes());
+            off += 8;
+        }
+        out
+    }
+
+    /// Build the jammed `coil` noun the nockchain wallet's
+    /// `import-master-pubkey` expects: `[%coil [%1 [[%pub p=@] cc=@]]]`.
+    /// Atom byte order follows the CKD HMAC convention (atom LE bytes ==
+    /// `ser_a_pt` / chain-code array order), which is what the Hoon side
+    /// produces and consumes.
+    pub fn build_master_pubkey(x: [u64; 6], y: [u64; 6], chain_code: &[u8]) -> Vec<u8> {
+        // `ser_a_pt` (like Hoon's `hmac-sha512l` input rendering) is the
+        // atom's MSB-first octet stream; pokenoun atoms take LE bytes, so
+        // both atoms are byte-reversed here. The 0x01 ser-p sentinel becomes
+        // the atom's top byte, preserving the fixed 97-byte width.
+        let mut ser = ser_a_pt(&(x, y));
+        ser.reverse();
+        let mut cc_le = [0u8; 32];
+        for (dst, src) in cc_le.iter_mut().zip(chain_code.iter().rev()) {
+            *dst = *src;
+        }
+        let mut arena = Arena::new();
+        let tag_coil = arena.alloc_atom_bytes(b"coil");
+        let tag_pub = arena.alloc_atom_bytes(b"pub");
+        let pub_atom = arena.alloc_atom_bytes(&ser);
+        let cc_atom = arena.alloc_atom_bytes(&cc_le);
+        let key = arena.alloc_cell(tag_pub, pub_atom);
+        let coil_data = arena.alloc_cell(key, cc_atom);
+        let version = arena.alloc_atom_u64(1);
+        let coil_v3 = arena.alloc_cell(version, coil_data);
+        let coil = arena.alloc_cell(tag_coil, coil_v3);
+        jam(coil, &arena)
+    }
+
+    pub fn jam_atom(bytes: &[u8]) -> Vec<u8> {
+        let mut arena = Arena::new();
+        let atom = arena.alloc_atom_bytes(bytes);
+        jam(atom, &arena)
+    }
+
+    pub fn cue_atom(bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let mut arena = Arena::new();
+        let root = cue(bytes, &mut arena).map_err(|_| "not a valid jammed noun".to_string())?;
+        match root {
+            Noun::Atom(id) => Ok(arena.atom_bytes(id).to_vec()),
+            Noun::Cell(_) => Err("noun is a cell, not an atom".to_string()),
+        }
+    }
+
+    pub fn commitment_b58(bytes: &[u8]) -> Result<String, String> {
+        let mut arena = Arena::new();
+        let root = cue(bytes, &mut arena).map_err(|_| "not a valid jammed noun".to_string())?;
+        let digest = tx_types::pokenoun::hash_noun_varlen(root, &arena)
+            .map_err(|_| "tip5 hash failed".to_string())?;
+        Ok(Hash { values: digest }.to_b58())
+    }
+}
+
+/// Parse a nockchain-wallet `keys.export` file and summarize its contents
+/// (seed phrases, key coils, labels, watch entries).
+#[wasm_bindgen]
+pub fn parse_wallet_keyfile(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let summary = wallet_keyfile::parse(bytes).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&summary).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Build a `master-pubkey.export` file (jammed coil) the nockchain wallet can
+/// import for watch-only use, from device-exported master pubkey + chain code.
+#[wasm_bindgen]
+pub fn build_master_pubkey_export(
+    pubkey_x: Vec<String>,
+    pubkey_y: Vec<String>,
+    chain_code: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    if pubkey_x.len() != 6 || pubkey_y.len() != 6 {
+        return Err(JsValue::from_str("expected 6 limbs for x and y"));
+    }
+    if chain_code.len() != 32 {
+        return Err(JsValue::from_str("expected 32-byte chain code"));
+    }
+    let mut x = [0u64; 6];
+    let mut y = [0u64; 6];
+    for (i, s) in pubkey_x.iter().enumerate() {
+        x[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in x"))?;
+    }
+    for (i, s) in pubkey_y.iter().enumerate() {
+        y[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in y"))?;
+    }
+    Ok(wallet_keyfile::build_master_pubkey(x, y, chain_code))
+}
+
+/// Wrap raw bytes as a jammed atom noun — the usual shape for a `%hax`
+/// preimage going into the device vault.
+#[wasm_bindgen]
+pub fn jam_byte_atom(bytes: &[u8]) -> Vec<u8> {
+    wallet_keyfile::jam_atom(bytes)
+}
+
+/// Extract the raw bytes of a jammed atom noun (e.g. a revealed vault
+/// preimage). Errors if the noun is a cell.
+#[wasm_bindgen]
+pub fn cue_byte_atom(bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    wallet_keyfile::cue_atom(bytes).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Tip5 hash-noun commitment (base58) of a jammed preimage — the value a
+/// `%hax` lock commits to. Host-side preview; the device computes its own.
+#[wasm_bindgen]
+pub fn noun_commitment_b58(bytes: &[u8]) -> Result<String, JsValue> {
+    wallet_keyfile::commitment_b58(bytes).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Render a Tip5 digest given as five decimal u64 limb strings (e.g. a vault
+/// commitment from the device) in the chain's base58 hash encoding.
+#[wasm_bindgen]
+pub fn tip5_limbs_b58(limbs: Vec<String>) -> Result<String, JsValue> {
+    if limbs.len() != 5 {
+        return Err(JsValue::from_str("expected 5 limbs"));
+    }
+    let mut values = [0u64; 5];
+    for (i, s) in limbs.iter().enumerate() {
+        values[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb"))?;
+    }
+    Ok(Hash { values }.to_b58())
+}

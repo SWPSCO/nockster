@@ -145,6 +145,11 @@ const requestBuilders = {
   GetUpdateBootStatus: { type: 'GetUpdateBootStatus' },
   Reboot: { type: 'Reboot' },
   GetAddressBook: { type: 'GetAddressBook' },
+  VaultStore: { type: 'VaultStore', label: 'htlc-1', preimage: filled(24, 0x5a) },
+  VaultList: { type: 'VaultList' },
+  VaultReveal: { type: 'VaultReveal', slot: 2 },
+  VaultDelete: { type: 'VaultDelete', slot: 2 },
+  GetMasterPubkey: { type: 'GetMasterPubkey', slot: 0 },
 };
 
 const frameBuilders = {
@@ -242,6 +247,22 @@ const responseValidators = {
     assert.equal(m.entries.length, 1);
     assert.equal(m.entries[0].label, 'alice');
     assert.equal(m.entries[0].pkh, 'addr1');
+  },
+  OkVaultEntries: (m) => {
+    assert.equal(m.entries.length, 1);
+    assert.equal(m.entries[0].slot, 2);
+    assert.equal(m.entries[0].commitment[4], 0xffffffffffffffffn);
+    assert.equal(m.entries[0].label, 'htlc-1');
+    assert.equal(m.entries[0].preimage_len, 24);
+  },
+  OkVaultPreimage: (m) => {
+    assert.equal(m.commitment[0], 1n);
+    assert.equal(toHex(m.preimage), '5a'.repeat(24));
+  },
+  OkMasterPubkey: (m) => {
+    assert.equal(m.x[0], 1n);
+    assert.equal(m.y[5], 0xffffffffffffffffn);
+    assert.equal(toHex(m.chain_code), '42'.repeat(32));
   },
 };
 

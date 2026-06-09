@@ -20,6 +20,12 @@ signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waves
 - Signed firmware update bundles with on-device manifest and image validation.
 - WASM transaction composer/parser shared by the browser app.
 - Tauri desktop wrapper for packaging the web UI as a local app.
+- Encrypted preimage vault for `%hax` lock secrets (HTLCs, commit-reveal),
+  with device-computed Tip5 commitments and on-screen reveal confirmation.
+  See [docs/preimage-vault.md](docs/preimage-vault.md).
+- `keys.export` / `master-pubkey.export` interop with the official
+  nockchain-wallet CLI: import its keyfiles, export watch-only keyfiles it
+  can import. See [docs/wallet-keyfile-interop.md](docs/wallet-keyfile-interop.md).
 
 ## User Workflows
 
@@ -28,6 +34,9 @@ signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waves
 - Unlock or lock the device from the screen, CLI, or browser.
 - Compose or load a transaction draft, review it on the device, and export the
   signed transaction.
+- Store, reveal, and delete `%hax` preimages in the on-device vault.
+- Export a slot's master pubkey as a watch-only keyfile for nockchain-wallet,
+  or import a nockchain-wallet `keys.export` seed phrase.
 - Calibrate the touchscreen and run hardware smoke checks.
 - Install signed firmware updates from a hosted update page or from local
   release artifacts.
@@ -44,8 +53,9 @@ signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waves
 - `nockster-js`: TypeScript device client used by the web app.
 - `web`: Vite/React browser UI.
 - `src-tauri`: desktop app wrapper. See [TAURI_SETUP.md](TAURI_SETUP.md).
-- `docs`: hardware smoke checks, security/provisioning notes, update flow, and
-  roadmap.
+- `docs`: hardware smoke checks, security/provisioning notes, update flow,
+  preimage vault and wallet-keyfile interop guides, and the roadmap of
+  potential paths forward ([docs/roadmap-ideas.md](docs/roadmap-ideas.md)).
 
 ## Quick Commands
 
@@ -55,6 +65,9 @@ signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waves
 - Flash and erase persistent device data: `make wipe`
 - Build the CLI: `make cli`
 - Seed a wiped device over HID: `nockster-cli seed --seedphrase "..." --pin 1234`
+  (or `--keyfile keys.export` to use a nockchain-wallet export)
+- Manage the preimage vault: `nockster-cli vault list|store|reveal|delete`
+- Export a watch-only keyfile: `nockster-cli export-master-pubkey --slot 0`
 - Check device info: `nockster-cli info`
 - Run a hardware smoke check:
   `target/x86_64-unknown-linux-gnu/release/nockster-cli smoke`

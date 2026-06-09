@@ -18,6 +18,7 @@ use crate::{seed_store, session};
 use esp_hal::time::Duration;
 use nockster_fw::nvs_store::{NvsError, NvsStore};
 use nockster_fw::security::read_security_status;
+use zeroize::Zeroize;
 
 const ADDRESS_BOOK_PAYLOAD_MAX: usize = 4 + MAX_DEVICE_ADDRESS_BOOK_ENTRIES
     * (MAX_ADDRESS_BOOK_LABEL_LEN + MAX_ADDRESS_BOOK_PKH_LEN + 2);
@@ -48,6 +49,147 @@ pub fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
         Frame::One(Request::SignSpendHashFor { .. }) => Some("Approve spend?"),
         Frame::One(Request::DeleteSeed { .. }) => Some("Delete seed?"),
         Frame::One(Request::Reset) => Some("Factory reset?"),
+        Frame::One(Request::VaultStore { .. }) => Some("Store secret?"),
+        Frame::One(Request::VaultReveal { .. }) => Some("Reveal secret?"),
+        Frame::One(Request::VaultDelete { .. }) => Some("Delete secret?"),
+        Frame::One(Request::GetMasterPubkey { .. }) => Some("Export pubkey?"),
+        _ => None,
+    }
+}
+
+/// Vault and master-pubkey requests. All of these arrive here only after the
+/// on-screen confirmation (except VaultList, which is metadata-only).
+pub fn handle_vault_request(req: &Request, locked: bool) -> Option<Response> {
+    match req {
+        Request::VaultList => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            Some(match NvsStore::new().vault_entries() {
+                Ok(entries) => Response::OkVaultEntries(entries),
+                Err(NvsError::Flash) => Response::Err { code: ERR_FLASH },
+                Err(_) => Response::OkVaultEntries(alloc::vec::Vec::new()),
+            })
+        }
+        Request::VaultStore { label, preimage } => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            if preimage.is_empty() || preimage.len() > nockster_core::MAX_VAULT_PREIMAGE_LEN {
+                return Some(Response::Err { code: ERR_OVERFLOW });
+            }
+            // The commitment is computed here, from the bytes that will be
+            // stored — never trusted from the host.
+            let commitment =
+                match nockster_core::draft_sign::noun_commitment_v1(preimage.as_slice()) {
+                    Ok(digest) => digest,
+                    Err(_) => {
+                        return Some(Response::Err {
+                            code: ERR_BAD_COBS_OR_POSTCARD,
+                        });
+                    }
+                };
+            let Some(mut master_key) = seed_store::master_key_copy() else {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            };
+            let result =
+                NvsStore::new().vault_store(&master_key, label.as_str(), commitment, preimage);
+            master_key.zeroize();
+            Some(match result {
+                Ok(_slot) => match NvsStore::new().vault_entries() {
+                    Ok(entries) => Response::OkVaultEntries(entries),
+                    Err(_) => Response::OkVaultEntries(alloc::vec::Vec::new()),
+                },
+                Err(NvsError::Full) | Err(NvsError::AlreadyInitialized) => {
+                    Response::Err { code: ERR_OVERFLOW }
+                }
+                Err(NvsError::InvalidLabel) => Response::Err {
+                    code: ERR_BAD_COBS_OR_POSTCARD,
+                },
+                Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
+                Err(_) => Response::Err { code: ERR_FLASH },
+            })
+        }
+        Request::VaultReveal { slot } => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            let Some(mut master_key) = seed_store::master_key_copy() else {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            };
+            let mut nvs = NvsStore::new();
+            let result = nvs.vault_reveal(&master_key, *slot as usize);
+            master_key.zeroize();
+            Some(match result {
+                Ok(preimage) => {
+                    let commitment = nvs
+                        .vault_entries()
+                        .ok()
+                        .and_then(|entries| {
+                            entries
+                                .into_iter()
+                                .find(|entry| entry.slot == *slot)
+                                .map(|entry| entry.commitment)
+                        })
+                        .unwrap_or([0u64; 5]);
+                    Response::OkVaultPreimage {
+                        commitment,
+                        preimage,
+                    }
+                }
+                Err(NvsError::InvalidSlot) | Err(NvsError::NotInitialized) => {
+                    Response::Err { code: ERR_NO_SEED }
+                }
+                Err(NvsError::Crypto) => Response::Err { code: ERR_CRYPTO },
+                Err(_) => Response::Err { code: ERR_FLASH },
+            })
+        }
+        Request::VaultDelete { slot } => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            Some(match NvsStore::new().vault_delete(*slot as usize) {
+                Ok(()) => match NvsStore::new().vault_entries() {
+                    Ok(entries) => Response::OkVaultEntries(entries),
+                    Err(_) => Response::OkVaultEntries(alloc::vec::Vec::new()),
+                },
+                Err(NvsError::InvalidSlot) | Err(NvsError::NotInitialized) => {
+                    Response::Err { code: ERR_NO_SEED }
+                }
+                Err(_) => Response::Err { code: ERR_FLASH },
+            })
+        }
+        Request::GetMasterPubkey { slot } => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            let Ok(mut seed) = session::get_seed_for_slot(*slot as usize) else {
+                return Some(Response::Err { code: ERR_NO_SEED });
+            };
+            let (mut sk, chain_code) = nockster_core::cheetah::master_from_seed(&seed);
+            seed.zeroize();
+            let pk = nockster_core::cheetah::cheetah_pub_from_sk(sk);
+            sk.zeroize();
+            Some(Response::OkMasterPubkey {
+                x: pk.0,
+                y: pk.1,
+                chain_code,
+            })
+        }
         _ => None,
     }
 }

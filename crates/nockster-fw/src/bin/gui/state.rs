@@ -26,6 +26,9 @@ pub enum GuiMode {
     Wallets,
     WalletDetail,
     WalletDeleteConfirm,
+    Vault,
+    VaultDetail,
+    VaultDeleteConfirm,
     LabelEntry,
 }
 
@@ -34,6 +37,7 @@ pub enum GuiMode {
 pub enum MenuItem {
     Wallets,
     AddSeed,
+    Vault,
     Theme,
     About,
     Calibrate,
@@ -101,12 +105,18 @@ pub enum GuiInteraction {
     TouchCalibrationComplete(nockster_core::TouchCalibration),
     Menu(MenuItem),
     Wallet(WalletInteraction),
+    VaultOp(VaultInteraction),
     Label(LabelInteraction),
     ExitDiagnostics,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalletInteraction {
+    DeleteConfirmed { slot: u8 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultInteraction {
     DeleteConfirmed { slot: u8 },
 }
 

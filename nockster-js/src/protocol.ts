@@ -251,7 +251,12 @@ export type Request =
   | { type: 'GetReleaseInfo' }
   | { type: 'GetUpdateBootStatus' }
   | { type: 'Reboot' }
-  | { type: 'GetAddressBook' };
+  | { type: 'GetAddressBook' }
+  | { type: 'VaultStore'; label: string; preimage: Uint8Array }
+  | { type: 'VaultList' }
+  | { type: 'VaultReveal'; slot: number }
+  | { type: 'VaultDelete'; slot: number }
+  | { type: 'GetMasterPubkey'; slot: number };
 
 export interface CheetahPubInfo {
   slot: number;
@@ -284,7 +289,19 @@ export type Response =
   | { type: 'OkReleaseInfo'; info: ReleaseInfo }
   | { type: 'OkUpdateBootStatus'; status: UpdateBootStatus }
   | { type: 'OkAddressBook'; entries: DeviceAddressBookEntry[] }
+  | { type: 'OkVaultEntries'; entries: VaultEntryInfo[] }
+  | { type: 'OkVaultPreimage'; commitment: bigint[]; preimage: Uint8Array }
+  | { type: 'OkMasterPubkey'; x: bigint[]; y: bigint[]; chain_code: Uint8Array }
   | { type: 'Err'; code: number };
+
+/** One preimage-vault slot. The commitment is the device-computed Tip5
+ * hash-noun digest of the stored preimage (the `%hax` lock value). */
+export interface VaultEntryInfo {
+  slot: number;
+  commitment: bigint[];
+  label: string;
+  preimage_len: number;
+}
 
 export interface Msg<T> {
   v: number;
@@ -325,6 +342,10 @@ export const FEATURE_RELEASE_INFO = 1 << 11;
 export const FEATURE_UPDATE_BOOT_STATUS = 1 << 12;
 export const FEATURE_DEVICE_REBOOT = 1 << 13;
 export const FEATURE_DEVICE_ADDRESS_BOOK = 1 << 14;
+export const FEATURE_PREIMAGE_VAULT = 1 << 15;
+export const FEATURE_MASTER_PUBKEY_EXPORT = 1 << 16;
+export const MAX_VAULT_ENTRIES = 8;
+export const MAX_VAULT_PREIMAGE_LEN = 320;
 export const NOCKSTER_UPDATE_HARDWARE_TARGET = 'esp32s3-touch-lcd-1.47';
 export const UPDATE_BUILD_PROFILE_DEV = 'dev';
 export const UPDATE_BUILD_PROFILE_CHIP_SECURITY = 'chip-security';
@@ -1406,6 +1427,26 @@ export function serializeRequest(req: Request): Uint8Array {
     case 'GetAddressBook':
       w.writeVarint(41);
       break;
+    case 'VaultStore':
+      w.writeVarint(42);
+      w.writeString(req.label);
+      w.writeBytes(req.preimage);
+      break;
+    case 'VaultList':
+      w.writeVarint(43);
+      break;
+    case 'VaultReveal':
+      w.writeVarint(44);
+      w.writeU8(req.slot);
+      break;
+    case 'VaultDelete':
+      w.writeVarint(45);
+      w.writeU8(req.slot);
+      break;
+    case 'GetMasterPubkey':
+      w.writeVarint(46);
+      w.writeU8(req.slot);
+      break;
   }
 
   return w.toBytes();
@@ -1572,6 +1613,32 @@ export function deserializeResponse(data: Uint8Array): Response {
       return { type: 'OkUpdateBootStatus', status: deserializeUpdateBootStatus(r) };
     case 23:
       return { type: 'OkAddressBook', entries: deserializeDeviceAddressBookEntriesFromReader(r) };
+    case 24: {
+      const count = r.readVarint();
+      const entries: VaultEntryInfo[] = [];
+      for (let i = 0; i < count; i++) {
+        entries.push({
+          slot: r.readU8(),
+          commitment: r.readU64Array(5),
+          label: r.readString(),
+          preimage_len: r.readVarint(),
+        });
+      }
+      return { type: 'OkVaultEntries', entries };
+    }
+    case 25:
+      return {
+        type: 'OkVaultPreimage',
+        commitment: r.readU64Array(5),
+        preimage: r.readBytes(),
+      };
+    case 26:
+      return {
+        type: 'OkMasterPubkey',
+        x: r.readU64Array(6),
+        y: r.readU64Array(6),
+        chain_code: r.readFixedBytes(32),
+      };
     default:
       throw new Error(`Unknown response variant: ${variant}`);
   }

@@ -779,6 +779,19 @@ fn cheetah_pubkey_noun(arena: &mut Arena, pk_coords: ([u64; 6], [u64; 6])) -> No
     build_tuple(arena, &[x_noun, y_noun, inf_noun])
 }
 
+/// Tip5 `hash-noun` digest of a jammed noun — the value a `%hax` lock commits
+/// to on-chain for this preimage (tx-engine: `(hash-noun:hax pre)`).
+pub fn noun_commitment_v1(preimage_jam: &[u8]) -> Result<[u64; 5], SignDraftError> {
+    let mut arena = Arena::new();
+    let root = cue(preimage_jam, &mut arena)?;
+    Ok(tip5::hash_noun_varlen(root, &arena)?)
+}
+
+/// Base58 rendering of a Tip5 digest, matching the chain's hash encoding.
+pub fn tip5_digest_b58(digest: [u64; 5]) -> String {
+    digest_to_b58(digest)
+}
+
 pub fn cheetah_pubkey_pkh_v1(pk_coords: ([u64; 6], [u64; 6])) -> Result<String, SignDraftError> {
     let mut arena = Arena::new();
     let pk_noun = cheetah_pubkey_noun(&mut arena, pk_coords);

@@ -2083,3 +2083,25 @@ body.app-device .tab-btn {
   white-space: nowrap;
   vertical-align: middle;
 }
+
+/* Preimage vault + keyfile interop */
+.keyfile-import-label {
+  display: inline;
+}
+
+.keyfile-import-link {
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.vault-revealed .pubkey-text {
+  word-break: break-all;
+  user-select: all;
+}
+
+.vault-jam-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}

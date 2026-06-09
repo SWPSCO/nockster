@@ -26,6 +26,8 @@ import {
   MAX_DEVICE_ADDRESS_BOOK_ENTRIES,
   MAX_ADDRESS_BOOK_LABEL_LEN,
   MAX_ADDRESS_BOOK_PKH_LEN,
+  MAX_VAULT_PREIMAGE_LEN,
+  hexToBytes,
 } from 'nockster-js';
 import type {
   BuildInfo,
@@ -34,6 +36,7 @@ import type {
   SecurityStatus,
   SeedSlotLabel,
   UpdateBootStatus,
+  VaultEntryInfo,
 } from 'nockster-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import { createSerialTransport } from './serial';
@@ -268,7 +271,21 @@ function App() {
   const [addressBookPkh, setAddressBookPkh] = useState('');
   const [addressBookStatus, setAddressBookStatus] = useState('');
   const [syncingAddressBook, setSyncingAddressBook] = useState(false);
-  const [walletPanelView, setWalletPanelView] = useState<'slots' | 'addresses'>('slots');
+  const [walletPanelView, setWalletPanelView] = useState<'slots' | 'addresses' | 'vault'>('slots');
+
+  // Preimage vault state
+  const [vaultEntries, setVaultEntries] = useState<VaultEntryInfo[] | null>(null);
+  const [vaultBusy, setVaultBusy] = useState(false);
+  const [vaultStatus, setVaultStatus] = useState('');
+  const [vaultLabel, setVaultLabel] = useState('');
+  const [vaultSecretHex, setVaultSecretHex] = useState('');
+  const [vaultInputIsJam, setVaultInputIsJam] = useState(false);
+  const [vaultRevealed, setVaultRevealed] = useState<{
+    slot: number;
+    label: string;
+    jamHex: string;
+    atomHex: string | null;
+  } | null>(null);
   const [slotBalances, setSlotBalances] = useState<Record<number, SlotBalance>>({});
   const [balanceStatus, setBalanceStatus] = useState('');
   const [syncingBalances, setSyncingBalances] = useState(false);
@@ -1640,20 +1657,191 @@ function App() {
     }
   };
 
-  const downloadSignedTx = () => {
-    if (!signedTxBytes || !txInfo) return;
-
-    const ab = new ArrayBuffer(signedTxBytes.byteLength);
-    new Uint8Array(ab).set(signedTxBytes);
+  const downloadBytesAs = (filename: string, bytes: Uint8Array) => {
+    const ab = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(ab).set(bytes);
     const blob = new Blob([ab], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${txInfo.tx_id.slice(0, 16)}.tx`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const downloadSignedTx = () => {
+    if (!signedTxBytes || !txInfo) return;
+    downloadBytesAs(`${txInfo.tx_id.slice(0, 16)}.tx`, signedTxBytes);
+  };
+
+  const vaultCommitmentB58 = useCallback(
+    (commitment: bigint[]): string => {
+      if (!wasm) return commitment.map((limb) => limb.toString(16)).join(':');
+      try {
+        return wasm.tip5_limbs_b58(commitment.map((limb) => limb.toString()));
+      } catch {
+        return commitment.map((limb) => limb.toString(16)).join(':');
+      }
+    },
+    [wasm],
+  );
+
+  const refreshVault = async () => {
+    setVaultBusy(true);
+    setVaultStatus('');
+    try {
+      setVaultEntries(await device.vaultList());
+    } catch (error: any) {
+      setVaultStatus(`Vault list failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setVaultBusy(false);
+    }
+  };
+
+  const storeVaultSecret = async () => {
+    if (!wasm) {
+      setVaultStatus('WASM not ready yet');
+      return;
+    }
+    let raw: Uint8Array;
+    try {
+      raw = hexToBytes(vaultSecretHex.trim().replace(/^0x/, ''));
+    } catch (error: any) {
+      setVaultStatus(`Invalid hex: ${error?.message ?? String(error)}`);
+      return;
+    }
+    if (raw.length === 0) {
+      setVaultStatus('Secret is empty');
+      return;
+    }
+    const preimage = vaultInputIsJam ? raw : wasm.jam_byte_atom(raw);
+    if (preimage.length > MAX_VAULT_PREIMAGE_LEN) {
+      setVaultStatus(`Preimage too large (${preimage.length} > ${MAX_VAULT_PREIMAGE_LEN} bytes jammed)`);
+      return;
+    }
+    let commitment = '';
+    try {
+      commitment = wasm.noun_commitment_b58(preimage);
+    } catch {
+      setVaultStatus('Input is not a valid jammed noun');
+      return;
+    }
+    setVaultBusy(true);
+    setVaultStatus(`Confirm on device — commitment ${commitment}`);
+    try {
+      const entries = await device.vaultStore(vaultLabel.trim(), preimage);
+      setVaultEntries(entries);
+      setVaultLabel('');
+      setVaultSecretHex('');
+      setVaultStatus(`Stored. Commitment ${commitment}`);
+    } catch (error: any) {
+      setVaultStatus(`Store failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setVaultBusy(false);
+    }
+  };
+
+  const revealVaultSecret = async (entry: VaultEntryInfo) => {
+    if (!wasm) {
+      setVaultStatus('WASM not ready yet');
+      return;
+    }
+    setVaultBusy(true);
+    setVaultStatus('Confirm reveal on device...');
+    setVaultRevealed(null);
+    try {
+      const { preimage } = await device.vaultReveal(entry.slot);
+      let atomHex: string | null = null;
+      try {
+        atomHex = bytesToHex(wasm.cue_byte_atom(preimage));
+      } catch {
+        atomHex = null; // preimage is a cell noun; only the jam is meaningful
+      }
+      setVaultRevealed({
+        slot: entry.slot,
+        label: entry.label,
+        jamHex: bytesToHex(preimage),
+        atomHex,
+      });
+      setVaultStatus('');
+    } catch (error: any) {
+      setVaultStatus(`Reveal failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setVaultBusy(false);
+    }
+  };
+
+  const deleteVaultSecret = async (entry: VaultEntryInfo) => {
+    setVaultBusy(true);
+    setVaultStatus('Confirm delete on device...');
+    try {
+      const entries = await device.vaultDelete(entry.slot);
+      setVaultEntries(entries);
+      if (vaultRevealed?.slot === entry.slot) {
+        setVaultRevealed(null);
+      }
+      setVaultStatus('Deleted.');
+    } catch (error: any) {
+      setVaultStatus(`Delete failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setVaultBusy(false);
+    }
+  };
+
+  const exportWatchOnly = async (slot: number, label: string) => {
+    if (!wasm) {
+      setStatus('WASM not ready yet');
+      return;
+    }
+    setStatus('Confirm watch-only export on device...');
+    try {
+      const { x, y, chain_code } = await device.getMasterPubkey(slot);
+      const bytes = wasm.build_master_pubkey_export(
+        x.map((limb) => limb.toString()),
+        y.map((limb) => limb.toString()),
+        chain_code,
+      );
+      const name = label ? label.replace(/[^a-zA-Z0-9-_]/g, '-') : `slot-${slot}`;
+      downloadBytesAs(`master-pubkey-${name}.export`, bytes);
+      setStatus(
+        'Watch-only keyfile downloaded. Import it with: nockchain-wallet import-master-pubkey --file <path>',
+      );
+    } catch (error: any) {
+      setStatus(`Watch-only export failed: ${error?.message ?? String(error)}`);
+    }
+  };
+
+  const importWalletKeyfile = async (file: File) => {
+    if (!wasm) {
+      setStatus('WASM not ready yet');
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const summary = wasm.parse_wallet_keyfile(bytes) as {
+        seedphrases: string[];
+        coil_pub_count: number;
+        coil_prv_count: number;
+        versions: number[];
+      };
+      if (summary.seedphrases.length > 0) {
+        setMnemonic(summary.seedphrases[0]);
+        setStatus(
+          `Keyfile parsed: found a seed phrase (${summary.coil_prv_count} private, ` +
+            `${summary.coil_pub_count} public keys). Review the filled-in phrase and load it.`,
+        );
+      } else {
+        setStatus(
+          'Keyfile parsed, but it contains no seed phrase — only derived keys ' +
+            `(${summary.coil_prv_count} private, ${summary.coil_pub_count} public). ` +
+            'Nockster slots store BIP39 seeds, so import the original phrase instead.',
+        );
+      }
+    } catch (error: any) {
+      setStatus(`Keyfile import failed: ${error?.message ?? String(error)}`);
+    }
   };
 
   const clearTransaction = () => {
@@ -2080,6 +2268,15 @@ function App() {
                     >
                       addresses{deviceAddressBook.length ? ` ${deviceAddressBook.length}` : ''}
                     </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={walletPanelView === 'vault'}
+                      className={`wallet-panel-tab ${walletPanelView === 'vault' ? 'active' : ''}`}
+                      onClick={() => setWalletPanelView('vault')}
+                    >
+                      vault{vaultEntries?.length ? ` ${vaultEntries.length}` : ''}
+                    </button>
                   </div>
                 </div>
                 <div className="device-panel-actions">
@@ -2105,7 +2302,7 @@ function App() {
                         </button>
                       )}
                     </>
-                  ) : (
+                  ) : walletPanelView === 'addresses' ? (
                     <button
                       type="button"
                       onClick={() => void refreshDeviceAddressBook()}
@@ -2113,6 +2310,15 @@ function App() {
                       disabled={!deviceAddressBookAvailable || locked !== false || syncingAddressBook}
                     >
                       {syncingAddressBook ? 'loading...' : 'refresh'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void refreshVault()}
+                      className="btn btn-small btn-secondary"
+                      disabled={vaultBusy || locked !== false}
+                    >
+                      {vaultBusy ? 'working...' : vaultEntries === null ? 'load' : 'refresh'}
                     </button>
                   )}
                 </div>
@@ -2290,6 +2496,15 @@ function App() {
                             </button>
                             <button
                               type="button"
+                              onClick={() => void exportWatchOnly(pub.slot, storedLabel)}
+                              className="btn btn-small btn-secondary"
+                              disabled={deviceBusy || locked !== false || !wasmReady}
+                              title="Export master pubkey + chain code for nockchain-wallet watch-only import (confirmed on device)"
+                            >
+                              export watch-only
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => deleteSeedSlot(pub.slot)}
                               className="btn btn-small btn-danger"
                               disabled={deviceBusy || deletingSlot === pub.slot || seeding || signing}
@@ -2304,7 +2519,8 @@ function App() {
                   </div>
                   {balanceStatus && <div className="device-inline-status">{balanceStatus}</div>}
                 </>
-              ) : !deviceAddressBookAvailable ? (
+              ) : walletPanelView === 'addresses' ? (
+                !deviceAddressBookAvailable ? (
                 <div className="device-empty-state">
                   {info ? 'Address book unavailable on this firmware.' : 'Reading device status...'}
                 </div>
@@ -2371,8 +2587,146 @@ function App() {
                     </div>
                   )}
                 </>
+                )
+              ) : locked !== false ? (
+                <div className="device-empty-state">Unlock to use the vault.</div>
+              ) : (
+                <>
+                  <p className="seed-subtitle">
+                    Encrypted on-device storage for %hax lock preimages (HTLC secrets,
+                    commit-reveal values). The device computes each Tip5 commitment itself and
+                    confirms store and reveal on-screen.
+                  </p>
+                  {vaultEntries !== null && (
+                    vaultEntries.length === 0 ? (
+                      <div className="device-empty-state">No stored secrets.</div>
+                    ) : (
+                      <div className="device-address-list device-address-list-compact">
+                        {vaultEntries.map((entry) => (
+                          <div className="device-address-row" key={entry.slot}>
+                            <div className="device-address-main">
+                              <strong>{entry.label || `slot ${entry.slot}`}</strong>
+                              <button
+                                type="button"
+                                className="pubkey-text pubkey-copy"
+                                onClick={() => {
+                                  const b58 = vaultCommitmentB58(entry.commitment);
+                                  navigator.clipboard.writeText(b58);
+                                  setVaultStatus('Copied commitment');
+                                }}
+                                title="Copy commitment (the %hax lock value)"
+                              >
+                                {vaultCommitmentB58(entry.commitment)}
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-small btn-secondary"
+                              onClick={() => void revealVaultSecret(entry)}
+                              disabled={vaultBusy}
+                            >
+                              reveal
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-small btn-danger"
+                              onClick={() => void deleteVaultSecret(entry)}
+                              disabled={vaultBusy}
+                            >
+                              delete
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                  {vaultRevealed && (
+                    <div className="device-inline-status vault-revealed">
+                      <div>
+                        <strong>{vaultRevealed.label || `slot ${vaultRevealed.slot}`}</strong>{' '}
+                        revealed{vaultRevealed.atomHex === null ? ' (cell noun, jam shown)' : ''}:
+                      </div>
+                      <div className="pubkey-text">
+                        {vaultRevealed.atomHex ?? vaultRevealed.jamHex}
+                      </div>
+                      <div className="seed-actions">
+                        <button
+                          type="button"
+                          className="btn btn-small btn-secondary"
+                          onClick={() => {
+                            navigator.clipboard.writeText(
+                              vaultRevealed.atomHex ?? vaultRevealed.jamHex,
+                            );
+                            setVaultStatus('Copied secret');
+                          }}
+                        >
+                          copy
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small btn-secondary"
+                          onClick={() =>
+                            downloadBytesAs(
+                              `preimage-${vaultRevealed.label || vaultRevealed.slot}.jam`,
+                              hexToBytes(vaultRevealed.jamHex),
+                            )
+                          }
+                        >
+                          download .jam
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small btn-secondary"
+                          onClick={() => setVaultRevealed(null)}
+                        >
+                          hide
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="device-address-form device-address-form-compact">
+                    <input
+                      className="input"
+                      value={vaultLabel}
+                      maxLength={32}
+                      placeholder="label"
+                      disabled={vaultBusy}
+                      onChange={(event) => setVaultLabel(event.target.value)}
+                    />
+                    <input
+                      className="input"
+                      value={vaultSecretHex}
+                      placeholder={vaultInputIsJam ? 'jammed noun (hex)' : 'secret bytes (hex)'}
+                      disabled={vaultBusy}
+                      spellCheck={false}
+                      onChange={(event) => setVaultSecretHex(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-small btn-primary"
+                      onClick={() => void storeVaultSecret()}
+                      disabled={vaultBusy || !vaultSecretHex.trim() || !wasmReady}
+                    >
+                      store
+                    </button>
+                  </div>
+                  <label className="seed-hint vault-jam-toggle">
+                    <input
+                      type="checkbox"
+                      checked={vaultInputIsJam}
+                      onChange={(event) => setVaultInputIsJam(event.target.checked)}
+                      disabled={vaultBusy}
+                    />{' '}
+                    input is already a jammed noun (otherwise bytes are wrapped as an atom)
+                  </label>
+                </>
               )}
-              {addressBookStatus && <div className="device-inline-status">{addressBookStatus}</div>}
+              {walletPanelView === 'addresses' && addressBookStatus && (
+                <div className="device-inline-status">{addressBookStatus}</div>
+              )}
+              {walletPanelView === 'vault' && vaultStatus && (
+                <div className="device-inline-status">{vaultStatus}</div>
+              )}
             </div>
           )}
 
@@ -2451,6 +2805,23 @@ function App() {
                     Seed words should contain 12, 15, 18, 21, or 24 words (currently {wordCount}).
                   </div>
                 )}
+                <div className="seed-hint">
+                  Have a nockchain-wallet <code>keys.export</code> file?{' '}
+                  <label className="keyfile-import-label">
+                    <input
+                      type="file"
+                      style={{ display: 'none' }}
+                      disabled={deviceBusy || seeding || !wasmReady}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void importWalletKeyfile(file);
+                        e.target.value = '';
+                      }}
+                    />
+                    <span className="keyfile-import-link">import it</span>
+                  </label>{' '}
+                  to fill in the seed phrase it contains.
+                </div>
                 {!isInitialSeed && (
                   <div className="seed-hint">
                     Device uses your existing PIN. Unlock it in the control section before adding a seed.

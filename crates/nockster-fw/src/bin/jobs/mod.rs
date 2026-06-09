@@ -113,6 +113,9 @@ pub enum ChangePinOutcome {
         msg_id: u32,
         seeds: Vec<[u8; 64]>,
         master_key: [u8; 32],
+        /// Needed once more by the committer to re-wrap the preimage vault;
+        /// zeroized there on every path.
+        old_master_key: [u8; 32],
         prepared: PreparedSeedRewrite,
     },
     WrongPin {

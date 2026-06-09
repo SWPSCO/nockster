@@ -64,6 +64,13 @@ pub enum Cmd {
     /// read the device's stored address book (label → PKH)
     AddressBook(PortArgs),
 
+    /// manage the on-device preimage vault (%hax lock secrets)
+    Vault(VaultArgs),
+
+    /// export a slot's master pubkey + chain code as a nockchain-wallet
+    /// watch-only keyfile (confirmed on-device)
+    ExportMasterPubkey(ExportMasterPubkeyArgs),
+
     /// derive addresses from a seed offline, no device (shows v0 and v1 forms)
     Derive(DeriveArgs),
 }
@@ -88,6 +95,67 @@ pub struct DeriveArgs {
     /// derive N consecutive children by appending /0../N-1 to --path
     #[arg(long, default_value_t = 1)]
     pub count: u32,
+}
+
+#[derive(Args, Clone)]
+pub struct VaultArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
+    #[arg(long, default_value = "hid", visible_alias = "device")]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    #[command(subcommand)]
+    pub action: VaultAction,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum VaultAction {
+    /// list stored preimages (labels + Tip5 commitments)
+    List,
+    /// store a preimage; the device computes the commitment and asks for
+    /// on-screen confirmation
+    Store {
+        /// nickname for the entry
+        #[arg(long, default_value = "")]
+        label: String,
+        /// secret bytes as hex (wrapped as an atom noun unless --jam)
+        #[arg(long, conflicts_with = "file")]
+        hex: Option<String>,
+        /// read the secret from a file (raw bytes, or a jammed noun with --jam)
+        #[arg(long, conflicts_with = "hex")]
+        file: Option<PathBuf>,
+        /// input is already a jammed noun; store it as-is
+        #[arg(long, default_value_t = false)]
+        jam: bool,
+    },
+    /// reveal a stored preimage after on-device confirmation
+    Reveal {
+        /// vault slot to reveal
+        slot: u8,
+        /// write the jammed preimage to a file instead of printing hex
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// delete a stored preimage after on-device confirmation
+    Delete {
+        /// vault slot to delete
+        slot: u8,
+    },
+}
+
+#[derive(Args, Clone)]
+pub struct ExportMasterPubkeyArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
+    #[arg(long, default_value = "hid", visible_alias = "device")]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    /// seed slot to export
+    #[arg(long, default_value_t = 0)]
+    pub slot: u8,
+    /// output path (import with: nockchain-wallet import-master-pubkey --file <path>)
+    #[arg(long, default_value = "master-pubkey.export")]
+    pub out: PathBuf,
 }
 
 #[derive(Args, Clone)]
@@ -212,12 +280,17 @@ pub struct SeedArgs {
 
     // one of these input sources:
     /// 64-byte seed in hex
-    #[arg(long, conflicts_with_all=&["seedphrase","list","select","delete"])]
+    #[arg(long, conflicts_with_all=&["seedphrase","keyfile","list","select","delete"])]
     pub seed_hex: Option<String>,
 
     /// bip39 mnemonic
-    #[arg(long, conflicts_with_all=&["seed_hex","list","select","delete"])]
+    #[arg(long, conflicts_with_all=&["seed_hex","keyfile","list","select","delete"])]
     pub seedphrase: Option<String>,
+
+    /// nockchain-wallet keys.export file; the seed phrase it contains is used
+    /// as if passed with --seedphrase
+    #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","list","select","delete"])]
+    pub keyfile: Option<PathBuf>,
 
     /// list seed slots and root PKHs
     #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","select","delete"])]
@@ -589,6 +662,8 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Reset(args) => commands::reset::run(&args),
         Cmd::ListPorts => commands::ports::run(),
         Cmd::AddressBook(args) => commands::address_book::run(&args.port, args.baud),
+        Cmd::Vault(args) => commands::vault::run(args),
+        Cmd::ExportMasterPubkey(args) => commands::vault::run_export_master_pubkey(args),
         Cmd::Derive(args) => commands::derive::run(
             args.seed_hex.as_deref(),
             args.seedphrase.as_deref(),

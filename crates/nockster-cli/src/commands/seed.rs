@@ -11,6 +11,10 @@ use nockster_core::{
 };
 
 pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
+    // A nockchain-wallet keys.export resolves to the seed phrase it carries.
+    if let Some(path) = args.keyfile.take() {
+        args.seedphrase = Some(super::vault::seedphrase_from_keyfile(&path)?);
+    }
     let labeling = args.label.is_some();
     let managing_slot = args.list || args.select.is_some() || args.delete.is_some() || labeling;
     let mut adding_seed = args.seedphrase.is_some() || args.seed_hex.is_some();

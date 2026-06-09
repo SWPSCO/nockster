@@ -23,6 +23,8 @@ pub enum LabelEntryContext {
     WalletDetail,
     AddedSeed,
     FirstSeed,
+    /// Renaming a preimage-vault entry from its detail screen.
+    VaultDetail,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,7 +182,9 @@ pub fn draw_label_button(
         LabelButton::Key(digit) => draw_key_label(display, center_x, center_y, digit),
         LabelButton::Cancel => {
             let label = match state.context {
-                LabelEntryContext::WalletMenu | LabelEntryContext::WalletDetail => "BACK",
+                LabelEntryContext::WalletMenu
+                | LabelEntryContext::WalletDetail
+                | LabelEntryContext::VaultDetail => "BACK",
                 LabelEntryContext::AddedSeed | LabelEntryContext::FirstSeed => "SKIP",
             };
             draw_action_label(display, center_x, center_y, label);
@@ -298,7 +302,9 @@ fn draw_label_preview(display: &mut GuiDisplay<'_>, state: &LabelEntryState) {
 
 fn label_header(context: LabelEntryContext) -> &'static str {
     match context {
-        LabelEntryContext::WalletMenu | LabelEntryContext::WalletDetail => "Rename",
+        LabelEntryContext::WalletMenu
+        | LabelEntryContext::WalletDetail
+        | LabelEntryContext::VaultDetail => "Rename",
         LabelEntryContext::AddedSeed | LabelEntryContext::FirstSeed => "Name Wallet",
     }
 }

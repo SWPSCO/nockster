@@ -31,8 +31,8 @@ use esp_hal::timer::timg::{MwdtStage, TimerGroup};
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
     AboutInfo, Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
-    TxReviewSummary, WalletInteraction, WalletRow, WalletRows, TX_REVIEW_FLAG_HIGH_FEE,
-    TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    TxReviewSummary, VaultInteraction, WalletInteraction, WalletRow, WalletRows,
+    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 use heapless::{String as HString, Vec as HVec};
 use jobs::{
@@ -87,6 +87,8 @@ const FIRMWARE_FEATURES: u32 = FEATURE_CHEETAH
     | FEATURE_UPDATE_BOOT_STATUS
     | FEATURE_DEVICE_REBOOT
     | FEATURE_DEVICE_ADDRESS_BOOK
+    | FEATURE_PREIMAGE_VAULT
+    | FEATURE_MASTER_PUBKEY_EXPORT
     | FIRMWARE_UPDATE_FEATURES;
 
 const fn valid_update_anchor_env() -> bool {
@@ -422,10 +424,11 @@ fn compute_change_pin_outcome(
         new_pin.as_str(),
         &mut state.nvs_pepper,
     ) {
-        Ok((prepared, seeds, master_key)) => ChangePinOutcome::Prepared {
+        Ok((prepared, seeds, master_key, old_master_key)) => ChangePinOutcome::Prepared {
             msg_id,
             seeds,
             master_key,
+            old_master_key,
             prepared,
         },
         Err(NvsError::WrongPin) => ChangePinOutcome::WrongPin { msg_id },
@@ -549,6 +552,49 @@ fn begin_confirmation(
     }
     if let Frame::One(Request::Reset) = &frame {
         let _ = details.push_str("Erase all seeds");
+    }
+    if let Frame::One(Request::VaultStore { preimage, .. }) = &frame {
+        if is_device_locked() {
+            return Err(ERR_DEVICE_LOCKED);
+        }
+        // Show the commitment the device itself computed, so the user
+        // confirms the actual on-chain hash, not a host claim.
+        match nockster_core::draft_sign::noun_commitment_v1(preimage.as_slice()) {
+            Ok(digest) => {
+                let b58 = nockster_core::draft_sign::tip5_digest_b58(digest);
+                let take = b58.len().min(20);
+                let _ = details.push_str(&b58[..take]);
+                let _ = details.push_str("..");
+            }
+            Err(_) => return Err(ERR_BAD_COBS_OR_POSTCARD),
+        }
+    }
+    if let Frame::One(Request::VaultReveal { slot }) | Frame::One(Request::VaultDelete { slot }) =
+        &frame
+    {
+        if is_device_locked() {
+            return Err(ERR_DEVICE_LOCKED);
+        }
+        let label = NvsStore::new().vault_entries().ok().and_then(|entries| {
+            entries
+                .into_iter()
+                .find(|entry| entry.slot == *slot)
+                .map(|entry| entry.label)
+        });
+        match label {
+            Some(label) if !label.is_empty() => {
+                let _ = details.push_str(label.as_str());
+            }
+            Some(_) | None => {
+                let _ = core::write!(&mut details, "slot {}", slot);
+            }
+        }
+    }
+    if let Frame::One(Request::GetMasterPubkey { slot }) = &frame {
+        if is_device_locked() {
+            return Err(ERR_DEVICE_LOCKED);
+        }
+        let _ = core::write!(&mut details, "watch-only, slot {}", slot);
     }
 
     let show_spend_outputs = match &frame {
@@ -1245,6 +1291,14 @@ fn main() -> ! {
                                 ui.show_add_seed();
                             }
                         }
+                        MenuItem::Vault => {
+                            if session::is_locked() {
+                                pending_menu_dest = Some(MenuItem::Vault);
+                                ui.begin_unlock(None);
+                            } else {
+                                ui.show_vault(&build_vault_rows());
+                            }
+                        }
                         MenuItem::Theme | MenuItem::Calibrate => {}
                     },
                     GuiInteraction::Label(interaction) => {
@@ -1252,6 +1306,9 @@ fn main() -> ! {
                     }
                     GuiInteraction::Wallet(interaction) => {
                         handle_wallet_interaction(interaction, ui, &mut hid);
+                    }
+                    GuiInteraction::VaultOp(interaction) => {
+                        handle_vault_interaction(interaction, ui, &mut hid);
                     }
                     GuiInteraction::ExitDiagnostics => {
                         ui.hide_touch_diagnostics(session::is_locked());
@@ -1290,6 +1347,7 @@ fn main() -> ! {
                                 adding_seed_while_unlocked = true;
                                 ui_ref.show_add_seed();
                             }
+                            MenuItem::Vault => ui_ref.show_vault(&build_vault_rows()),
                             _ => {}
                         }
                     }
@@ -2208,6 +2266,15 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
         Request::GetAddressBook => Response::Err {
             code: ERR_UNSUPPORTED_VERSION,
         },
+        Request::VaultStore { .. }
+        | Request::VaultList
+        | Request::VaultReveal { .. }
+        | Request::VaultDelete { .. }
+        | Request::GetMasterPubkey { .. } => {
+            dispatch::handle_vault_request(req, is_device_locked()).unwrap_or(Response::Err {
+                code: ERR_UNSUPPORTED_VERSION,
+            })
+        }
     }
 }
 
@@ -2423,6 +2490,7 @@ fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
             msg_id,
             mut seeds,
             mut master_key,
+            mut old_master_key,
             prepared,
         } => {
             if NvsStore::new()
@@ -2431,12 +2499,21 @@ fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
             {
                 zeroize_seed_vec_runtime(seeds.as_mut_slice());
                 master_key.zeroize();
+                old_master_key.zeroize();
                 if let Some(ui) = ui.as_mut() {
                     show_pin_change_failure(ui, "Flash error");
                 }
                 usb_debug(hid, b"pin change flash error\r\n");
                 return (msg_id, Response::Err { code: ERR_FLASH });
             }
+            // Keep the preimage vault reachable under the new PIN.
+            if NvsStore::new()
+                .vault_rewrap(&old_master_key, &master_key)
+                .is_err()
+            {
+                usb_debug(hid, b"pin change vault rewrap failed\r\n");
+            }
+            old_master_key.zeroize();
             // Release the attempt charged for the old PIN; the rewrite only
             // resets the legacy header counter, not the marks sector.
             if NvsStore::new().clear_pin_attempts().is_err() {
@@ -2614,6 +2691,24 @@ fn build_about_info() -> AboutInfo {
     }
 }
 
+fn build_vault_rows() -> Vec<WalletRow> {
+    let entries = NvsStore::new().vault_entries().unwrap_or_default();
+    let mut rows = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let mut pkh = HString::<64>::new();
+        let b58 = nockster_core::draft_sign::tip5_digest_b58(entry.commitment);
+        let take = b58.len().min(64);
+        let _ = pkh.push_str(&b58[..take]);
+        rows.push(WalletRow {
+            index: entry.slot,
+            active: false,
+            label: entry.label,
+            pkh,
+        });
+    }
+    rows
+}
+
 fn finish_label_entry(ui: &mut Gui<'_>, slot: u8, context: LabelEntryContext) {
     match context {
         LabelEntryContext::WalletMenu | LabelEntryContext::AddedSeed => {
@@ -2624,6 +2719,9 @@ fn finish_label_entry(ui: &mut Gui<'_>, slot: u8, context: LabelEntryContext) {
         }
         LabelEntryContext::FirstSeed => {
             ui.show_unlock_success();
+        }
+        LabelEntryContext::VaultDetail => {
+            ui.show_vault_detail(slot, &build_vault_rows());
         }
     }
 }
@@ -2639,22 +2737,54 @@ fn handle_label_interaction<B: usb_device::bus::UsbBus>(
             label,
             context,
         } => {
-            let saved = NvsStore::new().write_seed_label(slot as usize, label.as_str());
+            let saved = if matches!(context, LabelEntryContext::VaultDetail) {
+                NvsStore::new().vault_set_label(slot as usize, label.as_str())
+            } else {
+                NvsStore::new().write_seed_label(slot as usize, label.as_str())
+            };
             match saved {
                 Ok(()) => {
-                    bump_wallet_label_generation();
-                    warm_wallet_rows_cache();
-                    usb_debug(hid, b"seed label saved\r\n");
+                    if !matches!(context, LabelEntryContext::VaultDetail) {
+                        bump_wallet_label_generation();
+                        warm_wallet_rows_cache();
+                    }
+                    usb_debug(hid, b"label saved\r\n");
                     finish_label_entry(ui, slot, context);
                 }
                 Err(_) => {
-                    usb_debug(hid, b"seed label save failed\r\n");
+                    usb_debug(hid, b"label save failed\r\n");
                     ui.show_idle_message_timed("Label failed", Duration::from_millis(3_000));
                 }
             }
         }
         LabelInteraction::Cancelled { slot, context } => {
             finish_label_entry(ui, slot, context);
+        }
+    }
+}
+
+fn handle_vault_interaction<B: usb_device::bus::UsbBus>(
+    interaction: VaultInteraction,
+    ui: &mut Gui<'_>,
+    hid: &mut HIDClass<'_, B>,
+) {
+    match interaction {
+        VaultInteraction::DeleteConfirmed { slot } => {
+            if session::is_locked() {
+                ui.begin_unlock(None);
+                return;
+            }
+            match NvsStore::new().vault_delete(slot as usize) {
+                Ok(()) => {
+                    usb_debug(hid, b"vault entry deleted\r\n");
+                }
+                Err(_) => {
+                    usb_debug(hid, b"vault delete failed\r\n");
+                    ui.show_idle_message_timed("Delete failed", Duration::from_millis(3_000));
+                    return;
+                }
+            }
+            ui.show_vault(&build_vault_rows());
         }
     }
 }

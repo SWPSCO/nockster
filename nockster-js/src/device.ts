@@ -13,6 +13,7 @@ import {
   SecurityStatus,
   SeedSlotLabel,
   DeviceAddressBookEntry,
+  VaultEntryInfo,
   MAX_UPDATE_CHUNK_LEN,
   assertUpdateFirmwareMatchesBundle,
   assertUpdateStreamStatus,
@@ -456,6 +457,83 @@ export class NocksterDevice {
       throw new Error(`unexpected response: ${resp.type}`);
     }
     return resp;
+  }
+
+  /** List preimage-vault entries (commitments + labels; no secrets). */
+  async vaultList(): Promise<VaultEntryInfo[]> {
+    const resp = await this.call({ type: 'VaultList' });
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkVaultEntries') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp.entries;
+  }
+
+  /**
+   * Store a jammed preimage noun in the device vault. The device computes the
+   * Tip5 hash-noun commitment itself and shows it on-screen for confirmation;
+   * the long timeout covers the user interaction.
+   */
+  async vaultStore(
+    label: string,
+    preimage: Uint8Array,
+    timeoutMs: number = 120000,
+  ): Promise<VaultEntryInfo[]> {
+    const resp = await this.call({ type: 'VaultStore', label, preimage }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkVaultEntries') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp.entries;
+  }
+
+  /** Reveal a stored preimage after on-device confirmation. */
+  async vaultReveal(
+    slot: number,
+    timeoutMs: number = 120000,
+  ): Promise<{ commitment: bigint[]; preimage: Uint8Array }> {
+    const resp = await this.call({ type: 'VaultReveal', slot }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkVaultPreimage') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return { commitment: resp.commitment, preimage: resp.preimage };
+  }
+
+  /** Delete a vault slot after on-device confirmation. */
+  async vaultDelete(slot: number, timeoutMs: number = 120000): Promise<VaultEntryInfo[]> {
+    const resp = await this.call({ type: 'VaultDelete', slot }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkVaultEntries') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp.entries;
+  }
+
+  /**
+   * Export the master public key + chain code for a seed slot (watch-only
+   * pairing). Confirmed on-device: it reveals the unhardened address tree.
+   */
+  async getMasterPubkey(
+    slot: number,
+    timeoutMs: number = 120000,
+  ): Promise<{ x: bigint[]; y: bigint[]; chain_code: Uint8Array }> {
+    const resp = await this.call({ type: 'GetMasterPubkey', slot }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkMasterPubkey') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return { x: resp.x, y: resp.y, chain_code: resp.chain_code };
   }
 
   async resetPIN(currentPin: string, newPin: string) {

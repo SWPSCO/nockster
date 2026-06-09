@@ -17,8 +17,8 @@ pub use label::{LabelEntryContext, LabelInteraction};
 pub use menu::{AboutInfo, WalletRow, WalletRows};
 pub use seed::{SeedInteraction, SeedPhrase};
 pub use state::{
-    GuiInteraction, GuiMode, MenuItem, TxReviewSummary, WalletInteraction, TX_REVIEW_FLAG_HIGH_FEE,
-    TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    GuiInteraction, GuiMode, MenuItem, TxReviewSummary, VaultInteraction, WalletInteraction,
+    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
 };
 pub use touch::{default_touch_calibration, touch_calibration_valid, ScreenPoint};
 
@@ -648,6 +648,9 @@ impl<'d> Gui<'d> {
                 | GuiMode::Wallets
                 | GuiMode::WalletDetail
                 | GuiMode::WalletDeleteConfirm
+                | GuiMode::Vault
+                | GuiMode::VaultDetail
+                | GuiMode::VaultDeleteConfirm
                 | GuiMode::LabelEntry
         )
     }
@@ -898,6 +901,64 @@ impl<'d> Gui<'d> {
         self.show_label_entry(slot, current, label::LabelEntryContext::WalletDetail);
     }
 
+    /// Vault screens reuse the wallet row storage, scroll state, and button
+    /// geometry; the mode keeps their interactions separate.
+    pub fn show_vault(&mut self, rows: &[WalletRow]) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.selected_wallet_slot = None;
+        self.wallet_rows.clear();
+        for row in rows {
+            if self.wallet_rows.push(row.clone()).is_err() {
+                break;
+            }
+        }
+        self.wallets_scroll.reset();
+        self.wallet_drag.reset();
+        self.mode = GuiMode::Vault;
+        menu::render_vault(
+            &mut self.display,
+            &self.wallet_rows,
+            &mut self.wallets_scroll,
+        );
+    }
+
+    pub fn show_vault_detail(&mut self, slot: u8, rows: &[WalletRow]) {
+        self.wallet_rows.clear();
+        for row in rows {
+            if self.wallet_rows.push(row.clone()).is_err() {
+                break;
+            }
+        }
+        self.show_vault_detail_current(slot);
+    }
+
+    fn show_vault_detail_current(&mut self, slot: u8) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.selected_wallet_slot = Some(slot);
+        self.mode = GuiMode::VaultDetail;
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        menu::render_vault_detail(&mut self.display, row.as_ref());
+    }
+
+    fn show_vault_delete_confirm(&mut self, slot: u8) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.selected_wallet_slot = Some(slot);
+        self.mode = GuiMode::VaultDeleteConfirm;
+        let row = self
+            .wallet_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        menu::render_vault_delete_confirm(&mut self.display, row.as_ref());
+    }
+
     pub fn show_new_seed_label_entry(&mut self, slot: u8, context: label::LabelEntryContext) {
         self.show_label_entry(slot, "", context);
     }
@@ -923,11 +984,13 @@ impl<'d> Gui<'d> {
                 self.begin_touch_calibration();
                 None
             }
-            // These need host-side context (build string, master key, slot list),
-            // so the main loop handles them.
-            MenuItem::Wallets | MenuItem::AddSeed | MenuItem::Diagnostics | MenuItem::About => {
-                Some(GuiInteraction::Menu(item))
-            }
+            // These need host-side context (build string, master key, slot
+            // list, vault entries), so the main loop handles them.
+            MenuItem::Wallets
+            | MenuItem::AddSeed
+            | MenuItem::Vault
+            | MenuItem::Diagnostics
+            | MenuItem::About => Some(GuiInteraction::Menu(item)),
         }
     }
 
@@ -940,6 +1003,9 @@ impl<'d> Gui<'d> {
                 | GuiMode::Wallets
                 | GuiMode::WalletDetail
                 | GuiMode::WalletDeleteConfirm
+                | GuiMode::Vault
+                | GuiMode::VaultDetail
+                | GuiMode::VaultDeleteConfirm
         ) || (self.mode == GuiMode::SeedFirstBoot && self.seed_flow_is_add)
     }
 
@@ -949,7 +1015,7 @@ impl<'d> Gui<'d> {
                 self.show_unlock_success();
                 None
             }
-            GuiMode::About | GuiMode::Themes | GuiMode::Wallets => {
+            GuiMode::About | GuiMode::Themes | GuiMode::Wallets | GuiMode::Vault => {
                 self.show_menu();
                 None
             }
@@ -964,6 +1030,20 @@ impl<'d> Gui<'d> {
                 } else {
                     let rows = self.wallet_rows.clone();
                     self.show_wallets(&rows);
+                }
+                None
+            }
+            GuiMode::VaultDetail => {
+                let rows = self.wallet_rows.clone();
+                self.show_vault(&rows);
+                None
+            }
+            GuiMode::VaultDeleteConfirm => {
+                if let Some(slot) = self.selected_wallet_slot {
+                    self.show_vault_detail_current(slot);
+                } else {
+                    let rows = self.wallet_rows.clone();
+                    self.show_vault(&rows);
                 }
                 None
             }
@@ -989,6 +1069,51 @@ impl<'d> Gui<'d> {
                 let _ = NvsStore::new().write_gui_theme(theme.id());
                 menu::render_themes(&mut self.display);
                 None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_vault_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::WalletRow(slot) => {
+                self.show_vault_detail_current(slot);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_vault_detail_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::WalletEdit(slot) => {
+                let current = self
+                    .wallet_rows
+                    .iter()
+                    .find(|row| row.index == slot)
+                    .map(|row| row.label.clone())
+                    .unwrap_or_default();
+                self.show_label_entry(slot, current.as_str(), label::LabelEntryContext::VaultDetail);
+                None
+            }
+            Button::WalletDelete(slot) => {
+                self.show_vault_delete_confirm(slot);
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_vault_delete_button(&mut self, button: Button) -> Option<GuiInteraction> {
+        match button {
+            Button::WalletDeleteCancel(slot) => {
+                self.show_vault_detail_current(slot);
+                None
+            }
+            Button::WalletDeleteConfirm(slot) => {
+                Some(GuiInteraction::VaultOp(VaultInteraction::DeleteConfirmed {
+                    slot,
+                }))
             }
             _ => None,
         }
@@ -1330,9 +1455,9 @@ impl<'d> Gui<'d> {
             }
         }
 
-        // Wallet rows are tappable, but movement inside the list should turn
-        // into a scroll gesture before the press can complete.
-        if self.mode == GuiMode::Wallets {
+        // Wallet/vault rows are tappable, but movement inside the list should
+        // turn into a scroll gesture before the press can complete.
+        if self.mode == GuiMode::Wallets || self.mode == GuiMode::Vault {
             let pt = Point::new(point.x as i32, point.y as i32);
             if let scroll::DragUpdate::Dragging { moved } =
                 self.wallet_drag.update(pt, &mut self.wallets_scroll)
@@ -1375,6 +1500,15 @@ impl<'d> Gui<'d> {
                     menu::button_from_point_wallet_detail(pt, self.selected_wallet_slot)
                 }
                 GuiMode::WalletDeleteConfirm => {
+                    menu::button_from_point_wallet_delete(pt, self.selected_wallet_slot)
+                }
+                GuiMode::Vault => {
+                    menu::button_from_point_wallets(pt, &self.wallet_rows, &self.wallets_scroll)
+                }
+                GuiMode::VaultDetail => {
+                    menu::button_from_point_wallet_detail(pt, self.selected_wallet_slot)
+                }
+                GuiMode::VaultDeleteConfirm => {
                     menu::button_from_point_wallet_delete(pt, self.selected_wallet_slot)
                 }
                 GuiMode::LabelEntry => label::button_from_point_label_entry(pt),
@@ -1542,6 +1676,9 @@ impl<'d> Gui<'d> {
                     GuiMode::Wallets => self.handle_wallet_button(hit.button),
                     GuiMode::WalletDetail => self.handle_wallet_detail_button(hit.button),
                     GuiMode::WalletDeleteConfirm => self.handle_wallet_delete_button(hit.button),
+                    GuiMode::Vault => self.handle_vault_button(hit.button),
+                    GuiMode::VaultDetail => self.handle_vault_detail_button(hit.button),
+                    GuiMode::VaultDeleteConfirm => self.handle_vault_delete_button(hit.button),
                     GuiMode::LabelEntry => self.handle_label_button(hit.button, now),
                     _ => None,
                 };
@@ -1596,7 +1733,7 @@ impl<'d> Gui<'d> {
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
             }
-            GuiMode::Wallets => {
+            GuiMode::Wallets | GuiMode::Vault => {
                 menu::draw_wallet_row_press(
                     &mut self.display,
                     hit,
@@ -1608,7 +1745,10 @@ impl<'d> Gui<'d> {
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
             }
-            GuiMode::WalletDetail | GuiMode::WalletDeleteConfirm => {
+            GuiMode::WalletDetail
+            | GuiMode::WalletDeleteConfirm
+            | GuiMode::VaultDetail
+            | GuiMode::VaultDeleteConfirm => {
                 menu::draw_wallet_detail_button(&mut self.display, hit, true);
                 self.interaction.active_button = Some(hit);
                 self.interaction.active_seen_at = Some(now);
@@ -1652,14 +1792,17 @@ impl<'d> Gui<'d> {
                 GuiMode::Menu => menu::draw_menu_button(&mut self.display, old, false),
                 GuiMode::About => {}
                 GuiMode::Themes => menu::draw_theme_button(&mut self.display, old, false),
-                GuiMode::Wallets => menu::draw_wallet_row_press(
+                GuiMode::Wallets | GuiMode::Vault => menu::draw_wallet_row_press(
                     &mut self.display,
                     old,
                     &self.wallet_rows,
                     &mut self.wallets_scroll,
                     false,
                 ),
-                GuiMode::WalletDetail | GuiMode::WalletDeleteConfirm => {
+                GuiMode::WalletDetail
+                | GuiMode::WalletDeleteConfirm
+                | GuiMode::VaultDetail
+                | GuiMode::VaultDeleteConfirm => {
                     menu::draw_wallet_detail_button(&mut self.display, old, false)
                 }
                 GuiMode::LabelEntry => {

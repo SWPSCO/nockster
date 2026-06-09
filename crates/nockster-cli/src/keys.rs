@@ -239,11 +239,14 @@ mod derivation_tests {
     // These pin the current host derivation + address encoding so a refactor (or
     // an accidental divergence from firmware/chain) is caught. Values captured
     // from the implementation; update intentionally if the scheme changes.
+    // Updated for the SLIP10 unhardened-CKD parity fix (tx-types 9cc0526):
+    // the std path now matches the firmware/Hoon ser-p byte layout, which
+    // changed unhardened children.
     const SEED7: [u8; 64] = [7u8; 64];
     const PATH: &str = "m/44'/0'/0'/0/0";
-    const GOLDEN_SK: &str = "3f74fe890b16bf9b431fe2895884fdaf3ede162f637c3cc1ee11ffcc533955ff";
-    const GOLDEN_V0: &str = "2ZF6GhqAmRw9ApTxHsGrVrzox8hVHwLPFZwcpnBEqiyjpsdSMAaVGVnz2wV18MorWLpVF7fkMk6uWcp76SpuPGUbDqQDRtDqYB9wFa5dX2zQaWgPgGZT72MBzGYcaDQWPEhh";
-    const GOLDEN_V1: &str = "Pp8X4LTmpPhxw373eJtNZMogHZ4SJP2nSoKUW5zYn4raVZusZiDb1g";
+    const GOLDEN_SK: &str = "4e2f27f4f0f2ebfbc88053d6a019b057169c83a84e6383cd1431a4c54cd97120";
+    const GOLDEN_V0: &str = "2zEv3TitP94fELjTPs2H9QUEXPCEH2Wojxbzwd2tzFqdwF7A52vzN9J8PnSYGio4wYfdSug6jnh7C97Ut9NAcFbvt6upqnu9gPBUNgdvehfA4EvY2QjChWGqzZdH85eT84Vi";
+    const GOLDEN_V1: &str = "84YtTuQUNNGfDTu2CgXwjTudKnCfsADKVaiXPc1zGXqT2JLix3Ns87g";
 
     #[test]
     fn import_from_seed_is_stable() {

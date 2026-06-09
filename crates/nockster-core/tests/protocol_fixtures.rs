@@ -68,6 +68,11 @@ fn request_variant_reminder(req: Request) {
         Request::GetUpdateBootStatus => {}
         Request::Reboot => {}
         Request::GetAddressBook => {}
+        Request::VaultStore { .. } => {}
+        Request::VaultList => {}
+        Request::VaultReveal { .. } => {}
+        Request::VaultDelete { .. } => {}
+        Request::GetMasterPubkey { .. } => {}
     }
 }
 
@@ -98,6 +103,9 @@ fn response_variant_reminder(resp: Response) {
         Response::OkReleaseInfo(_) => {}
         Response::OkUpdateBootStatus(_) => {}
         Response::OkAddressBook(_) => {}
+        Response::OkVaultEntries(_) => {}
+        Response::OkVaultPreimage { .. } => {}
+        Response::OkMasterPubkey { .. } => {}
     }
 }
 
@@ -310,6 +318,17 @@ fn request_fixtures() -> Vec<(&'static str, Request)> {
         ("GetUpdateBootStatus", Request::GetUpdateBootStatus),
         ("Reboot", Request::Reboot),
         ("GetAddressBook", Request::GetAddressBook),
+        (
+            "VaultStore",
+            Request::VaultStore {
+                label: hstr("htlc-1"),
+                preimage: vec![0x5A; 24],
+            },
+        ),
+        ("VaultList", Request::VaultList),
+        ("VaultReveal", Request::VaultReveal { slot: 2 }),
+        ("VaultDelete", Request::VaultDelete { slot: 2 }),
+        ("GetMasterPubkey", Request::GetMasterPubkey { slot: 0 }),
     ]
 }
 
@@ -527,6 +546,30 @@ fn response_fixtures() -> Vec<(&'static str, Response)> {
                 label: hstr("alice"),
                 pkh: hstr("addr1"),
             }]),
+        ),
+        (
+            "OkVaultEntries",
+            Response::OkVaultEntries(vec![VaultEntryInfo {
+                slot: 2,
+                commitment: [1, 2, 3, 4, u64::MAX],
+                label: hstr("htlc-1"),
+                preimage_len: 24,
+            }]),
+        ),
+        (
+            "OkVaultPreimage",
+            Response::OkVaultPreimage {
+                commitment: [1, 2, 3, 4, 5],
+                preimage: vec![0x5A; 24],
+            },
+        ),
+        (
+            "OkMasterPubkey",
+            Response::OkMasterPubkey {
+                x: [1, 2, 3, 4, 5, 6],
+                y: [7, 8, 9, 10, 11, u64::MAX],
+                chain_code: [0x42; 32],
+            },
         ),
     ]
 }

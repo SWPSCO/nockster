@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  # Protocol wire-format guard: the same golden fixture file is checked by
+  # cargo (crates/nockster-core/tests/protocol_fixtures.rs) and by node
+  # (nockster-js/test/protocol-fixtures.test.mjs), so Rust/TypeScript codec
+  # drift fails one of these jobs instead of corrupting device traffic.
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: core-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      # nockster-core pulls private SWPSCO git deps (tx-types, ...).
+      - name: Authenticate cargo to private git deps
+        env:
+          GH_DEPS_TOKEN: ${{ secrets.GH_DEPS_TOKEN || github.token }}
+        run: |
+          git config --global \
+            url."https://x-access-token:${GH_DEPS_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Run nockster-core tests
+        run: cargo test -p nockster-core
+
+  nockster-js-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run nockster-js tests
+        working-directory: nockster-js
+        run: |
+          npm install
+          npm test

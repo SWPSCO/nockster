@@ -102,6 +102,10 @@ pub struct Gui<'d> {
     current_spinner_frame: u8,
     confirm_result: Option<bool>,
     interaction: InteractionState,
+    /// Last time the INT line delivered a touch report (presence polls while
+    /// INT is silent do not count).
+    last_int_report_at: Option<Instant>,
+    last_presence_poll_at: Option<Instant>,
     unlock_demo_state: Option<demo::AnimationState>,
     unlock_demo_last_frame_start: Option<Instant>,
     unlock_demo_frames_rendered: u32,
@@ -234,6 +238,8 @@ impl<'d> Gui<'d> {
             current_spinner_frame: 0,
             confirm_result: None,
             interaction: InteractionState::default(),
+            last_int_report_at: None,
+            last_presence_poll_at: None,
             unlock_demo_state: None,
             unlock_demo_last_frame_start: None,
             unlock_demo_frames_rendered: 0,
@@ -388,6 +394,7 @@ impl<'d> Gui<'d> {
         if finger_present {
             self.interaction.finger_down = true;
             self.interaction.last_touch_sample_at = Some(now);
+            self.last_int_report_at = Some(now);
             if let Ok(Some(sample)) = self.read_touch_sample() {
                 let point = sample.screen;
                 if self.interaction.cooldown_until.is_some() {
@@ -399,11 +406,51 @@ impl<'d> Gui<'d> {
             } else if self.interaction.active_button.is_some() {
                 self.interaction.active_seen_at = Some(now);
             }
+        } else if self.stationary_finger_still_present(now) {
+            // INT goes quiet while a finger rests in place (the controller
+            // only reports changes), which used to read as a release
+            // mid-gesture — re-arming and "tapping" whatever sat under a
+            // paused finger.
         } else if let Some(event) = self.process_no_touch(now) {
             return Some(event);
         }
 
         None
+    }
+
+    /// INT silence does not mean the finger lifted: a stationary touch stops
+    /// generating reports. While a touch is in progress, ask the controller
+    /// directly and only let the release path run once it reports zero touch
+    /// points (or stays silent implausibly long).
+    fn stationary_finger_still_present(&mut self, now: Instant) -> bool {
+        if !self.interaction.finger_down {
+            return false;
+        }
+        let Some(report_at) = self.last_int_report_at else {
+            return false;
+        };
+        if now - report_at > TOUCH_REPORT_SILENCE_LIMIT {
+            self.last_int_report_at = None;
+            return false;
+        }
+        if let Some(polled_at) = self.last_presence_poll_at {
+            if now - polled_at < PRESENCE_POLL_INTERVAL {
+                return true;
+            }
+        }
+        self.last_presence_poll_at = Some(now);
+        match self.touch.read_raw_touch_data() {
+            Ok((data, _)) if data.count > 0 => {
+                self.interaction.last_touch_sample_at = Some(now);
+                true
+            }
+            _ => {
+                // Zero touches (or unreadable): stop vouching for presence
+                // and let the normal release debounce run its course.
+                self.last_int_report_at = None;
+                false
+            }
+        }
     }
 
     pub fn begin_unlock(&mut self, expected_digits: Option<u8>) {
@@ -1199,6 +1246,7 @@ impl<'d> Gui<'d> {
                             && (dx.abs() > DRAG_THRESHOLD || dy.abs() > DRAG_THRESHOLD)
                         {
                             self.tx_review_drag_active = true;
+                            self.interaction.scroll_consumed = true;
                             self.tx_review_tap_index = None;
                             let delta = start.y as i32 - point.y as i32;
                             if delta != 0 {
@@ -1272,6 +1320,7 @@ impl<'d> Gui<'d> {
             if let scroll::DragUpdate::Dragging { moved } =
                 self.menu_drag.update(pt, &mut self.menu_scroll)
             {
+                self.interaction.scroll_consumed = true;
                 self.clear_pending();
                 self.deactivate_button();
                 if moved {
@@ -1288,6 +1337,7 @@ impl<'d> Gui<'d> {
             if let scroll::DragUpdate::Dragging { moved } =
                 self.wallet_drag.update(pt, &mut self.wallets_scroll)
             {
+                self.interaction.scroll_consumed = true;
                 self.clear_pending();
                 self.deactivate_button();
                 if moved {
@@ -1299,6 +1349,14 @@ impl<'d> Gui<'d> {
                 }
                 return;
             }
+        }
+
+        // A touch that became a scroll stays a scroll. Touch-sample dropouts
+        // look like releases (and reset the drag trackers), so without this a
+        // finger pausing mid-scroll gets re-armed as a fresh press on
+        // whatever sits under it — and "taps" it on the next dropout.
+        if self.interaction.scroll_consumed {
+            return;
         }
 
         let pt = Point::new(point.x as i32, point.y as i32);
@@ -1403,7 +1461,10 @@ impl<'d> Gui<'d> {
                     self.menu_drag.reset();
                     self.wallets_scroll.drag_end();
                     self.wallet_drag.reset();
+                    let scrolled = self.interaction.scroll_consumed;
+                    self.interaction.scroll_consumed = false;
                     let open_tx_review_detail = if self.mode == GuiMode::TxReview
+                        && !scrolled
                         && self.interaction.active_button.is_none()
                         && self.tx_review_expanded_index.is_none()
                         && !self.tx_review_drag_active
@@ -1421,7 +1482,13 @@ impl<'d> Gui<'d> {
                         self.disarm_active();
                         return None;
                     }
-                    if let Some(result) = self.finalize_press(now) {
+                    if scrolled {
+                        // The whole touch was a scroll gesture; releasing it
+                        // must not fire whatever ended up under the finger.
+                        self.deactivate_button();
+                        self.interaction.press_started_at = None;
+                        self.interaction.active_seen_at = None;
+                    } else if let Some(result) = self.finalize_press(now) {
                         return Some(result);
                     }
                     if let Some(idx) = open_tx_review_detail {
@@ -1609,6 +1676,7 @@ impl<'d> Gui<'d> {
         self.interaction.press_started_at = None;
         self.interaction.active_seen_at = None;
         self.interaction.cooldown_until = None;
+        self.interaction.scroll_consumed = false;
         self.clear_lock_button();
         self.tx_review_last_drag_y = None;
         self.menu_scroll.drag_end();

@@ -26,7 +26,8 @@ use dispatch::{frame_confirmation_prompt, update_mode_allows_frame};
 use esp_hal::otg_fs::{Usb, UsbBus as OtgUsbBus};
 use esp_hal::rng::Trng;
 use esp_hal::system::{software_reset, CpuControl, Stack};
-use esp_hal::time::Duration;
+use esp_hal::time::{Duration, Instant};
+use esp_hal::timer::timg::{MwdtStage, TimerGroup};
 use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
     AboutInfo, Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
@@ -57,6 +58,16 @@ const FW_MINOR: u16 = 1;
 const APP_CORE_STACK_SIZE: usize = 64 * 1024;
 const APP_HEAP_SIZE: usize = 96 * 1024;
 const BOOT_LOGO_HOLD_MS: u32 = 900;
+// Must comfortably exceed the longest legitimate gap between main-loop
+// iterations (boot-time GUI init + logo hold, OTA image verification, and
+// seed-region flash rewrites are all well under half this).
+const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
+// Absolute ceiling on an unanswered confirmation. Unlike auto-lock this is
+// never refreshed by touch activity, so phantom touches from a flaky panel
+// cannot keep a stale confirmation (and DEVICE_BUSY) alive forever. Longer
+// than AUTO_LOCK_TIMEOUT and every host-side request timeout, so it only
+// fires when nothing else cleaned up.
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(300);
 const FIRMWARE_UPDATE_FEATURES: u32 = if valid_update_anchor_env() {
     FEATURE_SECURE_UPDATE
 } else {
@@ -294,6 +305,7 @@ fn return_response_msg(id: u32, msg: Response) -> Option<Msg<Response>> {
 struct PendingConfirmation {
     msg_id: u32,
     frame: Frame,
+    expires_at: Instant,
 }
 
 struct PendingSignDraft {
@@ -301,6 +313,7 @@ struct PendingSignDraft {
     frag_id: u16,
     sk_be: [u8; 32],
     draft: Vec<u8>,
+    expires_at: Instant,
 }
 
 enum PendingPinChange {
@@ -404,7 +417,7 @@ fn compute_change_pin_outcome(
         new_pin,
     } = request;
     let mut nvs = NvsStore::new();
-    match nvs.prepare_change_pin_with_pepper(
+    match nvs.prepare_change_pin_with_pepper_precharged(
         current_pin.as_str(),
         new_pin.as_str(),
         &mut state.nvs_pepper,
@@ -582,7 +595,11 @@ fn begin_confirmation(
         if pending.is_some() {
             false
         } else {
-            pending.replace(PendingConfirmation { msg_id, frame });
+            pending.replace(PendingConfirmation {
+                msg_id,
+                frame,
+                expires_at: Instant::now() + CONFIRM_TIMEOUT,
+            });
             true
         }
     });
@@ -674,11 +691,80 @@ fn maybe_handle_address_book_fragment(
     ))
 }
 
+fn pin_attempt_err_code(err: &NvsError) -> u16 {
+    match err {
+        NvsError::LockedOut => ERR_PIN_LOCKED_OUT,
+        NvsError::NotInitialized => ERR_NO_SEED,
+        _ => ERR_FLASH,
+    }
+}
+
 fn take_pending_confirmation() -> Option<PendingConfirmation> {
     critical_section::with(|cs| {
         let mut slot = PENDING_CONFIRMATION.borrow_ref_mut(cs);
         slot.take()
     })
+}
+
+fn pending_confirmation_expired(now: Instant) -> bool {
+    critical_section::with(|cs| {
+        let confirm_expired = PENDING_CONFIRMATION
+            .borrow_ref(cs)
+            .as_ref()
+            .is_some_and(|p| now >= p.expires_at);
+        let draft_expired = PENDING_SIGN_DRAFT
+            .borrow_ref(cs)
+            .as_ref()
+            .is_some_and(|p| now >= p.expires_at);
+        confirm_expired || draft_expired
+    })
+}
+
+/// Flush any confirmation the user never answered: reply to the host and drop
+/// DEVICE_BUSY so the device cannot stay wedged rejecting every request.
+/// Callers are responsible for putting the GUI on a sane screen afterwards.
+fn cancel_pending_confirmation<B: usb_device::bus::UsbBus>(
+    hid: &mut HIDClass<'_, B>,
+    plain: &mut [u8],
+    enc: &mut [u8],
+) -> bool {
+    let mut cancelled = false;
+    if let Some(pending) = take_pending_confirmation() {
+        send_response(
+            hid,
+            pending.msg_id,
+            Response::Err {
+                code: ERR_REJECTED_BY_USER,
+            },
+            plain,
+            enc,
+        );
+        cancelled = true;
+    }
+    if let Some(pending) = take_pending_sign_draft() {
+        let PendingSignDraft {
+            msg_id,
+            mut sk_be,
+            mut draft,
+            ..
+        } = pending;
+        sk_be.zeroize();
+        draft.zeroize();
+        send_response(
+            hid,
+            msg_id,
+            Response::Err {
+                code: ERR_REJECTED_BY_USER,
+            },
+            plain,
+            enc,
+        );
+        cancelled = true;
+    }
+    if cancelled {
+        set_device_busy(false);
+    }
+    cancelled
 }
 
 fn take_pending_sign_draft() -> Option<PendingSignDraft> {
@@ -698,6 +784,14 @@ fn main() -> ! {
     let cfg = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let p = esp_hal::init(cfg);
     esp_alloc::heap_allocator!(size: APP_HEAP_SIZE);
+    // Watchdog: a hung main core (I2C, USB, flash, panic_halt) resets the
+    // device instead of wedging it until a manual power cycle. The worker
+    // core is restarted by the same chip reset, which also unsticks a worker
+    // parked on the flash-pause flag if the main core dies holding it.
+    let timg0 = TimerGroup::new(p.TIMG0);
+    let mut wdt = timg0.wdt;
+    wdt.set_timeout(MwdtStage::Stage0, WATCHDOG_TIMEOUT);
+    wdt.enable();
     let _trng = Trng::new(p.RNG, p.ADC1);
     let mut delay = Delay::new();
     let mut ui = Gui::new(
@@ -783,6 +877,7 @@ fn main() -> ! {
     let mut outbound_chunk_buf = Vec::with_capacity(fragments::TX_CHUNK);
     let mut displayed_initpin_progress = InitPinProgress::Idle;
     'main: loop {
+        wdt.feed();
         usb_dev.poll(&mut [&mut hid]);
         usb_service_tx(&mut hid);
         if soft_reboot_requested() && usb_hid::tx_idle() {
@@ -929,6 +1024,16 @@ fn main() -> ! {
                     }
                 }
             }
+            if pending_confirmation_expired(Instant::now())
+                && cancel_pending_confirmation(&mut hid, &mut plain, &mut enc)
+            {
+                usb_debug(&mut hid, b"confirmation timed out\r\n");
+                if session::is_locked() {
+                    ui.begin_unlock(None);
+                } else {
+                    ui.show_idle_message_timed("Request expired", Duration::from_millis(3_000));
+                }
+            }
             if let Some(event) = event {
                 match event {
                     GuiInteraction::PinComplete(digits) => {
@@ -968,22 +1073,43 @@ fn main() -> ! {
                                             &mut enc,
                                         );
                                     } else {
-                                        let request = ChangePinRequest {
-                                            msg_id,
-                                            current_pin,
-                                            new_pin,
-                                        };
-                                        match change_pin_controller.submit(request) {
+                                        match NvsStore::new().begin_pin_attempt() {
                                             Ok(()) => {
-                                                ui.show_unlocking();
+                                                let request = ChangePinRequest {
+                                                    msg_id,
+                                                    current_pin,
+                                                    new_pin,
+                                                };
+                                                match change_pin_controller.submit(request) {
+                                                    Ok(()) => {
+                                                        ui.show_unlocking();
+                                                    }
+                                                    Err(_) => {
+                                                        set_device_busy(false);
+                                                        show_pin_change_failure(ui, "Busy");
+                                                        send_response(
+                                                            &mut hid,
+                                                            msg_id,
+                                                            Response::Err { code: ERR_BUSY },
+                                                            &mut plain,
+                                                            &mut enc,
+                                                        );
+                                                    }
+                                                }
                                             }
-                                            Err(_) => {
+                                            Err(err) => {
                                                 set_device_busy(false);
-                                                show_pin_change_failure(ui, "Busy");
+                                                if matches!(err, NvsError::LockedOut) {
+                                                    ui.show_pin_locked_out();
+                                                } else {
+                                                    show_pin_change_failure(ui, "Flash error");
+                                                }
                                                 send_response(
                                                     &mut hid,
                                                     msg_id,
-                                                    Response::Err { code: ERR_BUSY },
+                                                    Response::Err {
+                                                        code: pin_attempt_err_code(&err),
+                                                    },
                                                     &mut plain,
                                                     &mut enc,
                                                 );
@@ -1015,14 +1141,30 @@ fn main() -> ! {
                                 ui.begin_pin_entry("Repeat PIN", None);
                             }
                         } else {
-                            match unlock_controller.submit(pin.as_str()) {
-                                Ok(()) => {
-                                    set_device_busy(true);
-                                    ui.show_unlocking();
+                            // Charge the attempt before the worker sees the
+                            // PIN; cutting power after a failed check must
+                            // not rewind the counter.
+                            match NvsStore::new().begin_pin_attempt() {
+                                Ok(()) => match unlock_controller.submit(pin.as_str()) {
+                                    Ok(()) => {
+                                        set_device_busy(true);
+                                        ui.show_unlocking();
+                                    }
+                                    Err(()) => {
+                                        ui.show_pin_failure(None);
+                                        usb_debug(&mut hid, b"unlock queue busy\r\n");
+                                    }
+                                },
+                                Err(NvsError::LockedOut) => {
+                                    ui.show_pin_locked_out();
+                                    usb_debug(&mut hid, b"pin locked out\r\n");
                                 }
-                                Err(()) => {
+                                Err(NvsError::NotInitialized) => {
+                                    ui.show_pin_not_initialized();
+                                }
+                                Err(_) => {
                                     ui.show_pin_failure(None);
-                                    usb_debug(&mut hid, b"unlock queue busy\r\n");
+                                    usb_debug(&mut hid, b"pin attempt charge failed\r\n");
                                 }
                             }
                         }
@@ -1035,6 +1177,10 @@ fn main() -> ! {
                     }
                     GuiInteraction::LockRequested => {
                         wipe_seed();
+                        // Locking (incl. auto-lock) while a confirmation is on
+                        // screen must answer the host and clear DEVICE_BUSY,
+                        // or the device rejects every request until reboot.
+                        cancel_pending_confirmation(&mut hid, &mut plain, &mut enc);
                         ui.begin_unlock(None);
                         usb_debug(&mut hid, b"locked\r\n");
                     }
@@ -1411,20 +1557,38 @@ fn main() -> ! {
                                                 msg: Response::Err { code: ERR_BUSY },
                                             })
                                         } else if let Frame::One(Request::Unlock { pin }) = &m.msg {
-                                            if let Some(ui) = ui.as_mut() {
-                                                ui.show_unlocking();
-                                            }
-                                            match unlock_controller.submit(pin.as_str()) {
+                                            match NvsStore::new().begin_pin_attempt() {
                                                 Ok(()) => {
-                                                    set_device_busy(true);
-                                                    set_pending_usb_unlock_id(m.id);
-                                                    None
+                                                    if let Some(ui) = ui.as_mut() {
+                                                        ui.show_unlocking();
+                                                    }
+                                                    match unlock_controller.submit(pin.as_str()) {
+                                                        Ok(()) => {
+                                                            set_device_busy(true);
+                                                            set_pending_usb_unlock_id(m.id);
+                                                            None
+                                                        }
+                                                        Err(()) => Some(Msg {
+                                                            v: PROTO_V1,
+                                                            id: m.id,
+                                                            msg: Response::Err { code: ERR_BUSY },
+                                                        }),
+                                                    }
                                                 }
-                                                Err(()) => Some(Msg {
-                                                    v: PROTO_V1,
-                                                    id: m.id,
-                                                    msg: Response::Err { code: ERR_BUSY },
-                                                }),
+                                                Err(err) => {
+                                                    if matches!(err, NvsError::LockedOut) {
+                                                        if let Some(ui) = ui.as_mut() {
+                                                            ui.show_pin_locked_out();
+                                                        }
+                                                    }
+                                                    Some(Msg {
+                                                        v: PROTO_V1,
+                                                        id: m.id,
+                                                        msg: Response::Err {
+                                                            code: pin_attempt_err_code(&err),
+                                                        },
+                                                    })
+                                                }
                                             }
                                         } else if let Frame::One(Request::InitializePIN {
                                             pin,
@@ -1527,15 +1691,30 @@ fn main() -> ! {
                                                         current_pin: current_pin_buf,
                                                         new_pin: new_pin_buf,
                                                     };
-                                                    match change_pin_controller.submit(request) {
+                                                    match NvsStore::new().begin_pin_attempt() {
                                                         Ok(()) => {
-                                                            set_device_busy(true);
-                                                            None
+                                                            match change_pin_controller
+                                                                .submit(request)
+                                                            {
+                                                                Ok(()) => {
+                                                                    set_device_busy(true);
+                                                                    None
+                                                                }
+                                                                Err(_) => Some(Msg {
+                                                                    v: PROTO_V1,
+                                                                    id: m.id,
+                                                                    msg: Response::Err {
+                                                                        code: ERR_BUSY,
+                                                                    },
+                                                                }),
+                                                            }
                                                         }
-                                                        Err(_) => Some(Msg {
+                                                        Err(err) => Some(Msg {
                                                             v: PROTO_V1,
                                                             id: m.id,
-                                                            msg: Response::Err { code: ERR_BUSY },
+                                                            msg: Response::Err {
+                                                                code: pin_attempt_err_code(&err),
+                                                            },
                                                         }),
                                                     }
                                                 }
@@ -1880,6 +2059,7 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                                     frag_id: st.id,
                                     sk_be: cfg.sk_be,
                                     draft,
+                                    expires_at: Instant::now() + CONFIRM_TIMEOUT,
                                 });
                                 true
                             }
@@ -2037,7 +2217,7 @@ fn is_device_locked() -> bool {
 
 fn compute_unlock_outcome(state: &mut AppCoreState<'_>, pin: &str) -> UnlockOutcome {
     let mut nvs = NvsStore::new();
-    match nvs.unlock_with_pepper_readonly(pin, &mut state.nvs_pepper) {
+    match nvs.unlock_with_pepper_precharged(pin, &mut state.nvs_pepper) {
         Ok((seeds, master_key, clear_attempts)) => UnlockOutcome::Success {
             seeds,
             master_key,
@@ -2071,12 +2251,14 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
 ) -> Response {
     match outcome {
         UnlockOutcome::Success {
-            seeds,
-            master_key,
+            mut seeds,
+            mut master_key,
             clear_attempts,
         } => {
             if clear_attempts {
                 if NvsStore::new().clear_pin_attempts().is_err() {
+                    zeroize_seed_vec_runtime(seeds.as_mut_slice());
+                    master_key.zeroize();
                     if let Some(ui) = ui.as_mut() {
                         ui.show_pin_failure(None);
                     }
@@ -2092,16 +2274,9 @@ fn handle_unlock_outcome<B: usb_device::bus::UsbBus>(
             Response::Ok
         }
         UnlockOutcome::WrongPin => {
-            let attempts_remaining = match NvsStore::new().record_wrong_pin_attempt() {
-                Ok(remaining) => remaining,
-                Err(_) => {
-                    if let Some(ui) = ui.as_mut() {
-                        ui.show_pin_failure(None);
-                    }
-                    usb_debug(hid, b"wrong pin attempt record failed\r\n");
-                    return Response::Err { code: ERR_FLASH };
-                }
-            };
+            // Already persisted by begin_pin_attempt() before the worker ran
+            // the KDF; only report what is left.
+            let attempts_remaining = NvsStore::new().get_attempts_remaining();
             if attempts_remaining == 0 {
                 if let Some(ui) = ui.as_mut() {
                     ui.show_pin_locked_out();
@@ -2262,6 +2437,11 @@ fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
                 usb_debug(hid, b"pin change flash error\r\n");
                 return (msg_id, Response::Err { code: ERR_FLASH });
             }
+            // Release the attempt charged for the old PIN; the rewrite only
+            // resets the legacy header counter, not the marks sector.
+            if NvsStore::new().clear_pin_attempts().is_err() {
+                usb_debug(hid, b"pin change clear attempts failed\r\n");
+            }
             apply_unlock_success(seeds.as_slice(), &master_key);
             zeroize_seed_vec_runtime(seeds.as_mut_slice());
             master_key.zeroize();
@@ -2272,16 +2452,9 @@ fn handle_change_pin_outcome<B: usb_device::bus::UsbBus>(
             (msg_id, Response::Ok)
         }
         ChangePinOutcome::WrongPin { msg_id } => {
-            let attempts_remaining = match NvsStore::new().record_wrong_pin_attempt() {
-                Ok(remaining) => remaining,
-                Err(_) => {
-                    if let Some(ui) = ui.as_mut() {
-                        show_pin_change_failure(ui, "Flash error");
-                    }
-                    usb_debug(hid, b"pin change wrong pin record failed\r\n");
-                    return (msg_id, Response::Err { code: ERR_FLASH });
-                }
-            };
+            // Already persisted by begin_pin_attempt() before the worker ran
+            // the KDF; only report what is left.
+            let attempts_remaining = NvsStore::new().get_attempts_remaining();
             if attempts_remaining == 0 {
                 if let Some(ui) = ui.as_mut() {
                     ui.show_pin_locked_out();

@@ -441,6 +441,10 @@ export function deserializeDeviceAddressBookEntries(data: Uint8Array): DeviceAdd
 
 function serializeSpendMetaOptional(w: PostcardWriter, meta: SpendMeta | undefined) {
   if (!meta || !Array.isArray(meta.outputs) || meta.outputs.length === 0) {
+    // Option::None must be written explicitly: postcard cannot decode an
+    // omitted trailing field, so leaving it out makes firmware reject the
+    // frame as bad postcard.
+    w.writeVarint(0);
     return;
   }
   // Option::Some

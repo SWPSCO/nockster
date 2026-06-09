@@ -184,6 +184,9 @@ pub struct InteractionState {
     pub press_started_at: Option<Instant>,
     pub last_touch_sample_at: Option<Instant>,
     pub cooldown_until: Option<Instant>,
+    /// The current touch turned into a scroll gesture; no tap may arm or
+    /// fire until the finger is lifted for real.
+    pub scroll_consumed: bool,
 }
 
 impl InteractionState {
@@ -197,6 +200,7 @@ impl InteractionState {
             press_started_at: None,
             last_touch_sample_at: None,
             cooldown_until: None,
+            scroll_consumed: false,
         }
     }
 }

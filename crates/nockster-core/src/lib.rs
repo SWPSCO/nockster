@@ -326,8 +326,11 @@ pub enum Request {
         slot: u8,
         path: alloc_path::Path,
         msg5: [u64; 5],
+        // `default` keeps decoding hosts that omit a trailing None (the old
+        // skip_serializing_if encoding). Never skip-serialize for postcard:
+        // the omitted form does not decode (non-self-describing format), so
+        // None is always written as its 0x00 option tag.
         #[serde(default)]
-        #[serde(skip_serializing_if = "Option::is_none")]
         meta: Option<SpendMeta>,
     },
     SignSpendHashFor {
@@ -336,7 +339,6 @@ pub enum Request {
         msg5: [u64; 5],
         pubkey: ([u64; 6], [u64; 6]),
         #[serde(default)]
-        #[serde(skip_serializing_if = "Option::is_none")]
         meta: Option<SpendMeta>,
     },
 

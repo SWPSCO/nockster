@@ -18,6 +18,12 @@ pub const BUTTON_INACTIVE_GRACE: Duration = Duration::from_millis(80);
 pub const MIN_PRESS_DURATION: Duration = Duration::from_millis(40);
 pub const RELEASE_DEBOUNCE: Duration = Duration::from_millis(40);
 pub const PRESS_COOLDOWN: Duration = Duration::from_millis(120);
+/// How often to ask the touch controller "is the finger still there?" while
+/// the INT line is silent mid-touch (stationary fingers stop reporting).
+pub const PRESENCE_POLL_INTERVAL: Duration = Duration::from_millis(15);
+/// Presence polling gives up if the controller produced no INT report for
+/// this long; a real touch keeps reporting at least occasionally.
+pub const TOUCH_REPORT_SILENCE_LIMIT: Duration = Duration::from_millis(1500);
 pub const PIN_BUFFER_LEN: usize = 16;
 pub const MAX_PIN_DIGITS: usize = 12;
 

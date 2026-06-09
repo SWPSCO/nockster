@@ -226,6 +226,21 @@ where
     offset_y: i32,
 }
 
+impl<D> ScrolledTarget<'_, D>
+where
+    D: DrawTarget<Color = Rgb565>,
+{
+    fn translate(&self, area: &Rectangle) -> Rectangle {
+        Rectangle::new(
+            Point::new(
+                self.viewport.top_left.x + area.top_left.x,
+                self.viewport.top_left.y + area.top_left.y - self.offset_y,
+            ),
+            area.size,
+        )
+    }
+}
+
 impl<D> DrawTarget for ScrolledTarget<'_, D>
 where
     D: DrawTarget<Color = Rgb565>,
@@ -245,6 +260,42 @@ where
                 let mapped = Point::new(origin.x + point.x, origin.y + point.y - offset_y);
                 viewport.contains(mapped).then_some(Pixel(mapped, color))
             }))
+    }
+
+    // Forward rectangle fills as rectangle fills. The DrawTarget defaults
+    // degrade them to draw_iter, which the SPI display services one pixel
+    // (one address-window transaction) at a time — slow enough that each
+    // scroll step visibly paints top-to-bottom.
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        let clipped = self.translate(area).intersection(&self.viewport);
+        if clipped.size.width == 0 || clipped.size.height == 0 {
+            return Ok(());
+        }
+        self.target.fill_solid(&clipped, color)
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        let translated = self.translate(area);
+        let clipped = translated.intersection(&self.viewport);
+        if clipped.size.width == 0 || clipped.size.height == 0 {
+            return Ok(());
+        }
+        if clipped == translated {
+            return self.target.fill_contiguous(&translated, colors);
+        }
+        // Partially visible at a viewport edge: clip per pixel.
+        let viewport = self.viewport;
+        self.target.draw_iter(
+            translated
+                .points()
+                .zip(colors)
+                .filter_map(move |(point, color)| {
+                    viewport.contains(point).then_some(Pixel(point, color))
+                }),
+        )
     }
 
     fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {

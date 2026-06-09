@@ -46,7 +46,18 @@ const LABELS_ADDR: u32 = CALIBRATION_ADDR + CALIBRATION_SIZE as u32;
 const GUI_PREFS_ADDR: u32 = LABELS_ADDR + LABELS_SIZE as u32;
 const ADDRESS_BOOK_ADDR: u32 = SEED_CORE_STORAGE_END;
 const ADDRESS_BOOK_STORAGE_END: u32 = ADDRESS_BOOK_ADDR + ADDRESS_BOOK_STORAGE_SIZE as u32;
-const NVS_STORAGE_END: u32 = ADDRESS_BOOK_STORAGE_END;
+// PIN attempt marks live in their own sector so recording an attempt never
+// erases or rewrites the seed region: one erased->programmed 32-byte block
+// per attempt (atomic under power loss, and writable under flash encryption),
+// erased as a whole on successful unlock. The legacy header.attempts field is
+// still honored read-only via max() but no longer written on failures.
+const ATTEMPT_MARKS_ADDR: u32 = ADDRESS_BOOK_STORAGE_END;
+const ATTEMPT_MARKS_STORAGE_SIZE: usize = NVS_SECTOR_SIZE;
+const ATTEMPT_MARKS_END: u32 = ATTEMPT_MARKS_ADDR + ATTEMPT_MARKS_STORAGE_SIZE as u32;
+const ATTEMPT_MARK_SIZE: usize = 32;
+const NVS_STORAGE_END: u32 = ATTEMPT_MARKS_END;
+// partitions.csv: nvs, 0x9000, 28K
+const _: () = assert!(NVS_STORAGE_END <= NVS_BASE_ADDR + 28 * 1024);
 const FLASH_PAUSE_TIMEOUT_MS: u16 = 2_000;
 
 const MAGIC: [u8; 4] = *b"NCK1";
@@ -474,7 +485,8 @@ impl NvsStore {
     pub fn get_attempts_remaining(&mut self) -> u8 {
         match self.read_header() {
             Ok(Some(header)) if header.initialized() => {
-                MAX_PIN_ATTEMPTS.saturating_sub(header.attempts)
+                let used = self.attempts_used(&header).unwrap_or(MAX_PIN_ATTEMPTS);
+                MAX_PIN_ATTEMPTS.saturating_sub(used)
             }
             _ => MAX_PIN_ATTEMPTS,
         }
@@ -696,11 +708,33 @@ impl NvsStore {
         pin: &str,
         pepper_source: &mut P,
     ) -> Result<(Vec<[u8; 64]>, [u8; 32], bool), NvsError> {
+        self.unlock_with_pepper_inner(pin, pepper_source, true)
+    }
+
+    /// Unlock variant for callers that already charged this attempt via
+    /// [`Self::begin_pin_attempt`]: the lockout gate is skipped here because
+    /// the final allowed attempt legitimately runs with the persisted counter
+    /// at MAX. Never call this without the pre-charge.
+    pub fn unlock_with_pepper_precharged<P: NvsPepperSource>(
+        &mut self,
+        pin: &str,
+        pepper_source: &mut P,
+    ) -> Result<(Vec<[u8; 64]>, [u8; 32], bool), NvsError> {
+        self.unlock_with_pepper_inner(pin, pepper_source, false)
+    }
+
+    fn unlock_with_pepper_inner<P: NvsPepperSource>(
+        &mut self,
+        pin: &str,
+        pepper_source: &mut P,
+        enforce_lockout: bool,
+    ) -> Result<(Vec<[u8; 64]>, [u8; 32], bool), NvsError> {
         let header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
         if !header.initialized() {
             return Err(NvsError::NotInitialized);
         }
-        if header.attempts >= MAX_PIN_ATTEMPTS {
+        let attempts_used = self.attempts_used(&header)?;
+        if enforce_lockout && attempts_used >= MAX_PIN_ATTEMPTS {
             return Err(NvsError::LockedOut);
         }
 
@@ -738,22 +772,42 @@ impl NvsStore {
             }
         }
 
-        Ok((seeds, key, header.attempts != 0))
+        Ok((seeds, key, attempts_used != 0))
     }
 
-    pub fn record_wrong_pin_attempt(&mut self) -> Result<u8, NvsError> {
-        let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
+    /// Persist a provisional failed attempt BEFORE the PIN is checked, so
+    /// cutting power right after a failed check cannot rewind the counter.
+    /// A successful unlock clears it. Returns LockedOut when no attempts
+    /// remain; on Ok the caller may run exactly one PIN check.
+    pub fn begin_pin_attempt(&mut self) -> Result<(), NvsError> {
+        let header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
         if !header.initialized() {
             return Err(NvsError::NotInitialized);
         }
-        if header.attempts >= MAX_PIN_ATTEMPTS {
+        let used = self.attempts_used(&header)?;
+        if used >= MAX_PIN_ATTEMPTS {
+            return Err(NvsError::LockedOut);
+        }
+        self.write_attempt_marks_up_to(used + 1)
+    }
+
+    pub fn record_wrong_pin_attempt(&mut self) -> Result<u8, NvsError> {
+        let header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
+        if !header.initialized() {
+            return Err(NvsError::NotInitialized);
+        }
+        let used = self.attempts_used(&header)?;
+        if used >= MAX_PIN_ATTEMPTS {
             return Ok(0);
         }
-        self.increment_attempts(&mut header)?;
-        Ok(MAX_PIN_ATTEMPTS.saturating_sub(header.attempts))
+        self.write_attempt_marks_up_to(used + 1)?;
+        Ok(MAX_PIN_ATTEMPTS - (used + 1))
     }
 
     pub fn clear_pin_attempts(&mut self) -> Result<(), NvsError> {
+        self.erase_attempt_marks()?;
+        // Legacy devices may still carry a nonzero header counter; clearing it
+        // rewrites the seed region, so it only happens when actually set.
         let mut header = self.read_header()?.ok_or(NvsError::NotInitialized)?;
         self.clear_attempts_if_needed(&mut header)
     }
@@ -868,6 +922,9 @@ impl NvsStore {
         }
         new_key.zeroize();
         zeroize_seed_vec(&mut seeds);
+        // The PIN changed successfully; a failed marks clear must not turn
+        // that into an error (the marks also clear on the next unlock).
+        let _ = self.erase_attempt_marks();
         Ok(())
     }
 
@@ -877,8 +934,29 @@ impl NvsStore {
         new_pin: &str,
         pepper_source: &mut P,
     ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
+        self.prepare_change_pin_inner(old_pin, new_pin, pepper_source, true)
+    }
+
+    /// See [`Self::unlock_with_pepper_precharged`]: requires a prior
+    /// [`Self::begin_pin_attempt`] for the old PIN.
+    pub fn prepare_change_pin_with_pepper_precharged<P: NvsPepperSource>(
+        &mut self,
+        old_pin: &str,
+        new_pin: &str,
+        pepper_source: &mut P,
+    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
+        self.prepare_change_pin_inner(old_pin, new_pin, pepper_source, false)
+    }
+
+    fn prepare_change_pin_inner<P: NvsPepperSource>(
+        &mut self,
+        old_pin: &str,
+        new_pin: &str,
+        pepper_source: &mut P,
+        enforce_lockout: bool,
+    ) -> Result<(PreparedSeedRewrite, Vec<[u8; 64]>, [u8; 32]), NvsError> {
         let (mut seeds, mut old_key, _clear_attempts) =
-            self.unlock_with_pepper_readonly(old_pin, pepper_source)?;
+            self.unlock_with_pepper_inner(old_pin, pepper_source, enforce_lockout)?;
         old_key.zeroize();
         let labels = self.read_seed_labels().unwrap_or_default();
         let calibration = self.read_touch_calibration().ok().flatten();
@@ -1659,6 +1737,60 @@ impl NvsStore {
         sector[..HEADER_SIZE].copy_from_slice(&header_bytes);
 
         self.write_seed_core_region(&sector)
+    }
+
+    fn read_attempt_marks(&mut self) -> Result<u8, NvsError> {
+        let mut buf = [0u8; ATTEMPT_MARK_SIZE * MAX_PIN_ATTEMPTS as usize];
+        self.flash
+            .read(ATTEMPT_MARKS_ADDR, &mut buf)
+            .map_err(|_| NvsError::Flash)?;
+        let mut count = 0u8;
+        for block in buf.chunks_exact(ATTEMPT_MARK_SIZE) {
+            if !block.iter().all(|b| *b == 0xFF) {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    fn write_attempt_marks_up_to(&mut self, target: u8) -> Result<(), NvsError> {
+        let target = target.min(MAX_PIN_ATTEMPTS);
+        let mut buf = [0u8; ATTEMPT_MARK_SIZE * MAX_PIN_ATTEMPTS as usize];
+        self.flash
+            .read(ATTEMPT_MARKS_ADDR, &mut buf)
+            .map_err(|_| NvsError::Flash)?;
+        let mut used: u8 = 0;
+        for block in buf.chunks_exact(ATTEMPT_MARK_SIZE) {
+            if !block.iter().all(|b| *b == 0xFF) {
+                used += 1;
+            }
+        }
+        if used >= target {
+            return Ok(());
+        }
+        let _pause = FlashPauseGuard::acquire()?;
+        let zeros = [0u8; ATTEMPT_MARK_SIZE];
+        for (index, block) in buf.chunks_exact(ATTEMPT_MARK_SIZE).enumerate() {
+            if used >= target {
+                break;
+            }
+            if block.iter().all(|b| *b == 0xFF) {
+                let addr = ATTEMPT_MARKS_ADDR + (index * ATTEMPT_MARK_SIZE) as u32;
+                embedded_storage::nor_flash::NorFlash::write(&mut self.flash, addr, &zeros)
+                    .map_err(|_| NvsError::Flash)?;
+                used += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn erase_attempt_marks(&mut self) -> Result<(), NvsError> {
+        let _pause = FlashPauseGuard::acquire()?;
+        self.erase_flash_region(ATTEMPT_MARKS_ADDR, ATTEMPT_MARKS_END)
+    }
+
+    fn attempts_used(&mut self, header: &Header) -> Result<u8, NvsError> {
+        Ok(header.attempts.max(self.read_attempt_marks()?))
     }
 
     fn increment_attempts(&mut self, header: &mut Header) -> Result<(), NvsError> {

@@ -758,3 +758,11 @@ details[open] > .composer-summary::after {
   margin-bottom: 4px;
   border-bottom: 1px solid rgba(128, 128, 128, 0.25);
 }
+
+.composer-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}

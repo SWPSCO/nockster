@@ -1259,6 +1259,82 @@ export function Composer({
   const readFileBytes = async (file: File | null | undefined): Promise<Uint8Array | null> =>
     file ? new Uint8Array(await file.arrayBuffer()) : null;
 
+  // Spend an HTLC-locked note: branch 0 (claim) = recipient + preimage,
+  // branch 1 (refund) = refund address after a timeout height. The same params
+  // the HTLC output was built with, plus which branch you're spending.
+  const composeHtlcSpend = useCallback(() => {
+    setHtlcStatus('');
+    setHtlcDraft(null);
+    const fields: Array<[string, string]> = [
+      ['source/change address', htlc.sourceAddr],
+      ['claim recipient', htlc.claimRecipient],
+      ['claim commitment', htlc.commitment],
+      ['refund address', htlc.refundAddr],
+      ['output recipient', htlc.outRecipient],
+    ];
+    for (const [label, v] of fields) {
+      if (!is_valid_pkh(v.trim())) {
+        setHtlcStatus(`${label} is not a valid address/hash`);
+        return;
+      }
+    }
+    const originPage = Number(htlc.originPage.trim());
+    const assets = Number(htlc.assets.trim());
+    const refundHeight = Number(htlc.refundHeight.trim());
+    if (![originPage, assets].every((n) => Number.isInteger(n) && n >= 0)) {
+      setHtlcStatus('note origin-page and assets must be whole numbers');
+      return;
+    }
+    if (!Number.isInteger(refundHeight) || refundHeight <= 0) {
+      setHtlcStatus('refund height must be a positive whole number');
+      return;
+    }
+    if (!is_valid_pkh(htlc.nameFirst.trim()) || !is_valid_pkh(htlc.nameLast.trim())) {
+      setHtlcStatus('note name (first/last) must be valid hashes');
+      return;
+    }
+    const parsedAmount = parseAmountTextToNicks(htlc.outAmount, unitModeRef.current);
+    if ('error' in parsedAmount) {
+      setHtlcStatus(`output amount: ${parsedAmount.error}`);
+      return;
+    }
+    try {
+      const branches: OutputLockBranch[] = [
+        { recipient: htlc.claimRecipient.trim(), hashlock: [htlc.commitment.trim()] },
+        { recipient: htlc.refundAddr.trim(), timelock: { abs_min: refundHeight } },
+      ];
+      const result = compose_tx_v1_unsigned({
+        source_pkh: htlc.sourceAddr.trim(),
+        source_or_lock: { branches, spend_branch: htlc.branch === 'claim' ? 0 : 1 },
+        notes: [
+          {
+            name_first: htlc.nameFirst.trim(),
+            name_last: htlc.nameLast.trim(),
+            origin_page: originPage,
+            assets,
+            version: 1,
+          },
+        ],
+        outputs: [{ recipient: htlc.outRecipient.trim(), amount: parsedAmount.nicks, alias: 'htlc-spend' }],
+      });
+      let tree: TxTreeNode | null = null;
+      try {
+        tree = inspect_tx(result.wallet_jam) as TxTreeNode;
+      } catch {
+        tree = null;
+      }
+      setHtlcDraft({
+        filename: `htlc-${htlc.branch}-${Date.now()}.psnt`,
+        psnt: result.wallet_jam,
+        summaryJson: result.summary_json,
+        tree,
+      });
+      setHtlcStatus(`composed ${htlc.branch} spend`);
+    } catch (err: any) {
+      setHtlcStatus(`compose failed: ${err?.message ?? String(err)}`);
+    }
+  }, [htlc]);
+
   const addEntry = useCallback(async () => {
     const alias = entryFormAlias.trim();
     if (!alias) {
@@ -2023,6 +2099,95 @@ export function Composer({
                   merge &amp; download
                 </button>
                 {mergeStatus && <div className="composer-api-status">{mergeStatus}</div>}
+              </div>
+            </details>
+            )}
+
+            {sidebarPanel === 'send' && (
+            <details className="composer-details">
+              <summary className="composer-summary">
+                <span>Spend an HTLC-locked note</span>
+              </summary>
+              <div className="composer-details-body">
+                <div className="inspector-help">
+                  Spend a note locked by an HTLC: <b>claim</b> (you reveal the preimage) or{' '}
+                  <b>refund</b> (the refund address reclaims after the timeout height). Enter the
+                  same lock parameters the HTLC was built with.
+                </div>
+                <div className="composer-row">
+                  <label className="composer-radio">
+                    <input
+                      type="radio"
+                      checked={htlc.branch === 'claim'}
+                      onChange={() => setHtlc((h) => ({ ...h, branch: 'claim' }))}
+                    />
+                    claim
+                  </label>
+                  <label className="composer-radio">
+                    <input
+                      type="radio"
+                      checked={htlc.branch === 'refund'}
+                      onChange={() => setHtlc((h) => ({ ...h, branch: 'refund' }))}
+                    />
+                    refund
+                  </label>
+                </div>
+                {(
+                  [
+                    ['sourceAddr', 'your address (change / refund-to)'],
+                    ['nameFirst', 'note name (first hash)'],
+                    ['nameLast', 'note name (last hash)'],
+                    ['originPage', 'note origin page'],
+                    ['assets', 'note assets (nicks)'],
+                    ['claimRecipient', 'HTLC claim recipient (pkh)'],
+                    ['commitment', 'HTLC claim commitment (hash)'],
+                    ['refundAddr', 'HTLC refund address (pkh)'],
+                    ['refundHeight', 'HTLC refund unlock height'],
+                    ['outRecipient', 'output recipient (pkh)'],
+                    ['outAmount', `output amount (${unitMode})`],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label className="composer-field" key={key}>
+                    <span>{label}</span>
+                    <input
+                      className="node-input"
+                      value={htlc[key] as string}
+                      onChange={(e) => setHtlc((h) => ({ ...h, [key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+                <button type="button" className="btn btn-small btn-success" onClick={composeHtlcSpend}>
+                  compose {htlc.branch} spend
+                </button>
+                {htlcStatus && <div className="composer-api-status">{htlcStatus}</div>}
+                {htlcDraft && (
+                  <div className="composer-result">
+                    <div className="composer-row composer-action-row">
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-small"
+                        title={!canSignDraft ? signDraftDisabledReason : undefined}
+                        disabled={!onSignDraft || !canSignDraft || signingDraft}
+                        onClick={() => void onSignDraft?.(htlcDraft)}
+                      >
+                        {signingDraft ? 'signing...' : 'sign on device'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => downloadBytes(htlcDraft.filename, htlcDraft.psnt)}
+                      >
+                        download
+                      </button>
+                    </div>
+                    {htlcDraft.tree && (
+                      <details className="composer-inspect">
+                        <summary>inspect transaction</summary>
+                        <TxTree node={htlcDraft.tree} />
+                      </details>
+                    )}
+                  </div>
+                )}
               </div>
             </details>
             )}

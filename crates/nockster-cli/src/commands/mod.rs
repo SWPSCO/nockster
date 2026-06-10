@@ -10,6 +10,8 @@ pub mod reset;
 pub mod security;
 pub mod seed;
 pub mod seed_prompt;
+pub mod show_address;
+pub mod sign_message;
 pub mod sign_draft;
 pub mod smoke;
 pub mod test;

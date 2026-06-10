@@ -48,6 +48,16 @@ pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
 pub const TX_REVIEW_FLAG_HIGH_FEE: u8 = 1 << 0;
 pub const TX_REVIEW_FLAG_NO_REFUND: u8 = 1 << 1;
 pub const TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS: u8 = 1 << 2;
+/// An output's claimed lock did not hash to its committed lock-root.
+pub const TX_REVIEW_FLAG_LOCK_UNVERIFIED: u8 = 1 << 3;
+/// An output is timelocked.
+pub const TX_REVIEW_FLAG_TIMELOCK: u8 = 1 << 4;
+/// An output requires a hash preimage (HTLC-style).
+pub const TX_REVIEW_FLAG_HASHLOCK: u8 = 1 << 5;
+/// An output is a Base bridge deposit (leaving the chain).
+pub const TX_REVIEW_FLAG_BRIDGE: u8 = 1 << 6;
+/// An output pays an M-of-N multisig (M &lt; N).
+pub const TX_REVIEW_FLAG_MULTISIG: u8 = 1 << 7;
 
 #[derive(Clone, Debug)]
 pub struct TxReviewOutput {
@@ -63,6 +73,12 @@ pub struct TxReviewSummary {
     pub refund_total: u64,
     pub fee_total: u64,
     pub flags: u8,
+    /// Multisig coordination for the input the device is authorized on (0 if
+    /// none): signatures required, real signatures already collected, and
+    /// whether the device still needs to add its own.
+    pub multisig_m: u8,
+    pub multisig_present: u8,
+    pub multisig_we_must_sign: bool,
 }
 
 use super::label::{LabelButton, LabelInteraction};

@@ -144,8 +144,48 @@ pub fn handle_request(req: &Request, locked: bool) -> Option<Response> {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             })
         }
+        Request::SignMessage { slot, path, message } => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            let digest = match nockster_core::draft_sign::message_digest_v1(message) {
+                Ok(d) => d,
+                Err(_) => return Some(Response::Err { code: ERR_CRYPTO }),
+            };
+            Some(sign_digest5_for_slot(*slot, path, digest))
+        }
+        Request::SignHash {
+            slot,
+            path,
+            digest5,
+        } => {
+            if locked {
+                return Some(Response::Err {
+                    code: ERR_DEVICE_LOCKED,
+                });
+            }
+            Some(sign_digest5_for_slot(*slot, path, *digest5))
+        }
         Request::Health => Some(handle_health()),
         _ => None,
+    }
+}
+
+/// Cheetah-schnorr sign a 5-limb Tip5 digest with the key at slot/path.
+fn sign_digest5_for_slot(slot: u8, path: &pathmod::Path, digest5: [u64; 5]) -> Response {
+    match derive_child_sk_for_slot(path, slot as usize) {
+        Ok(mut sk) => {
+            let pk = cheetah::cheetah_pub_from_sk(sk);
+            let (e, s) = cheetah::schnorr_sign_tx(sk, pk, digest5);
+            sk.zeroize();
+            Response::OkCheetahSig {
+                chal: e.values,
+                sig: s.values,
+            }
+        }
+        Err(_) => Response::Err { code: ERR_NO_SEED },
     }
 }
 

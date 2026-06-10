@@ -18,7 +18,9 @@ pub use menu::{AboutInfo, WalletRow, WalletRows};
 pub use seed::{SeedInteraction, SeedPhrase};
 pub use state::{
     GuiInteraction, GuiMode, MenuItem, TxReviewSummary, VaultInteraction, WalletInteraction,
-    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
+    TX_REVIEW_FLAG_LOCK_UNVERIFIED, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_MULTISIG,
+    TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
 };
 pub use touch::{default_touch_calibration, touch_calibration_valid, ScreenPoint};
 

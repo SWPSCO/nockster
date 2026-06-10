@@ -64,6 +64,12 @@ pub enum Cmd {
     /// read the device's stored address book (label → PKH)
     AddressBook(PortArgs),
 
+    /// ask the device to display a receive PKH for a slot/path
+    ShowAddress(ShowAddressArgs),
+
+    /// sign an arbitrary message on-device after on-screen review
+    SignMessage(SignMessageArgs),
+
     /// manage the on-device preimage vault (%hax lock secrets)
     Vault(VaultArgs),
 
@@ -156,6 +162,42 @@ pub struct ExportMasterPubkeyArgs {
     /// output path (import with: nockchain-wallet import-master-pubkey --file <path>)
     #[arg(long, default_value = "master-pubkey.export")]
     pub out: PathBuf,
+}
+
+#[derive(Args, Clone)]
+pub struct ShowAddressArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
+    #[arg(long, default_value = "hid", visible_alias = "device")]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    /// seed slot to derive from
+    #[arg(long, default_value_t = 0)]
+    pub slot: u8,
+    /// derivation path to display
+    #[arg(long, default_value = "m")]
+    pub path: String,
+}
+
+#[derive(Args, Clone)]
+pub struct SignMessageArgs {
+    /// Serial port path (e.g. `/dev/ttyACM0`) or HID selector (`hid` or `hid:VID:PID`)
+    #[arg(long, default_value = "hid", visible_alias = "device")]
+    pub port: String,
+    #[arg(long, default_value_t = 115200)]
+    pub baud: u32,
+    /// seed slot to sign with
+    #[arg(long, default_value_t = 0)]
+    pub slot: u8,
+    /// derivation path
+    #[arg(long, default_value = "m")]
+    pub path: String,
+    /// message text to sign
+    #[arg(long, conflicts_with = "file")]
+    pub message: Option<String>,
+    /// read the message bytes from a file instead of --message
+    #[arg(long, conflicts_with = "message")]
+    pub file: Option<PathBuf>,
 }
 
 #[derive(Args, Clone)]
@@ -662,6 +704,10 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Reset(args) => commands::reset::run(&args),
         Cmd::ListPorts => commands::ports::run(),
         Cmd::AddressBook(args) => commands::address_book::run(&args.port, args.baud),
+        Cmd::ShowAddress(args) => {
+            commands::show_address::run(&args.port, args.baud, args.slot, &args.path)
+        }
+        Cmd::SignMessage(args) => commands::sign_message::run(args),
         Cmd::Vault(args) => commands::vault::run(args),
         Cmd::ExportMasterPubkey(args) => commands::vault::run_export_master_pubkey(args),
         Cmd::Derive(args) => commands::derive::run(

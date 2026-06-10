@@ -73,6 +73,9 @@ fn request_variant_reminder(req: Request) {
         Request::VaultReveal { .. } => {}
         Request::VaultDelete { .. } => {}
         Request::GetMasterPubkey { .. } => {}
+        Request::ShowAddress { .. } => {}
+        Request::SignMessage { .. } => {}
+        Request::SignHash { .. } => {}
     }
 }
 
@@ -329,6 +332,29 @@ fn request_fixtures() -> Vec<(&'static str, Request)> {
         ("VaultReveal", Request::VaultReveal { slot: 2 }),
         ("VaultDelete", Request::VaultDelete { slot: 2 }),
         ("GetMasterPubkey", Request::GetMasterPubkey { slot: 0 }),
+        (
+            "ShowAddress",
+            Request::ShowAddress {
+                slot: 0,
+                path: path(&[44, 0, 0]),
+            },
+        ),
+        (
+            "SignMessage",
+            Request::SignMessage {
+                slot: 1,
+                path: path(&[44, 0]),
+                message: b"hello nockchain".to_vec(),
+            },
+        ),
+        (
+            "SignHash",
+            Request::SignHash {
+                slot: 0,
+                path: path(&[44]),
+                digest5: [1, 2, 3, 4, u64::MAX],
+            },
+        ),
     ]
 }
 

@@ -591,6 +591,57 @@ export class NocksterDevice {
     return resp;
   }
 
+  async showAddress(slot: number, path: number[], timeoutMs: number = 300000) {
+    const resp = await this.call({ type: 'ShowAddress', slot, path }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
+  /**
+   * Sign an arbitrary message after on-device review (the device shows the
+   * message text and hashes it itself). Returns the Cheetah schnorr signature.
+   */
+  async signMessage(
+    slot: number,
+    path: number[],
+    message: Uint8Array,
+    timeoutMs: number = 300000,
+  ): Promise<{ chal: bigint[]; sig: bigint[] }> {
+    const resp = await this.call({ type: 'SignMessage', slot, path, message }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkCheetahSig') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return { chal: resp.chal, sig: resp.sig };
+  }
+
+  /** Sign a pre-computed Tip5 digest (five Goldilocks limbs) after confirmation. */
+  async signHash(
+    slot: number,
+    path: number[],
+    digest5: bigint[],
+    timeoutMs: number = 300000,
+  ): Promise<{ chal: bigint[]; sig: bigint[] }> {
+    if (digest5.length !== 5) {
+      throw new Error('digest5 must have 5 limbs');
+    }
+    const resp = await this.call({ type: 'SignHash', slot, path, digest5 }, timeoutMs);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'OkCheetahSig') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return { chal: resp.chal, sig: resp.sig };
+  }
+
   async getAddressBook(timeoutMs: number = 30000): Promise<DeviceAddressBookEntry[]> {
     const msgId = this.nextMsgId++;
     const respP = this.waitForResponse(msgId, () => true, timeoutMs);
@@ -725,46 +776,86 @@ export class NocksterDevice {
       writeFlash?: boolean;
       chunkSize?: number;
       timeoutMs?: number;
+      /**
+       * Resume an interrupted transfer instead of restarting it. When the
+       * device still has an active session for this exact bundle (same
+       * release version and image size, partway through), streaming continues
+       * from its `bytes_received` rather than re-running BeginUpdate. Default
+       * true. The FinishUpdate full-image hash check still guards integrity.
+       */
+      resume?: boolean;
       onProgress?: (status: UpdateStatus) => void;
       onBegin?: (status: UpdateStatus) => void;
       onChunk?: (status: UpdateStatus, expectedBytesReceived: number) => void;
+      onResume?: (status: UpdateStatus) => void;
     } = {},
   ): Promise<UpdateStatus> {
     const writeFlash = options.writeFlash ?? false;
     const chunkSize = options.chunkSize ?? MAX_UPDATE_CHUNK_LEN;
     const timeoutMs = options.timeoutMs ?? 120000;
+    const allowResume = options.resume ?? true;
 
     if (chunkSize <= 0 || chunkSize > MAX_UPDATE_CHUNK_LEN) {
       throw new Error(`chunkSize must be between 1 and ${MAX_UPDATE_CHUNK_LEN}`);
     }
     await assertUpdateFirmwareMatchesBundle(bundle, firmware);
 
+    // Resume detection: an active session whose verified manifest matches this
+    // bundle and is partway through can be continued without re-beginning.
+    let resumeStatus: UpdateStatus | null = null;
+    if (allowResume) {
+      try {
+        const statusResp = await this.call({ type: 'GetUpdateStatus' }, timeoutMs);
+        if (
+          statusResp.type === 'OkUpdateStatus' &&
+          statusResp.status.active &&
+          statusResp.status.manifest_verified &&
+          statusResp.status.release_version === bundle.manifest.release_version &&
+          statusResp.status.image_size === bundle.manifest.image_size &&
+          statusResp.status.bytes_received > 0 &&
+          statusResp.status.bytes_received < firmware.length
+        ) {
+          resumeStatus = statusResp.status;
+        }
+      } catch {
+        // No resumable session; fall through to a fresh BeginUpdate.
+      }
+    }
+
     let begun = false;
     try {
-      const beginResp = await this.call({
-        type: 'BeginUpdate',
-        manifest: bundle.manifest,
-        signature64: bundle.signature64,
-        signing_pubkey_sec1: bundle.signing_pubkey_sec1,
-        write_flash: writeFlash,
-      }, timeoutMs);
-      if (beginResp.type === 'Err') {
-        throw new Error(getErrorMessage(beginResp.code));
+      let offset: number;
+      if (resumeStatus) {
+        begun = true;
+        offset = resumeStatus.bytes_received;
+        options.onResume?.(resumeStatus);
+        options.onProgress?.(resumeStatus);
+      } else {
+        const beginResp = await this.call({
+          type: 'BeginUpdate',
+          manifest: bundle.manifest,
+          signature64: bundle.signature64,
+          signing_pubkey_sec1: bundle.signing_pubkey_sec1,
+          write_flash: writeFlash,
+        }, timeoutMs);
+        if (beginResp.type === 'Err') {
+          throw new Error(getErrorMessage(beginResp.code));
+        }
+        if (beginResp.type !== 'OkUpdateStatus') {
+          throw new Error(`unexpected response: ${beginResp.type}`);
+        }
+        assertUpdateStreamStatus(beginResp.status, bundle, 'begin update stream', {
+          expectedActive: true,
+          expectedManifestVerified: true,
+          expectedImageVerified: false,
+          expectedBytesReceived: 0,
+        });
+        begun = true;
+        offset = 0;
+        options.onBegin?.(beginResp.status);
+        options.onProgress?.(beginResp.status);
       }
-      if (beginResp.type !== 'OkUpdateStatus') {
-        throw new Error(`unexpected response: ${beginResp.type}`);
-      }
-      assertUpdateStreamStatus(beginResp.status, bundle, 'begin update stream', {
-        expectedActive: true,
-        expectedManifestVerified: true,
-        expectedImageVerified: false,
-        expectedBytesReceived: 0,
-      });
-      begun = true;
-      options.onBegin?.(beginResp.status);
-      options.onProgress?.(beginResp.status);
 
-      let offset = 0;
       while (offset < firmware.length) {
         const end = Math.min(firmware.length, offset + chunkSize);
         const chunk = firmware.subarray(offset, end);

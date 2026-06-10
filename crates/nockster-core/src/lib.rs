@@ -458,6 +458,29 @@ pub enum Request {
     GetMasterPubkey {
         slot: u8,
     },
+    /// Compute and display the receive PKH for a seed slot/path on the trusted
+    /// device screen. The host may also show an address, but the user's check
+    /// should be against the device-rendered value.
+    ShowAddress {
+        slot: u8,
+        path: alloc_path::Path,
+    },
+    /// Sign an arbitrary message after on-screen review. The device hashes the
+    /// message itself (nockchain `++page-msg`, Tip5) and Cheetah-schnorr signs
+    /// the digest — same scheme as the wallet's `sign-message`.
+    SignMessage {
+        slot: u8,
+        path: alloc_path::Path,
+        message: alloc::vec::Vec<u8>,
+    },
+    /// Sign a pre-computed Tip5 digest (five Goldilocks limbs) after on-screen
+    /// confirmation — the wallet's `sign-hash`. Domain-separated from spend
+    /// signing only by the explicit user prompt.
+    SignHash {
+        slot: u8,
+        path: alloc_path::Path,
+        digest5: [u64; 5],
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

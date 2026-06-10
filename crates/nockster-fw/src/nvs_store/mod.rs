@@ -1465,11 +1465,13 @@ impl NvsStore {
         }
     }
 
-    fn seed_root_pub(seed: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
-        let (mut sk, mut cc) = cheetah::master_from_seed(seed);
+    /// Stored slot plaintext is a Cheetah master coil (`sk || cc`); the root
+    /// pubkey is the public key of the master `sk`.
+    fn seed_root_pub(coil: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
+        let mut sk = [0u8; 32];
+        sk.copy_from_slice(&coil[..32]);
         let pub_xy = cheetah::cheetah_pub_from_sk(sk);
         sk.zeroize();
-        cc.zeroize();
         pub_xy
     }
 

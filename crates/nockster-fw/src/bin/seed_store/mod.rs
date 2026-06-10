@@ -119,7 +119,14 @@ pub fn bip39_seed_from_words<'a>(words: impl IntoIterator<Item = &'a str>) -> Re
     result
 }
 
-pub fn get_xpub(path: &pathmod::Path) -> Result<Xpub, ()> {
+pub fn get_xpub(_path: &pathmod::Path) -> Result<Xpub, ()> {
+    // secp256k1/bip32 xpub derivation needs a BIP39 seed; slots now store a
+    // Cheetah coil with no seed, so this legacy path is unsupported.
+    Err(())
+}
+
+#[allow(dead_code)]
+fn get_xpub_legacy(path: &pathmod::Path) -> Result<Xpub, ()> {
     let mut seed = get_active_seed_copy()?;
     let dp = path_to_derivation(path)?;
     let child = match XPrv::derive_from_path(&seed, &dp) {
@@ -182,7 +189,10 @@ pub fn wipe_seed() {
 pub fn handle_session_request(req: &Request) -> Option<Response> {
     match req {
         Request::SetSeed { seed64 } => {
-            set_seed(seed64);
+            // Dev/diagnostic path: store the BIP39 seed as a coil too.
+            let mut coil = coil_from_seed(seed64);
+            set_seed(&coil);
+            coil.zeroize();
             Some(Response::Ok)
         }
         Request::Wipe | Request::Lock => {
@@ -202,23 +212,32 @@ pub fn compute_seed_op_outcome(mut request: SeedOpRequest) -> SeedOpOutcome {
     match &mut request.op {
         SeedOp::Add { seed64, master_key } => {
             let mut nvs = NvsStore::new();
-            let pub_xy = root_pub_from_seed(seed64);
-            let outcome = match nvs.add_seed_with_key(master_key, seed64, pub_xy) {
+            // Convert the BIP39 seed to the stored coil; the session and NVS
+            // hold coils, not seeds.
+            let mut coil = coil_from_seed(seed64);
+            seed64.zeroize();
+            let pub_xy = root_pub_from_coil(&coil);
+            let outcome = match nvs.add_seed_with_key(master_key, &coil, pub_xy) {
                 Ok(slot) => SeedOpOutcome::Added {
                     msg_id,
                     slot,
-                    seed64: *seed64,
+                    seed64: coil,
                 },
-                Err(NvsError::WrongPin) => SeedOpOutcome::WrongPin { msg_id },
-                Err(NvsError::LockedOut) => SeedOpOutcome::LockedOut { msg_id },
-                Err(NvsError::Full) => SeedOpOutcome::Full { msg_id },
-                Err(NvsError::Flash) => SeedOpOutcome::Flash { msg_id },
-                Err(NvsError::Crypto) => SeedOpOutcome::Crypto { msg_id },
-                Err(NvsError::NotInitialized) => SeedOpOutcome::NotInitialized { msg_id },
-                Err(_) => SeedOpOutcome::Failed { msg_id },
+                Err(err) => {
+                    // On failure the coil is not handed to the session; wipe it.
+                    coil.zeroize();
+                    match err {
+                        NvsError::WrongPin => SeedOpOutcome::WrongPin { msg_id },
+                        NvsError::LockedOut => SeedOpOutcome::LockedOut { msg_id },
+                        NvsError::Full => SeedOpOutcome::Full { msg_id },
+                        NvsError::Flash => SeedOpOutcome::Flash { msg_id },
+                        NvsError::Crypto => SeedOpOutcome::Crypto { msg_id },
+                        NvsError::NotInitialized => SeedOpOutcome::NotInitialized { msg_id },
+                        _ => SeedOpOutcome::Failed { msg_id },
+                    }
+                }
             };
             master_key.zeroize();
-            seed64.zeroize();
             outcome
         }
         SeedOp::Delete { slot, master_key } => {
@@ -374,7 +393,7 @@ pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
     // Slow path: derive once for this generation, then cache.
     let mut out = Vec::new();
     for (idx, seed) in session::seed_slots_copy().into_iter().enumerate() {
-        let pub_xy = root_pub_from_seed(&seed);
+        let pub_xy = root_pub_from_coil(&seed);
         let path = pathmod::Path::new();
         out.push(CheetahPub {
             slot: idx as u8,
@@ -402,7 +421,13 @@ fn path_to_derivation(path: &pathmod::Path) -> Result<DerivationPath, ()> {
     Ok(dp)
 }
 
-fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<SigningKey, ()> {
+fn derive_signing_key_for_slot(_path: &pathmod::Path, _slot: usize) -> Result<SigningKey, ()> {
+    // secp256k1 signing needs a BIP39 seed; coil slots have none.
+    Err(())
+}
+
+#[allow(dead_code)]
+fn derive_signing_key_for_slot_legacy(path: &pathmod::Path, slot: usize) -> Result<SigningKey, ()> {
     let mut seed = get_seed_for_slot(slot)?;
     let mut key = match XPrv::new(&seed) {
         Ok(key) => key,
@@ -429,6 +454,12 @@ fn derive_signing_key_for_slot(path: &pathmod::Path, slot: usize) -> Result<Sign
 }
 
 pub fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
+    // secp256k1 master fingerprint needs a BIP39 seed; coil slots have none.
+    Err(())
+}
+
+#[allow(dead_code)]
+fn master_fingerprint_for_active_legacy() -> Result<[u8; 4], ()> {
     let mut seed = get_active_seed_copy()?;
     let xprv = match XPrv::new(&seed) {
         Ok(xprv) => xprv,
@@ -447,10 +478,28 @@ pub fn master_fingerprint_for_active() -> Result<[u8; 4], ()> {
     Ok(fp4)
 }
 
+/// Slots store a Cheetah master **coil** (`sk || cc`), the nockchain-wallet's
+/// native key format, rather than a BIP39 seed. A BIP39 mnemonic is converted
+/// to a coil once at ingest via [`coil_from_seed`]; a raw coil (e.g. from a
+/// wallet `keys.export`) is stored as-is. Child derivation then skips the
+/// SLIP10 master step entirely.
+pub fn coil_from_seed(seed64: &[u8; 64]) -> [u8; 64] {
+    let (mut sk, mut cc) = cheetah::master_from_seed(seed64);
+    let mut coil = [0u8; 64];
+    coil[..32].copy_from_slice(&sk);
+    coil[32..].copy_from_slice(&cc);
+    sk.zeroize();
+    cc.zeroize();
+    coil
+}
+
 pub fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8; 32], ()> {
-    let mut seed = get_seed_for_slot(slot)?;
-    let (mut sk, mut cc) = cheetah::master_from_seed(&seed);
-    seed.zeroize();
+    let mut coil = get_seed_for_slot(slot)?;
+    let mut sk = [0u8; 32];
+    let mut cc = [0u8; 32];
+    sk.copy_from_slice(&coil[..32]);
+    cc.copy_from_slice(&coil[32..]);
+    coil.zeroize();
     let mut xk = cheetah::XKey::from_master(sk, cc);
     sk.zeroize();
     cc.zeroize();
@@ -460,9 +509,13 @@ pub fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8
     xk.sk.ok_or(())
 }
 
-pub fn root_pub_from_seed(seed: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
-    let (sk, _cc) = cheetah::master_from_seed(seed);
-    cheetah::cheetah_pub_from_sk(sk)
+/// Root public key for a stored coil (`pub` of the master `sk`).
+pub fn root_pub_from_coil(coil: &[u8; 64]) -> ([u64; 6], [u64; 6]) {
+    let mut sk = [0u8; 32];
+    sk.copy_from_slice(&coil[..32]);
+    let pubkey = cheetah::cheetah_pub_from_sk(sk);
+    sk.zeroize();
+    pubkey
 }
 
 fn get_seed_for_slot(slot: usize) -> Result<[u8; 64], ()> {

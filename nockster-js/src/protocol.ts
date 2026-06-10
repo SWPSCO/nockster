@@ -256,7 +256,10 @@ export type Request =
   | { type: 'VaultList' }
   | { type: 'VaultReveal'; slot: number }
   | { type: 'VaultDelete'; slot: number }
-  | { type: 'GetMasterPubkey'; slot: number };
+  | { type: 'GetMasterPubkey'; slot: number }
+  | { type: 'ShowAddress'; slot: number; path: number[] }
+  | { type: 'SignMessage'; slot: number; path: number[]; message: Uint8Array }
+  | { type: 'SignHash'; slot: number; path: number[]; digest5: bigint[] };
 
 export interface CheetahPubInfo {
   slot: number;
@@ -1446,6 +1449,34 @@ export function serializeRequest(req: Request): Uint8Array {
     case 'GetMasterPubkey':
       w.writeVarint(46);
       w.writeU8(req.slot);
+      break;
+    case 'ShowAddress':
+      w.writeVarint(47);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeVarint(p);
+      }
+      break;
+    case 'SignMessage':
+      w.writeVarint(48);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeVarint(p);
+      }
+      w.writeBytes(req.message);
+      break;
+    case 'SignHash':
+      w.writeVarint(49);
+      w.writeU8(req.slot);
+      w.writeVarint(req.path.length);
+      for (const p of req.path) {
+        w.writeVarint(p);
+      }
+      for (const limb of req.digest5) {
+        w.writeU64Varint(limb);
+      }
       break;
   }
 

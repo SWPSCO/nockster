@@ -916,3 +916,158 @@ pub fn tip5_limbs_b58(limbs: Vec<String>) -> Result<String, JsValue> {
     }
     Ok(Hash { values }.to_b58())
 }
+
+// --- Generic noun inspector: cue any jam and render it as a typed tree, the
+// --- pseudo-JSON treatment used for transactions, for arbitrary nouns
+// --- (.tx/.psnt/keys.export/.sig/.jam). Host-side, read-only.
+mod noun_inspect {
+    use serde::Serialize;
+    use tx_types::pokenoun::{cue, Arena, Noun};
+
+    const MAX_NODES: usize = 20_000;
+    const MAX_DEPTH: usize = 96;
+    const MAX_LIST: usize = 4_096;
+
+    #[derive(Serialize)]
+    #[serde(tag = "kind")]
+    pub enum NounView {
+        /// A leaf atom with type heuristics.
+        #[serde(rename = "atom")]
+        Atom {
+            /// Decimal value when it fits in u64.
+            num: Option<String>,
+            /// Big-endian hex (most significant byte first).
+            hex: String,
+            /// Printable-ASCII rendering of the cord bytes, when applicable.
+            text: Option<String>,
+            /// Short `%tas`-style tag, when the bytes look like one.
+            tag: Option<String>,
+            /// Significant byte length.
+            bytes: usize,
+        },
+        /// A null-terminated proper list, rendered as its elements.
+        #[serde(rename = "list")]
+        List { items: Vec<NounView>, truncated: bool },
+        /// An improper cell (head/tail pair).
+        #[serde(rename = "cell")]
+        Cell {
+            head: Box<NounView>,
+            tail: Box<NounView>,
+        },
+        /// Depth/size budget exceeded; rendering stopped here.
+        #[serde(rename = "elided")]
+        Elided,
+    }
+
+    fn render_atom(bytes: &[u8]) -> NounView {
+        // pokenoun atom bytes are little-endian, significant bytes only.
+        let num = if bytes.len() <= 8 {
+            let mut v = 0u64;
+            for (i, b) in bytes.iter().enumerate() {
+                v |= (*b as u64) << (8 * i);
+            }
+            Some(v.to_string())
+        } else {
+            None
+        };
+        let mut hex = String::from("0x");
+        if bytes.is_empty() {
+            hex.push('0');
+        } else {
+            for b in bytes.iter().rev() {
+                hex.push_str(&format!("{b:02x}"));
+            }
+        }
+        // A cord stores its first character in the low byte, so the LE bytes
+        // already read left-to-right as text.
+        let printable = !bytes.is_empty() && bytes.iter().all(|b| (0x20..0x7f).contains(b));
+        let text = if printable {
+            core::str::from_utf8(bytes).ok().map(|s| s.to_string())
+        } else {
+            None
+        };
+        let tag = text
+            .as_ref()
+            .filter(|t| t.len() <= 16 && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+            .cloned();
+        NounView::Atom {
+            num,
+            hex,
+            text,
+            tag,
+            bytes: bytes.len(),
+        }
+    }
+
+    fn render(noun: Noun, arena: &Arena, depth: usize, budget: &mut usize) -> NounView {
+        if *budget == 0 || depth >= MAX_DEPTH {
+            return NounView::Elided;
+        }
+        *budget -= 1;
+        match noun {
+            Noun::Atom(id) => render_atom(arena.atom_bytes(id)),
+            Noun::Cell(_) => {
+                // Walk the right spine: if it terminates in atom 0 it is a
+                // proper list; render as items. Otherwise it is a pair.
+                let mut items = Vec::new();
+                let mut cursor = noun;
+                let mut truncated = false;
+                loop {
+                    match cursor {
+                        Noun::Cell(cid) => {
+                            let cell = arena.cell(cid);
+                            if items.len() >= MAX_LIST {
+                                truncated = true;
+                                break;
+                            }
+                            if *budget == 0 {
+                                truncated = true;
+                                break;
+                            }
+                            items.push(render(cell.head, arena, depth + 1, budget));
+                            cursor = cell.tail;
+                        }
+                        Noun::Atom(aid) if arena.atom_bytes(aid).is_empty() => {
+                            // Proper list terminator (~).
+                            return NounView::List { items, truncated };
+                        }
+                        other => {
+                            // Improper tail: fall back to a head/tail cell on
+                            // the first element, preserving structure.
+                            if items.len() == 1 {
+                                return NounView::Cell {
+                                    head: Box::new(items.pop().unwrap()),
+                                    tail: Box::new(render(other, arena, depth + 1, budget)),
+                                };
+                            }
+                            let tail = render(other, arena, depth + 1, budget);
+                            return NounView::List {
+                                items: {
+                                    items.push(tail);
+                                    items
+                                },
+                                truncated,
+                            };
+                        }
+                    }
+                }
+                NounView::List { items, truncated }
+            }
+        }
+    }
+
+    pub fn inspect(bytes: &[u8]) -> Result<NounView, String> {
+        let mut arena = Arena::new();
+        let root = cue(bytes, &mut arena).map_err(|_| "not a valid jammed noun".to_string())?;
+        let mut budget = MAX_NODES;
+        Ok(render(root, &arena, 0, &mut budget))
+    }
+}
+
+/// Cue a jammed noun and return a typed tree (atoms with number/hex/text/tag
+/// heuristics, lists, cells) for display. Works on any jam.
+#[wasm_bindgen]
+pub fn inspect_noun(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let view = noun_inspect::inspect(bytes).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&view).map_err(|e| JsValue::from_str(&e.to_string()))
+}

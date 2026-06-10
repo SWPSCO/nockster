@@ -688,56 +688,6 @@ fn trusted_recipient_display(
     out
 }
 
-/// Recipient line for the TX review: a bridge deposit shows its EVM address;
-/// a multisig output is prefixed with "MofN"; otherwise the trusted (address-
-/// book-labeled) recipient pkh.
-fn annotate_output_recipient(
-    output: &nockster_core::draft_sign::DraftOutputV1,
-    address_book: &[DeviceAddressBookEntry],
-) -> HString<64> {
-    use nockster_core::draft_sign::LockPrimitiveV1;
-    if let Some(evm) = &output.bridge_evm_addr {
-        let mut out = HString::<64>::new();
-        let _ = out.push_str("eth ");
-        let take = evm.len().min(60);
-        let _ = out.push_str(&evm[..take]);
-        return out;
-    }
-    let mut out = HString::<64>::new();
-    if let Some(lock) = &output.lock {
-        for prim in &lock.primitives {
-            if let LockPrimitiveV1::Pkh { m, n } = prim {
-                if n > m {
-                    let _ = core::write!(out, "{}of{} ", m, n);
-                }
-            }
-        }
-    }
-    let base = trusted_recipient_display(output.recipient_b58.as_str(), address_book);
-    let room = 64 - out.len();
-    let take = base.len().min(room);
-    let _ = out.push_str(&base.as_str()[..take]);
-    out
-}
-
-fn trusted_recipient_display(
-    recipient_pkh_b58: &str,
-    address_book: &[DeviceAddressBookEntry],
-) -> HString<64> {
-    let mut out = HString::<64>::new();
-    if let Some(entry) = address_book
-        .iter()
-        .find(|entry| entry.pkh.as_str() == recipient_pkh_b58 && !entry.label.is_empty())
-    {
-        let _ = out.push_str(entry.label.as_str());
-        return out;
-    }
-
-    let take = recipient_pkh_b58.len().min(64);
-    let _ = out.push_str(&recipient_pkh_b58[..take]);
-    out
-}
-
 fn begin_confirmation(
     msg_id: u32,
     frame: Frame,

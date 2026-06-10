@@ -663,3 +663,52 @@ details[open] > .composer-summary::after {
     min-height: 520px;
   }
 }
+
+/* Per-output lock breakdown (device-parity preview) */
+.composer-output-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.composer-output-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.composer-output-row strong {
+  margin-left: auto;
+}
+.composer-lock-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  opacity: 0.7;
+}
+.composer-lock-badge.multisig {
+  opacity: 1;
+  font-weight: 600;
+}
+.composer-output-addr {
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.composer-output-note {
+  font-size: 9px;
+  opacity: 0.5;
+  margin-top: 2px;
+}
+
+.composer-review { margin-top: 6px; }
+.composer-review-msig {
+  font-size: 11px;
+  padding: 2px 0;
+  font-weight: 600;
+}

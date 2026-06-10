@@ -2,11 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import {
   Background,
   Controls,
-  Handle,
   MiniMap,
-  Node,
-  Edge,
-  Position,
   ReactFlow,
   ReactFlowInstance,
   ReactFlowProvider,
@@ -16,13 +12,17 @@ import {
   type Connection,
   type OnSelectionChangeFunc,
   type NodeTypes,
-  type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { DeviceAddressBookEntry } from 'nockster-js';
 
-import { ParsedTransaction, compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'nockster-wasm';
-import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1, WalletAddress } from './types';
+import {
+  ParsedTransaction,
+  compose_tx_v1_recipient_address,
+  compose_tx_v1_unsigned,
+  review_draft,
+} from 'nockster-wasm';
+import type { AddressBookEntry, AddressKind, NoteV1, WalletAddress } from './types';
 import { loadAddressBook, newId, saveAddressBook } from './storage';
 import {
   NOCKBLOCKS_API_KEY_STORAGE_KEY,
@@ -31,496 +31,47 @@ import {
 
 import './Composer.css';
 
-type AddressNodeData = {
-  entryId: string;
-  alias: string;
-  kind: AddressKind;
-  address: string;
-  multisig?: MultisigDescriptor;
-  noteCount: number;
-  total: number;
-  amount: string;
-  onChangeAmount: (next: string) => void;
-  io?: { isInput: boolean; isOutput: boolean };
-};
-type NoteNodeData = {
-  entryId: string;
-  noteId: string;
-  assets: number;
-  originPage: number;
-  nameFirst: string;
-  nameLast: string;
-};
-type TxNodeData = {
-  onCompose?: () => void;
-  onSignDraft?: (draft: ComposedDraft) => void | Promise<void>;
-  composing?: boolean;
-  signingDraft?: boolean;
-  canSignDraft?: boolean;
-  signDraftDisabledReason?: string;
-  lastError?: string;
-  result?: ComposedDraft;
-};
+import {
+  shortAddr,
+  describePrimitive,
+  describeReviewOutputBadge,
+  shortHash,
+  walletSlotLabel,
+  entryDisplayLabel,
+  parsePkhListText,
+  formatAmountNoUnit,
+  formatAmountWithUnit,
+  parseAmountTextToNicks,
+  formatSummaryJson,
+  formatPreviewDetails,
+  normalizePreviewDetails,
+  previewNumber,
+  previewString,
+  parseComposeSummary,
+  summaryOutputTotal,
+  isHighFeeSummary,
+  downloadBytes,
+  sumAssets,
+  NICKS_PER_NOCK,
+} from './model';
+import type {
+  AddressNodeData,
+  NoteNodeData,
+  TxNodeData,
+  ComposedDraft,
+  DraftReview,
+  ImportedTxPreview,
+  PreviewNodeData,
+  UnitMode,
+  ComposerSidebarPanel,
+  AddressFlowNode,
+  NoteFlowNode,
+  PreviewFlowNode,
+  ComposerNode,
+  ComposerEdge,
+} from './model';
 
-type ComposedDraft = {
-  psnt: Uint8Array;
-  filename: string;
-  summaryJson: string;
-};
-
-type ComposeSummary = {
-  outputs?: Array<{ amount?: number; alias?: string; recipient?: unknown }>;
-  total_fees?: number;
-  minimum_fee?: number;
-  inputs_used?: Array<{ assets?: number }>;
-};
-
-type ImportedTxPreview = {
-  name: string;
-  info: {
-    tx_id: string;
-    shape: string;
-    version: number;
-    input_count: number;
-  };
-  details: PreviewTxDetails;
-};
-
-type PreviewSeed = {
-  gift?: unknown;
-  recipient_pkh?: unknown;
-  lock_root?: unknown;
-  parent_hash?: unknown;
-};
-
-type PreviewSpend = {
-  name_first?: unknown;
-  name_last?: unknown;
-  fee?: unknown;
-  seeds?: PreviewSeed[];
-};
-
-type PreviewTxDetails = {
-  version?: unknown;
-  transaction_id?: unknown;
-  spend_count?: unknown;
-  spends?: PreviewSpend[];
-};
-
-type PreviewNodeData = {
-  label: string;
-  title: string;
-  meta?: string[];
-  mono?: string;
-  copyValue?: string;
-  copyLabel?: string;
-  feeNicks?: number;
-  giftNicks?: number;
-};
-
-type UnitMode = 'n' | 'ℕ';
-type ComposerSidebarPanel = 'send' | 'wallet' | 'preview' | 'canvas';
-
-type AddressFlowNode = Node<AddressNodeData, 'address'>;
-type NoteFlowNode = Node<NoteNodeData, 'note'>;
-type TxFlowNode = Node<TxNodeData, 'tx'>;
-type PreviewFlowNode = Node<PreviewNodeData, 'preview'>;
-type ComposerNode = AddressFlowNode | NoteFlowNode | TxFlowNode | PreviewFlowNode;
-type ComposerEdge = Edge;
-
-const NICKS_PER_NOCK = 1n << 16n; // 65536
-const NOCK_DEC_SCALE = 10n ** 16n;
-
-function shortHash(h: string, keep = 4): string {
-  const s = (h ?? '').trim();
-  if (s.length <= keep * 2 + 3) return s;
-  return `${s.slice(0, keep)}...${s.slice(-keep)}`;
-}
-
-// Label a wallet slot as "<nickname or abcd...wxyz> · slot N".
-// Falls back to a truncated address when the alias is just the default "wallet slot N".
-function walletSlotLabel(wallet: WalletAddress): string {
-  const nick = wallet.alias?.trim();
-  const isDefault = !nick || /^wallet slot \d+$/i.test(nick);
-  const base = isDefault ? shortHash(wallet.address, 4) : nick;
-  return `${base} · slot ${wallet.slot}`;
-}
-
-// Display label for any address-book entry. Rewrites a stale default "wallet slot N"
-// alias into "<abcd...wxyz> · slot N" so persisted entries read well without re-import.
-function entryDisplayLabel(entry: { alias?: string; address: string }): string {
-  const alias = (entry.alias ?? '').trim();
-  const slotMatch = alias.match(/^wallet slot (\d+)$/i);
-  if (slotMatch) return `${shortHash(entry.address, 4)} · slot ${slotMatch[1]}`;
-  return alias || shortHash(entry.address, 4);
-}
-
-function parsePkhListText(text: string): string[] {
-  return (text ?? '')
-    .split(/[\s,]+/g)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function bigintToSafeNumber(value: bigint): number | null {
-  const max = BigInt(Number.MAX_SAFE_INTEGER);
-  if (value > max) return null;
-  return Number(value);
-}
-
-function formatNicksAsNocksExact(nicks: bigint): string {
-  const whole = nicks / NICKS_PER_NOCK;
-  const frac = nicks % NICKS_PER_NOCK;
-  if (frac === 0n) return whole.toString();
-
-  const fracScaled = (frac * NOCK_DEC_SCALE) / NICKS_PER_NOCK;
-  const fracStr = fracScaled.toString().padStart(16, '0').replace(/0+$/, '');
-  return `${whole.toString()}.${fracStr}`;
-}
-
-function formatAmountNoUnit(nicks: number, unit: UnitMode): string {
-  const n = BigInt(Math.trunc(nicks));
-  if (unit === 'n') return n.toString();
-  return formatNicksAsNocksExact(n);
-}
-
-function formatAmountWithUnit(nicks: number, unit: UnitMode): string {
-  return `${formatAmountNoUnit(nicks, unit)} ${unit}`;
-}
-
-function parseAmountTextToNicks(text: string, unit: UnitMode): { nicks: number } | { error: string } {
-  const raw = (text ?? '').trim().replace(/[,_]/g, '');
-  if (!raw) return { error: 'amount required' };
-
-  if (unit === 'n') {
-    if (!/^\d+$/.test(raw)) return { error: "amount must be an integer number of nicks ('n')" };
-    const v = BigInt(raw);
-    const asNumber = bigintToSafeNumber(v);
-    if (asNumber === null) return { error: 'amount too large' };
-    return { nicks: asNumber };
-  }
-
-  const m = raw.match(/^(\d+)(?:\.(\d+))?$/);
-  if (!m) return { error: "amount must be a decimal number of nocks ('ℕ')" };
-  const wholeStr = m[1] ?? '0';
-  const fracStr = m[2] ?? '';
-  if (fracStr.length > 16) return { error: 'too many decimal places (max 16)' };
-
-  const whole = BigInt(wholeStr);
-  const frac = fracStr ? BigInt(fracStr) : 0n;
-  const denom = 10n ** BigInt(fracStr.length);
-  const numer = whole * denom + frac;
-  const scaled = numer * NICKS_PER_NOCK;
-  if (scaled % denom !== 0n) {
-    return { error: 'amount is not an exact multiple of 1/65536 ℕ (one nick)' };
-  }
-  const nicks = scaled / denom;
-  const asNumber = bigintToSafeNumber(nicks);
-  if (asNumber === null) return { error: 'amount too large' };
-  return { nicks: asNumber };
-}
-
-function formatSummaryJson(raw: string): string {
-  const text = (raw ?? '').trim();
-  if (!text) return '';
-  try {
-    const parsed: any = JSON.parse(text);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      delete parsed.tx_id;
-      delete parsed.coinbase_rel_min;
-    }
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return text;
-  }
-}
-
-function formatPreviewDetails(value: unknown): string {
-  try {
-    return JSON.stringify(normalizeWasmValue(value), null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function normalizeWasmValue(value: unknown): unknown {
-  if (typeof value === 'bigint') return value.toString();
-  if (value instanceof Map) {
-    const result: Record<string, unknown> = {};
-    for (const [key, mapValue] of value.entries()) {
-      result[String(key)] = normalizeWasmValue(mapValue);
-    }
-    return result;
-  }
-  if (Array.isArray(value)) {
-    return value.map(normalizeWasmValue);
-  }
-  if (value && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, objectValue] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = normalizeWasmValue(objectValue);
-    }
-    return result;
-  }
-  return value;
-}
-
-function normalizePreviewDetails(value: unknown): PreviewTxDetails {
-  const normalized = normalizeWasmValue(value);
-  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
-    return {};
-  }
-
-  const details = normalized as PreviewTxDetails;
-  return {
-    ...details,
-    spends: Array.isArray(details.spends) ? details.spends : [],
-  };
-}
-
-function previewNumber(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function previewString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function parseComposeSummary(raw: string | undefined): ComposeSummary | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as ComposeSummary) : null;
-  } catch {
-    return null;
-  }
-}
-
-function summaryOutputTotal(summary: ComposeSummary | null): number {
-  return (summary?.outputs ?? []).reduce((acc, output) => acc + (Number(output.amount) || 0), 0);
-}
-
-function summaryInputTotal(summary: ComposeSummary | null): number {
-  return (summary?.inputs_used ?? []).reduce((acc, input) => acc + (Number(input.assets) || 0), 0);
-}
-
-function isHighFeeSummary(summary: ComposeSummary | null): boolean {
-  const fee = Number(summary?.total_fees) || 0;
-  const minimum = Number(summary?.minimum_fee);
-  if (!Number.isFinite(minimum)) return false;
-  return fee > minimum;
-}
-
-function downloadBytes(name: string, bytes: Uint8Array) {
-  const ab = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(ab).set(bytes);
-  const blob = new Blob([ab], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function stopNodeInputEvent(event: { stopPropagation: () => void }) {
-  event.stopPropagation();
-}
-
-function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { unitMode: UnitMode }) {
-  const io = data.io ?? { isInput: false, isOutput: false };
-  const showNotes = io.isInput || (!io.isOutput && data.noteCount > 0);
-  const showAmount = io.isOutput || data.amount.trim().length > 0;
-
-  const parsed = data.amount.trim() ? parseAmountTextToNicks(data.amount, unitMode) : null;
-
-  return (
-    <div className="node-card">
-      <div className="node-header address">
-        <span>{data.kind === 'multisig' ? 'Multisig' : 'Address'}</span>
-      </div>
-      <div className="node-body">
-        <div>{data.alias}</div>
-        <div className="node-mono">{shortHash(data.address)}</div>
-        {data.kind === 'multisig' && data.multisig && (
-          <div className="inspector-help">
-            {data.multisig.m}-of-{data.multisig.pkhs.length}
-          </div>
-        )}
-        {showNotes && (
-          <div className="inspector-help">
-            {data.noteCount} notes · {formatAmountWithUnit(data.total, unitMode)}
-          </div>
-        )}
-        {showAmount && (
-          <input
-            className="node-input node-input-compact nodrag"
-            placeholder={`amount (${unitMode})`}
-            value={data.amount}
-            onClick={stopNodeInputEvent}
-            onDoubleClick={stopNodeInputEvent}
-            onKeyDown={stopNodeInputEvent}
-            onPointerDown={stopNodeInputEvent}
-            onChange={(e) => data.onChangeAmount(e.target.value)}
-          />
-        )}
-        {parsed && 'error' in parsed && <div className="validation-text">{parsed.error}</div>}
-      </div>
-      <Handle type="target" id="in" position={Position.Left} />
-      <Handle type="source" id="out" position={Position.Right} />
-    </div>
-  );
-}
-
-function NoteNode({ data, unitMode }: NodeProps<NoteFlowNode> & { unitMode: UnitMode }) {
-  return (
-    <div className="node-card">
-      <div className="node-header note">
-        <span>Note</span>
-      </div>
-      <div className="node-body">
-        <div className="inspector-help">
-          {formatAmountWithUnit(data.assets, unitMode)} · p{data.originPage}
-        </div>
-        <div className="node-mono">
-          {shortHash(data.nameFirst)} {shortHash(data.nameLast)}
-        </div>
-      </div>
-      <Handle type="source" id="out" position={Position.Right} />
-    </div>
-  );
-}
-
-function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: UnitMode }) {
-  const composing = data.composing ?? false;
-  const onCompose = data.onCompose;
-  const summary = parseComposeSummary(data.result?.summaryJson);
-  const fee = Number(summary?.total_fees) || 0;
-  const minimumFee = Number(summary?.minimum_fee) || 0;
-  const external = summaryOutputTotal(summary);
-  const inputTotal = summaryInputTotal(summary);
-  const change = Math.max(0, inputTotal - external - fee);
-  const highFee = isHighFeeSummary(summary);
-
-  return (
-    <div className="node-card">
-      <div className="node-header tx">
-        <span>Tx</span>
-      </div>
-      <div className="node-body">
-        <div className="node-actions">
-          <button
-            className="btn btn-success btn-small nodrag"
-            onPointerDown={stopNodeInputEvent}
-            onClick={(event) => {
-              event.stopPropagation();
-              onCompose?.();
-            }}
-            disabled={!onCompose || composing}
-          >
-            {composing ? 'composing...' : 'compose'}
-          </button>
-        </div>
-        {data.result && (
-          <div className="composer-result">
-            {summary && (
-              <div className="composer-result-grid">
-                <span>send</span>
-                <strong>{formatAmountWithUnit(external, unitMode)}</strong>
-                <span>fee</span>
-                <strong className={highFee ? 'composer-warn-text' : ''}>
-                  {formatAmountWithUnit(fee, unitMode)}
-                </strong>
-                <span>min</span>
-                <strong>{formatAmountWithUnit(minimumFee, unitMode)}</strong>
-                <span>change</span>
-                <strong>{formatAmountWithUnit(change, unitMode)}</strong>
-              </div>
-            )}
-            {highFee && <div className="validation-text">Fee exceeds calculated minimum.</div>}
-            <div className="composer-row composer-action-row">
-              <button
-                className="btn btn-primary btn-small nodrag"
-                title={!data.canSignDraft ? data.signDraftDisabledReason : undefined}
-                onPointerDown={stopNodeInputEvent}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (data.result) void data.onSignDraft?.(data.result);
-                }}
-                disabled={!data.result || !data.onSignDraft || !data.canSignDraft || data.signingDraft}
-              >
-                {data.signingDraft ? 'signing...' : 'sign on device'}
-              </button>
-              <button
-                className="btn btn-secondary btn-small nodrag"
-                onPointerDown={stopNodeInputEvent}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  downloadBytes(data.result!.filename, data.result!.psnt);
-                }}
-              >
-                download
-              </button>
-            </div>
-          </div>
-        )}
-        {data.lastError && <div className="validation-text">{data.lastError}</div>}
-      </div>
-      <Handle type="target" id="in" position={Position.Left} />
-      <Handle type="source" id="out" position={Position.Right} />
-    </div>
-  );
-}
-
-function PreviewNode({ data, unitMode }: NodeProps<PreviewFlowNode> & { unitMode: UnitMode }) {
-  const amountMeta = [
-    data.feeNicks === undefined ? '' : `fee ${formatAmountWithUnit(data.feeNicks, unitMode)}`,
-    data.giftNicks === undefined ? '' : formatAmountWithUnit(data.giftNicks, unitMode),
-  ].filter(Boolean);
-  const copyPreviewValue = () => {
-    if (!data.copyValue) return;
-    void navigator.clipboard.writeText(data.copyValue);
-  };
-
-  return (
-    <div className="node-card preview-node-card">
-      <div className="node-header preview">
-        <span>{data.label}</span>
-      </div>
-      <div className="node-body">
-        <div>{data.title}</div>
-        {[...amountMeta, ...(data.meta ?? [])].map((item) => (
-          <div key={item} className="inspector-help">
-            {item}
-          </div>
-        ))}
-        {data.mono && <div className="node-mono preview-node-mono">{data.mono}</div>}
-        {data.copyValue && (
-          <button
-            type="button"
-            className="btn btn-small btn-secondary preview-copy-btn nodrag"
-            onPointerDown={stopNodeInputEvent}
-            onClick={(event) => {
-              event.stopPropagation();
-              copyPreviewValue();
-            }}
-          >
-            copy {data.copyLabel ?? 'value'}
-          </button>
-        )}
-      </div>
-      <Handle type="target" id="in" position={Position.Left} isConnectable={false} />
-      <Handle type="source" id="out" position={Position.Right} isConnectable={false} />
-    </div>
-  );
-}
-
-function sumAssets(notes: NoteV1[]): number {
-  return notes.reduce((acc, n) => acc + (Number(n.assets) || 0), 0);
-}
+import { AddressNode, NoteNode, TxNode, PreviewNode } from './nodes';
 
 export function Composer({
   wasmReady,
@@ -1521,10 +1072,19 @@ export function Composer({
       };
       info.free();
       const details = normalizePreviewDetails(parsed.get_details());
+      // Device-parity review: outputs, locks, bridge, multisig — keyed by the
+      // device's own address (best-effort: refund/we-signed detection needs it).
+      let review: DraftReview | null = null;
+      try {
+        review = review_draft(bytes, walletAddresses[0]?.address ?? '') as DraftReview;
+      } catch {
+        review = null;
+      }
       const preview: ImportedTxPreview = {
         name: file.name,
         info: previewInfo,
         details,
+        review,
       };
       setImportedTxPreview(preview);
       showImportedPreviewGraph(preview);
@@ -1536,7 +1096,7 @@ export function Composer({
     } finally {
       parsed?.free();
     }
-  }, [clearImportedPreviewGraph, showImportedPreviewGraph]);
+  }, [clearImportedPreviewGraph, showImportedPreviewGraph, walletAddresses]);
 
   const addEntry = useCallback(async () => {
     const alias = entryFormAlias.trim();
@@ -2205,6 +1765,40 @@ export function Composer({
                       <span>tx</span>
                       <strong>{shortHash(importedTxPreview.info.tx_id, 5)}</strong>
                     </div>
+                    {importedTxPreview.review && (
+                      <div className="composer-review">
+                        <div className="composer-output-note">what the device will show</div>
+                        {importedTxPreview.review.multisig_inputs.map((ms, i) => (
+                          <div className="composer-review-msig" key={`ms-${i}`}>
+                            spend {ms.m}-of-{ms.n} · {ms.present}/{ms.m} signed
+                            {ms.we_authorized && (ms.we_signed ? ' · you signed' : ' · you can sign')}
+                          </div>
+                        ))}
+                        <div className="composer-output-list">
+                          {importedTxPreview.review.outputs.map((output, i) => {
+                            const badge = describeReviewOutputBadge(output);
+                            const detail = (output.lock ?? []).map(describePrimitive).join(' · ');
+                            const addr = output.bridge_evm_addr || output.recipient_b58;
+                            return (
+                              <div className="composer-output-row" key={`o-${i}`}>
+                                <span
+                                  className={`composer-lock-badge ${badge !== 'p2pkh' && badge !== 'change' ? 'multisig' : ''}`}
+                                  title={detail || undefined}
+                                >
+                                  {badge}
+                                </span>
+                                <span className="composer-output-addr" title={addr}>
+                                  {shortAddr(addr)}
+                                </span>
+                                <strong>
+                                  {formatAmountWithUnit(Number(output.gift) || 0, unitMode)}
+                                </strong>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                     <pre className="inspector-pre tx-preview-pre">
                       {formatPreviewDetails(importedTxPreview.details)}
                     </pre>

@@ -7,6 +7,7 @@ use tx_types::hashing::hashable::Hashable;
 use tx_types::transaction_types::{Hash, SchnorrPubkey, F6LT};
 
 mod compose_v1;
+mod review_v1;
 mod tip5;
 
 #[wasm_bindgen(start)]
@@ -1069,5 +1070,16 @@ mod noun_inspect {
 #[wasm_bindgen]
 pub fn inspect_noun(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let view = noun_inspect::inspect(bytes).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&view).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Review a jammed v1 draft / `.psnt` against a watch-only source pkh (base58),
+/// returning the same facts the device shows: outputs (recipient, gift,
+/// refund, bridge EVM address, lock primitives), per-input multisig
+/// coordination, and totals. Device verifies lock-roots; this host view does
+/// not.
+#[wasm_bindgen]
+pub fn review_draft(jam: &[u8], source_pkh_b58: &str) -> Result<JsValue, JsValue> {
+    let view = review_v1::review(jam, source_pkh_b58).map_err(|e| JsValue::from_str(&e))?;
     serde_wasm_bindgen::to_value(&view).map_err(|e| JsValue::from_str(&e.to_string()))
 }

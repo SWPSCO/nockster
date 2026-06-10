@@ -63,6 +63,9 @@ pub const TX_REVIEW_FLAG_MULTISIG: u8 = 1 << 7;
 pub struct TxReviewOutput {
     pub gift: u64,
     pub recipient_b58: HString<64>,
+    /// Verbatim lock facts for this output (timelock bounds, m-of-n, hashlock,
+    /// burn, bridge, verification status), shown in the tap-to-expand detail.
+    pub detail: HString<96>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

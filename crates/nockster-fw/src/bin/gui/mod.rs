@@ -1276,7 +1276,7 @@ impl<'d> Gui<'d> {
 
     pub fn request_tx_review_with_header<'a, I>(&mut self, header: &str, outputs: I)
     where
-        I: IntoIterator<Item = (u64, &'a str)>,
+        I: IntoIterator<Item = (u64, &'a str, &'a str)>,
     {
         self.request_tx_review_with_summary(header, None, outputs);
     }
@@ -1287,10 +1287,10 @@ impl<'d> Gui<'d> {
         summary: Option<TxReviewSummary>,
         outputs: I,
     ) where
-        I: IntoIterator<Item = (u64, &'a str)>,
+        I: IntoIterator<Item = (u64, &'a str, &'a str)>,
     {
         self.tx_review_outputs.clear();
-        for (gift, recipient_b58) in outputs {
+        for (gift, recipient_b58, detail) in outputs {
             if self.tx_review_outputs.is_full() {
                 break;
             }
@@ -1298,9 +1298,13 @@ impl<'d> Gui<'d> {
             let max = 64usize;
             let take = recipient_b58.len().min(max);
             let _ = recipient_buf.push_str(&recipient_b58[..take]);
+            let mut detail_buf = HString::<96>::new();
+            let dtake = detail.len().min(96);
+            let _ = detail_buf.push_str(&detail[..dtake]);
             let _ = self.tx_review_outputs.push(TxReviewOutput {
                 gift,
                 recipient_b58: recipient_buf,
+                detail: detail_buf,
             });
         }
 

@@ -100,6 +100,7 @@ pub struct SigerGui {
     menu_scroll: gui::scroll::ScrollState,
     menu_drag: gui::scroll::DragState,
     wallet_rows: WalletRows,
+    vault_rows: WalletRows,
     wallets_scroll: gui::scroll::ScrollState,
     wallet_drag: gui::scroll::DragState,
     selected_wallet_slot: Option<u8>,
@@ -126,6 +127,7 @@ impl SigerGui {
             menu_scroll: gui::scroll::ScrollState::new(gui::menu::menu_viewport()),
             menu_drag: gui::scroll::DragState::new(),
             wallet_rows: HVec::new(),
+            vault_rows: HVec::new(),
             wallets_scroll: gui::scroll::ScrollState::new(gui::menu::wallets_viewport()),
             wallet_drag: gui::scroll::DragState::new(),
             selected_wallet_slot: None,
@@ -138,6 +140,7 @@ impl SigerGui {
             calibration_step: 0,
         };
         gui.seed_demo_wallets();
+        gui.seed_demo_vault();
         gui.show_splash();
         Ok(gui)
     }
@@ -174,15 +177,20 @@ impl SigerGui {
             return Ok(());
         }
 
-        if self.mode == GuiMode::Wallets {
+        if self.mode == GuiMode::Wallets || self.mode == GuiMode::Vault {
             if let gui::scroll::DragUpdate::Dragging { moved } =
                 self.wallet_drag.update(point, &mut self.wallets_scroll)
             {
                 self.clear_active_target();
                 if moved {
+                    let rows = if self.mode == GuiMode::Vault {
+                        &self.vault_rows
+                    } else {
+                        &self.wallet_rows
+                    };
                     gui::menu::render_wallets_viewport(
                         &mut self.display,
-                        &self.wallet_rows,
+                        rows,
                         &mut self.wallets_scroll,
                     );
                 }
@@ -303,6 +311,42 @@ impl SigerGui {
         gui::menu::render_wallet_delete_confirm(&mut self.display, row.as_ref());
     }
 
+    fn show_vault(&mut self) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::Vault;
+        self.selected_wallet_slot = None;
+        self.wallets_scroll.reset();
+        self.wallet_drag.reset();
+        gui::menu::render_vault(&mut self.display, &self.vault_rows, &mut self.wallets_scroll);
+    }
+
+    fn show_vault_detail(&mut self, slot: u8) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::VaultDetail;
+        self.selected_wallet_slot = Some(slot);
+        let row = self
+            .vault_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        gui::menu::render_vault_detail(&mut self.display, row.as_ref());
+    }
+
+    fn show_vault_delete_confirm(&mut self, slot: u8) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::VaultDeleteConfirm;
+        self.selected_wallet_slot = Some(slot);
+        let row = self
+            .vault_rows
+            .iter()
+            .find(|row| row.index == slot)
+            .cloned();
+        gui::menu::render_vault_delete_confirm(&mut self.display, row.as_ref());
+    }
+
     fn show_add_seed(&mut self) {
         self.stop_unlock_animation();
         self.clear_active_target();
@@ -343,6 +387,9 @@ impl SigerGui {
                 | GuiMode::Wallets
                 | GuiMode::WalletDetail
                 | GuiMode::WalletDeleteConfirm
+                | GuiMode::Vault
+                | GuiMode::VaultDetail
+                | GuiMode::VaultDeleteConfirm
                 | GuiMode::Diagnostics
                 | GuiMode::TouchCalibration
         ) || (self.mode == GuiMode::SeedFirstBoot && self.seed_flow_is_add)
@@ -354,6 +401,7 @@ impl SigerGui {
             GuiMode::About
             | GuiMode::Themes
             | GuiMode::Wallets
+            | GuiMode::Vault
             | GuiMode::Diagnostics
             | GuiMode::TouchCalibration => self.show_menu(),
             GuiMode::WalletDetail => self.show_wallets(),
@@ -362,6 +410,14 @@ impl SigerGui {
                     self.show_wallet_detail(slot);
                 } else {
                     self.show_wallets();
+                }
+            }
+            GuiMode::VaultDetail => self.show_vault(),
+            GuiMode::VaultDeleteConfirm => {
+                if let Some(slot) = self.selected_wallet_slot {
+                    self.show_vault_detail(slot);
+                } else {
+                    self.show_vault();
                 }
             }
             GuiMode::SeedFirstBoot if self.seed_flow_is_add => {
@@ -428,6 +484,29 @@ impl SigerGui {
                 )
             }
             GuiMode::WalletDeleteConfirm => {
+                gui::menu::button_from_point_wallet_delete(point, self.selected_wallet_slot).map(
+                    |hit| ActiveTarget::Button {
+                        mode: self.mode,
+                        hit,
+                    },
+                )
+            }
+            GuiMode::Vault => {
+                gui::menu::button_from_point_wallets(point, &self.vault_rows, &self.wallets_scroll)
+                    .map(|hit| ActiveTarget::Button {
+                        mode: self.mode,
+                        hit,
+                    })
+            }
+            GuiMode::VaultDetail => {
+                gui::menu::button_from_point_wallet_detail(point, self.selected_wallet_slot).map(
+                    |hit| ActiveTarget::Button {
+                        mode: self.mode,
+                        hit,
+                    },
+                )
+            }
+            GuiMode::VaultDeleteConfirm => {
                 gui::menu::button_from_point_wallet_delete(point, self.selected_wallet_slot).map(
                     |hit| ActiveTarget::Button {
                         mode: self.mode,
@@ -506,8 +585,11 @@ impl SigerGui {
                 GuiMode::Menu => gui::menu::draw_menu_button(&mut self.display, hit, active),
                 GuiMode::About => {}
                 GuiMode::Themes => gui::menu::draw_theme_button(&mut self.display, hit, active),
-                GuiMode::Wallets => self.draw_wallet_active_target(hit, active),
-                GuiMode::WalletDetail | GuiMode::WalletDeleteConfirm => {
+                GuiMode::Wallets | GuiMode::Vault => self.draw_wallet_active_target(hit, active),
+                GuiMode::WalletDetail
+                | GuiMode::WalletDeleteConfirm
+                | GuiMode::VaultDetail
+                | GuiMode::VaultDeleteConfirm => {
                     gui::menu::draw_wallet_detail_button(&mut self.display, hit, active)
                 }
                 GuiMode::LabelEntry => gui::label::draw_label_button(
@@ -531,11 +613,16 @@ impl SigerGui {
     }
 
     fn draw_wallet_active_target(&mut self, hit: ButtonHit, active: bool) {
+        let rows = if self.mode == GuiMode::Vault {
+            &self.vault_rows
+        } else {
+            &self.wallet_rows
+        };
         match hit.button {
             Button::WalletRow(_) => gui::menu::draw_wallet_row_press(
                 &mut self.display,
                 hit,
-                &self.wallet_rows,
+                rows,
                 &mut self.wallets_scroll,
                 active,
             ),
@@ -563,6 +650,9 @@ impl SigerGui {
                     GuiMode::Wallets => self.handle_wallets(point),
                     GuiMode::WalletDetail => self.handle_wallet_detail(point),
                     GuiMode::WalletDeleteConfirm => self.handle_wallet_delete_confirm(point),
+                    GuiMode::Vault => self.handle_vault(point),
+                    GuiMode::VaultDetail => self.handle_vault_detail(point),
+                    GuiMode::VaultDeleteConfirm => self.handle_vault_delete_confirm(point),
                     GuiMode::LabelEntry => self.handle_label_entry(point),
                     GuiMode::SeedFirstBoot => self.handle_seed_setup(point),
                     GuiMode::SeedEntry => self.handle_seed_entry(point),
@@ -618,6 +708,7 @@ impl SigerGui {
         match hit.button {
             Button::Menu(MenuItem::Wallets) => self.show_wallets(),
             Button::Menu(MenuItem::AddSeed) => self.show_add_seed(),
+            Button::Menu(MenuItem::Vault) => self.show_vault(),
             Button::Menu(MenuItem::Theme) => self.show_themes(),
             Button::Menu(MenuItem::About) => self.show_about(),
             Button::Menu(MenuItem::Diagnostics) => self.show_diagnostics(),
@@ -694,6 +785,56 @@ impl SigerGui {
         }
     }
 
+    fn handle_vault(&mut self, point: Point) {
+        let Some(hit) =
+            gui::menu::button_from_point_wallets(point, &self.vault_rows, &self.wallets_scroll)
+        else {
+            return;
+        };
+        match hit.button {
+            Button::WalletRow(slot) => {
+                self.show_vault_detail(slot);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_vault_detail(&mut self, point: Point) {
+        let Some(hit) =
+            gui::menu::button_from_point_wallet_detail(point, self.selected_wallet_slot)
+        else {
+            return;
+        };
+        match hit.button {
+            Button::WalletEdit(slot) => {
+                let mut current = HString::<MAX_SEED_LABEL_LEN>::new();
+                if let Some(row) = self.vault_rows.iter().find(|row| row.index == slot) {
+                    let _ = current.push_str(row.label.as_str());
+                }
+                self.show_label_entry(slot, current.as_str(), LabelEntryContext::VaultDetail);
+            }
+            Button::WalletDelete(slot) => self.show_vault_delete_confirm(slot),
+            _ => {}
+        }
+    }
+
+    fn handle_vault_delete_confirm(&mut self, point: Point) {
+        let Some(hit) =
+            gui::menu::button_from_point_wallet_delete(point, self.selected_wallet_slot)
+        else {
+            return;
+        };
+        match hit.button {
+            Button::WalletDeleteCancel(slot) => self.show_vault_detail(slot),
+            Button::WalletDeleteConfirm(slot) => {
+                self.vault_rows.retain(|row| row.index != slot);
+                self.selected_wallet_slot = None;
+                self.show_vault();
+            }
+            _ => {}
+        }
+    }
+
     fn handle_label_entry(&mut self, point: Point) {
         let Some(hit) = gui::label::button_from_point_label_entry(point) else {
             return;
@@ -724,6 +865,7 @@ impl SigerGui {
                     }
                     LabelEntryContext::WalletDetail => self.show_wallet_detail(slot),
                     LabelEntryContext::FirstSeed => self.show_unlocked("Wallet named"),
+                    LabelEntryContext::VaultDetail => self.show_vault_detail(slot),
                 }
             }
             LabelButton::Cancel => {
@@ -736,6 +878,9 @@ impl SigerGui {
                         self.show_wallet_detail(self.label_entry_state.slot())
                     }
                     LabelEntryContext::FirstSeed => self.show_unlocked("Wallet ready"),
+                    LabelEntryContext::VaultDetail => {
+                        self.show_vault_detail(self.label_entry_state.slot())
+                    }
                 }
             }
         }
@@ -919,11 +1064,49 @@ impl SigerGui {
     }
 
     fn save_label(&mut self, slot: u8, label: &str) {
-        if let Some(row) = self.wallet_rows.iter_mut().find(|row| row.index == slot) {
+        let rows = if matches!(
+            self.label_entry_state.context(),
+            LabelEntryContext::VaultDetail
+        ) {
+            &mut self.vault_rows
+        } else {
+            &mut self.wallet_rows
+        };
+        if let Some(row) = rows.iter_mut().find(|row| row.index == slot) {
             row.label.clear();
             let take = label.len().min(MAX_SEED_LABEL_LEN);
             let _ = row.label.push_str(&label[..take]);
         }
+    }
+
+    fn seed_demo_vault(&mut self) {
+        if !self.vault_rows.is_empty() {
+            return;
+        }
+        let mut htlc = WalletRow {
+            index: 0,
+            active: false,
+            label: HString::new(),
+            pkh: HString::new(),
+        };
+        let _ = htlc.label.push_str("htlc-1");
+        let _ = htlc
+            .pkh
+            .push_str("6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ay");
+
+        let mut reveal = WalletRow {
+            index: 1,
+            active: false,
+            label: HString::new(),
+            pkh: HString::new(),
+        };
+        let _ = reveal.label.push_str("auction-bid");
+        let _ = reveal
+            .pkh
+            .push_str("84YtTuQUNNGfDTu2CgXwjTudKnCfsADKVaiXPc1zGXqT2JLix3N");
+
+        let _ = self.vault_rows.push(htlc);
+        let _ = self.vault_rows.push(reveal);
     }
 
     fn delete_demo_wallet(&mut self, slot: u8) {

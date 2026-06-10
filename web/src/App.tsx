@@ -40,6 +40,7 @@ import type {
 } from 'nockster-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import { createSerialTransport } from './serial';
+import { NounInspector } from './NounInspector';
 import type { WalletAddress } from './composer/types';
 import {
   NOCKBLOCKS_API_KEY_STORAGE_KEY,
@@ -1813,6 +1814,52 @@ function App() {
     }
   };
 
+  const verifyReceiveAddress = async (wallet: WalletAddress) => {
+    if (locked !== false) {
+      setStatus('Unlock the device before verifying a receive address');
+      return;
+    }
+    deviceBusyRef.current = true;
+    setDeviceBusy(true);
+    setStatus('Compare the address with the device screen, then approve on-device...');
+    try {
+      await device.showAddress(wallet.slot, wallet.path);
+      setStatus(`Device confirmed receive address for slot ${wallet.slot}`);
+    } catch (error: any) {
+      setStatus(`Receive address verification failed: ${error?.message ?? String(error)}`);
+    } finally {
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
+    }
+  };
+
+  const signMessageWithSlot = async (wallet: WalletAddress) => {
+    if (locked !== false) {
+      setStatus('Unlock the device before signing a message');
+      return;
+    }
+    const message = window.prompt('Message to sign on the device:');
+    if (message === null || message === '') return;
+    deviceBusyRef.current = true;
+    setDeviceBusy(true);
+    setStatus('Review the message on the device screen, then approve on-device...');
+    try {
+      const { chal, sig } = await device.signMessage(
+        wallet.slot,
+        wallet.path,
+        new TextEncoder().encode(message),
+      );
+      const hex = (limbs: bigint[]) =>
+        limbs.map((l) => l.toString(16).padStart(16, '0')).join('');
+      setStatus(`Signed. chal=${hex(chal)} sig=${hex(sig)}`);
+    } catch (error: any) {
+      setStatus(`Message signing failed: ${error?.message ?? String(error)}`);
+    } finally {
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
+    }
+  };
+
   const importWalletKeyfile = async (file: File) => {
     if (!wasm) {
       setStatus('WASM not ready yet');
@@ -2473,6 +2520,43 @@ function App() {
                               type="button"
                               onClick={() => {
                                 if (!walletAddress) {
+                                  setStatus('Wallet PKH is not ready yet');
+                                  return;
+                                }
+                                void verifyReceiveAddress(wallet ?? {
+                                  slot: pub.slot,
+                                  path: pub.path,
+                                  pathLabel: formatDerivationPath(pub.path),
+                                  address: walletAddress,
+                                  alias: storedLabel || `wallet slot ${pub.slot}`,
+                                });
+                              }}
+                              className="btn btn-small btn-secondary"
+                              disabled={deviceBusy || locked !== false || !walletAddress}
+                            >
+                              verify on device
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void signMessageWithSlot(wallet ?? {
+                                  slot: pub.slot,
+                                  path: pub.path,
+                                  pathLabel: formatDerivationPath(pub.path),
+                                  address: walletAddress ?? '',
+                                  alias: storedLabel || `wallet slot ${pub.slot}`,
+                                })
+                              }
+                              className="btn btn-small btn-secondary"
+                              disabled={deviceBusy || locked !== false}
+                              title="Sign an arbitrary message with this slot's key (reviewed on-device)"
+                            >
+                              sign message
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!walletAddress) {
                                   setAddressBookStatus('Wallet PKH is not ready yet');
                                   return;
                                 }
@@ -3005,6 +3089,8 @@ function App() {
             )}
           </div>
           </div>{/* device-controls-row */}
+
+          <NounInspector wasm={wasm} />
 
           <div className="section device-panel device-update-panel">
             <div className="seed-header">

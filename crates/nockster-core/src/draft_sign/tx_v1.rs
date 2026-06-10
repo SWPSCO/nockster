@@ -48,6 +48,42 @@ pub struct DraftOutputV1 {
     pub gift: u64,
     /// True if this output pays back to the signing key (refund/change).
     pub is_refund: bool,
+    /// Decoded EVM address (`0x…`) when this output is a Base bridge deposit.
+    pub bridge_evm_addr: Option<String>,
+    /// Spend conditions for this output, parsed from `note_data` and verified
+    /// against the output's `lock_root` (present only when the host supplied
+    /// them and they matched).
+    pub lock: Option<LockSummaryV1>,
+}
+
+/// A note's lock as understood from the draft's `note_data` "lock" entry. The
+/// constraints are reported verbatim — no current-block-height comparison,
+/// which the device cannot trust without chain state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockSummaryV1 {
+    /// The supplied spend-condition hashed to the output's `lock_root`. False
+    /// means the host's claimed lock does not match what is committed — treat
+    /// the constraints as unverified.
+    pub verified: bool,
+    pub primitives: Vec<LockPrimitiveV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockPrimitiveV1 {
+    /// M-of-N multisig over N public-key hashes.
+    Pkh { m: u64, n: u64 },
+    /// Timelock: optional relative (origin-page-relative) and absolute
+    /// (block-height) min/max bounds, in blocks. Reported as-is.
+    Timelock {
+        rel_min: Option<u64>,
+        rel_max: Option<u64>,
+        abs_min: Option<u64>,
+        abs_max: Option<u64>,
+    },
+    /// Hash-preimage lock requiring `n` preimages to be revealed.
+    Hax { n: u64 },
+    /// Unspendable.
+    Burn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +101,24 @@ pub struct DraftReviewV1 {
     pub fee_total: u64,
     /// Minimum valid post-Bythos fee in nicks for the reviewed draft.
     pub minimum_fee: u64,
+    /// Per-input multisig coordination state (only inputs whose lock is m-of-n
+    /// with N &gt; 1 are listed).
+    pub multisig_inputs: Vec<MultisigInputV1>,
+}
+
+/// One m-of-N multisig input being spent, for coordination display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultisigInputV1 {
+    /// Signatures required.
+    pub m: u64,
+    /// Authorized public-key hashes.
+    pub n: u64,
+    /// Real (non-placeholder) signatures already collected in the witness.
+    pub present: u64,
+    /// The signing device's key is among the N authorized.
+    pub we_authorized: bool,
+    /// The signing device's key already holds a real signature here.
+    pub we_signed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -599,6 +653,68 @@ fn zmap_count_up_to(map: Noun, arena: &Arena, limit: u64) -> Result<u64, SignDra
     Ok(count)
 }
 
+/// Count z-set members (used for the N in an m-of-n pkh lock).
+fn zset_count_members(set: Noun, arena: &Arena, limit: u64) -> Result<u64, SignDraftError> {
+    if limit == 0 || set == arena.atom0() {
+        return Ok(0);
+    }
+    let (_value, left, right) = tuple3(set, arena).ok_or(SignDraftError::Malformed)?;
+    let mut count = 1u64;
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zset_count_members(left, arena, limit - count)?);
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zset_count_members(right, arena, limit - count)?);
+    Ok(count)
+}
+
+/// Count real (non-placeholder) pkh signatures already present in a witness
+/// signature z-map.
+fn zmap_count_real_sigs(map: Noun, arena: &Arena, limit: u64) -> Result<u64, SignDraftError> {
+    if limit == 0 || map == arena.atom0() {
+        return Ok(0);
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (_key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    let mut count = if is_placeholder_pkh_signature_value(value, arena)? {
+        0
+    } else {
+        1
+    };
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zmap_count_real_sigs(left, arena, limit - count)?);
+    if count >= limit {
+        return Ok(count);
+    }
+    count = count.saturating_add(zmap_count_real_sigs(right, arena, limit - count)?);
+    Ok(count)
+}
+
+/// True when the signer's pkh already holds a real (non-placeholder)
+/// signature in the witness map.
+fn zmap_has_real_sig_for(
+    map: Noun,
+    arena: &Arena,
+    want: [u64; 5],
+) -> Result<bool, SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(false);
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    if parse_hash(key, arena).is_some_and(|d| d == want)
+        && !is_placeholder_pkh_signature_value(value, arena)?
+    {
+        return Ok(true);
+    }
+    Ok(zmap_has_real_sig_for(left, arena, want)? || zmap_has_real_sig_for(right, arena, want)?)
+}
+
 fn tuple_all_u64_eq(
     noun: Noun,
     arena: &Arena,
@@ -777,6 +893,98 @@ fn cheetah_pubkey_noun(arena: &mut Arena, pk_coords: ([u64; 6], [u64; 6])) -> No
 
     let inf_noun = arena.alloc_atom_u64(1);
     build_tuple(arena, &[x_noun, y_noun, inf_noun])
+}
+
+/// Tip5 digest of a message for `sign-message`, byte-compatible with the
+/// nockchain wallet's `++page-msg`. The cord is split into 32-bit
+/// little-endian belts (`rip-correct 5`) and the resulting belt list is
+/// hashed with `hash-noun-varlen` (Hoon `(hash-hashable:tip5 leaf+form)`).
+pub fn message_digest_v1(message: &[u8]) -> Result<[u64; 5], SignDraftError> {
+    // Significant byte length: a cord is a little-endian atom, so trailing
+    // zero bytes are not part of the value (matches `met`/`rip`).
+    let mut sig_len = message.len();
+    while sig_len > 0 && message[sig_len - 1] == 0 {
+        sig_len -= 1;
+    }
+    let mut arena = Arena::new();
+    let list = if sig_len == 0 {
+        // rip-correct of an empty/zero cord is the single belt 0.
+        let zero = arena.alloc_atom_u64(0);
+        build_tuple(&mut arena, &[zero])
+    } else {
+        let nblocks = sig_len.div_ceil(4);
+        let mut belts: Vec<Noun> = Vec::with_capacity(nblocks + 1);
+        for block in 0..nblocks {
+            let mut word = 0u64;
+            for j in 0..4 {
+                let idx = block * 4 + j;
+                if idx < sig_len {
+                    word |= (message[idx] as u64) << (8 * j);
+                }
+            }
+            belts.push(arena.alloc_atom_u64(word));
+        }
+        // Null-terminated list: [b0 b1 ... bn 0].
+        belts.push(arena.alloc_atom_u64(0));
+        build_tuple(&mut arena, &belts)
+    };
+    Ok(tip5::hash_noun_varlen(list, &arena)?)
+}
+
+#[cfg(test)]
+mod lock_bridge_tests {
+    use super::*;
+
+    // EVM address decode: a + b*p + c*p^2 -> 20 BE bytes. p = Goldilocks.
+    #[test]
+    fn evm_decode_roundtrips() {
+        let p = tip5::GOLDILOCKS_P as u128;
+        // Choose a 160-bit value and split into base-p limbs.
+        let addr: u128 = 0x1234_5678_9abc_def0_1122_3344u128 << 32 | 0x5566_7788;
+        let a = (addr % p) as u64;
+        let b = ((addr / p) % p) as u64;
+        let c = ((addr / p / p) % p) as u64;
+
+        let mut buf = [0u8; 20];
+        assert!(be20_mul_add(&mut buf, 1, c));
+        assert!(be20_mul_add(&mut buf, tip5::GOLDILOCKS_P, b));
+        assert!(be20_mul_add(&mut buf, tip5::GOLDILOCKS_P, a));
+
+        // Recompose from BE bytes and compare the low 160 bits.
+        let mut got: u128 = 0;
+        for byte in &buf {
+            got = (got << 8) | *byte as u128;
+        }
+        assert_eq!(got, addr);
+        assert!(evm_addr_to_hex(&buf).starts_with("0x"));
+        assert_eq!(evm_addr_to_hex(&buf).len(), 42);
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+
+    // Stability + structure regression. A short message splits into 32-bit
+    // little-endian belts; "abcd" -> single belt 0x64636261.
+    #[test]
+    fn message_digest_is_stable_and_chunked() {
+        let a = message_digest_v1(b"abcd").unwrap();
+        let b = message_digest_v1(b"abcd").unwrap();
+        assert_eq!(a, b);
+        // Empty and zero-only messages both reduce to the single belt 0.
+        assert_eq!(
+            message_digest_v1(b"").unwrap(),
+            message_digest_v1(&[0, 0, 0]).unwrap()
+        );
+        // Different content -> different digest.
+        assert_ne!(message_digest_v1(b"abcd").unwrap(), message_digest_v1(b"abce").unwrap());
+        // A trailing zero byte is not significant (cord = LE atom).
+        assert_eq!(
+            message_digest_v1(b"abc").unwrap(),
+            message_digest_v1(b"abc\0").unwrap()
+        );
+    }
 }
 
 /// Tip5 `hash-noun` digest of a jammed noun — the value a `%hax` lock commits
@@ -1210,11 +1418,219 @@ fn seed_recipient_pkh(
     Ok(Some(digest))
 }
 
+/// Count z-set members up to `limit` (full count for small sets used in lock
+/// display; pkh/hax sets are tiny).
+fn zset_count(set: Noun, arena: &Arena, limit: u64) -> u64 {
+    if limit == 0 || set == arena.atom0() {
+        return 0;
+    }
+    let Some((_value, lr)) = uncons(set, arena) else {
+        return 0;
+    };
+    let Some((left, right)) = uncons(lr, arena) else {
+        return 1;
+    };
+    let mut count = 1u64;
+    count += zset_count(left, arena, limit - count);
+    if count >= limit {
+        return count;
+    }
+    count + zset_count(right, arena, limit - count)
+}
+
+/// Decode a `(unit @)`: `~` (atom 0) -> None, `[~ v]` -> Some(v).
+fn parse_unit_u64(opt: Noun, arena: &Arena) -> Option<u64> {
+    match opt {
+        Noun::Atom(_) => None,
+        Noun::Cell(_) => {
+            let (_null, v) = uncons(opt, arena)?;
+            noun_atom_u64(v, arena)
+        }
+    }
+}
+
+fn parse_timelock_range(range: Noun, arena: &Arena) -> Option<(Option<u64>, Option<u64>)> {
+    let (min, max) = tuple2(range, arena)?;
+    Some((parse_unit_u64(min, arena), parse_unit_u64(max, arena)))
+}
+
+fn parse_lock_primitive(lp: Noun, arena: &Arena) -> Option<LockPrimitiveV1> {
+    let (header, body) = tuple2(lp, arena)?;
+    if atom_eq_bytes(header, b"pkh", arena) {
+        let (m, h) = tuple2(body, arena)?;
+        let m = noun_atom_u64(m, arena)?;
+        Some(LockPrimitiveV1::Pkh {
+            m,
+            n: zset_count(h, arena, 64),
+        })
+    } else if atom_eq_bytes(header, b"tim", arena) {
+        let (rel, abs) = tuple2(body, arena)?;
+        let (rel_min, rel_max) = parse_timelock_range(rel, arena)?;
+        let (abs_min, abs_max) = parse_timelock_range(abs, arena)?;
+        Some(LockPrimitiveV1::Timelock {
+            rel_min,
+            rel_max,
+            abs_min,
+            abs_max,
+        })
+    } else if atom_eq_bytes(header, b"hax", arena) {
+        Some(LockPrimitiveV1::Hax {
+            n: zset_count(body, arena, 64),
+        })
+    } else if atom_eq_bytes(header, b"brn", arena) {
+        Some(LockPrimitiveV1::Burn)
+    } else {
+        None
+    }
+}
+
+/// Parse and verify the output's lock from `note_data` "lock" =
+/// `[%0 spend-condition]`. For a single spend-condition (single-sig, m-of-n,
+/// AND-composed) `lock_root == hash:spend-condition`, so a match confirms the
+/// displayed constraints are the ones committed. OR-composed (merkle) locks
+/// carry only one branch here and will report `verified=false`.
+fn parse_lock_summary(
+    note_data: Noun,
+    lock_root: [u64; 5],
+    arena: &Arena,
+    ctx: &TxIdCtx,
+) -> Result<Option<LockSummaryV1>, SignDraftError> {
+    let Some(lock_data) = note_data_find(note_data, arena, b"lock") else {
+        return Ok(None);
+    };
+    let Some((ver, sc)) = tuple2(lock_data, arena) else {
+        return Ok(None);
+    };
+    if noun_atom_u64(ver, arena) != Some(0) {
+        return Ok(None);
+    }
+
+    let mut primitives = Vec::new();
+    let mut cursor = sc;
+    while cursor != arena.atom0() {
+        let Some((head, tail)) = uncons(cursor, arena) else {
+            return Ok(None);
+        };
+        let Some(prim) = parse_lock_primitive(head, arena) else {
+            // Unknown primitive: don't claim a partial summary.
+            return Ok(None);
+        };
+        primitives.push(prim);
+        cursor = tail;
+    }
+    if primitives.is_empty() {
+        return Ok(None);
+    }
+
+    let computed = hash_lock_primitives_list(sc, arena, ctx)?;
+    Ok(Some(LockSummaryV1 {
+        verified: computed == lock_root,
+        primitives,
+    }))
+}
+
+/// Big-endian 160-bit `buf = buf*mul + add`; returns false on >160-bit
+/// overflow (an invalid EVM address).
+fn be20_mul_add(buf: &mut [u8; 20], mul: u64, add: u64) -> bool {
+    let mut carry = add as u128;
+    for byte in buf.iter_mut().rev() {
+        let v = (*byte as u128) * (mul as u128) + carry;
+        *byte = (v & 0xff) as u8;
+        carry = v >> 8;
+    }
+    carry == 0
+}
+
+/// Decode a Base bridge deposit from `note_data` "bridge" =
+/// `[%0 %base [a b c]]`, where the 20-byte EVM address is `a + b*p + c*p²`
+/// (p = Goldilocks prime), reproducing `evm-address-to-based`.
+fn parse_bridge_evm(note_data: Noun, arena: &Arena) -> Option<[u8; 20]> {
+    let value = note_data_find(note_data, arena, b"bridge")?;
+    let (ver, rest) = tuple2(value, arena)?;
+    if noun_atom_u64(ver, arena) != Some(0) {
+        return None;
+    }
+    let (base_tag, abc) = tuple2(rest, arena)?;
+    if !atom_eq_bytes(base_tag, b"base", arena) {
+        return None;
+    }
+    let (a, bc) = tuple2(abc, arena)?;
+    let (b, c) = tuple2(bc, arena)?;
+    let a = noun_atom_u64(a, arena)?;
+    let b = noun_atom_u64(b, arena)?;
+    let c = noun_atom_u64(c, arena)?;
+
+    let p = tip5::GOLDILOCKS_P;
+    let mut buf = [0u8; 20];
+    // buf = ((c*p + b)*p + a) = c*p^2 + b*p + a.
+    if !be20_mul_add(&mut buf, 1, c)
+        || !be20_mul_add(&mut buf, p, b)
+        || !be20_mul_add(&mut buf, p, a)
+    {
+        return None;
+    }
+    Some(buf)
+}
+
+fn evm_addr_to_hex(addr: &[u8; 20]) -> String {
+    let mut out = String::with_capacity(42);
+    out.push_str("0x");
+    for byte in addr {
+        out.push(core::char::from_digit((byte >> 4) as u32, 16).unwrap());
+        out.push(core::char::from_digit((byte & 0xf) as u32, 16).unwrap());
+    }
+    out
+}
+
+fn collect_multisig_inputs(
+    spends: Noun,
+    arena: &Arena,
+    signer_pkh: [u64; 5],
+    out: &mut Vec<MultisigInputV1>,
+) -> Result<(), SignDraftError> {
+    if spends == arena.atom0() {
+        return Ok(());
+    }
+    let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
+    let (_name, spend) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    let (ver, body) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
+    if noun_atom_u64(ver, arena) == Some(1) {
+        let (witness, _seeds, _fee) = tuple3(body, arena).ok_or(SignDraftError::Malformed)?;
+        let (lmp, pkh_map, _hax, _tim) =
+            tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+        let (_v, spend_condition, _axis, _merk) = decompose_lock_merkle_proof(lmp, arena)?;
+        if let Some((m, allowed)) = spend_condition_pkh_lock(spend_condition, arena)? {
+            let n = zset_count_members(allowed, arena, 64)?;
+            if n > 1 {
+                out.push(MultisigInputV1 {
+                    m,
+                    n,
+                    present: zmap_count_real_sigs(pkh_map, arena, 64)?,
+                    we_authorized: zset_contains_hash(allowed, arena, signer_pkh)?,
+                    we_signed: zmap_has_real_sig_for(pkh_map, arena, signer_pkh)?,
+                });
+            }
+        }
+    }
+    collect_multisig_inputs(left, arena, signer_pkh, out)?;
+    collect_multisig_inputs(right, arena, signer_pkh, out)?;
+    Ok(())
+}
+
+/// One accumulated external output, merged by recipient.
+struct OutAcc {
+    recipient: [u64; 5],
+    gift: u64,
+    bridge: Option<[u8; 20]>,
+    lock: Option<LockSummaryV1>,
+}
+
 fn collect_outputs_from_seeds(
     seeds_zset: Noun,
     arena: &Arena,
     signer_pkh: [u64; 5],
-    acc: &mut Vec<([u64; 5], u64)>,
+    ctx: &TxIdCtx,
+    acc: &mut Vec<OutAcc>,
     refund: &mut Option<u64>,
 ) -> Result<(), SignDraftError> {
     if seeds_zset == arena.atom0() {
@@ -1224,14 +1640,14 @@ fn collect_outputs_from_seeds(
     let (seed, lr) = uncons(seeds_zset, arena).ok_or(SignDraftError::Malformed)?;
     let (left, right) = uncons(lr, arena).ok_or(SignDraftError::Malformed)?;
 
-    let (_output_source, _lock_root, note_data, gift_noun, _parent_hash) =
+    let (_output_source, lock_root_noun, note_data, gift_noun, _parent_hash) =
         tuple5(seed, arena).ok_or(SignDraftError::Malformed)?;
     let gift = match gift_noun {
         Noun::Atom(id) => arena.atom_u64(id).ok_or(SignDraftError::Malformed)?,
         _ => return Err(SignDraftError::Malformed),
     };
     if gift != 0 {
-        let lock_root_digest = parse_hash(_lock_root, arena).ok_or(SignDraftError::Malformed)?;
+        let lock_root_digest = parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
         let recipient = seed_recipient_pkh(note_data, arena)?.unwrap_or(lock_root_digest);
         if recipient == signer_pkh {
             let next = refund
@@ -1239,26 +1655,43 @@ fn collect_outputs_from_seeds(
                 .checked_add(gift)
                 .ok_or(SignDraftError::Malformed)?;
             *refund = Some(next);
-        } else if let Some(existing) = acc.iter_mut().find(|(d, _)| *d == recipient) {
-            existing.1 = existing
-                .1
-                .checked_add(gift)
-                .ok_or(SignDraftError::Malformed)?;
         } else {
-            acc.push((recipient, gift));
+            let bridge = parse_bridge_evm(note_data, arena);
+            let lock = parse_lock_summary(note_data, lock_root_digest, arena, ctx)?;
+            if let Some(existing) = acc.iter_mut().find(|o| o.recipient == recipient) {
+                existing.gift = existing
+                    .gift
+                    .checked_add(gift)
+                    .ok_or(SignDraftError::Malformed)?;
+                if existing.bridge.is_none() {
+                    existing.bridge = bridge;
+                }
+                if existing.lock.is_none() {
+                    existing.lock = lock;
+                }
+            } else {
+                acc.push(OutAcc {
+                    recipient,
+                    gift,
+                    bridge,
+                    lock,
+                });
+            }
         }
     }
 
-    collect_outputs_from_seeds(left, arena, signer_pkh, acc, refund)?;
-    collect_outputs_from_seeds(right, arena, signer_pkh, acc, refund)?;
+    collect_outputs_from_seeds(left, arena, signer_pkh, ctx, acc, refund)?;
+    collect_outputs_from_seeds(right, arena, signer_pkh, ctx, acc, refund)?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_outputs_from_spends(
     spends: Noun,
     arena: &Arena,
     signer_pkh: [u64; 5],
-    acc: &mut Vec<([u64; 5], u64)>,
+    ctx: &TxIdCtx,
+    acc: &mut Vec<OutAcc>,
     refund: &mut Option<u64>,
     input_count: &mut u32,
     fee_total: &mut u64,
@@ -1281,13 +1714,14 @@ fn collect_outputs_from_spends(
     *fee_total = fee_total
         .checked_add(fee)
         .ok_or(SignDraftError::Malformed)?;
-    collect_outputs_from_seeds(seeds, arena, signer_pkh, acc, refund)?;
+    collect_outputs_from_seeds(seeds, arena, signer_pkh, ctx, acc, refund)?;
 
-    collect_outputs_from_spends(left, arena, signer_pkh, acc, refund, input_count, fee_total)?;
+    collect_outputs_from_spends(left, arena, signer_pkh, ctx, acc, refund, input_count, fee_total)?;
     collect_outputs_from_spends(
         right,
         arena,
         signer_pkh,
+        ctx,
         acc,
         refund,
         input_count,
@@ -1378,14 +1812,16 @@ pub fn draft_review_v1(
 
     let minimum_fee = calculate_minimum_fee_v1(&mut arena, spends)?;
 
-    let mut acc: Vec<([u64; 5], u64)> = Vec::new();
+    let mut acc: Vec<OutAcc> = Vec::new();
     let mut refund: Option<u64> = None;
     let mut input_count = 0u32;
     let mut fee_total = 0u64;
+    let ctx = tx_id_ctx(&mut arena)?;
     collect_outputs_from_spends(
         spends,
         &arena,
         signer_pkh,
+        &ctx,
         &mut acc,
         &mut refund,
         &mut input_count,
@@ -1395,14 +1831,16 @@ pub fn draft_review_v1(
     let mut out: Vec<DraftOutputV1> = Vec::with_capacity(acc.len() + 1);
     let mut external_total = 0u64;
     let external_output_count = acc.len() as u32;
-    for (digest, gift) in acc {
+    for entry in acc {
         external_total = external_total
-            .checked_add(gift)
+            .checked_add(entry.gift)
             .ok_or(SignDraftError::Malformed)?;
         out.push(DraftOutputV1 {
-            recipient_b58: digest_to_b58(digest),
-            gift,
+            recipient_b58: digest_to_b58(entry.recipient),
+            gift: entry.gift,
             is_refund: false,
+            bridge_evm_addr: entry.bridge.as_ref().map(evm_addr_to_hex),
+            lock: entry.lock,
         });
     }
     let refund_total = refund.unwrap_or(0);
@@ -1411,8 +1849,13 @@ pub fn draft_review_v1(
             recipient_b58: digest_to_b58(signer_pkh),
             gift: refund_total,
             is_refund: true,
+            bridge_evm_addr: None,
+            lock: None,
         });
     }
+    let mut multisig_inputs = Vec::new();
+    collect_multisig_inputs(spends, &arena, signer_pkh, &mut multisig_inputs)?;
+
     Ok(DraftReviewV1 {
         outputs: out,
         input_count,
@@ -1421,6 +1864,7 @@ pub fn draft_review_v1(
         refund_total,
         fee_total,
         minimum_fee,
+        multisig_inputs,
     })
 }
 

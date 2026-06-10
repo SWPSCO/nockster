@@ -19,7 +19,9 @@ use super::layout::{
 use super::palette;
 use super::state::{
     Button, ButtonHit, GuiMode, TouchDiagnostics, TxReviewOutput, TxReviewSummary,
-    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
+    TX_REVIEW_FLAG_LOCK_UNVERIFIED, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_MULTISIG,
+    TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
 };
 use super::GuiDisplay;
 
@@ -881,6 +883,27 @@ pub fn render_tx_review_overlay(
 
     fn write_warning(buf: &mut heapless::String<32>, flags: u8) -> bool {
         buf.clear();
+        // Lock/destination warnings first — they change what the money does.
+        if flags & TX_REVIEW_FLAG_LOCK_UNVERIFIED != 0 {
+            let _ = buf.push_str("WARN lock unverified");
+            return true;
+        }
+        if flags & TX_REVIEW_FLAG_BRIDGE != 0 {
+            let _ = buf.push_str("WARN eth bridge out");
+            return true;
+        }
+        if flags & TX_REVIEW_FLAG_TIMELOCK != 0 {
+            let _ = buf.push_str("WARN timelocked out");
+            return true;
+        }
+        if flags & TX_REVIEW_FLAG_HASHLOCK != 0 {
+            let _ = buf.push_str("WARN hashlock out");
+            return true;
+        }
+        if flags & TX_REVIEW_FLAG_MULTISIG != 0 {
+            let _ = buf.push_str("multisig out");
+            return true;
+        }
         if flags & TX_REVIEW_FLAG_HIGH_FEE != 0 {
             let _ = buf.push_str("WARN high fee");
             return true;
@@ -937,6 +960,35 @@ pub fn render_tx_review_overlay(
         baseline += line_h;
         line.clear();
 
+        // Multisig coordination for the input we're authorized on.
+        if summary.multisig_m > 0 {
+            if summary.multisig_we_must_sign {
+                let _ = write!(
+                    line,
+                    "MSIG {}/{} +YOU",
+                    summary.multisig_present, summary.multisig_m
+                );
+            } else {
+                let _ = write!(
+                    line,
+                    "MSIG {}/{} signed",
+                    summary.multisig_present, summary.multisig_m
+                );
+            }
+            let _ = Text::new(
+                line.as_str(),
+                Point::new(inner_left, baseline),
+                if summary.multisig_we_must_sign {
+                    warning_style
+                } else {
+                    summary_style
+                },
+            )
+            .draw(display);
+            baseline += line_h;
+            line.clear();
+        }
+
         if write_warning(&mut line, summary.flags) {
             let _ = Text::new(
                 line.as_str(),
@@ -986,7 +1038,11 @@ pub fn render_tx_review_overlay(
 
             let mut baseline = y + FONT_10X20.character_size.height as i32;
             let mut line1 = heapless::String::<32>::new();
-            write_amount(&mut line1, out.gift);
+            if summary.is_none() && out.gift == 0 {
+                let _ = line1.push_str("receive address");
+            } else {
+                write_amount(&mut line1, out.gift);
+            }
             let _ =
                 Text::new(line1.as_str(), Point::new(inner_left, baseline), style).draw(display);
 
@@ -1017,7 +1073,11 @@ pub fn render_tx_review_overlay(
             let mut baseline = top + FONT_10X20.character_size.height as i32;
 
             let mut amount = heapless::String::<32>::new();
-            write_amount(&mut amount, out.gift);
+            if summary.is_none() && out.gift == 0 {
+                let _ = amount.push_str("receive address");
+            } else {
+                write_amount(&mut amount, out.gift);
+            }
             let _ = Text::new(amount.as_str(), Point::new(left, baseline), style).draw(display);
             baseline += line_h;
 

@@ -6,6 +6,23 @@ BIP39 mnemonic → PBKDF2-HMAC-SHA512 (2048 rounds, `"mnemonic" + passphrase`)
 the shared `tx-types` implementation / its Hoon counterpart). That makes two
 interop flows possible without any new trust assumptions.
 
+## Storage format: coil-only
+
+Device slots store the nockchain-wallet's native **Cheetah master coil**
+(`sk || cc`), not a BIP39 seed. A mnemonic is converted to a coil once at
+ingest (`master_from_seed`); child keys derive straight from `(sk, cc)` with
+no per-signature SLIP10 master step. Derived addresses are identical to the
+old seed-based path (the master `sk` is the same), so this is an internal
+storage/perf change — but the on-disk slot format changed, so a device must be
+wiped and re-seeded once. Consequences:
+
+- A raw coil (no seed) is now storable as-is, so importing a wallet's `%prv`
+  coil is a natural next step (needs the request wiring + one verified
+  byte-order vector — see proposals doc).
+- The legacy secp256k1/bip32 features (`GetXpub`, `GetPubkey`, `SignDigest`,
+  `GetFingerprint`) are unsupported on coil slots and now return an error;
+  they were never part of the nockchain (Cheetah) path.
+
 ## Importing `keys.export` into Nockster
 
 `nockchain-wallet export-keys` writes a jammed `(list [trek meta])` where the

@@ -150,6 +150,19 @@ const requestBuilders = {
   VaultReveal: { type: 'VaultReveal', slot: 2 },
   VaultDelete: { type: 'VaultDelete', slot: 2 },
   GetMasterPubkey: { type: 'GetMasterPubkey', slot: 0 },
+  ShowAddress: { type: 'ShowAddress', slot: 0, path: [44, 0, 0] },
+  SignMessage: {
+    type: 'SignMessage',
+    slot: 1,
+    path: [44, 0],
+    message: new TextEncoder().encode('hello nockchain'),
+  },
+  SignHash: {
+    type: 'SignHash',
+    slot: 0,
+    path: [44],
+    digest5: [1n, 2n, 3n, 4n, 0xffffffffffffffffn],
+  },
 };
 
 const frameBuilders = {

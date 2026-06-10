@@ -32,7 +32,9 @@ use esp_hal::{clock::CpuClock, delay::Delay, main};
 use gui::{
     AboutInfo, Gui, GuiInteraction, LabelEntryContext, LabelInteraction, MenuItem, SeedInteraction,
     TxReviewSummary, VaultInteraction, WalletInteraction, WalletRow, WalletRows,
-    TX_REVIEW_FLAG_HIGH_FEE, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_NO_REFUND,
+    TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
+    TX_REVIEW_FLAG_LOCK_UNVERIFIED, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_MULTISIG,
+    TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
 };
 use heapless::{String as HString, Vec as HVec};
 use jobs::{
@@ -45,7 +47,7 @@ use jobs::{
 use nockster_core::*;
 use protocol::{send_err, send_msg, send_response};
 use seed_store::{
-    clear_master_key, master_key_copy, root_pub_from_seed, set_seed, store_master_key,
+    clear_master_key, master_key_copy, root_pub_from_coil, set_seed, store_master_key,
     update_seed_store_from_slice, wipe_seed, PendingSeedSetup, SeedOpUiEffect,
 };
 use static_slot::StaticSlot;
@@ -357,10 +359,13 @@ fn compute_initpin_outcome(
     }
 
     set_initpin_progress(InitPinProgress::RootPub);
-    let pub_xy = root_pub_from_seed(&seed64);
+    // Store a Cheetah coil (sk || cc), not the BIP39 seed.
+    let mut coil = seed_store::coil_from_seed(&seed64);
+    seed64.zeroize();
+    let pub_xy = root_pub_from_coil(&coil);
     match nvs.prepare_initialize_pin_with_pepper_and_progress(
         pin.as_str(),
-        &seed64,
+        &coil,
         pub_xy,
         &mut state.nvs_pepper,
         nvs_init_progress,
@@ -368,28 +373,28 @@ fn compute_initpin_outcome(
         Ok((prepared, master_key, _slot)) => {
             set_initpin_progress(InitPinProgress::NvsWriteFlash);
             InitPinOutcome::Prepared {
-                seed64,
+                seed64: coil,
                 master_key,
                 prepared,
             }
         }
         Err(NvsError::AlreadyInitialized) => {
-            seed64.zeroize();
+            coil.zeroize();
             set_initpin_progress(InitPinProgress::Complete);
             InitPinOutcome::AlreadyInitialized
         }
         Err(NvsError::Flash) => {
-            seed64.zeroize();
+            coil.zeroize();
             set_initpin_progress(InitPinProgress::Error);
             InitPinOutcome::Flash
         }
         Err(NvsError::Crypto) => {
-            seed64.zeroize();
+            coil.zeroize();
             set_initpin_progress(InitPinProgress::Error);
             InitPinOutcome::Crypto
         }
         Err(_) => {
-            seed64.zeroize();
+            coil.zeroize();
             set_initpin_progress(InitPinProgress::Error);
             InitPinOutcome::Failed
         }
@@ -473,6 +478,8 @@ fn is_direct_sign_frame(frame: &Frame) -> bool {
             Request::SignDigest { .. }
                 | Request::SignSpendHash { .. }
                 | Request::SignSpendHashFor { .. }
+                | Request::SignMessage { .. }
+                | Request::SignHash { .. }
         )
     )
 }
@@ -511,6 +518,46 @@ fn tx_review_summary_from_draft(
     if review.external_output_count > 1 {
         flags |= TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS;
     }
+    for output in review.outputs.iter().filter(|o| !o.is_refund) {
+        if output.bridge_evm_addr.is_some() {
+            flags |= TX_REVIEW_FLAG_BRIDGE;
+        }
+        if let Some(lock) = &output.lock {
+            if !lock.verified {
+                flags |= TX_REVIEW_FLAG_LOCK_UNVERIFIED;
+            }
+            for prim in &lock.primitives {
+                match prim {
+                    nockster_core::draft_sign::LockPrimitiveV1::Pkh { m, n } if n > m => {
+                        flags |= TX_REVIEW_FLAG_MULTISIG;
+                    }
+                    nockster_core::draft_sign::LockPrimitiveV1::Timelock { .. } => {
+                        flags |= TX_REVIEW_FLAG_TIMELOCK;
+                    }
+                    nockster_core::draft_sign::LockPrimitiveV1::Hax { .. } => {
+                        flags |= TX_REVIEW_FLAG_HASHLOCK;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Surface the multisig input we're authorized on (or the first multisig
+    // input). Most multisig txs spend a single multisig note.
+    let msig = review
+        .multisig_inputs
+        .iter()
+        .find(|i| i.we_authorized)
+        .or_else(|| review.multisig_inputs.first());
+    let (multisig_m, multisig_present, multisig_we_must_sign) = match msig {
+        Some(i) => (
+            i.m.min(255) as u8,
+            i.present.min(255) as u8,
+            i.we_authorized && !i.we_signed,
+        ),
+        None => (0, 0, false),
+    };
 
     TxReviewSummary {
         input_count: review.input_count,
@@ -519,7 +566,60 @@ fn tx_review_summary_from_draft(
         refund_total: review.refund_total,
         fee_total: review.fee_total,
         flags,
+        multisig_m,
+        multisig_present,
+        multisig_we_must_sign,
     }
+}
+
+/// Recipient line for the TX review: a bridge deposit shows its EVM address;
+/// a multisig output is prefixed with "MofN"; otherwise the trusted (address-
+/// book-labeled) recipient pkh.
+fn annotate_output_recipient(
+    output: &nockster_core::draft_sign::DraftOutputV1,
+    address_book: &[DeviceAddressBookEntry],
+) -> HString<64> {
+    use nockster_core::draft_sign::LockPrimitiveV1;
+    if let Some(evm) = &output.bridge_evm_addr {
+        let mut out = HString::<64>::new();
+        let _ = out.push_str("eth ");
+        let take = evm.len().min(60);
+        let _ = out.push_str(&evm[..take]);
+        return out;
+    }
+    let mut out = HString::<64>::new();
+    if let Some(lock) = &output.lock {
+        for prim in &lock.primitives {
+            if let LockPrimitiveV1::Pkh { m, n } = prim {
+                if n > m {
+                    let _ = core::write!(out, "{}of{} ", m, n);
+                }
+            }
+        }
+    }
+    let base = trusted_recipient_display(output.recipient_b58.as_str(), address_book);
+    let room = 64 - out.len();
+    let take = base.len().min(room);
+    let _ = out.push_str(&base.as_str()[..take]);
+    out
+}
+
+fn trusted_recipient_display(
+    recipient_pkh_b58: &str,
+    address_book: &[DeviceAddressBookEntry],
+) -> HString<64> {
+    let mut out = HString::<64>::new();
+    if let Some(entry) = address_book
+        .iter()
+        .find(|entry| entry.pkh.as_str() == recipient_pkh_b58 && !entry.label.is_empty())
+    {
+        let _ = out.push_str(entry.label.as_str());
+        return out;
+    }
+
+    let take = recipient_pkh_b58.len().min(64);
+    let _ = out.push_str(&recipient_pkh_b58[..take]);
+    out
 }
 
 fn begin_confirmation(
@@ -535,14 +635,22 @@ fn begin_confirmation(
     let mut spend_outputs: HVec<(u64, HString<64>), 24> = HVec::new();
     let mut details = HString::<48>::new();
     let mut tx_review_header = prompt;
+    let is_blind_spend = matches!(
+        &frame,
+        Frame::One(Request::SignSpendHash { .. }) | Frame::One(Request::SignSpendHashFor { .. })
+    );
+    if is_blind_spend {
+        tx_review_header = "BLIND SIGN";
+        let _ = details.push_str("Raw hash only");
+    }
 
     if let Frame::One(Request::SignSpendHashFor {
         slot, path, pubkey, ..
     }) = &frame
     {
         signing::preflight_spend_pubkey(*slot, path, pubkey, is_device_locked())?;
-        let _ = details.push_str("Pubkey OK");
-        tx_review_header = "Pubkey OK";
+        details.clear();
+        let _ = details.push_str("Pubkey OK, raw hash");
     }
     if let Frame::One(Request::DeleteSeed { slot }) = &frame {
         if is_device_locked() {
@@ -596,6 +704,48 @@ fn begin_confirmation(
         }
         let _ = core::write!(&mut details, "watch-only, slot {}", slot);
     }
+    let mut show_review_outputs = false;
+    if let Frame::One(Request::ShowAddress { slot, path }) = &frame {
+        if is_device_locked() {
+            return Err(ERR_DEVICE_LOCKED);
+        }
+        let mut sk =
+            seed_store::derive_child_sk_for_slot(path, *slot as usize).map_err(|_| ERR_NO_SEED)?;
+        let pk = cheetah::cheetah_pub_from_sk(sk);
+        sk.zeroize();
+        let pkh = draft_sign::cheetah_pubkey_pkh_v1(pk).map_err(|_| ERR_CRYPTO)?;
+        let mut recipient = HString::<64>::new();
+        let take = pkh.len().min(64);
+        let _ = recipient.push_str(&pkh[..take]);
+        let _ = spend_outputs.push((0, recipient));
+        tx_review_header = "Verify Receive";
+        show_review_outputs = true;
+    }
+    if let Frame::One(Request::SignMessage { message, .. }) = &frame {
+        if is_device_locked() {
+            return Err(ERR_DEVICE_LOCKED);
+        }
+        // Show the message text so the user signs what they read. Render only
+        // printable ASCII; anything else collapses to '.' so a binary blob
+        // can't paint arbitrary glyphs.
+        details.clear();
+        for &b in message.iter() {
+            if details.len() >= 46 {
+                let _ = details.push('~');
+                break;
+            }
+            let ch = if (0x20..0x7f).contains(&b) { b as char } else { '.' };
+            let _ = details.push(ch);
+        }
+    }
+    if let Frame::One(Request::SignHash { digest5, .. }) = &frame {
+        if is_device_locked() {
+            return Err(ERR_DEVICE_LOCKED);
+        }
+        let b58 = draft_sign::tip5_digest_b58(*digest5);
+        let take = b58.len().min(44);
+        let _ = details.push_str(&b58[..take]);
+    }
 
     let show_spend_outputs = match &frame {
         Frame::One(Request::SignSpendHash {
@@ -604,14 +754,15 @@ fn begin_confirmation(
         | Frame::One(Request::SignSpendHashFor {
             meta: Some(meta), ..
         }) => {
+            let address_book = NvsStore::new()
+                .read_device_address_book()
+                .unwrap_or_default();
             for out in meta.outputs.iter() {
                 if out.gift == 0 || out.is_refund {
                     continue;
                 }
-                let mut recipient = HString::<64>::new();
-                let max = 64usize;
-                let take = out.recipient_pkh_b58.len().min(max);
-                let _ = recipient.push_str(&out.recipient_pkh_b58[..take]);
+                let recipient =
+                    trusted_recipient_display(out.recipient_pkh_b58.as_str(), &address_book);
                 let candidate = (out.gift, recipient);
                 if let Err(candidate) = spend_outputs.push(candidate) {
                     // Keep only the largest outputs when more than the UI list can display.
@@ -633,7 +784,7 @@ fn begin_confirmation(
                 .sort_unstable_by(|a, b| b.0.cmp(&a.0));
             true
         }
-        _ => false,
+        _ => show_review_outputs,
     };
 
     let stored = critical_section::with(|cs| {
@@ -936,9 +1087,9 @@ fn main() -> ! {
                 if let Some(pending) = take_pending_confirmation() {
                     let resp_msg = if decision {
                         let approved_label = match &pending.frame {
-                            Frame::One(Request::SignDigest { .. })
-                            | Frame::One(Request::SignSpendHash { .. })
-                            | Frame::One(Request::SignSpendHashFor { .. }) => "Signing...",
+                            Frame::One(Request::SignDigest { .. }) => "Signing...",
+                            Frame::One(Request::SignSpendHash { .. })
+                            | Frame::One(Request::SignSpendHashFor { .. }) => "Blind signing...",
                             _ => "Approved",
                         };
                         ui.show_idle_message_timed(approved_label, Duration::from_millis(3_000));
@@ -2128,15 +2279,24 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                         }
 
                         let summary = tx_review_summary_from_draft(&review);
+                        let address_book = NvsStore::new()
+                            .read_device_address_book()
+                            .unwrap_or_default();
+                        let mut review_outputs: HVec<(u64, HString<64>), 24> = HVec::new();
+                        for output in review.outputs.iter().filter(|o| !o.is_refund) {
+                            if review_outputs.is_full() {
+                                break;
+                            }
+                            let recipient = annotate_output_recipient(output, &address_book);
+                            let _ = review_outputs.push((output.gift, recipient));
+                        }
                         set_device_busy(true);
                         ui.request_tx_review_with_summary(
                             "Review Tx",
                             Some(summary),
-                            review
-                                .outputs
+                            review_outputs
                                 .iter()
-                                .filter(|o| !o.is_refund)
-                                .map(|o| (o.gift, o.recipient_b58.as_str())),
+                                .map(|(gift, recipient)| (*gift, recipient.as_str())),
                         );
                         Response::Ok
                     } else {
@@ -2208,6 +2368,8 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
         | Request::GetCheetahPub { .. }
         | Request::SignSpendHash { .. }
         | Request::SignSpendHashFor { .. }
+        | Request::SignMessage { .. }
+        | Request::SignHash { .. }
         | Request::Health => {
             signing::handle_request(req, is_device_locked()).unwrap_or(Response::Err {
                 code: ERR_UNSUPPORTED_VERSION,
@@ -2275,6 +2437,9 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
                 code: ERR_UNSUPPORTED_VERSION,
             })
         }
+        Request::ShowAddress { .. } => Response::Err {
+            code: ERR_UNSUPPORTED_VERSION,
+        },
     }
 }
 

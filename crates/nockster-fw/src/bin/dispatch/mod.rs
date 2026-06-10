@@ -45,14 +45,17 @@ pub fn update_mode_allows_frame(frame: &Frame) -> bool {
 pub fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
     match frame {
         Frame::One(Request::SignDigest { .. }) => Some("Sign digest?"),
-        Frame::One(Request::SignSpendHash { .. }) => Some("Approve spend?"),
-        Frame::One(Request::SignSpendHashFor { .. }) => Some("Approve spend?"),
+        Frame::One(Request::SignSpendHash { .. }) => Some("WARNING blind sign?"),
+        Frame::One(Request::SignSpendHashFor { .. }) => Some("WARNING blind sign?"),
         Frame::One(Request::DeleteSeed { .. }) => Some("Delete seed?"),
         Frame::One(Request::Reset) => Some("Factory reset?"),
         Frame::One(Request::VaultStore { .. }) => Some("Store secret?"),
         Frame::One(Request::VaultReveal { .. }) => Some("Reveal secret?"),
         Frame::One(Request::VaultDelete { .. }) => Some("Delete secret?"),
         Frame::One(Request::GetMasterPubkey { .. }) => Some("Export pubkey?"),
+        Frame::One(Request::ShowAddress { .. }) => Some("Verify receive?"),
+        Frame::One(Request::SignMessage { .. }) => Some("Sign message?"),
+        Frame::One(Request::SignHash { .. }) => Some("Sign hash?"),
         _ => None,
     }
 }

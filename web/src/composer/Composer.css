@@ -712,3 +712,49 @@ details[open] > .composer-summary::after {
   padding: 2px 0;
   font-weight: 600;
 }
+
+.composer-lock-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* Typed transaction tree (inspect_tx) */
+.composer-inspect, .composer-raw-noun { margin-top: 6px; }
+.composer-inspect > summary, .composer-raw-noun > summary {
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.75;
+  user-select: none;
+}
+.txtree { margin-top: 4px; font-size: 11px; line-height: 1.5; }
+.txtree-row { display: flex; align-items: baseline; gap: 4px; }
+.txtree-toggle {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  width: 12px;
+  padding: 0;
+  opacity: 0.7;
+}
+.txtree-leaf-dot { cursor: default; opacity: 0.4; }
+.txtree-label { opacity: 0.6; }
+.txtree-value {
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.txtree-value:hover { text-decoration: underline; }
+.txtree-children { border-left: 1px solid currentColor; border-color: rgba(128,128,128,0.25); }
+
+.composer-canvas-controls {
+  padding: 6px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}

@@ -21,7 +21,20 @@ import {
   compose_tx_v1_recipient_address,
   compose_tx_v1_unsigned,
   review_draft,
+  inspect_tx,
+  merge_signed_tx,
+  is_valid_pkh,
 } from 'nockster-wasm';
+import { TxTree } from './TxTree';
+import type { TxTreeNode } from './model';
+
+// One branch of an OR-composed lock (mirrors wasm LockBranch).
+type OutputLockBranch = {
+  recipient?: string | { m: number; pkhs: string[] };
+  timelock?: { abs_min: number };
+  hashlock?: string[];
+  burn?: boolean;
+};
 import type { AddressBookEntry, AddressKind, NoteV1, WalletAddress } from './types';
 import { loadAddressBook, newId, saveAddressBook } from './storage';
 import {
@@ -43,7 +56,6 @@ import {
   formatAmountWithUnit,
   parseAmountTextToNicks,
   formatSummaryJson,
-  formatPreviewDetails,
   normalizePreviewDetails,
   previewNumber,
   previewString,
@@ -130,6 +142,26 @@ export function Composer({
   const [selectedEdges, setSelectedEdges] = useState<ComposerEdge[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarPanel, setSidebarPanel] = useState<ComposerSidebarPanel>('send');
+  const [mergeA, setMergeA] = useState<Uint8Array | null>(null);
+  const [mergeB, setMergeB] = useState<Uint8Array | null>(null);
+  const [mergeStatus, setMergeStatus] = useState('');
+  const emptyHtlc = {
+    sourceAddr: '',
+    nameFirst: '',
+    nameLast: '',
+    originPage: '',
+    assets: '',
+    claimRecipient: '',
+    commitment: '',
+    refundAddr: '',
+    refundHeight: '',
+    branch: 'claim' as 'claim' | 'refund',
+    outRecipient: '',
+    outAmount: '',
+  };
+  const [htlc, setHtlc] = useState(emptyHtlc);
+  const [htlcStatus, setHtlcStatus] = useState('');
+  const [htlcDraft, setHtlcDraft] = useState<ComposedDraft | null>(null);
   const [inspectorDrag, setInspectorDrag] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
   const [inspectorDragging, setInspectorDragging] = useState(false);
   const inspectorDragRef = useRef<{
@@ -773,7 +805,15 @@ export function Composer({
 
           const recipientEdges = edgesNow.filter((e) => e.source === nodeId && e.sourceHandle === 'out');
           type Recipient = string | { m: number; pkhs: string[] };
-          const outputs: { recipient: Recipient; amount: number; alias?: string }[] = [];
+          const outputs: {
+            recipient: Recipient;
+            amount: number;
+            alias?: string;
+            timelock?: { abs_min: number };
+            hashlock?: string[];
+            burn?: boolean;
+            or_branches?: OutputLockBranch[];
+          }[] = [];
           const outputErrors: string[] = [];
           for (const e of recipientEdges) {
             const rNode = nodesNow.find((n) => n.id === e.target && n.type === 'address');
@@ -782,6 +822,10 @@ export function Composer({
             const address = (rData.address ?? '').trim();
             if (!address) {
               outputErrors.push('recipient missing address');
+              continue;
+            }
+            if (rData.kind !== 'multisig' && !is_valid_pkh(address)) {
+              outputErrors.push(`${rData.alias ?? address}: recipient is not a valid address`);
               continue;
             }
 
@@ -795,18 +839,87 @@ export function Composer({
               continue;
             }
 
-            if (rData.kind === 'multisig') {
+            // Optional output lock condition (timelock / hashlock / burn / HTLC).
+            const lock = rData.lock ?? { kind: 'plain' as const };
+            let timelock: { abs_min: number } | undefined;
+            let hashlock: string[] | undefined;
+            let burn = false;
+            let orBranches: OutputLockBranch[] | undefined;
+            if (lock.kind === 'burn') {
+              burn = true;
+            } else if (lock.kind === 'timelock') {
+              const h = Number((lock.absMin ?? '').trim());
+              if (!Number.isInteger(h) || h <= 0) {
+                outputErrors.push(`${rData.alias ?? address}: timelock needs a block height`);
+                continue;
+              }
+              timelock = { abs_min: h };
+            } else if (lock.kind === 'hashlock') {
+              const commitments = parsePkhListText(lock.commitments ?? '');
+              if (commitments.length === 0) {
+                outputErrors.push(`${rData.alias ?? address}: hashlock needs commitment hash(es)`);
+                continue;
+              }
+              if (commitments.some((c) => !is_valid_pkh(c))) {
+                outputErrors.push(`${rData.alias ?? address}: hashlock commitments are not valid hashes`);
+                continue;
+              }
+              hashlock = commitments;
+            } else if (lock.kind === 'htlc') {
+              const commitments = parsePkhListText(lock.commitments ?? '');
+              const refundAddr = (lock.refundAddress ?? '').trim();
+              const refundH = Number((lock.refundHeight ?? '').trim());
+              if (commitments.length === 0 || !refundAddr || !Number.isInteger(refundH) || refundH <= 0) {
+                outputErrors.push(
+                  `${rData.alias ?? address}: HTLC needs claim commitment, refund address, and refund height`,
+                );
+                continue;
+              }
+              if (!is_valid_pkh(refundAddr) || commitments.some((c) => !is_valid_pkh(c))) {
+                outputErrors.push(`${rData.alias ?? address}: HTLC refund address / commitments are not valid hashes`);
+                continue;
+              }
+              // Branch 0 (claim): recipient reveals the preimage.
+              // Branch 1 (refund): refund address can reclaim after the height.
+              orBranches = [
+                { recipient: address, hashlock: commitments },
+                { recipient: refundAddr, timelock: { abs_min: refundH } },
+              ];
+            }
+
+            if (orBranches) {
+              outputs.push({
+                recipient: address,
+                amount: parsedAmount.nicks,
+                alias: rData.alias,
+                or_branches: orBranches,
+              });
+            } else if (rData.kind === 'multisig') {
               if (!rData.multisig || !Array.isArray(rData.multisig.pkhs) || rData.multisig.pkhs.length === 0) {
                 outputErrors.push(`${rData.alias ?? address}: multisig is missing signer pubkeys`);
+                continue;
+              }
+              if (rData.multisig.pkhs.some((p) => !is_valid_pkh(p))) {
+                outputErrors.push(`${rData.alias ?? address}: multisig has an invalid signer pubkey`);
                 continue;
               }
               outputs.push({
                 recipient: { m: rData.multisig.m, pkhs: rData.multisig.pkhs },
                 amount: parsedAmount.nicks,
                 alias: rData.alias,
+                timelock,
+                hashlock,
+                burn,
               });
             } else {
-              outputs.push({ recipient: address, amount: parsedAmount.nicks, alias: rData.alias });
+              outputs.push({
+                recipient: address,
+                amount: parsedAmount.nicks,
+                alias: rData.alias,
+                timelock,
+                hashlock,
+                burn,
+              });
             }
           }
 
@@ -824,6 +937,12 @@ export function Composer({
           try {
             const result = compose_tx_v1_unsigned({
               source_pkh: entry.address,
+              // Spending from a multisig source: inputs are reconstructed as
+              // multisig and the .psnt round-trips through each co-signer.
+              source_multisig:
+                entry.kind === 'multisig' && entry.multisig
+                  ? { m: entry.multisig.m, pkhs: entry.multisig.pkhs }
+                  : undefined,
               notes: inputNotes.map((n) => ({
                 name_first: n.nameFirst,
                 name_last: n.nameLast,
@@ -834,6 +953,12 @@ export function Composer({
               outputs,
             });
 
+            let tree: TxTreeNode | null = null;
+            try {
+              tree = inspect_tx(result.wallet_jam) as TxTreeNode;
+            } catch {
+              tree = null;
+            }
             updateNodeData(nodeId, {
               composing: false,
               lastError: undefined,
@@ -841,6 +966,7 @@ export function Composer({
                 filename: `draft-${Date.now()}.psnt`,
                 psnt: result.wallet_jam,
                 summaryJson: result.summary_json,
+                tree,
               },
             });
           } catch (err: any) {
@@ -932,6 +1058,8 @@ export function Composer({
               total: sumAssets(notes),
               amount: '',
               onChangeAmount: (next: string) => updateNodeData(id, { amount: next }),
+              lock: { kind: 'plain' },
+              onChangeLock: (next) => updateNodeData(id, { lock: next }),
             } satisfies AddressNodeData,
           })
         );
@@ -1003,6 +1131,10 @@ export function Composer({
         setQuickStatus('composing...');
         const result = compose_tx_v1_unsigned({
           source_pkh: quickSourceEntry.address,
+          source_multisig:
+            quickSourceEntry.kind === 'multisig' && quickSourceEntry.multisig
+              ? { m: quickSourceEntry.multisig.m, pkhs: quickSourceEntry.multisig.pkhs }
+              : undefined,
           notes: notes.map((note) => ({
             name_first: note.nameFirst,
             name_last: note.nameLast,
@@ -1012,10 +1144,17 @@ export function Composer({
           })),
           outputs: [{ recipient, amount: parsedAmount.nicks, alias: 'recipient' }],
         });
+        let quickTree: TxTreeNode | null = null;
+        try {
+          quickTree = inspect_tx(result.wallet_jam) as TxTreeNode;
+        } catch {
+          quickTree = null;
+        }
         const draft: ComposedDraft = {
           filename: `draft-${Date.now()}.psnt`,
           psnt: result.wallet_jam,
           summaryJson: result.summary_json,
+          tree: quickTree,
         };
         setQuickDraft(draft);
 
@@ -1080,11 +1219,19 @@ export function Composer({
       } catch {
         review = null;
       }
+      let tree: TxTreeNode | null = null;
+      try {
+        tree = inspect_tx(bytes) as TxTreeNode;
+      } catch {
+        tree = null;
+      }
       const preview: ImportedTxPreview = {
         name: file.name,
         info: previewInfo,
         details,
         review,
+        tree,
+        bytes,
       };
       setImportedTxPreview(preview);
       showImportedPreviewGraph(preview);
@@ -1097,6 +1244,20 @@ export function Composer({
       parsed?.free();
     }
   }, [clearImportedPreviewGraph, showImportedPreviewGraph, walletAddresses]);
+
+  const mergeSignedCopies = useCallback(() => {
+    if (!mergeA || !mergeB) return;
+    try {
+      const merged = merge_signed_tx(mergeA, mergeB) as Uint8Array;
+      downloadBytes(`merged-${Date.now()}.psnt`, merged);
+      setMergeStatus('merged signatures, downloaded combined .psnt');
+    } catch (err: any) {
+      setMergeStatus(`merge failed: ${err?.message ?? String(err)}`);
+    }
+  }, [mergeA, mergeB]);
+
+  const readFileBytes = async (file: File | null | undefined): Promise<Uint8Array | null> =>
+    file ? new Uint8Array(await file.arrayBuffer()) : null;
 
   const addEntry = useCallback(async () => {
     const alias = entryFormAlias.trim();
@@ -1578,10 +1739,8 @@ export function Composer({
 
             <div className="composer-sidebar-tabs" role="tablist" aria-label="Composer panels">
               {([
-                ['send', 'Send'],
+                ['send', 'Send / Sign'],
                 ['wallet', 'Wallet'],
-                ['preview', 'Preview'],
-                ['canvas', 'Canvas'],
               ] as const).map(([panel, label]) => (
                 <button
                   key={panel}
@@ -1594,32 +1753,22 @@ export function Composer({
               ))}
             </div>
 
-            {sidebarPanel === 'canvas' && (
-            <details className="composer-details" open>
-              <summary className="composer-summary">
-                <span>Canvas</span>
-              </summary>
-              <div className="composer-details-body">
-                <div className="composer-row">
-                  <button
-                    type="button"
-                    className="btn btn-small btn-danger"
-                    onClick={deleteSelection}
-                    disabled={selectedNodes.length === 0 && selectedEdges.length === 0}
-                  >
-                    delete selected
-                  </button>
-                  <button type="button" className="btn btn-small btn-secondary" onClick={resetCanvas}>
-                    reset
-                  </button>
-                </div>
-                <div className="inspector-help">
-                  Connect: Address/Note → Tx → Address. Drag an address into the canvas, then wire it as an input or
-                  output depending on which side you connect. Click a node to open inspector.
-                </div>
+            {/* Canvas controls live at the top of every tab. */}
+            <div className="composer-canvas-controls">
+              <div className="composer-row">
+                <button
+                  type="button"
+                  className="btn btn-small btn-danger"
+                  onClick={deleteSelection}
+                  disabled={selectedNodes.length === 0 && selectedEdges.length === 0}
+                >
+                  delete selected
+                </button>
+                <button type="button" className="btn btn-small btn-secondary" onClick={resetCanvas}>
+                  reset canvas
+                </button>
               </div>
-            </details>
-            )}
+            </div>
 
             {sidebarPanel === 'send' && (
             <details className="composer-details" open>
@@ -1738,14 +1887,14 @@ export function Composer({
             </details>
             )}
 
-            {sidebarPanel === 'preview' && (
+            {sidebarPanel === 'send' && (
             <details className="composer-details" open>
               <summary className="composer-summary">
-                <span>Transaction preview</span>
+                <span>Upload &amp; sign a transaction</span>
               </summary>
               <div className="composer-details-body">
                 <label className="composer-field">
-                  <span>Jam file</span>
+                  <span>Jam file (.psnt / .tx)</span>
                   <input
                     className="node-input"
                     type="file"
@@ -1799,12 +1948,81 @@ export function Composer({
                         </div>
                       </div>
                     )}
-                    <pre className="inspector-pre tx-preview-pre">
-                      {formatPreviewDetails(importedTxPreview.details)}
-                    </pre>
+                    {importedTxPreview.tree && (
+                      <div className="composer-review">
+                        <div className="composer-output-note">transaction structure</div>
+                        <TxTree node={importedTxPreview.tree} />
+                      </div>
+                    )}
+                    {importedTxPreview.bytes && (
+                      <div className="composer-row composer-action-row">
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-small"
+                          title={!canSignDraft ? signDraftDisabledReason : undefined}
+                          disabled={!onSignDraft || !canSignDraft || signingDraft}
+                          onClick={() =>
+                            void onSignDraft?.({
+                              filename: importedTxPreview.name,
+                              psnt: importedTxPreview.bytes!,
+                              summaryJson: '',
+                            })
+                          }
+                        >
+                          {signingDraft ? 'signing...' : 'sign on device'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
                 {importedTxStatus && <div className="composer-api-status">{importedTxStatus}</div>}
+              </div>
+            </details>
+            )}
+
+            {sidebarPanel === 'send' && (
+            <details className="composer-details">
+              <summary className="composer-summary">
+                <span>Combine multisig signatures</span>
+              </summary>
+              <div className="composer-details-body">
+                <div className="inspector-help">
+                  Merge two partially-signed copies of the same multisig transaction (parallel
+                  co-signing) into one combined <code>.psnt</code>.
+                </div>
+                <label className="composer-field">
+                  <span>Signed copy A</span>
+                  <input
+                    className="node-input"
+                    type="file"
+                    accept=".jam,.draft,.psnt,.wallet,application/octet-stream"
+                    onChange={async (e) => {
+                      setMergeA(await readFileBytes(e.target.files?.[0]));
+                      setMergeStatus('');
+                    }}
+                  />
+                </label>
+                <label className="composer-field">
+                  <span>Signed copy B</span>
+                  <input
+                    className="node-input"
+                    type="file"
+                    accept=".jam,.draft,.psnt,.wallet,application/octet-stream"
+                    onChange={async (e) => {
+                      setMergeB(await readFileBytes(e.target.files?.[0]));
+                      setMergeStatus('');
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-small btn-primary"
+                  disabled={!mergeA || !mergeB}
+                  onClick={mergeSignedCopies}
+                >
+                  merge &amp; download
+                </button>
+                {mergeStatus && <div className="composer-api-status">{mergeStatus}</div>}
               </div>
             </details>
             )}

@@ -1083,3 +1083,20 @@ pub fn review_draft(jam: &[u8], source_pkh_b58: &str) -> Result<JsValue, JsValue
     let view = review_v1::review(jam, source_pkh_b58).map_err(|e| JsValue::from_str(&e))?;
     serde_wasm_bindgen::to_value(&view).map_err(|e| JsValue::from_str(&e.to_string()))
 }
+
+/// True if `s` is a well-formed base58 pkh/lock-root hash (decodes to a 5-belt
+/// Hash). Lets the composer validate addresses up-front with clear errors
+/// instead of failing deep in compose.
+#[wasm_bindgen]
+pub fn is_valid_pkh(s: &str) -> bool {
+    Hash::from_b58(s).is_ok()
+}
+
+/// Inspect a jammed v1 transaction/draft as a human-meaningful typed tree:
+/// labeled nodes with b58 hashes, readable amounts, and decoded lock
+/// primitives (m-of-n signers, timelock bounds, hashlock commitments).
+#[wasm_bindgen]
+pub fn inspect_tx(jam: &[u8]) -> Result<JsValue, JsValue> {
+    let tree = review_v1::inspect_tx(jam).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&tree).map_err(|e| JsValue::from_str(&e.to_string()))
+}

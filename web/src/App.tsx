@@ -40,7 +40,6 @@ import type {
 } from 'nockster-js';
 import { mnemonicToSeed, validateMnemonicWords, isValidMnemonicWordCount } from './bip39';
 import { createSerialTransport } from './serial';
-import { NounInspector } from './NounInspector';
 import type { WalletAddress } from './composer/types';
 import {
   NOCKBLOCKS_API_KEY_STORAGE_KEY,
@@ -3089,8 +3088,6 @@ function App() {
             )}
           </div>
           </div>{/* device-controls-row */}
-
-          <NounInspector wasm={wasm} />
 
           <div className="section device-panel device-update-panel">
             <div className="seed-header">

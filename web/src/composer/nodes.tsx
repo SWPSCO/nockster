@@ -2,6 +2,8 @@
 // Verbatim move — pure presentational components driven by node data.
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 
+import { TxTree } from './TxTree';
+
 import {
   describeRecipient,
   downloadBytes,
@@ -61,6 +63,98 @@ export function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { u
           />
         )}
         {parsed && 'error' in parsed && <div className="validation-text">{parsed.error}</div>}
+        {io.isOutput && data.onChangeLock && (
+          <div className="composer-lock-controls">
+            <select
+              className="node-input node-input-compact nodrag"
+              value={data.lock?.kind ?? 'plain'}
+              onPointerDown={stopNodeInputEvent}
+              onChange={(e) =>
+                data.onChangeLock?.({
+                  ...(data.lock ?? { kind: 'plain' }),
+                  kind: e.target.value as 'plain' | 'timelock' | 'burn',
+                })
+              }
+            >
+              <option value="plain">plain</option>
+              <option value="timelock">timelock</option>
+              <option value="hashlock">hashlock</option>
+              <option value="htlc">HTLC (claim-or-refund)</option>
+              <option value="burn">burn</option>
+            </select>
+            {data.lock?.kind === 'timelock' && (
+              <input
+                className="node-input node-input-compact nodrag"
+                placeholder="spendable at height"
+                value={data.lock?.absMin ?? ''}
+                onClick={stopNodeInputEvent}
+                onDoubleClick={stopNodeInputEvent}
+                onKeyDown={stopNodeInputEvent}
+                onPointerDown={stopNodeInputEvent}
+                onChange={(e) =>
+                  data.onChangeLock?.({ kind: 'timelock', absMin: e.target.value })
+                }
+              />
+            )}
+            {data.lock?.kind === 'hashlock' && (
+              <input
+                className="node-input node-input-compact nodrag"
+                placeholder="commitment hash(es)"
+                value={data.lock?.commitments ?? ''}
+                onClick={stopNodeInputEvent}
+                onDoubleClick={stopNodeInputEvent}
+                onKeyDown={stopNodeInputEvent}
+                onPointerDown={stopNodeInputEvent}
+                onChange={(e) =>
+                  data.onChangeLock?.({ kind: 'hashlock', commitments: e.target.value })
+                }
+              />
+            )}
+            {data.lock?.kind === 'htlc' && (
+              <>
+                <div className="inspector-help">
+                  claim: recipient + preimage · refund: address after height
+                </div>
+                <input
+                  className="node-input node-input-compact nodrag"
+                  placeholder="claim commitment hash"
+                  value={data.lock?.commitments ?? ''}
+                  onClick={stopNodeInputEvent}
+                  onPointerDown={stopNodeInputEvent}
+                  onKeyDown={stopNodeInputEvent}
+                  onChange={(e) =>
+                    data.onChangeLock?.({ ...(data.lock ?? { kind: 'htlc' }), kind: 'htlc', commitments: e.target.value })
+                  }
+                />
+                <input
+                  className="node-input node-input-compact nodrag"
+                  placeholder="refund address (pkh)"
+                  value={data.lock?.refundAddress ?? ''}
+                  onClick={stopNodeInputEvent}
+                  onPointerDown={stopNodeInputEvent}
+                  onKeyDown={stopNodeInputEvent}
+                  onChange={(e) =>
+                    data.onChangeLock?.({ ...(data.lock ?? { kind: 'htlc' }), kind: 'htlc', refundAddress: e.target.value })
+                  }
+                />
+                <input
+                  className="node-input node-input-compact nodrag"
+                  placeholder="refund unlock height"
+                  value={data.lock?.refundHeight ?? ''}
+                  onClick={stopNodeInputEvent}
+                  onPointerDown={stopNodeInputEvent}
+                  onKeyDown={stopNodeInputEvent}
+                  onChange={(e) =>
+                    data.onChangeLock?.({ ...(data.lock ?? { kind: 'htlc' }), kind: 'htlc', refundHeight: e.target.value })
+                  }
+                />
+              </>
+            )}
+            {data.lock?.kind === 'burn' && (
+              <div className="inspector-help">⚠ unspendable</div>
+            )}
+          </div>
+        )}
       </div>
       <Handle type="target" id="in" position={Position.Left} />
       <Handle type="source" id="out" position={Position.Right} />
@@ -152,6 +246,12 @@ export function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: U
                 })}
                 <div className="composer-output-note">what the device will show</div>
               </div>
+            )}
+            {data.result.tree && (
+              <details className="composer-inspect">
+                <summary>inspect transaction</summary>
+                <TxTree node={data.result.tree} />
+              </details>
             )}
             {highFee && <div className="validation-text">Fee exceeds calculated minimum.</div>}
             <div className="composer-row composer-action-row">

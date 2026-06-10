@@ -4,6 +4,17 @@
 import type { Node, Edge } from '@xyflow/react';
 import type { AddressKind, MultisigDescriptor, NoteV1, WalletAddress } from './types';
 
+// Output lock condition set on an output address node. `plain` is a normal
+// payment; `timelock` makes the output spendable only at/after a block height;
+// `burn` sends to an unspendable lock.
+export type OutputLockConfig = {
+  kind: 'plain' | 'timelock' | 'hashlock' | 'burn' | 'htlc';
+  absMin?: string; // block height (timelock abs.min), as entered text
+  commitments?: string; // hashlock / htlc-claim: comma/space-separated base58 commitment hashes
+  refundAddress?: string; // htlc refund branch: base58 pkh that can reclaim
+  refundHeight?: string; // htlc refund branch: block height the refund unlocks at
+};
+
 export type AddressNodeData = {
   entryId: string;
   alias: string;
@@ -14,6 +25,8 @@ export type AddressNodeData = {
   total: number;
   amount: string;
   onChangeAmount: (next: string) => void;
+  lock?: OutputLockConfig;
+  onChangeLock?: (next: OutputLockConfig) => void;
   io?: { isInput: boolean; isOutput: boolean };
 };
 export type NoteNodeData = {
@@ -39,6 +52,7 @@ export type ComposedDraft = {
   psnt: Uint8Array;
   filename: string;
   summaryJson: string;
+  tree?: TxTreeNode | null;
 };
 
 // `recipient` mirrors the wasm RecipientInput: a base58 pkh string, or a
@@ -61,8 +75,17 @@ export type ReviewOutput = {
   gift: number;
   is_refund: boolean;
   bridge_evm_addr?: string | null;
+  bridge_withdrawal?: boolean;
+  or_lock?: number | null;
   lock?: ReviewPrimitive[] | null;
 };
+// Mirrors wasm `TxTreeNode` from `inspect_tx`: a human-meaningful typed tree.
+export type TxTreeNode = {
+  label: string;
+  value: string;
+  children: TxTreeNode[];
+};
+
 export type DraftReview = {
   outputs: ReviewOutput[];
   input_count: number;
@@ -88,6 +111,8 @@ export type ImportedTxPreview = {
   };
   details: PreviewTxDetails;
   review?: DraftReview | null;
+  tree?: TxTreeNode | null;
+  bytes?: Uint8Array; // raw uploaded jam, for signing on device
 };
 
 export type PreviewSeed = {
@@ -174,6 +199,8 @@ export function describePrimitive(p: ReviewPrimitive): string {
 }
 
 export function describeReviewOutputBadge(output: ReviewOutput): string {
+  if (output.or_lock) return `OR ${output.or_lock}-branch`;
+  if (output.bridge_withdrawal) return 'bridge↓';
   if (output.bridge_evm_addr) return 'bridge';
   const prims = output.lock ?? [];
   const pkh = prims.find((p): p is Extract<ReviewPrimitive, { kind: 'pkh' }> => p.kind === 'pkh');

@@ -39,6 +39,11 @@ pub struct OutputView {
     pub gift: u64,
     pub is_refund: bool,
     pub bridge_evm_addr: Option<String>,
+    /// True if this output is a Base bridge *withdrawal* (`bridge-w` note-data).
+    pub bridge_withdrawal: bool,
+    /// For an OR-composed lock (`%2/%4/%8/%16` tree), the padded branch count
+    /// (2/4/8/16); `None` for a single spend-condition.
+    pub or_lock: Option<u64>,
     /// Output lock primitives parsed from `note_data`. The device additionally
     /// verifies these hash to the committed lock-root; this host view does not.
     pub lock: Option<Vec<PrimitiveView>>,
@@ -222,6 +227,23 @@ fn parse_lock_primitive(lp: Noun, arena: &Arena) -> Option<PrimitiveView> {
         Some(PrimitiveView::Burn)
     } else {
         None
+    }
+}
+
+/// If the note_data lock is an OR-composed tree (`%2/%4/%8/%16`), return the
+/// padded branch count; else `None` (single spend-condition).
+fn parse_or_lock(note_data: Noun, arena: &Arena) -> Option<u64> {
+    let lock_data = note_data_find(note_data, arena, b"lock")?;
+    let (ver, sc) = tuple2(lock_data, arena)?;
+    if noun_atom_u64(ver, arena) != Some(0) {
+        return None;
+    }
+    // A tree's head is an atom tag (2/4/8/16); a single spend-condition's head
+    // is a primitive cell.
+    let (head, _tail) = uncons(sc, arena)?;
+    match noun_atom_u64(head, arena) {
+        Some(n @ (2 | 4 | 8 | 16)) => Some(n),
+        _ => None,
     }
 }
 
@@ -460,6 +482,8 @@ fn walk_seeds(
             gift,
             is_refund,
             bridge_evm_addr: parse_bridge_evm(note_data, arena),
+            bridge_withdrawal: note_data_find(note_data, arena, b"bridge-w").is_some(),
+            or_lock: parse_or_lock(note_data, arena),
             lock: parse_lock(note_data, arena),
         });
     }
@@ -479,27 +503,28 @@ fn walk_spends(
     }
     let (node, left, right) = decompose_map(spends, arena)?;
     let (_name, spend) = decompose_pair(node, arena)?;
-    let (ver, body) = tuple2(spend, arena)?;
-    if noun_atom_u64(ver, arena) != Some(1) {
-        return None;
-    }
-    let (witness, seeds, fee) = tuple3(body, arena)?;
+    // spend = [tag body]: tag 1 = v1 witness, tag 0 = legacy v0 signature map.
+    // Both share [_ seeds fee]; only the v1 witness carries multisig coordination.
+    let (tag, body) = tuple2(spend, arena)?;
+    let (first, seeds, fee) = tuple3(body, arena)?;
     view.input_count = view.input_count.checked_add(1)?;
     view.fee_total = view.fee_total.checked_add(noun_atom_u64(fee, arena)?)?;
 
-    // Multisig coordination from the witness.
-    if let Some((lmp, pkh_map, _hax, _tim)) = tuple4(witness, arena) {
-        if let Some((spend_condition, _)) = decompose_lock_merkle_proof(lmp, arena) {
-            if let Some((m, allowed)) = spend_condition_pkh_lock(spend_condition, arena) {
-                let n = zset_count_members(allowed, arena, 64);
-                if n > 1 {
-                    view.multisig_inputs.push(MultisigInputView {
-                        m,
-                        n,
-                        present: zmap_count_real_sigs(pkh_map, arena, 64),
-                        we_authorized: zset_contains_hash(allowed, arena, signer_pkh),
-                        we_signed: zmap_has_real_sig_for(pkh_map, arena, signer_pkh),
-                    });
+    // Multisig coordination is only present in the v1 witness (first = witness).
+    if noun_atom_u64(tag, arena) == Some(1) {
+        if let Some((lmp, pkh_map, _hax, _tim)) = tuple4(first, arena) {
+            if let Some((spend_condition, _)) = decompose_lock_merkle_proof(lmp, arena) {
+                if let Some((m, allowed)) = spend_condition_pkh_lock(spend_condition, arena) {
+                    let n = zset_count_members(allowed, arena, 64);
+                    if n > 1 {
+                        view.multisig_inputs.push(MultisigInputView {
+                            m,
+                            n,
+                            present: zmap_count_real_sigs(pkh_map, arena, 64),
+                            we_authorized: zset_contains_hash(allowed, arena, signer_pkh),
+                            we_signed: zmap_has_real_sig_for(pkh_map, arena, signer_pkh),
+                        });
+                    }
                 }
             }
         }
@@ -544,6 +569,249 @@ fn find_spends(root: Noun, arena: &Arena) -> Option<Noun> {
         return Some(tail);
     }
     None
+}
+
+// ---- typed inspector tree -------------------------------------------------
+
+/// A node in the human-meaningful transaction tree. `value` is rendered for
+/// display (b58 hashes, readable amounts, lock labels); `children` recurse.
+#[derive(Serialize)]
+pub struct TxTreeNode {
+    pub label: String,
+    pub value: String,
+    pub children: Vec<TxTreeNode>,
+}
+
+fn tnode(label: &str, value: impl Into<String>, children: Vec<TxTreeNode>) -> TxTreeNode {
+    TxTreeNode {
+        label: label.to_string(),
+        value: value.into(),
+        children,
+    }
+}
+
+fn short_b58(s: &str) -> String {
+    if s.len() <= 16 {
+        s.to_string()
+    } else {
+        format!("{}…{}", &s[..8], &s[s.len() - 6..])
+    }
+}
+
+fn fmt_amount(nicks: u64) -> String {
+    const N: u64 = 1 << 16;
+    if nicks >= N {
+        let whole = nicks / N;
+        let frac = ((nicks % N) * 100 + N / 2) / N;
+        format!("{nicks} nicks ({whole}.{frac:02} ℕ)")
+    } else {
+        format!("{nicks} nicks")
+    }
+}
+
+/// Collect all member hashes from a z-set of hashes.
+fn zset_collect_hashes(set: Noun, arena: &Arena, out: &mut Vec<[u64; 5]>) {
+    if set == arena.atom0() || out.len() >= 64 {
+        return;
+    }
+    let Some((value, left, right)) = tuple3(set, arena) else {
+        return;
+    };
+    if let Some(h) = parse_hash(value, arena) {
+        out.push(h);
+    }
+    zset_collect_hashes(left, arena, out);
+    zset_collect_hashes(right, arena, out);
+}
+
+/// One lock spend-condition's primitives → tree nodes (with real signer b58).
+fn spend_condition_nodes(sc: Noun, arena: &Arena) -> Vec<TxTreeNode> {
+    let mut nodes = Vec::new();
+    let mut cursor = sc;
+    let mut guard = 0;
+    while cursor != arena.atom0() && guard < 64 {
+        guard += 1;
+        let Some((prim, tail)) = uncons(cursor, arena) else {
+            break;
+        };
+        cursor = tail;
+        let Some((header, body)) = tuple2(prim, arena) else {
+            continue;
+        };
+        if atom_eq_bytes(header, b"pkh", arena) {
+            if let Some((m, h)) = tuple2(body, arena) {
+                let m = noun_atom_u64(m, arena).unwrap_or(0);
+                let mut hashes = Vec::new();
+                zset_collect_hashes(h, arena, &mut hashes);
+                let n = hashes.len();
+                let label = if n > m as usize {
+                    format!("{m}-of-{n} multisig")
+                } else {
+                    "single-sig (p2pkh)".to_string()
+                };
+                let signers = hashes
+                    .iter()
+                    .map(|hh| tnode("signer", digest_to_b58(*hh), vec![]))
+                    .collect();
+                nodes.push(tnode("pkh", label, signers));
+            }
+        } else if atom_eq_bytes(header, b"tim", arena) {
+            let mut bounds = Vec::new();
+            if let Some((rel, abs)) = tuple2(body, arena) {
+                if let Some((mn, mx)) = parse_timelock_range(rel, arena) {
+                    if let Some(v) = mn {
+                        bounds.push(tnode("rel min", format!("+{v}"), vec![]));
+                    }
+                    if let Some(v) = mx {
+                        bounds.push(tnode("rel max", format!("+{v}"), vec![]));
+                    }
+                }
+                if let Some((mn, mx)) = parse_timelock_range(abs, arena) {
+                    if let Some(v) = mn {
+                        bounds.push(tnode("abs min", format!("height ≥ {v}"), vec![]));
+                    }
+                    if let Some(v) = mx {
+                        bounds.push(tnode("abs max", format!("height ≤ {v}"), vec![]));
+                    }
+                }
+            }
+            nodes.push(tnode("timelock", "spendable within bounds", bounds));
+        } else if atom_eq_bytes(header, b"hax", arena) {
+            let mut hashes = Vec::new();
+            zset_collect_hashes(body, arena, &mut hashes);
+            let commits = hashes
+                .iter()
+                .map(|hh| tnode("commitment", digest_to_b58(*hh), vec![]))
+                .collect();
+            nodes.push(tnode(
+                "hashlock",
+                format!("{} preimage commitment(s)", hashes.len()),
+                commits,
+            ));
+        } else if atom_eq_bytes(header, b"brn", arena) {
+            nodes.push(tnode("burn", "unspendable", vec![]));
+        }
+    }
+    nodes
+}
+
+/// Lock node from note_data — single spend-condition or OR-composed tree.
+fn lock_node(note_data: Noun, arena: &Arena) -> Option<TxTreeNode> {
+    let lock_data = note_data_find(note_data, arena, b"lock")?;
+    let (ver, sc) = tuple2(lock_data, arena)?;
+    if noun_atom_u64(ver, arena) != Some(0) {
+        return None;
+    }
+    if let Some(size) = parse_or_lock(note_data, arena) {
+        return Some(tnode(
+            "lock",
+            format!("OR-composed ({size}-branch) — any branch can spend"),
+            vec![],
+        ));
+    }
+    let children = spend_condition_nodes(sc, arena);
+    if children.is_empty() {
+        return None;
+    }
+    Some(tnode("lock", "all conditions required", children))
+}
+
+fn seed_node(seed: Noun, arena: &Arena) -> Option<TxTreeNode> {
+    let (_src, lock_root, note_data, gift_noun, _parent) = tuple5(seed, arena)?;
+    let gift = noun_atom_u64(gift_noun, arena)?;
+    let recipient = seed_recipient_pkh(note_data, arena)
+        .or_else(|| parse_hash(lock_root, arena))
+        .map(digest_to_b58)
+        .unwrap_or_default();
+    let mut children = vec![tnode("amount", fmt_amount(gift), vec![])];
+    if let Some(addr) = parse_bridge_evm(note_data, arena) {
+        children.push(tnode("bridge", format!("Base deposit → {addr}"), vec![]));
+    }
+    if note_data_find(note_data, arena, b"bridge-w").is_some() {
+        children.push(tnode("bridge", "Base withdrawal", vec![]));
+    }
+    if let Some(lock) = lock_node(note_data, arena) {
+        children.push(lock);
+    }
+    Some(tnode("output", short_b58(&recipient), children))
+}
+
+fn seeds_nodes(seeds: Noun, arena: &Arena, out: &mut Vec<TxTreeNode>) {
+    if seeds == arena.atom0() || out.len() >= 64 {
+        return;
+    }
+    let Some((seed, lr)) = uncons(seeds, arena) else {
+        return;
+    };
+    let Some((left, right)) = uncons(lr, arena) else {
+        return;
+    };
+    if let Some(n) = seed_node(seed, arena) {
+        out.push(n);
+    }
+    seeds_nodes(left, arena, out);
+    seeds_nodes(right, arena, out);
+}
+
+fn spend_node(name: Noun, spend: Noun, arena: &Arena) -> Option<TxTreeNode> {
+    let (tag, body) = tuple2(spend, arena)?;
+    let (first, seeds, fee) = tuple3(body, arena)?;
+    let name_b58 = parse_hash(name, arena).map(digest_to_b58).unwrap_or_default();
+    let mut children = vec![tnode("fee", fmt_amount(noun_atom_u64(fee, arena)?), vec![])];
+
+    // Witness: spend-condition (lock branch being satisfied) + signatures.
+    if noun_atom_u64(tag, arena) == Some(1) {
+        if let Some((lmp, pkh_map, _hax, _tim)) = tuple4(first, arena) {
+            if let Some((sc, _)) = decompose_lock_merkle_proof(lmp, arena) {
+                let sc_nodes = spend_condition_nodes(sc, arena);
+                if !sc_nodes.is_empty() {
+                    children.push(tnode("unlock condition", "", sc_nodes));
+                }
+            }
+            let present = zmap_count_real_sigs(pkh_map, arena, 64);
+            if present > 0 {
+                children.push(tnode("signatures", format!("{present} present"), vec![]));
+            }
+        }
+    } else {
+        children.push(tnode("legacy", "v0 signature spend", vec![]));
+    }
+
+    let mut seed_children = Vec::new();
+    seeds_nodes(seeds, arena, &mut seed_children);
+    children.push(tnode("outputs", format!("{}", seed_children.len()), seed_children));
+    Some(tnode("input", short_b58(&name_b58), children))
+}
+
+fn spends_nodes(spends: Noun, arena: &Arena, out: &mut Vec<TxTreeNode>) {
+    if spends == arena.atom0() || out.len() >= 64 {
+        return;
+    }
+    let Some((node, left, right)) = decompose_map(spends, arena) else {
+        return;
+    };
+    if let Some((name, spend)) = decompose_pair(node, arena) {
+        if let Some(n) = spend_node(name, spend, arena) {
+            out.push(n);
+        }
+    }
+    spends_nodes(left, arena, out);
+    spends_nodes(right, arena, out);
+}
+
+/// Build a human-meaningful typed tree for a jammed v1 transaction/draft.
+pub fn inspect_tx(jam: &[u8]) -> Result<TxTreeNode, String> {
+    let mut arena = Arena::new();
+    let root = cue(jam, &mut arena).map_err(|_| "not a valid jammed noun".to_string())?;
+    let spends = find_spends(root, &arena).ok_or("unsupported draft shape".to_string())?;
+    let mut spend_children = Vec::new();
+    spends_nodes(spends, &arena, &mut spend_children);
+    let n = spend_children.len();
+    Ok(tnode(
+        "transaction",
+        format!("v1 · {n} input(s)"),
+        vec![tnode("inputs", format!("{n}"), spend_children)],
+    ))
 }
 
 pub fn review(jam: &[u8], source_pkh_b58: &str) -> Result<ReviewView, String> {

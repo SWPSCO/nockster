@@ -2,11 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } fro
 import {
   Background,
   Controls,
-  Handle,
   MiniMap,
-  Node,
-  Edge,
-  Position,
   ReactFlow,
   ReactFlowInstance,
   ReactFlowProvider,
@@ -16,13 +12,32 @@ import {
   type Connection,
   type OnSelectionChangeFunc,
   type NodeTypes,
-  type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { DeviceAddressBookEntry } from 'nockster-js';
 
-import { ParsedTransaction, compose_tx_v1_recipient_address, compose_tx_v1_unsigned } from 'nockster-wasm';
-import type { AddressBookEntry, AddressKind, MultisigDescriptor, NoteV1, WalletAddress } from './types';
+import {
+  ParsedTransaction,
+  compose_tx_v1_recipient_address,
+  compose_tx_v1_unsigned,
+  review_draft,
+  inspect_tx,
+  merge_signed_tx,
+  is_valid_pkh,
+  inspect_noun,
+} from 'nockster-wasm';
+import { TxTree } from './TxTree';
+import { NounTree, type NounView } from '../NounInspector';
+import type { TxTreeNode } from './model';
+
+// One branch of an OR-composed lock (mirrors wasm LockBranch).
+type OutputLockBranch = {
+  recipient?: string | { m: number; pkhs: string[] };
+  timelock?: { abs_min: number };
+  hashlock?: string[];
+  burn?: boolean;
+};
+import type { AddressBookEntry, AddressKind, NoteV1, WalletAddress } from './types';
 import { loadAddressBook, newId, saveAddressBook } from './storage';
 import {
   NOCKBLOCKS_API_KEY_STORAGE_KEY,
@@ -31,496 +46,45 @@ import {
 
 import './Composer.css';
 
-type AddressNodeData = {
-  entryId: string;
-  alias: string;
-  kind: AddressKind;
-  address: string;
-  multisig?: MultisigDescriptor;
-  noteCount: number;
-  total: number;
-  amount: string;
-  onChangeAmount: (next: string) => void;
-  io?: { isInput: boolean; isOutput: boolean };
-};
-type NoteNodeData = {
-  entryId: string;
-  noteId: string;
-  assets: number;
-  originPage: number;
-  nameFirst: string;
-  nameLast: string;
-};
-type TxNodeData = {
-  onCompose?: () => void;
-  onSignDraft?: (draft: ComposedDraft) => void | Promise<void>;
-  composing?: boolean;
-  signingDraft?: boolean;
-  canSignDraft?: boolean;
-  signDraftDisabledReason?: string;
-  lastError?: string;
-  result?: ComposedDraft;
-};
+import {
+  describePrimitive,
+  describeReviewOutputBadge,
+  shortHash,
+  walletSlotLabel,
+  entryDisplayLabel,
+  parsePkhListText,
+  formatAmountNoUnit,
+  formatAmountWithUnit,
+  parseAmountTextToNicks,
+  formatSummaryJson,
+  normalizePreviewDetails,
+  previewNumber,
+  previewString,
+  parseComposeSummary,
+  summaryOutputTotal,
+  isHighFeeSummary,
+  downloadBytes,
+  sumAssets,
+  NICKS_PER_NOCK,
+} from './model';
+import type {
+  AddressNodeData,
+  NoteNodeData,
+  TxNodeData,
+  ComposedDraft,
+  DraftReview,
+  ImportedTxPreview,
+  PreviewNodeData,
+  UnitMode,
+  ComposerSidebarPanel,
+  AddressFlowNode,
+  NoteFlowNode,
+  PreviewFlowNode,
+  ComposerNode,
+  ComposerEdge,
+} from './model';
 
-type ComposedDraft = {
-  psnt: Uint8Array;
-  filename: string;
-  summaryJson: string;
-};
-
-type ComposeSummary = {
-  outputs?: Array<{ amount?: number; alias?: string; recipient?: unknown }>;
-  total_fees?: number;
-  minimum_fee?: number;
-  inputs_used?: Array<{ assets?: number }>;
-};
-
-type ImportedTxPreview = {
-  name: string;
-  info: {
-    tx_id: string;
-    shape: string;
-    version: number;
-    input_count: number;
-  };
-  details: PreviewTxDetails;
-};
-
-type PreviewSeed = {
-  gift?: unknown;
-  recipient_pkh?: unknown;
-  lock_root?: unknown;
-  parent_hash?: unknown;
-};
-
-type PreviewSpend = {
-  name_first?: unknown;
-  name_last?: unknown;
-  fee?: unknown;
-  seeds?: PreviewSeed[];
-};
-
-type PreviewTxDetails = {
-  version?: unknown;
-  transaction_id?: unknown;
-  spend_count?: unknown;
-  spends?: PreviewSpend[];
-};
-
-type PreviewNodeData = {
-  label: string;
-  title: string;
-  meta?: string[];
-  mono?: string;
-  copyValue?: string;
-  copyLabel?: string;
-  feeNicks?: number;
-  giftNicks?: number;
-};
-
-type UnitMode = 'n' | 'ℕ';
-type ComposerSidebarPanel = 'send' | 'wallet' | 'preview' | 'canvas';
-
-type AddressFlowNode = Node<AddressNodeData, 'address'>;
-type NoteFlowNode = Node<NoteNodeData, 'note'>;
-type TxFlowNode = Node<TxNodeData, 'tx'>;
-type PreviewFlowNode = Node<PreviewNodeData, 'preview'>;
-type ComposerNode = AddressFlowNode | NoteFlowNode | TxFlowNode | PreviewFlowNode;
-type ComposerEdge = Edge;
-
-const NICKS_PER_NOCK = 1n << 16n; // 65536
-const NOCK_DEC_SCALE = 10n ** 16n;
-
-function shortHash(h: string, keep = 4): string {
-  const s = (h ?? '').trim();
-  if (s.length <= keep * 2 + 3) return s;
-  return `${s.slice(0, keep)}...${s.slice(-keep)}`;
-}
-
-// Label a wallet slot as "<nickname or abcd...wxyz> · slot N".
-// Falls back to a truncated address when the alias is just the default "wallet slot N".
-function walletSlotLabel(wallet: WalletAddress): string {
-  const nick = wallet.alias?.trim();
-  const isDefault = !nick || /^wallet slot \d+$/i.test(nick);
-  const base = isDefault ? shortHash(wallet.address, 4) : nick;
-  return `${base} · slot ${wallet.slot}`;
-}
-
-// Display label for any address-book entry. Rewrites a stale default "wallet slot N"
-// alias into "<abcd...wxyz> · slot N" so persisted entries read well without re-import.
-function entryDisplayLabel(entry: { alias?: string; address: string }): string {
-  const alias = (entry.alias ?? '').trim();
-  const slotMatch = alias.match(/^wallet slot (\d+)$/i);
-  if (slotMatch) return `${shortHash(entry.address, 4)} · slot ${slotMatch[1]}`;
-  return alias || shortHash(entry.address, 4);
-}
-
-function parsePkhListText(text: string): string[] {
-  return (text ?? '')
-    .split(/[\s,]+/g)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function bigintToSafeNumber(value: bigint): number | null {
-  const max = BigInt(Number.MAX_SAFE_INTEGER);
-  if (value > max) return null;
-  return Number(value);
-}
-
-function formatNicksAsNocksExact(nicks: bigint): string {
-  const whole = nicks / NICKS_PER_NOCK;
-  const frac = nicks % NICKS_PER_NOCK;
-  if (frac === 0n) return whole.toString();
-
-  const fracScaled = (frac * NOCK_DEC_SCALE) / NICKS_PER_NOCK;
-  const fracStr = fracScaled.toString().padStart(16, '0').replace(/0+$/, '');
-  return `${whole.toString()}.${fracStr}`;
-}
-
-function formatAmountNoUnit(nicks: number, unit: UnitMode): string {
-  const n = BigInt(Math.trunc(nicks));
-  if (unit === 'n') return n.toString();
-  return formatNicksAsNocksExact(n);
-}
-
-function formatAmountWithUnit(nicks: number, unit: UnitMode): string {
-  return `${formatAmountNoUnit(nicks, unit)} ${unit}`;
-}
-
-function parseAmountTextToNicks(text: string, unit: UnitMode): { nicks: number } | { error: string } {
-  const raw = (text ?? '').trim().replace(/[,_]/g, '');
-  if (!raw) return { error: 'amount required' };
-
-  if (unit === 'n') {
-    if (!/^\d+$/.test(raw)) return { error: "amount must be an integer number of nicks ('n')" };
-    const v = BigInt(raw);
-    const asNumber = bigintToSafeNumber(v);
-    if (asNumber === null) return { error: 'amount too large' };
-    return { nicks: asNumber };
-  }
-
-  const m = raw.match(/^(\d+)(?:\.(\d+))?$/);
-  if (!m) return { error: "amount must be a decimal number of nocks ('ℕ')" };
-  const wholeStr = m[1] ?? '0';
-  const fracStr = m[2] ?? '';
-  if (fracStr.length > 16) return { error: 'too many decimal places (max 16)' };
-
-  const whole = BigInt(wholeStr);
-  const frac = fracStr ? BigInt(fracStr) : 0n;
-  const denom = 10n ** BigInt(fracStr.length);
-  const numer = whole * denom + frac;
-  const scaled = numer * NICKS_PER_NOCK;
-  if (scaled % denom !== 0n) {
-    return { error: 'amount is not an exact multiple of 1/65536 ℕ (one nick)' };
-  }
-  const nicks = scaled / denom;
-  const asNumber = bigintToSafeNumber(nicks);
-  if (asNumber === null) return { error: 'amount too large' };
-  return { nicks: asNumber };
-}
-
-function formatSummaryJson(raw: string): string {
-  const text = (raw ?? '').trim();
-  if (!text) return '';
-  try {
-    const parsed: any = JSON.parse(text);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      delete parsed.tx_id;
-      delete parsed.coinbase_rel_min;
-    }
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return text;
-  }
-}
-
-function formatPreviewDetails(value: unknown): string {
-  try {
-    return JSON.stringify(normalizeWasmValue(value), null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function normalizeWasmValue(value: unknown): unknown {
-  if (typeof value === 'bigint') return value.toString();
-  if (value instanceof Map) {
-    const result: Record<string, unknown> = {};
-    for (const [key, mapValue] of value.entries()) {
-      result[String(key)] = normalizeWasmValue(mapValue);
-    }
-    return result;
-  }
-  if (Array.isArray(value)) {
-    return value.map(normalizeWasmValue);
-  }
-  if (value && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, objectValue] of Object.entries(value as Record<string, unknown>)) {
-      result[key] = normalizeWasmValue(objectValue);
-    }
-    return result;
-  }
-  return value;
-}
-
-function normalizePreviewDetails(value: unknown): PreviewTxDetails {
-  const normalized = normalizeWasmValue(value);
-  if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) {
-    return {};
-  }
-
-  const details = normalized as PreviewTxDetails;
-  return {
-    ...details,
-    spends: Array.isArray(details.spends) ? details.spends : [],
-  };
-}
-
-function previewNumber(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function previewString(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function parseComposeSummary(raw: string | undefined): ComposeSummary | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as ComposeSummary) : null;
-  } catch {
-    return null;
-  }
-}
-
-function summaryOutputTotal(summary: ComposeSummary | null): number {
-  return (summary?.outputs ?? []).reduce((acc, output) => acc + (Number(output.amount) || 0), 0);
-}
-
-function summaryInputTotal(summary: ComposeSummary | null): number {
-  return (summary?.inputs_used ?? []).reduce((acc, input) => acc + (Number(input.assets) || 0), 0);
-}
-
-function isHighFeeSummary(summary: ComposeSummary | null): boolean {
-  const fee = Number(summary?.total_fees) || 0;
-  const minimum = Number(summary?.minimum_fee);
-  if (!Number.isFinite(minimum)) return false;
-  return fee > minimum;
-}
-
-function downloadBytes(name: string, bytes: Uint8Array) {
-  const ab = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(ab).set(bytes);
-  const blob = new Blob([ab], { type: 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function stopNodeInputEvent(event: { stopPropagation: () => void }) {
-  event.stopPropagation();
-}
-
-function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { unitMode: UnitMode }) {
-  const io = data.io ?? { isInput: false, isOutput: false };
-  const showNotes = io.isInput || (!io.isOutput && data.noteCount > 0);
-  const showAmount = io.isOutput || data.amount.trim().length > 0;
-
-  const parsed = data.amount.trim() ? parseAmountTextToNicks(data.amount, unitMode) : null;
-
-  return (
-    <div className="node-card">
-      <div className="node-header address">
-        <span>{data.kind === 'multisig' ? 'Multisig' : 'Address'}</span>
-      </div>
-      <div className="node-body">
-        <div>{data.alias}</div>
-        <div className="node-mono">{shortHash(data.address)}</div>
-        {data.kind === 'multisig' && data.multisig && (
-          <div className="inspector-help">
-            {data.multisig.m}-of-{data.multisig.pkhs.length}
-          </div>
-        )}
-        {showNotes && (
-          <div className="inspector-help">
-            {data.noteCount} notes · {formatAmountWithUnit(data.total, unitMode)}
-          </div>
-        )}
-        {showAmount && (
-          <input
-            className="node-input node-input-compact nodrag"
-            placeholder={`amount (${unitMode})`}
-            value={data.amount}
-            onClick={stopNodeInputEvent}
-            onDoubleClick={stopNodeInputEvent}
-            onKeyDown={stopNodeInputEvent}
-            onPointerDown={stopNodeInputEvent}
-            onChange={(e) => data.onChangeAmount(e.target.value)}
-          />
-        )}
-        {parsed && 'error' in parsed && <div className="validation-text">{parsed.error}</div>}
-      </div>
-      <Handle type="target" id="in" position={Position.Left} />
-      <Handle type="source" id="out" position={Position.Right} />
-    </div>
-  );
-}
-
-function NoteNode({ data, unitMode }: NodeProps<NoteFlowNode> & { unitMode: UnitMode }) {
-  return (
-    <div className="node-card">
-      <div className="node-header note">
-        <span>Note</span>
-      </div>
-      <div className="node-body">
-        <div className="inspector-help">
-          {formatAmountWithUnit(data.assets, unitMode)} · p{data.originPage}
-        </div>
-        <div className="node-mono">
-          {shortHash(data.nameFirst)} {shortHash(data.nameLast)}
-        </div>
-      </div>
-      <Handle type="source" id="out" position={Position.Right} />
-    </div>
-  );
-}
-
-function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: UnitMode }) {
-  const composing = data.composing ?? false;
-  const onCompose = data.onCompose;
-  const summary = parseComposeSummary(data.result?.summaryJson);
-  const fee = Number(summary?.total_fees) || 0;
-  const minimumFee = Number(summary?.minimum_fee) || 0;
-  const external = summaryOutputTotal(summary);
-  const inputTotal = summaryInputTotal(summary);
-  const change = Math.max(0, inputTotal - external - fee);
-  const highFee = isHighFeeSummary(summary);
-
-  return (
-    <div className="node-card">
-      <div className="node-header tx">
-        <span>Tx</span>
-      </div>
-      <div className="node-body">
-        <div className="node-actions">
-          <button
-            className="btn btn-success btn-small nodrag"
-            onPointerDown={stopNodeInputEvent}
-            onClick={(event) => {
-              event.stopPropagation();
-              onCompose?.();
-            }}
-            disabled={!onCompose || composing}
-          >
-            {composing ? 'composing...' : 'compose'}
-          </button>
-        </div>
-        {data.result && (
-          <div className="composer-result">
-            {summary && (
-              <div className="composer-result-grid">
-                <span>send</span>
-                <strong>{formatAmountWithUnit(external, unitMode)}</strong>
-                <span>fee</span>
-                <strong className={highFee ? 'composer-warn-text' : ''}>
-                  {formatAmountWithUnit(fee, unitMode)}
-                </strong>
-                <span>min</span>
-                <strong>{formatAmountWithUnit(minimumFee, unitMode)}</strong>
-                <span>change</span>
-                <strong>{formatAmountWithUnit(change, unitMode)}</strong>
-              </div>
-            )}
-            {highFee && <div className="validation-text">Fee exceeds calculated minimum.</div>}
-            <div className="composer-row composer-action-row">
-              <button
-                className="btn btn-primary btn-small nodrag"
-                title={!data.canSignDraft ? data.signDraftDisabledReason : undefined}
-                onPointerDown={stopNodeInputEvent}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (data.result) void data.onSignDraft?.(data.result);
-                }}
-                disabled={!data.result || !data.onSignDraft || !data.canSignDraft || data.signingDraft}
-              >
-                {data.signingDraft ? 'signing...' : 'sign on device'}
-              </button>
-              <button
-                className="btn btn-secondary btn-small nodrag"
-                onPointerDown={stopNodeInputEvent}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  downloadBytes(data.result!.filename, data.result!.psnt);
-                }}
-              >
-                download
-              </button>
-            </div>
-          </div>
-        )}
-        {data.lastError && <div className="validation-text">{data.lastError}</div>}
-      </div>
-      <Handle type="target" id="in" position={Position.Left} />
-      <Handle type="source" id="out" position={Position.Right} />
-    </div>
-  );
-}
-
-function PreviewNode({ data, unitMode }: NodeProps<PreviewFlowNode> & { unitMode: UnitMode }) {
-  const amountMeta = [
-    data.feeNicks === undefined ? '' : `fee ${formatAmountWithUnit(data.feeNicks, unitMode)}`,
-    data.giftNicks === undefined ? '' : formatAmountWithUnit(data.giftNicks, unitMode),
-  ].filter(Boolean);
-  const copyPreviewValue = () => {
-    if (!data.copyValue) return;
-    void navigator.clipboard.writeText(data.copyValue);
-  };
-
-  return (
-    <div className="node-card preview-node-card">
-      <div className="node-header preview">
-        <span>{data.label}</span>
-      </div>
-      <div className="node-body">
-        <div>{data.title}</div>
-        {[...amountMeta, ...(data.meta ?? [])].map((item) => (
-          <div key={item} className="inspector-help">
-            {item}
-          </div>
-        ))}
-        {data.mono && <div className="node-mono preview-node-mono">{data.mono}</div>}
-        {data.copyValue && (
-          <button
-            type="button"
-            className="btn btn-small btn-secondary preview-copy-btn nodrag"
-            onPointerDown={stopNodeInputEvent}
-            onClick={(event) => {
-              event.stopPropagation();
-              copyPreviewValue();
-            }}
-          >
-            copy {data.copyLabel ?? 'value'}
-          </button>
-        )}
-      </div>
-      <Handle type="target" id="in" position={Position.Left} isConnectable={false} />
-      <Handle type="source" id="out" position={Position.Right} isConnectable={false} />
-    </div>
-  );
-}
-
-function sumAssets(notes: NoteV1[]): number {
-  return notes.reduce((acc, n) => acc + (Number(n.assets) || 0), 0);
-}
+import { AddressNode, NoteNode, TxNode, PreviewNode } from './nodes';
 
 export function Composer({
   wasmReady,
@@ -579,6 +143,26 @@ export function Composer({
   const [selectedEdges, setSelectedEdges] = useState<ComposerEdge[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarPanel, setSidebarPanel] = useState<ComposerSidebarPanel>('send');
+  const [mergeA, setMergeA] = useState<Uint8Array | null>(null);
+  const [mergeB, setMergeB] = useState<Uint8Array | null>(null);
+  const [mergeStatus, setMergeStatus] = useState('');
+  const emptyHtlc = {
+    sourceAddr: '',
+    nameFirst: '',
+    nameLast: '',
+    originPage: '',
+    assets: '',
+    claimRecipient: '',
+    commitment: '',
+    refundAddr: '',
+    refundHeight: '',
+    branch: 'claim' as 'claim' | 'refund',
+    outRecipient: '',
+    outAmount: '',
+  };
+  const [htlc, setHtlc] = useState(emptyHtlc);
+  const [htlcStatus, setHtlcStatus] = useState('');
+  const [htlcDraft, setHtlcDraft] = useState<ComposedDraft | null>(null);
   const [inspectorDrag, setInspectorDrag] = useState<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
   const [inspectorDragging, setInspectorDragging] = useState(false);
   const inspectorDragRef = useRef<{
@@ -648,15 +232,21 @@ export function Composer({
     }
   }, [entryFormKind, entryFormMultisigM, entryFormMultisigPkhs, wasmReady]);
 
-  const nodeTypes: NodeTypes = useMemo(
-    () => ({
-      address: ((props: any) => <AddressNode {...props} unitMode={unitMode} />) as any,
-      note: ((props: any) => <NoteNode {...props} unitMode={unitMode} />) as any,
-      tx: ((props: any) => <TxNode {...props} unitMode={unitMode} />) as any,
-      preview: ((props: any) => <PreviewNode {...props} unitMode={unitMode} />) as any,
-    }),
-    [unitMode]
-  );
+  const nodeTypes: NodeTypes = useMemo(() => {
+    const inspect = (props: any) => () => setSelectedNodeId(props.id);
+    return {
+      address: ((props: any) => (
+        <AddressNode {...props} unitMode={unitMode} onInspect={inspect(props)} />
+      )) as any,
+      note: ((props: any) => (
+        <NoteNode {...props} unitMode={unitMode} onInspect={inspect(props)} />
+      )) as any,
+      tx: ((props: any) => <TxNode {...props} unitMode={unitMode} onInspect={inspect(props)} />) as any,
+      preview: ((props: any) => (
+        <PreviewNode {...props} unitMode={unitMode} onInspect={inspect(props)} />
+      )) as any,
+    };
+  }, [unitMode]);
 
   const entryById = useCallback((id: string) => addressBook.find((e) => e.id === id) ?? null, [addressBook]);
 
@@ -937,6 +527,52 @@ export function Composer({
     queueMicrotask(() => rfInstance.current?.fitView?.({ padding: 0.3, maxZoom: 0.9 }));
   }, [setEdges, setNodes]);
 
+  // "Gravity": nudge overlapping boxes apart along their smaller-overlap axis.
+  // A few relaxation passes resolve most overlaps without visible jitter.
+  const separateOverlaps = useCallback(() => {
+    setNodes((current) => {
+      const PAD = 18;
+      const boxes = current.map((n) => ({
+        id: n.id,
+        x: n.position.x,
+        y: n.position.y,
+        w: (n as any).measured?.width ?? (n as any).width ?? 240,
+        h: (n as any).measured?.height ?? (n as any).height ?? 130,
+      }));
+      let moved = false;
+      for (let iter = 0; iter < 8; iter++) {
+        for (let i = 0; i < boxes.length; i++) {
+          for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i];
+            const b = boxes[j];
+            const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+            const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+            if (ox > -PAD && oy > -PAD) {
+              if (ox < oy) {
+                const push = (ox + PAD) / 2;
+                const dir = a.x <= b.x ? 1 : -1;
+                a.x -= dir * push;
+                b.x += dir * push;
+              } else {
+                const push = (oy + PAD) / 2;
+                const dir = a.y <= b.y ? 1 : -1;
+                a.y -= dir * push;
+                b.y += dir * push;
+              }
+              moved = true;
+            }
+          }
+        }
+      }
+      if (!moved) return current;
+      const pos = new Map(boxes.map((box) => [box.id, { x: box.x, y: box.y }]));
+      return current.map((n) => {
+        const p = pos.get(n.id);
+        return p ? { ...n, position: p } : n;
+      });
+    });
+  }, [setNodes]);
+
   const clearImportedPreviewGraph = useCallback(() => {
     setEdges((current) => current.filter((edge) => !edge.id.startsWith('preview-')));
     setNodes((current) => current.filter((node) => node.type !== 'preview'));
@@ -959,11 +595,23 @@ export function Composer({
       const hiddenCount = Math.max(0, spends.length - visibleSpends.length)
         + Math.max(0, outputs.length - visibleOutputs.length);
 
+      // Left→right flow: inputs | tx | outputs, with the tx node vertically
+      // centered against the taller column and consistent row spacing so
+      // nothing overlaps and edges read cleanly.
+      const SPEND_X = 40;
+      const TX_X = 520;
+      const OUT_X = 1000;
+      const ROW_H = 210;
+      const TOP = 20;
+      const spendRows = Math.max(visibleSpends.length, 1);
+      const outputRows = Math.max(visibleOutputs.length, 1);
+      const txY = TOP + ((Math.max(spendRows, outputRows) - 1) * ROW_H) / 2;
+
       const previewNodes: ComposerNode[] = [
         {
           id: txNodeId,
           type: 'preview',
-          position: { x: 520, y: 180 },
+          position: { x: TX_X, y: txY },
           data: {
             label: 'Imported tx',
             title: shortHash(preview.info.tx_id, 6),
@@ -984,7 +632,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 60, y: 180 },
+          position: { x: SPEND_X, y: txY },
           data: {
             label: 'Spends',
             title: 'No parsed spend detail',
@@ -1011,7 +659,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 60, y: 40 + index * 190 },
+          position: { x: SPEND_X, y: TOP + index * ROW_H },
           data: {
             label: `Spend ${index + 1}`,
             title: first || last ? `${shortHash(first, 5)} ${shortHash(last, 5)}` : 'Input note',
@@ -1037,7 +685,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 980, y: 180 },
+          position: { x: OUT_X, y: txY },
           data: {
             label: 'Outputs',
             title: 'No parsed output detail',
@@ -1063,7 +711,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 980, y: 40 + index * 165 },
+          position: { x: OUT_X, y: TOP + index * ROW_H },
           data: {
             label: `Output ${index + 1}`,
             title: recipient ? shortHash(recipient, 6) : lockRoot ? shortHash(lockRoot, 6) : 'Recipient',
@@ -1088,7 +736,7 @@ export function Composer({
         previewNodes.push({
           id: `${base}-hidden`,
           type: 'preview',
-          position: { x: 520, y: 380 },
+          position: { x: TX_X, y: TOP + Math.max(spendRows, outputRows) * ROW_H },
           data: {
             label: 'Preview',
             title: `+${hiddenCount} hidden row${hiddenCount === 1 ? '' : 's'}`,
@@ -1222,7 +870,16 @@ export function Composer({
 
           const recipientEdges = edgesNow.filter((e) => e.source === nodeId && e.sourceHandle === 'out');
           type Recipient = string | { m: number; pkhs: string[] };
-          const outputs: { recipient: Recipient; amount: number; alias?: string }[] = [];
+          const outputs: {
+            recipient: Recipient;
+            amount: number;
+            alias?: string;
+            timelock?: { abs_min: number };
+            hashlock?: string[];
+            burn?: boolean;
+            lock_root_only?: boolean;
+            or_branches?: OutputLockBranch[];
+          }[] = [];
           const outputErrors: string[] = [];
           for (const e of recipientEdges) {
             const rNode = nodesNow.find((n) => n.id === e.target && n.type === 'address');
@@ -1231,6 +888,10 @@ export function Composer({
             const address = (rData.address ?? '').trim();
             if (!address) {
               outputErrors.push('recipient missing address');
+              continue;
+            }
+            if (rData.kind !== 'multisig' && !is_valid_pkh(address)) {
+              outputErrors.push(`${rData.alias ?? address}: recipient is not a valid address`);
               continue;
             }
 
@@ -1244,18 +905,90 @@ export function Composer({
               continue;
             }
 
-            if (rData.kind === 'multisig') {
+            // Optional output lock condition (timelock / hashlock / burn / HTLC).
+            const lock = rData.lock ?? { kind: 'plain' as const };
+            let timelock: { abs_min: number } | undefined;
+            let hashlock: string[] | undefined;
+            let burn = false;
+            let orBranches: OutputLockBranch[] | undefined;
+            if (lock.kind === 'burn') {
+              burn = true;
+            } else if (lock.kind === 'timelock') {
+              const h = Number((lock.absMin ?? '').trim());
+              if (!Number.isInteger(h) || h <= 0) {
+                outputErrors.push(`${rData.alias ?? address}: timelock needs a block height`);
+                continue;
+              }
+              timelock = { abs_min: h };
+            } else if (lock.kind === 'hashlock') {
+              const commitments = parsePkhListText(lock.commitments ?? '');
+              if (commitments.length === 0) {
+                outputErrors.push(`${rData.alias ?? address}: hashlock needs commitment hash(es)`);
+                continue;
+              }
+              if (commitments.some((c) => !is_valid_pkh(c))) {
+                outputErrors.push(`${rData.alias ?? address}: hashlock commitments are not valid hashes`);
+                continue;
+              }
+              hashlock = commitments;
+            } else if (lock.kind === 'htlc') {
+              const commitments = parsePkhListText(lock.commitments ?? '');
+              const refundAddr = (lock.refundAddress ?? '').trim();
+              const refundH = Number((lock.refundHeight ?? '').trim());
+              if (commitments.length === 0 || !refundAddr || !Number.isInteger(refundH) || refundH <= 0) {
+                outputErrors.push(
+                  `${rData.alias ?? address}: HTLC needs claim commitment, refund address, and refund height`,
+                );
+                continue;
+              }
+              if (!is_valid_pkh(refundAddr) || commitments.some((c) => !is_valid_pkh(c))) {
+                outputErrors.push(`${rData.alias ?? address}: HTLC refund address / commitments are not valid hashes`);
+                continue;
+              }
+              // Branch 0 (claim): recipient reveals the preimage.
+              // Branch 1 (refund): refund address can reclaim after the height.
+              orBranches = [
+                { recipient: address, hashlock: commitments },
+                { recipient: refundAddr, timelock: { abs_min: refundH } },
+              ];
+            }
+
+            if (orBranches) {
+              outputs.push({
+                recipient: address,
+                amount: parsedAmount.nicks,
+                alias: rData.alias,
+                or_branches: orBranches,
+                lock_root_only: rData.lockRootOnly,
+              });
+            } else if (rData.kind === 'multisig') {
               if (!rData.multisig || !Array.isArray(rData.multisig.pkhs) || rData.multisig.pkhs.length === 0) {
                 outputErrors.push(`${rData.alias ?? address}: multisig is missing signer pubkeys`);
+                continue;
+              }
+              if (rData.multisig.pkhs.some((p) => !is_valid_pkh(p))) {
+                outputErrors.push(`${rData.alias ?? address}: multisig has an invalid signer pubkey`);
                 continue;
               }
               outputs.push({
                 recipient: { m: rData.multisig.m, pkhs: rData.multisig.pkhs },
                 amount: parsedAmount.nicks,
                 alias: rData.alias,
+                timelock,
+                hashlock,
+                burn,
+                lock_root_only: rData.lockRootOnly,
               });
             } else {
-              outputs.push({ recipient: address, amount: parsedAmount.nicks, alias: rData.alias });
+              outputs.push({
+                recipient: address,
+                amount: parsedAmount.nicks,
+                alias: rData.alias,
+                timelock,
+                hashlock,
+                burn,
+                lock_root_only: rData.lockRootOnly,
+              });
             }
           }
 
@@ -1273,6 +1006,12 @@ export function Composer({
           try {
             const result = compose_tx_v1_unsigned({
               source_pkh: entry.address,
+              // Spending from a multisig source: inputs are reconstructed as
+              // multisig and the .psnt round-trips through each co-signer.
+              source_multisig:
+                entry.kind === 'multisig' && entry.multisig
+                  ? { m: entry.multisig.m, pkhs: entry.multisig.pkhs }
+                  : undefined,
               notes: inputNotes.map((n) => ({
                 name_first: n.nameFirst,
                 name_last: n.nameLast,
@@ -1283,6 +1022,12 @@ export function Composer({
               outputs,
             });
 
+            let tree: TxTreeNode | null = null;
+            try {
+              tree = inspect_tx(result.wallet_jam) as TxTreeNode;
+            } catch {
+              tree = null;
+            }
             updateNodeData(nodeId, {
               composing: false,
               lastError: undefined,
@@ -1290,6 +1035,7 @@ export function Composer({
                 filename: `draft-${Date.now()}.psnt`,
                 psnt: result.wallet_jam,
                 summaryJson: result.summary_json,
+                tree,
               },
             });
           } catch (err: any) {
@@ -1381,6 +1127,10 @@ export function Composer({
               total: sumAssets(notes),
               amount: '',
               onChangeAmount: (next: string) => updateNodeData(id, { amount: next }),
+              lock: { kind: 'plain' },
+              onChangeLock: (next) => updateNodeData(id, { lock: next }),
+              lockRootOnly: false,
+              onChangeLockRootOnly: (v) => updateNodeData(id, { lockRootOnly: v }),
             } satisfies AddressNodeData,
           })
         );
@@ -1452,6 +1202,10 @@ export function Composer({
         setQuickStatus('composing...');
         const result = compose_tx_v1_unsigned({
           source_pkh: quickSourceEntry.address,
+          source_multisig:
+            quickSourceEntry.kind === 'multisig' && quickSourceEntry.multisig
+              ? { m: quickSourceEntry.multisig.m, pkhs: quickSourceEntry.multisig.pkhs }
+              : undefined,
           notes: notes.map((note) => ({
             name_first: note.nameFirst,
             name_last: note.nameLast,
@@ -1461,10 +1215,17 @@ export function Composer({
           })),
           outputs: [{ recipient, amount: parsedAmount.nicks, alias: 'recipient' }],
         });
+        let quickTree: TxTreeNode | null = null;
+        try {
+          quickTree = inspect_tx(result.wallet_jam) as TxTreeNode;
+        } catch {
+          quickTree = null;
+        }
         const draft: ComposedDraft = {
           filename: `draft-${Date.now()}.psnt`,
           psnt: result.wallet_jam,
           summaryJson: result.summary_json,
+          tree: quickTree,
         };
         setQuickDraft(draft);
 
@@ -1521,10 +1282,36 @@ export function Composer({
       };
       info.free();
       const details = normalizePreviewDetails(parsed.get_details());
+      // Device-parity review: outputs, locks, bridge, multisig — keyed by the
+      // device's own address (best-effort: refund/we-signed detection needs it).
+      let review: DraftReview | null = null;
+      try {
+        review = review_draft(bytes, walletAddresses[0]?.address ?? '') as DraftReview;
+      } catch {
+        review = null;
+      }
+      let tree: TxTreeNode | null = null;
+      let nounView: NounView | null = null;
+      try {
+        tree = inspect_tx(bytes) as TxTreeNode;
+      } catch {
+        // Not a v1 transaction (e.g. keys.export / .sig) — fall back to the
+        // generic typed-noun tree so any jam is still inspectable.
+        tree = null;
+        try {
+          nounView = inspect_noun(bytes) as NounView;
+        } catch {
+          nounView = null;
+        }
+      }
       const preview: ImportedTxPreview = {
         name: file.name,
         info: previewInfo,
         details,
+        review,
+        tree,
+        nounView,
+        bytes,
       };
       setImportedTxPreview(preview);
       showImportedPreviewGraph(preview);
@@ -1536,7 +1323,97 @@ export function Composer({
     } finally {
       parsed?.free();
     }
-  }, [clearImportedPreviewGraph, showImportedPreviewGraph]);
+  }, [clearImportedPreviewGraph, showImportedPreviewGraph, walletAddresses]);
+
+  const mergeSignedCopies = useCallback(() => {
+    if (!mergeA || !mergeB) return;
+    try {
+      const merged = merge_signed_tx(mergeA, mergeB) as Uint8Array;
+      downloadBytes(`merged-${Date.now()}.psnt`, merged);
+      setMergeStatus('merged signatures, downloaded combined .psnt');
+    } catch (err: any) {
+      setMergeStatus(`merge failed: ${err?.message ?? String(err)}`);
+    }
+  }, [mergeA, mergeB]);
+
+  const readFileBytes = async (file: File | null | undefined): Promise<Uint8Array | null> =>
+    file ? new Uint8Array(await file.arrayBuffer()) : null;
+
+  // Spend an HTLC-locked note: branch 0 (claim) = recipient + preimage,
+  // branch 1 (refund) = refund address after a timeout height. The same params
+  // the HTLC output was built with, plus which branch you're spending.
+  const composeHtlcSpend = useCallback(() => {
+    setHtlcStatus('');
+    setHtlcDraft(null);
+    const fields: Array<[string, string]> = [
+      ['source/change address', htlc.sourceAddr],
+      ['claim recipient', htlc.claimRecipient],
+      ['claim commitment', htlc.commitment],
+      ['refund address', htlc.refundAddr],
+      ['output recipient', htlc.outRecipient],
+    ];
+    for (const [label, v] of fields) {
+      if (!is_valid_pkh(v.trim())) {
+        setHtlcStatus(`${label} is not a valid address/hash`);
+        return;
+      }
+    }
+    const originPage = Number(htlc.originPage.trim());
+    const assets = Number(htlc.assets.trim());
+    const refundHeight = Number(htlc.refundHeight.trim());
+    if (![originPage, assets].every((n) => Number.isInteger(n) && n >= 0)) {
+      setHtlcStatus('note origin-page and assets must be whole numbers');
+      return;
+    }
+    if (!Number.isInteger(refundHeight) || refundHeight <= 0) {
+      setHtlcStatus('refund height must be a positive whole number');
+      return;
+    }
+    if (!is_valid_pkh(htlc.nameFirst.trim()) || !is_valid_pkh(htlc.nameLast.trim())) {
+      setHtlcStatus('note name (first/last) must be valid hashes');
+      return;
+    }
+    const parsedAmount = parseAmountTextToNicks(htlc.outAmount, unitModeRef.current);
+    if ('error' in parsedAmount) {
+      setHtlcStatus(`output amount: ${parsedAmount.error}`);
+      return;
+    }
+    try {
+      const branches: OutputLockBranch[] = [
+        { recipient: htlc.claimRecipient.trim(), hashlock: [htlc.commitment.trim()] },
+        { recipient: htlc.refundAddr.trim(), timelock: { abs_min: refundHeight } },
+      ];
+      const result = compose_tx_v1_unsigned({
+        source_pkh: htlc.sourceAddr.trim(),
+        source_or_lock: { branches, spend_branch: htlc.branch === 'claim' ? 0 : 1 },
+        notes: [
+          {
+            name_first: htlc.nameFirst.trim(),
+            name_last: htlc.nameLast.trim(),
+            origin_page: originPage,
+            assets,
+            version: 1,
+          },
+        ],
+        outputs: [{ recipient: htlc.outRecipient.trim(), amount: parsedAmount.nicks, alias: 'htlc-spend' }],
+      });
+      let tree: TxTreeNode | null = null;
+      try {
+        tree = inspect_tx(result.wallet_jam) as TxTreeNode;
+      } catch {
+        tree = null;
+      }
+      setHtlcDraft({
+        filename: `htlc-${htlc.branch}-${Date.now()}.psnt`,
+        psnt: result.wallet_jam,
+        summaryJson: result.summary_json,
+        tree,
+      });
+      setHtlcStatus(`composed ${htlc.branch} spend`);
+    } catch (err: any) {
+      setHtlcStatus(`compose failed: ${err?.message ?? String(err)}`);
+    }
+  }, [htlc]);
 
   const addEntry = useCallback(async () => {
     const alias = entryFormAlias.trim();
@@ -2018,10 +1895,8 @@ export function Composer({
 
             <div className="composer-sidebar-tabs" role="tablist" aria-label="Composer panels">
               {([
-                ['send', 'Send'],
+                ['send', 'Send / Sign'],
                 ['wallet', 'Wallet'],
-                ['preview', 'Preview'],
-                ['canvas', 'Canvas'],
               ] as const).map(([panel, label]) => (
                 <button
                   key={panel}
@@ -2034,32 +1909,22 @@ export function Composer({
               ))}
             </div>
 
-            {sidebarPanel === 'canvas' && (
-            <details className="composer-details" open>
-              <summary className="composer-summary">
-                <span>Canvas</span>
-              </summary>
-              <div className="composer-details-body">
-                <div className="composer-row">
-                  <button
-                    type="button"
-                    className="btn btn-small btn-danger"
-                    onClick={deleteSelection}
-                    disabled={selectedNodes.length === 0 && selectedEdges.length === 0}
-                  >
-                    delete selected
-                  </button>
-                  <button type="button" className="btn btn-small btn-secondary" onClick={resetCanvas}>
-                    reset
-                  </button>
-                </div>
-                <div className="inspector-help">
-                  Connect: Address/Note → Tx → Address. Drag an address into the canvas, then wire it as an input or
-                  output depending on which side you connect. Click a node to open inspector.
-                </div>
+            {/* Canvas controls live at the top of every tab. */}
+            <div className="composer-canvas-controls">
+              <div className="composer-row">
+                <button
+                  type="button"
+                  className="btn btn-small btn-danger"
+                  onClick={deleteSelection}
+                  disabled={selectedNodes.length === 0 && selectedEdges.length === 0}
+                >
+                  delete selected
+                </button>
+                <button type="button" className="btn btn-small btn-secondary" onClick={resetCanvas}>
+                  reset canvas
+                </button>
               </div>
-            </details>
-            )}
+            </div>
 
             {sidebarPanel === 'send' && (
             <details className="composer-details" open>
@@ -2178,14 +2043,14 @@ export function Composer({
             </details>
             )}
 
-            {sidebarPanel === 'preview' && (
+            {sidebarPanel === 'send' && (
             <details className="composer-details" open>
               <summary className="composer-summary">
-                <span>Transaction preview</span>
+                <span>Upload &amp; sign a transaction</span>
               </summary>
               <div className="composer-details-body">
                 <label className="composer-field">
-                  <span>Jam file</span>
+                  <span>Jam file (.psnt / .tx)</span>
                   <input
                     className="node-input"
                     type="file"
@@ -2205,12 +2070,210 @@ export function Composer({
                       <span>tx</span>
                       <strong>{shortHash(importedTxPreview.info.tx_id, 5)}</strong>
                     </div>
-                    <pre className="inspector-pre tx-preview-pre">
-                      {formatPreviewDetails(importedTxPreview.details)}
-                    </pre>
+                    {importedTxPreview.review && (
+                      <div className="composer-review">
+                        <div className="composer-section-title">Outputs &amp; locks (device review)</div>
+                        {importedTxPreview.review.multisig_inputs.map((ms, i) => (
+                          <div className="composer-review-msig" key={`ms-${i}`}>
+                            spend {ms.m}-of-{ms.n} · {ms.present}/{ms.m} signed
+                            {ms.we_authorized && (ms.we_signed ? ' · you signed' : ' · you can sign')}
+                          </div>
+                        ))}
+                        <div className="composer-output-list">
+                          {importedTxPreview.review.outputs.map((output, i) => {
+                            const badge = describeReviewOutputBadge(output);
+                            const detail = (output.lock ?? []).map(describePrimitive).join(' · ');
+                            const addr = output.bridge_evm_addr || output.recipient_b58;
+                            return (
+                              <div className="composer-output-row" key={`o-${i}`}>
+                                <span
+                                  className={`composer-lock-badge ${badge !== 'p2pkh' && badge !== 'change' ? 'multisig' : ''}`}
+                                  title={detail || undefined}
+                                >
+                                  {badge}
+                                </span>
+                                <span className="composer-output-addr" title={addr}>
+                                  {addr}
+                                </span>
+                                <strong>
+                                  {formatAmountWithUnit(Number(output.gift) || 0, unitMode)}
+                                </strong>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {importedTxPreview.tree && (
+                      <div className="composer-review">
+                        <div className="composer-output-note">transaction structure</div>
+                        <TxTree node={importedTxPreview.tree} />
+                      </div>
+                    )}
+                    {!importedTxPreview.tree && importedTxPreview.nounView != null && (
+                      <div className="composer-review">
+                        <div className="composer-output-note">noun structure (not a v1 transaction)</div>
+                        <NounTree view={importedTxPreview.nounView as NounView} />
+                      </div>
+                    )}
+                    {importedTxPreview.bytes && (
+                      <div className="composer-row composer-action-row">
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-small"
+                          title={!canSignDraft ? signDraftDisabledReason : undefined}
+                          disabled={!onSignDraft || !canSignDraft || signingDraft}
+                          onClick={() =>
+                            void onSignDraft?.({
+                              filename: importedTxPreview.name,
+                              psnt: importedTxPreview.bytes!,
+                              summaryJson: '',
+                            })
+                          }
+                        >
+                          {signingDraft ? 'signing...' : 'sign on device'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
                 {importedTxStatus && <div className="composer-api-status">{importedTxStatus}</div>}
+              </div>
+            </details>
+            )}
+
+            {sidebarPanel === 'send' && (
+            <details className="composer-details">
+              <summary className="composer-summary">
+                <span>Combine multisig signatures</span>
+              </summary>
+              <div className="composer-details-body">
+                <div className="inspector-help">
+                  Merge two partially-signed copies of the same multisig transaction (parallel
+                  co-signing) into one combined <code>.psnt</code>.
+                </div>
+                <label className="composer-field">
+                  <span>Signed copy A</span>
+                  <input
+                    className="node-input"
+                    type="file"
+                    accept=".jam,.draft,.psnt,.wallet,application/octet-stream"
+                    onChange={async (e) => {
+                      setMergeA(await readFileBytes(e.target.files?.[0]));
+                      setMergeStatus('');
+                    }}
+                  />
+                </label>
+                <label className="composer-field">
+                  <span>Signed copy B</span>
+                  <input
+                    className="node-input"
+                    type="file"
+                    accept=".jam,.draft,.psnt,.wallet,application/octet-stream"
+                    onChange={async (e) => {
+                      setMergeB(await readFileBytes(e.target.files?.[0]));
+                      setMergeStatus('');
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-small btn-primary"
+                  disabled={!mergeA || !mergeB}
+                  onClick={mergeSignedCopies}
+                >
+                  merge &amp; download
+                </button>
+                {mergeStatus && <div className="composer-api-status">{mergeStatus}</div>}
+              </div>
+            </details>
+            )}
+
+            {sidebarPanel === 'send' && (
+            <details className="composer-details">
+              <summary className="composer-summary">
+                <span>Spend an HTLC-locked note</span>
+              </summary>
+              <div className="composer-details-body">
+                <div className="inspector-help">
+                  Spend a note locked by an HTLC: <b>claim</b> (you reveal the preimage) or{' '}
+                  <b>refund</b> (the refund address reclaims after the timeout height). Enter the
+                  same lock parameters the HTLC was built with.
+                </div>
+                <div className="composer-row">
+                  <label className="composer-radio">
+                    <input
+                      type="radio"
+                      checked={htlc.branch === 'claim'}
+                      onChange={() => setHtlc((h) => ({ ...h, branch: 'claim' }))}
+                    />
+                    claim
+                  </label>
+                  <label className="composer-radio">
+                    <input
+                      type="radio"
+                      checked={htlc.branch === 'refund'}
+                      onChange={() => setHtlc((h) => ({ ...h, branch: 'refund' }))}
+                    />
+                    refund
+                  </label>
+                </div>
+                {(
+                  [
+                    ['sourceAddr', 'your address (change / refund-to)'],
+                    ['nameFirst', 'note name (first hash)'],
+                    ['nameLast', 'note name (last hash)'],
+                    ['originPage', 'note origin page'],
+                    ['assets', 'note assets (nicks)'],
+                    ['claimRecipient', 'HTLC claim recipient (pkh)'],
+                    ['commitment', 'HTLC claim commitment (hash)'],
+                    ['refundAddr', 'HTLC refund address (pkh)'],
+                    ['refundHeight', 'HTLC refund unlock height'],
+                    ['outRecipient', 'output recipient (pkh)'],
+                    ['outAmount', `output amount (${unitMode})`],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label className="composer-field" key={key}>
+                    <span>{label}</span>
+                    <input
+                      className="node-input"
+                      value={htlc[key] as string}
+                      onChange={(e) => setHtlc((h) => ({ ...h, [key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+                <button type="button" className="btn btn-small btn-success" onClick={composeHtlcSpend}>
+                  compose {htlc.branch} spend
+                </button>
+                {htlcStatus && <div className="composer-api-status">{htlcStatus}</div>}
+                {htlcDraft && (
+                  <div className="composer-result">
+                    <div className="composer-row composer-action-row">
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-small"
+                        title={!canSignDraft ? signDraftDisabledReason : undefined}
+                        disabled={!onSignDraft || !canSignDraft || signingDraft}
+                        onClick={() => void onSignDraft?.(htlcDraft)}
+                      >
+                        {signingDraft ? 'signing...' : 'sign on device'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-small"
+                        onClick={() => downloadBytes(htlcDraft.filename, htlcDraft.psnt)}
+                      >
+                        download
+                      </button>
+                    </div>
+                    {htlcDraft.tree && (
+                      <details className="composer-inspect">
+                        <summary>inspect transaction</summary>
+                        <TxTree node={htlcDraft.tree} />
+                      </details>
+                    )}
+                  </div>
+                )}
               </div>
             </details>
             )}
@@ -2654,7 +2717,8 @@ export function Composer({
             onInit={(inst) => {
               rfInstance.current = inst;
             }}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+            onNodeDoubleClick={(_, node) => setSelectedNodeId(node.id)}
+            onNodeDragStop={() => separateOverlaps()}
             onPaneClick={() => setSelectedNodeId(null)}
             onDrop={onDrop}
             onDragOver={onDragOver}
@@ -2716,7 +2780,11 @@ export function Composer({
                             download .psnt
                           </button>
                         </div>
-                        <pre className="inspector-pre">{formatSummaryJson(data.result.summaryJson)}</pre>
+                        {data.result.tree ? (
+                          <TxTree node={data.result.tree} />
+                        ) : (
+                          <pre className="inspector-pre">{formatSummaryJson(data.result.summaryJson)}</pre>
+                        )}
                       </>
                     );
                   }

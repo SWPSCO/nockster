@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use tx_types::pokenoun::{
-    canonical_zmap_put, canonical_zset_put, hash_noun_varlen, hash_ten_cell, jam, Arena, Noun,
+    canonical_zmap_put, canonical_zset_put, cue, hash_noun_varlen, hash_ten_cell, jam, Arena, Noun,
 };
 
 const BYTHOS_PHASE: u64 = 54_000;
@@ -43,6 +43,29 @@ pub struct ComposeTxV1Input {
     pub input_fee_divisor: Option<u64>,
     #[serde(default)]
     pub min_fee: Option<u64>,
+    /// When the source notes are held under an m-of-n multisig lock, this
+    /// supplies the lock so inputs are reconstructed as multisig (and change
+    /// returns to the multisig). The composed `.psnt` then round-trips through
+    /// each co-signer's device, which fills its own signature slot.
+    #[serde(default)]
+    pub source_multisig: Option<MultisigSourceInput>,
+    /// When the source notes are held under an OR-composed lock (e.g. an HTLC),
+    /// this supplies the full branch set and which branch to spend. The witness
+    /// carries a full lock-merkle-proof for that branch.
+    #[serde(default)]
+    pub source_or_lock: Option<OrSourceInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MultisigSourceInput {
+    pub m: u64,
+    pub pkhs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrSourceInput {
+    pub branches: Vec<LockBranch>,
+    pub spend_branch: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -72,6 +95,51 @@ pub struct OutputInput {
     pub amount: u64,
     #[serde(default)]
     pub alias: Option<String>,
+    /// Optional timelock: appends a `%tim` primitive (recipient AND time).
+    #[serde(default)]
+    pub timelock: Option<TimelockSpec>,
+    /// Optional hashlock: appends a `%hax` primitive committing to these
+    /// preimage-hash commitments (base58); the spender must reveal preimages.
+    #[serde(default)]
+    pub hashlock: Option<Vec<String>>,
+    /// Burn: the spend-condition is `[%brn]` (unspendable); recipient ignored.
+    #[serde(default)]
+    pub burn: bool,
+    /// Semi-anonymous output: commit only the lock-root (empty note_data) so the
+    /// lock structure isn't revealed on-chain until the recipient spends
+    /// (nockchain `include_data = false`).
+    #[serde(default)]
+    pub lock_root_only: bool,
+    /// OR-composed lock: any one branch can spend (HTLC / refund-after-timeout
+    /// patterns). When set, the flat recipient/timelock/hashlock/burn fields
+    /// above are ignored and the lock is the `%2/%4/%8/%16` tree of branches.
+    #[serde(default)]
+    pub or_branches: Option<Vec<LockBranch>>,
+}
+
+/// One branch of an OR-composed lock — a single spend-condition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockBranch {
+    #[serde(default)]
+    pub recipient: Option<RecipientInput>,
+    #[serde(default)]
+    pub timelock: Option<TimelockSpec>,
+    #[serde(default)]
+    pub hashlock: Option<Vec<String>>,
+    #[serde(default)]
+    pub burn: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelockSpec {
+    #[serde(default)]
+    pub rel_min: Option<u64>,
+    #[serde(default)]
+    pub rel_max: Option<u64>,
+    #[serde(default)]
+    pub abs_min: Option<u64>,
+    #[serde(default)]
+    pub abs_max: Option<u64>,
 }
 
 #[wasm_bindgen]
@@ -108,6 +176,9 @@ impl ComposedTransactionV1 {
 #[derive(Debug, Clone, Copy)]
 struct TxIdCtx {
     null_digest: [u64; 5],
+    // Retained for parity with the hashing context; the `%hax` stub that read
+    // it was replaced by real commitment-z-set hashing.
+    #[allow(dead_code)]
     fake_digest: [u64; 5],
     version_digest: [u64; 5],
 }
@@ -352,10 +423,11 @@ fn hash_lock_primitive_hashable(
     }
 
     if arena.atom_eq_bytes(header_id, b"hax") {
+        // `%hax` body is a z-set of preimage-commitment hashes, hashed exactly
+        // like `%pkh`'s hash set (matches nockchain `hashable:hax`).
         let tag_digest = hash_noun_varlen(header, arena).map_err(|e| js_err(format!("{e:?}")))?;
-        return Ok(
-            hash_ten_cell(tag_digest, ctx.fake_digest).map_err(|e| js_err(format!("{e:?}")))?
-        );
+        let h_digest = hash_zset_hashes(body, arena, ctx)?;
+        return Ok(hash_ten_cell(tag_digest, h_digest).map_err(|e| js_err(format!("{e:?}")))?);
     }
 
     if arena.atom_eq_bytes(header_id, b"brn") {
@@ -816,6 +888,9 @@ struct NoteSpec {
     note_hash: [u64; 5],
     witness_unsigned: Noun,
     capacity: u64,
+    /// Signers whose slots seed the fee-estimation placeholder map: the source
+    /// pkh for single-sig, or the m expected signers for a multisig input.
+    signer_pkhs: Vec<[u64; 5]>,
 }
 
 fn build_pkh_lock(arena: &mut Arena, pkh: [u64; 5]) -> Result<Noun, JsValue> {
@@ -850,17 +925,58 @@ fn build_pkh_lock_multisig(
     Ok(build_tuple(arena, &[header, body]))
 }
 
-fn build_tim_lock(arena: &mut Arena, rel_min: u64) -> Noun {
+/// A `(unit @)`: `~` (atom 0) for None, `[~ v]` for Some.
+fn unit_opt(arena: &mut Arena, v: Option<u64>) -> Noun {
+    match v {
+        Some(n) => {
+            let z = arena.atom0();
+            let nn = arena.alloc_atom_u64(n);
+            build_tuple(arena, &[z, nn])
+        }
+        None => arena.atom0(),
+    }
+}
+
+/// `[%tim [rel=[min max] abs=[min max]]]` with each bound a `(unit page-number)`.
+fn build_tim_lock_full(
+    arena: &mut Arena,
+    rel_min: Option<u64>,
+    rel_max: Option<u64>,
+    abs_min: Option<u64>,
+    abs_max: Option<u64>,
+) -> Noun {
     let header = arena.alloc_atom_bytes(b"tim");
-
-    let rel_min_noun = arena.alloc_atom_u64(rel_min);
-    let min = build_tuple(arena, &[arena.atom0(), rel_min_noun]);
-    let max = arena.atom0();
-    let rel_range = build_tuple(arena, &[min, max]);
-
-    let abs_range = build_tuple(arena, &[arena.atom0(), arena.atom0()]);
+    let rmin = unit_opt(arena, rel_min);
+    let rmax = unit_opt(arena, rel_max);
+    let rel_range = build_tuple(arena, &[rmin, rmax]);
+    let amin = unit_opt(arena, abs_min);
+    let amax = unit_opt(arena, abs_max);
+    let abs_range = build_tuple(arena, &[amin, amax]);
     let body = build_tuple(arena, &[rel_range, abs_range]);
     build_tuple(arena, &[header, body])
+}
+
+fn build_tim_lock(arena: &mut Arena, rel_min: u64) -> Noun {
+    build_tim_lock_full(arena, Some(rel_min), None, None, None)
+}
+
+/// `[%hax (z-set hash)]` — commits to preimage hashes; the spender reveals the
+/// preimages in the witness hax map.
+fn build_hax_lock(arena: &mut Arena, commitments: &[[u64; 5]]) -> Result<Noun, JsValue> {
+    let header = arena.alloc_atom_bytes(b"hax");
+    let mut set = arena.atom0();
+    for c in commitments {
+        let hn = build_hash_noun(arena, *c);
+        set = canonical_zset_put(arena, set, hn).map_err(|e| js_err(format!("zset: {e:?}")))?;
+    }
+    Ok(build_tuple(arena, &[header, set]))
+}
+
+/// `[%brn ~]` — unspendable (burn).
+fn build_brn_lock(arena: &mut Arena) -> Noun {
+    let header = arena.alloc_atom_bytes(b"brn");
+    let null = arena.atom0();
+    build_tuple(arena, &[header, null])
 }
 
 fn build_note_data_with_lock(arena: &mut Arena, lock: Noun) -> Result<(Noun, u64), JsValue> {
@@ -932,10 +1048,18 @@ fn placeholder_pkh_signature_value(arena: &mut Arena) -> Noun {
     build_tuple(arena, &[pk, schnorr_sig])
 }
 
-fn build_placeholder_pkh_map(arena: &mut Arena, pkh: [u64; 5]) -> Result<Noun, JsValue> {
-    let key = build_hash_noun(arena, pkh);
-    let value = placeholder_pkh_signature_value(arena);
-    canonical_zmap_put(arena, arena.atom0(), key, value).map_err(|e| js_err(format!("zmap: {e:?}")))
+/// One placeholder signature slot per signer, so fee estimation reflects the
+/// signed witness size (m slots for an m-of-n input) and every co-signer's
+/// device has a slot to fill.
+fn build_placeholder_pkh_map_multi(arena: &mut Arena, pkhs: &[[u64; 5]]) -> Result<Noun, JsValue> {
+    let mut map = arena.atom0();
+    for pkh in pkhs {
+        let key = build_hash_noun(arena, *pkh);
+        let value = placeholder_pkh_signature_value(arena);
+        map = canonical_zmap_put(arena, map, key, value)
+            .map_err(|e| js_err(format!("zmap: {e:?}")))?;
+    }
+    Ok(map)
 }
 
 fn witness_with_placeholder(
@@ -952,6 +1076,8 @@ fn build_note_spec(
     arena: &mut Arena,
     note: &NoteInput,
     source_pkh: [u64; 5],
+    source_multisig: Option<&(u64, Vec<[u64; 5]>)>,
+    source_or_lock: Option<&OrSourceInput>,
     ctx: &TxIdCtx,
     coinbase_rel_min: u64,
     bythos_phase: u64,
@@ -962,30 +1088,51 @@ fn build_note_spec(
     let last_noun = build_hash_noun(arena, name_last);
     let name_noun = build_tuple(arena, &[first_noun, last_noun, arena.atom0()]);
 
-    // Attempt to reconstruct the note lock by matching its first name.
-    let simple_pkh = build_pkh_lock(arena, source_pkh)?;
-    let simple_lock = build_list(arena, &[simple_pkh]);
-    let simple_lock_hash = hash_lock_primitives_list(simple_lock, arena, ctx)?;
-    let simple_first = compute_first_name_from_lock_hash(simple_lock_hash, ctx)?;
-
-    let lock = if simple_first == name_first {
-        simple_lock
-    } else {
-        let coinbase_pkh = build_pkh_lock(arena, source_pkh)?;
-        let coinbase_tim = build_tim_lock(arena, coinbase_rel_min);
-        let coinbase_lock = build_list(arena, &[coinbase_pkh, coinbase_tim]);
-        let coinbase_hash = hash_lock_primitives_list(coinbase_lock, arena, ctx)?;
-        let coinbase_first = compute_first_name_from_lock_hash(coinbase_hash, ctx)?;
-        if coinbase_first == name_first {
-            coinbase_lock
-        } else {
+    // Reconstruct the note lock by matching its first name. An OR-composed
+    // source spends one branch (custom full-lmp witness); a multisig source is
+    // the m-of-n pkh lock; otherwise try a simple pkh then a coinbase lock.
+    let (lock, lock_hash, signer_pkhs, witness_override) = if let Some(or) = source_or_lock {
+        let (lock, root, witness, signers) =
+            build_or_input(arena, &or.branches, or.spend_branch as usize, ctx)?;
+        if compute_first_name_from_lock_hash(root, ctx)? != name_first {
+            return Err(js_err("note name does not match the provided OR lock / branches"));
+        }
+        (lock, root, signers, Some(witness))
+    } else if let Some((m, pkhs)) = source_multisig {
+        let ms_lock = build_pkh_lock_multisig(arena, *m, pkhs)?;
+        let ms_list = build_list(arena, &[ms_lock]);
+        let ms_hash = hash_lock_primitives_list(ms_list, arena, ctx)?;
+        if compute_first_name_from_lock_hash(ms_hash, ctx)? != name_first {
             return Err(js_err(
-                "unsupported note lock; provide a standard pkh or coinbase note",
+                "note name does not match the provided multisig lock (m/signers)",
             ));
         }
+        let signers: Vec<[u64; 5]> = pkhs.iter().take(*m as usize).copied().collect();
+        (ms_list, ms_hash, signers, None)
+    } else {
+        let simple_pkh = build_pkh_lock(arena, source_pkh)?;
+        let simple_lock = build_list(arena, &[simple_pkh]);
+        let simple_lock_hash = hash_lock_primitives_list(simple_lock, arena, ctx)?;
+        let simple_first = compute_first_name_from_lock_hash(simple_lock_hash, ctx)?;
+        let (lock, lock_hash) = if simple_first == name_first {
+            (simple_lock, simple_lock_hash)
+        } else {
+            let coinbase_pkh = build_pkh_lock(arena, source_pkh)?;
+            let coinbase_tim = build_tim_lock(arena, coinbase_rel_min);
+            let coinbase_lock = build_list(arena, &[coinbase_pkh, coinbase_tim]);
+            let coinbase_hash = hash_lock_primitives_list(coinbase_lock, arena, ctx)?;
+            let coinbase_first = compute_first_name_from_lock_hash(coinbase_hash, ctx)?;
+            if coinbase_first == name_first {
+                (coinbase_lock, coinbase_hash)
+            } else {
+                return Err(js_err(
+                    "unsupported note lock; provide a standard pkh or coinbase note",
+                ));
+            }
+        };
+        (lock, lock_hash, vec![source_pkh], None)
     };
 
-    let lock_hash = hash_lock_primitives_list(lock, arena, ctx)?;
     let (note_data, _) = build_note_data_with_lock(arena, lock)?;
     let note_data_hash = hash_note_data(note_data, arena)?;
     let name_hash = hash_nname_hashable(name_noun, arena)?;
@@ -1006,8 +1153,10 @@ fn build_note_spec(
     note_hash = hash_ten_cell(origin_digest, note_hash).map_err(|e| js_err(format!("{e:?}")))?;
     note_hash = hash_ten_cell(version_digest, note_hash).map_err(|e| js_err(format!("{e:?}")))?;
 
-    let witness_unsigned =
-        build_witness_unsigned(arena, lock, lock_hash, note.origin_page, bythos_phase);
+    let witness_unsigned = match witness_override {
+        Some(w) => w,
+        None => build_witness_unsigned(arena, lock, lock_hash, note.origin_page, bythos_phase),
+    };
     Ok(NoteSpec {
         name_first,
         name_last,
@@ -1018,25 +1167,289 @@ fn build_note_spec(
         note_hash,
         witness_unsigned,
         capacity: note.assets,
+        signer_pkhs,
     })
+}
+
+/// Build one spend-condition (AND-list of primitives) and a display string.
+/// `[%brn]` if `burn`, else `[pkh, (tim)?, (hax)?]`.
+fn build_spend_condition(
+    arena: &mut Arena,
+    recipient: Option<&RecipientInput>,
+    timelock: Option<&TimelockSpec>,
+    hashlock: Option<&[String]>,
+    burn: bool,
+    ctx: &TxIdCtx,
+) -> Result<(Noun, Option<String>), JsValue> {
+    if burn {
+        let brn = build_brn_lock(arena);
+        return Ok((build_list(arena, &[brn]), None));
+    }
+    let recipient = recipient.ok_or_else(|| js_err("spend-condition needs a recipient or burn"))?;
+    let (pkh, recipient_b58) = recipient_lock_and_display_address(arena, recipient, ctx)?;
+    let mut prims = vec![pkh];
+    if let Some(tl) = timelock {
+        if tl.rel_min.is_none()
+            && tl.rel_max.is_none()
+            && tl.abs_min.is_none()
+            && tl.abs_max.is_none()
+        {
+            return Err(js_err("timelock requires at least one bound"));
+        }
+        prims.push(build_tim_lock_full(
+            arena, tl.rel_min, tl.rel_max, tl.abs_min, tl.abs_max,
+        ));
+    }
+    if let Some(hashes) = hashlock {
+        if hashes.is_empty() {
+            return Err(js_err("hashlock requires at least one commitment"));
+        }
+        let mut digests: Vec<[u64; 5]> = Vec::with_capacity(hashes.len());
+        for h in hashes {
+            digests.push(parse_b58_hash(h)?);
+        }
+        digests.sort();
+        digests.dedup();
+        prims.push(build_hax_lock(arena, &digests)?);
+    }
+    Ok((build_list(arena, &prims), Some(recipient_b58)))
 }
 
 fn build_output_seed_spec(
     arena: &mut Arena,
-    recipient: &RecipientInput,
-    gift: u64,
+    output: &OutputInput,
     ctx: &TxIdCtx,
 ) -> Result<SeedSpec, JsValue> {
-    let (pkh, recipient_b58) = recipient_lock_and_display_address(arena, recipient, ctx)?;
-    let lock = build_list(arena, &[pkh]);
-    let lock_hash = hash_lock_primitives_list(lock, arena, ctx)?;
-    let (note_data, _) = build_note_data_with_lock(arena, lock)?;
+    // OR-composed lock (any branch can spend), else a single spend-condition.
+    let (lock, lock_hash, recipient_b58) = if let Some(branches) = &output.or_branches {
+        let (lock, root) = build_or_lock(arena, branches, ctx)?;
+        (lock, root, hash_to_b58(root))
+    } else {
+        let (sc, display) = build_spend_condition(
+            arena,
+            Some(&output.recipient),
+            output.timelock.as_ref(),
+            output.hashlock.as_deref(),
+            output.burn,
+            ctx,
+        )?;
+        let hash = hash_lock_primitives_list(sc, arena, ctx)?;
+        let display = display.unwrap_or_else(|| hash_to_b58(hash));
+        (sc, hash, display)
+    };
+    // Semi-anonymous: commit only the lock-root (empty note_data); else embed
+    // the full lock so the recipient/chain can see it.
+    let note_data = if output.lock_root_only {
+        arena.atom0()
+    } else {
+        build_note_data_with_lock(arena, lock)?.0
+    };
     Ok(SeedSpec {
         lock_root: lock_hash,
         note_data,
-        gift,
+        gift: output.amount,
         recipient_b58,
     })
+}
+
+/// Build an OR-composed lock from branch spend-conditions, mirroring
+/// nockchain `++lock`: pad to the nearest power of two (≤16) with `[%brn]`
+/// fillers, build the balanced `%2/%4/%8/%16` tree, and hash it
+/// (`hash-leaf(size) :: balanced-hash-pair(leaf-hashes)`).
+///
+/// Validated against nockchain's golden `%2`/`%4` lock-root vectors
+/// (`or_composed_lock_roots_match_nockchain_vectors`).
+fn build_or_lock(
+    arena: &mut Arena,
+    branches: &[LockBranch],
+    ctx: &TxIdCtx,
+) -> Result<(Noun, [u64; 5]), JsValue> {
+    if branches.is_empty() {
+        return Err(js_err("OR lock requires at least one branch"));
+    }
+    let mut scs: Vec<Noun> = Vec::with_capacity(branches.len());
+    for b in branches {
+        let (sc, _display) = build_spend_condition(
+            arena,
+            b.recipient.as_ref(),
+            b.timelock.as_ref(),
+            b.hashlock.as_deref(),
+            b.burn,
+            ctx,
+        )?;
+        scs.push(sc);
+    }
+    // nearest power of two >= len, capped at 16.
+    let len = scs.len();
+    let mut size = 1usize;
+    while size < len {
+        size <<= 1;
+    }
+    if size > 16 {
+        return Err(js_err("OR lock supports at most 16 branches"));
+    }
+    // Pad with `[%brn]` filler spend-conditions.
+    while scs.len() < size {
+        let brn = build_brn_lock(arena);
+        scs.push(build_list(arena, &[brn]));
+    }
+    let leaf_hashes: Vec<[u64; 5]> = scs
+        .iter()
+        .map(|sc| hash_lock_primitives_list(*sc, arena, ctx))
+        .collect::<Result<_, _>>()?;
+    let lock = build_lock_tree_noun(arena, &scs, size);
+    let root = hash_lock_tree_root(arena, &leaf_hashes, size)?;
+    Ok((lock, root))
+}
+
+/// The pkh signer hashes a branch needs (for fee/placeholder sizing).
+fn branch_signer_pkhs(branch: &LockBranch) -> Result<Vec<[u64; 5]>, JsValue> {
+    if branch.burn {
+        return Ok(Vec::new());
+    }
+    match &branch.recipient {
+        Some(RecipientInput::Pkh(b58)) => Ok(vec![parse_b58_hash(b58)?]),
+        Some(RecipientInput::Multisig { m, pkhs }) => {
+            let mut digests: Vec<[u64; 5]> = Vec::new();
+            for p in pkhs {
+                digests.push(parse_b58_hash(p)?);
+            }
+            digests.sort();
+            digests.dedup();
+            Ok(digests.into_iter().take(*m as usize).collect())
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Reconstruct an OR-composed input lock and build the unsigned witness that
+/// spends it via the chosen branch — a full lock-merkle-proof
+/// (`[%full spend-condition axis [root path]]`) plus placeholder signature
+/// slots for that branch's signers. Returns (lock, lock_root, witness, signers).
+fn build_or_input(
+    arena: &mut Arena,
+    branches: &[LockBranch],
+    spend_branch: usize,
+    ctx: &TxIdCtx,
+) -> Result<(Noun, [u64; 5], Noun, Vec<[u64; 5]>), JsValue> {
+    if branches.is_empty() {
+        return Err(js_err("OR input requires at least one branch"));
+    }
+    if spend_branch >= branches.len() {
+        return Err(js_err("spend_branch out of range"));
+    }
+    let mut scs: Vec<Noun> = Vec::new();
+    let mut signers: Vec<Vec<[u64; 5]>> = Vec::new();
+    for b in branches {
+        let (sc, _disp) = build_spend_condition(
+            arena,
+            b.recipient.as_ref(),
+            b.timelock.as_ref(),
+            b.hashlock.as_deref(),
+            b.burn,
+            ctx,
+        )?;
+        scs.push(sc);
+        signers.push(branch_signer_pkhs(b)?);
+    }
+    let mut size = 1usize;
+    while size < scs.len() {
+        size <<= 1;
+    }
+    if size > 16 {
+        return Err(js_err("OR input supports at most 16 branches"));
+    }
+    while scs.len() < size {
+        let brn = build_brn_lock(arena);
+        scs.push(build_list(arena, &[brn]));
+        signers.push(Vec::new());
+    }
+    let leaf_hashes: Vec<[u64; 5]> = scs
+        .iter()
+        .map(|sc| hash_lock_primitives_list(*sc, arena, ctx))
+        .collect::<Result<_, _>>()?;
+    let lock = build_lock_tree_noun(arena, &scs, size);
+    let root = hash_lock_tree_root(arena, &leaf_hashes, size)?;
+
+    // Prove the chosen leaf. leaf_number is 1-indexed (spend_branch + 1) and
+    // the hashable index adds 1 more because the tag occupies hashable leaf 1.
+    let tree = or_hashable_tree(arena, &leaf_hashes, size);
+    let (proof_root, path, axis) = htree_prove(&tree, spend_branch as u64 + 2)?;
+    if proof_root != root {
+        return Err(js_err("internal: OR proof root mismatch"));
+    }
+
+    // Full lock-merkle-proof witness for the chosen branch.
+    let version = arena.alloc_atom_bytes(LOCK_MERKLE_PROOF_FULL_TAG);
+    let chosen_sc = scs[spend_branch];
+    let axis_noun = arena.alloc_atom_u64(axis);
+    let root_noun = build_hash_noun(arena, root);
+    let path_nouns: Vec<Noun> = path.iter().map(|h| build_hash_noun(arena, *h)).collect();
+    let path_noun = if path_nouns.is_empty() {
+        arena.atom0()
+    } else {
+        build_list(arena, &path_nouns)
+    };
+    let merkle_proof = build_tuple(arena, &[root_noun, path_noun]);
+    let lmp = build_tuple(arena, &[version, chosen_sc, axis_noun, merkle_proof]);
+    let pkh_map = build_placeholder_pkh_map_multi(arena, &signers[spend_branch])?;
+    let hax = arena.atom0();
+    let tim = arena.atom0();
+    let witness = build_tuple(arena, &[lmp, pkh_map, hax, tim]);
+    Ok((lock, root, witness, signers[spend_branch].clone()))
+}
+
+/// Tree noun per nockchain `++build`: leaf is the spend-condition; `%2` keeps
+/// both children whole; higher tags re-tag the stripped child payloads.
+fn build_lock_tree_noun(arena: &mut Arena, leaves: &[Noun], size: usize) -> Noun {
+    if size == 1 {
+        return leaves[0];
+    }
+    let half = size / 2;
+    let left = build_lock_tree_noun(arena, &leaves[..half], half);
+    let right = build_lock_tree_noun(arena, &leaves[half..], half);
+    let tag = arena.alloc_atom_u64(size as u64);
+    if size == 2 {
+        build_tuple(arena, &[tag, left, right])
+    } else {
+        // `[%size +.left +.right]`: strip the child tags (take their tails).
+        let lp = match left {
+            Noun::Cell(id) => arena.cell(id).tail,
+            _ => left,
+        };
+        let rp = match right {
+            Noun::Cell(id) => arena.cell(id).tail,
+            _ => right,
+        };
+        build_tuple(arena, &[tag, lp, rp])
+    }
+}
+
+/// Lock-root per nockchain `Lock::hash`: a single leaf hashes to its
+/// spend-condition hash; a tree hashes to `hash-pair(leaf(size),
+/// balanced-hash-pair(leaf-hashes))`.
+fn hash_lock_tree_root(
+    arena: &mut Arena,
+    leaf_hashes: &[[u64; 5]],
+    size: usize,
+) -> Result<[u64; 5], JsValue> {
+    if size == 1 {
+        return Ok(leaf_hashes[0]);
+    }
+    let tag_atom = arena.alloc_atom_u64(size as u64);
+    let tag_digest = hash_noun_varlen(tag_atom, arena).map_err(|e| js_err(format!("{e:?}")))?;
+    let payload = hash_balanced_pairs(leaf_hashes)?;
+    Ok(hash_ten_cell(tag_digest, payload).map_err(|e| js_err(format!("{e:?}")))?)
+}
+
+fn hash_balanced_pairs(hashes: &[[u64; 5]]) -> Result<[u64; 5], JsValue> {
+    if hashes.len() == 1 {
+        return Ok(hashes[0]);
+    }
+    let half = hashes.len() / 2;
+    let left = hash_balanced_pairs(&hashes[..half])?;
+    let right = hash_balanced_pairs(&hashes[half..])?;
+    Ok(hash_ten_cell(left, right).map_err(|e| js_err(format!("{e:?}")))?)
 }
 
 #[wasm_bindgen]
@@ -1264,7 +1677,9 @@ fn settle_candidate_fees(
     arena: &mut Arena,
     notes: &[NoteSpec],
     mut plans: Vec<SpendPlan>,
-    source_pkh: [u64; 5],
+    // Retained for signature symmetry; per-note signers now size the fee
+    // placeholder map (see build_candidate_plan), so this is unused.
+    _source_pkh: [u64; 5],
     refund_lock_root: [u64; 5],
     refund_note_data: Noun,
     refund_recipient_b58: &str,
@@ -1278,7 +1693,7 @@ fn settle_candidate_fees(
     let mut fee_spends_map = arena.atom0();
     for plan in &plans {
         let note = &notes[plan.note_index];
-        let placeholder_map = build_placeholder_pkh_map(arena, source_pkh)?;
+        let placeholder_map = build_placeholder_pkh_map_multi(arena, &note.signer_pkhs)?;
         let fee_witness = witness_with_placeholder(note.witness_unsigned, placeholder_map, arena)?;
         let built = build_spend_from_plan(
             arena,
@@ -1532,6 +1947,296 @@ fn choose_best_candidate_plan(
     best.ok_or_else(|| js_err("insufficient funds to cover requested outputs and fee"))
 }
 
+// ---- lock-merkle-proof (spending from an OR-composed lock) ----------------
+//
+// Mirrors nockchain `++prove-hashable-by-index` / `++verify-merk-proof`
+// (hoon/common/ztd/three.hoon). The hashable of an OR lock is
+// `[leaf+tag, balanced-payload]`; a leaf's `axis` is its Nock tree address and
+// the `path` is the sibling digests leaf→root.
+
+/// Abstract hashable tree node used for proof construction.
+enum HTree {
+    Leaf([u64; 5]),
+    Node(Box<HTree>, Box<HTree>),
+}
+
+fn htree_node_digest(t: &HTree) -> [u64; 5] {
+    match t {
+        HTree::Leaf(d) => *d,
+        HTree::Node(p, q) => {
+            hash_ten_cell(htree_node_digest(p), htree_node_digest(q)).unwrap_or([0; 5])
+        }
+    }
+}
+
+fn htree_leaf_count(t: &HTree) -> u64 {
+    match t {
+        HTree::Leaf(_) => 1,
+        HTree::Node(p, q) => htree_leaf_count(p) + htree_leaf_count(q),
+    }
+}
+
+/// Hoon `++peg`: replace the leading 1 of `b` with `a` (a → high bits).
+fn peg(a: u64, b: u64) -> u64 {
+    if b == 1 {
+        return a;
+    }
+    let d = (64 - b.leading_zeros() as u64) - 1; // dec(xeb(b))
+    (a << d) + (b - (1u64 << d))
+}
+
+/// `++go`: returns (root, path, axis) for the 1-indexed leaf `i`.
+fn htree_prove(t: &HTree, i: u64) -> Result<([u64; 5], Vec<[u64; 5]>, u64), JsValue> {
+    match t {
+        HTree::Leaf(d) => Ok((*d, Vec::new(), 1)),
+        HTree::Node(p, q) => {
+            let lc = htree_leaf_count(p);
+            if i <= lc {
+                let (root, mut path, axis) = htree_prove(p, i)?;
+                let sib = htree_node_digest(q);
+                let new_root = hash_ten_cell(root, sib).map_err(|e| js_err(format!("{e:?}")))?;
+                path.push(sib);
+                Ok((new_root, path, peg(2, axis)))
+            } else {
+                let (root, mut path, axis) = htree_prove(q, i - lc)?;
+                let sib = htree_node_digest(p);
+                let new_root = hash_ten_cell(sib, root).map_err(|e| js_err(format!("{e:?}")))?;
+                path.push(sib);
+                Ok((new_root, path, peg(3, axis)))
+            }
+        }
+    }
+}
+
+/// `++verify-merk-proof`: recompute the root from leaf + axis + path. Used by
+/// tests as the correctness oracle (the chain runs the equivalent verifier).
+#[cfg(test)]
+fn merk_verify_root(
+    leaf: [u64; 5],
+    axis: u64,
+    path: &[[u64; 5]],
+) -> Result<Option<[u64; 5]>, JsValue> {
+    let mut axis = axis;
+    let mut leaf = leaf;
+    let mut idx = 0usize;
+    if axis == 0 {
+        return Ok(None);
+    }
+    loop {
+        if axis == 1 {
+            return Ok(if idx == path.len() { Some(leaf) } else { None });
+        }
+        if idx >= path.len() {
+            return Ok(None);
+        }
+        let sib = path[idx];
+        if axis == 2 {
+            let r = hash_ten_cell(leaf, sib).map_err(|e| js_err(format!("{e:?}")))?;
+            return Ok(if idx + 1 == path.len() { Some(r) } else { None });
+        }
+        if axis == 3 {
+            let r = hash_ten_cell(sib, leaf).map_err(|e| js_err(format!("{e:?}")))?;
+            return Ok(if idx + 1 == path.len() { Some(r) } else { None });
+        }
+        if axis % 2 == 0 {
+            leaf = hash_ten_cell(leaf, sib).map_err(|e| js_err(format!("{e:?}")))?;
+            axis /= 2;
+        } else {
+            leaf = hash_ten_cell(sib, leaf).map_err(|e| js_err(format!("{e:?}")))?;
+            axis = (axis - 1) / 2;
+        }
+        idx += 1;
+    }
+}
+
+/// Build the hashable tree for an OR lock from its (already power-of-two,
+/// padded) leaf spend-condition hashes: `[leaf+tag, balanced-payload]`.
+fn or_hashable_tree(arena: &mut Arena, leaf_hashes: &[[u64; 5]], size: usize) -> HTree {
+    fn balanced(hs: &[[u64; 5]]) -> HTree {
+        if hs.len() == 1 {
+            HTree::Leaf(hs[0])
+        } else {
+            let half = hs.len() / 2;
+            HTree::Node(
+                Box::new(balanced(&hs[..half])),
+                Box::new(balanced(&hs[half..])),
+            )
+        }
+    }
+    let tag_atom = arena.alloc_atom_u64(size as u64);
+    let tag_digest = hash_noun_varlen(tag_atom, arena).unwrap_or([0; 5]);
+    HTree::Node(Box::new(HTree::Leaf(tag_digest)), Box::new(balanced(leaf_hashes)))
+}
+
+/// True if a pkh-signature-map value is an all-zero placeholder slot.
+fn is_placeholder_sig(value: Noun, arena: &Arena) -> bool {
+    fn all_zero(noun: Noun, arena: &Arena, count: usize) -> bool {
+        let mut cur = noun;
+        for _ in 0..count.saturating_sub(1) {
+            let Some((head, tail)) = (match cur {
+                Noun::Cell(id) => {
+                    let c = arena.cell(id);
+                    Some((c.head, c.tail))
+                }
+                _ => None,
+            }) else {
+                return false;
+            };
+            if noun_atom_u64(head, arena) != Some(0) {
+                return false;
+            }
+            cur = tail;
+        }
+        noun_atom_u64(cur, arena) == Some(0)
+    }
+    let Some((pk, sig)) = tuple2(value, arena) else {
+        return true;
+    };
+    let Some((x, y, _inf)) = tuple3(pk, arena) else {
+        return true;
+    };
+    if !all_zero(x, arena, 6) || !all_zero(y, arena, 6) {
+        return false;
+    }
+    let Some((chal, s)) = tuple2(sig, arena) else {
+        return true;
+    };
+    all_zero(chal, arena, 8) && all_zero(s, arena, 8)
+}
+
+/// Union the real (non-placeholder) entries of two pkh-signature z-maps,
+/// preferring real signatures from either side.
+fn merge_pkh_maps(arena: &mut Arena, base: Noun, extra: Noun) -> Result<Noun, JsValue> {
+    let mut out = base;
+    let mut stack = vec![extra];
+    while let Some(map) = stack.pop() {
+        if map == arena.atom0() {
+            continue;
+        }
+        let Some((node, left, right)) = decompose_map(map, arena) else {
+            continue;
+        };
+        if let Some((key, value)) = decompose_pair(node, arena) {
+            if !is_placeholder_sig(value, arena) {
+                out = canonical_zmap_put(arena, out, key, value)
+                    .map_err(|e| js_err(format!("zmap: {e:?}")))?;
+            }
+        }
+        stack.push(left);
+        stack.push(right);
+    }
+    Ok(out)
+}
+
+/// Merge the witness signatures of one spend (`[%1 [witness seeds fee]]`),
+/// taking seeds/fee from `base` and unioning the pkh-signature maps.
+fn merge_spend(arena: &mut Arena, base: Noun, extra: Noun) -> Result<Noun, JsValue> {
+    let (tag, body) = tuple2(base, arena).ok_or_else(|| js_err("malformed spend"))?;
+    let (witness, seeds, fee) = tuple3(body, arena).ok_or_else(|| js_err("malformed spend body"))?;
+    let (lmp, pkh, hax, tim) =
+        tuple4(witness, arena).ok_or_else(|| js_err("malformed witness"))?;
+    // Find the same spend's witness pkh map in `extra`.
+    let extra_pkh = tuple2(extra, arena)
+        .and_then(|(_t, b)| tuple3(b, arena))
+        .and_then(|(w, _s, _f)| tuple4(w, arena))
+        .map(|(_lmp, p, _h, _t)| p)
+        .unwrap_or_else(|| arena.atom0());
+    let merged_pkh = merge_pkh_maps(arena, pkh, extra_pkh)?;
+    let merged_witness = build_tuple(arena, &[lmp, merged_pkh, hax, tim]);
+    let merged_body = build_tuple(arena, &[merged_witness, seeds, fee]);
+    Ok(build_tuple(arena, &[tag, merged_body]))
+}
+
+/// Merge two wallet z-maps (`name -> spend`/`name -> witness`) keyed by name.
+fn collect_map_entries(map: Noun, arena: &Arena, out: &mut Vec<(Noun, Noun)>) {
+    if map == arena.atom0() || out.len() >= 256 {
+        return;
+    }
+    let Some((node, left, right)) = decompose_map(map, arena) else {
+        return;
+    };
+    if let Some(pair) = decompose_pair(node, arena) {
+        out.push(pair);
+    }
+    collect_map_entries(left, arena, out);
+    collect_map_entries(right, arena, out);
+}
+
+/// Combine two partially-signed v1 wallet transactions (`.psnt`) for the same
+/// transaction by unioning their per-input signature maps — the parallel
+/// multisig co-signing step.
+///
+/// VALIDATION: structurally tested (synthetic signatures); confirm against a
+/// real device-signed multisig `.psnt` before relying on it for funds.
+#[wasm_bindgen]
+pub fn merge_signed_tx(a: &[u8], b: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let mut arena = Arena::new();
+    let ta = cue(a, &mut arena).map_err(|_| js_err("first tx is not a valid jam"))?;
+    let tb = cue(b, &mut arena).map_err(|_| js_err("second tx is not a valid jam"))?;
+    let (tag, name, spends_a, display, wd_a) =
+        tuple5(ta, &arena).ok_or_else(|| js_err("first tx is not a v1 wallet tx"))?;
+    let (_tb_tag, _tb_name, spends_b, _tb_display, wd_b) =
+        tuple5(tb, &arena).ok_or_else(|| js_err("second tx is not a v1 wallet tx"))?;
+
+    // Index b's spends by name (b58) for matching.
+    let mut b_spends = Vec::new();
+    collect_map_entries(spends_b, &arena, &mut b_spends);
+    let find_b = |name_noun: Noun, arena: &Arena| -> Noun {
+        let want = parse_hash(name_noun, arena);
+        for (k, v) in &b_spends {
+            if parse_hash(*k, arena) == want {
+                return *v;
+            }
+        }
+        arena.atom0()
+    };
+
+    // Rebuild the spends map with merged signatures.
+    let mut a_spends = Vec::new();
+    collect_map_entries(spends_a, &arena, &mut a_spends);
+    let mut merged_spends = arena.atom0();
+    for (name_noun, spend_a) in a_spends {
+        let extra = find_b(name_noun, &arena);
+        let merged = if extra == arena.atom0() {
+            spend_a
+        } else {
+            merge_spend(&mut arena, spend_a, extra)?
+        };
+        merged_spends = canonical_zmap_put(&mut arena, merged_spends, name_noun, merged)
+            .map_err(|e| js_err(format!("zmap: {e:?}")))?;
+    }
+
+    // Rebuild the witness-data map (`[%1 map]`) the same way.
+    let (wd_tag, wd_map_a) = tuple2(wd_a, &arena).ok_or_else(|| js_err("malformed witness-data"))?;
+    let wd_map_b = tuple2(wd_b, &arena).map(|(_t, m)| m).unwrap_or_else(|| arena.atom0());
+    let mut b_wits = Vec::new();
+    collect_map_entries(wd_map_b, &arena, &mut b_wits);
+    let mut a_wits = Vec::new();
+    collect_map_entries(wd_map_a, &arena, &mut a_wits);
+    let mut merged_wd_map = arena.atom0();
+    for (name_noun, wit_a) in a_wits {
+        let want = parse_hash(name_noun, &arena);
+        let extra_pkh = b_wits
+            .iter()
+            .find(|(k, _)| parse_hash(*k, &arena) == want)
+            .and_then(|(_, w)| tuple4(*w, &arena))
+            .map(|(_lmp, p, _h, _t)| p)
+            .unwrap_or_else(|| arena.atom0());
+        let merged_wit = if let Some((lmp, pkh, hax, tim)) = tuple4(wit_a, &arena) {
+            let mp = merge_pkh_maps(&mut arena, pkh, extra_pkh)?;
+            build_tuple(&mut arena, &[lmp, mp, hax, tim])
+        } else {
+            wit_a
+        };
+        merged_wd_map = canonical_zmap_put(&mut arena, merged_wd_map, name_noun, merged_wit)
+            .map_err(|e| js_err(format!("zmap: {e:?}")))?;
+    }
+    let merged_wd = build_tuple(&mut arena, &[wd_tag, merged_wd_map]);
+
+    let merged = build_tuple(&mut arena, &[tag, name, merged_spends, display, merged_wd]);
+    Ok(jam(merged, &arena))
+}
+
 #[wasm_bindgen]
 pub fn compose_tx_v1_unsigned(input: JsValue) -> Result<ComposedTransactionV1, JsValue> {
     let input: ComposeTxV1Input =
@@ -1566,8 +2271,37 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
         version_digest,
     };
 
-    let refund_pkh = build_pkh_lock(&mut arena, source_pkh)?;
-    let refund_lock = build_list(&mut arena, &[refund_pkh]);
+    // Parse an optional multisig source lock (sorted, deduped digests).
+    let source_multisig: Option<(u64, Vec<[u64; 5]>)> = match &input.source_multisig {
+        Some(ms) => {
+            if ms.m == 0 {
+                return Err(js_err("multisig source requires m >= 1"));
+            }
+            let mut digests: Vec<[u64; 5]> = Vec::with_capacity(ms.pkhs.len());
+            for pkh_b58 in &ms.pkhs {
+                digests.push(parse_b58_hash(pkh_b58)?);
+            }
+            digests.sort();
+            digests.dedup();
+            if (ms.m as usize) > digests.len() {
+                return Err(js_err("multisig source requires m <= unique signers"));
+            }
+            Some((ms.m, digests))
+        }
+        None => None,
+    };
+
+    // Change returns to the same lock the inputs use: the multisig lock for a
+    // multisig source, else the source pkh.
+    let (refund_lock, refund_recipient_b58) = if let Some((m, pkhs)) = &source_multisig {
+        let ms_lock = build_pkh_lock_multisig(&mut arena, *m, pkhs)?;
+        let ms_list = build_list(&mut arena, &[ms_lock]);
+        let root = hash_lock_primitives_list(ms_list, &arena, &ctx)?;
+        (ms_list, hash_to_b58(root))
+    } else {
+        let refund_pkh = build_pkh_lock(&mut arena, source_pkh)?;
+        (build_list(&mut arena, &[refund_pkh]), input.source_pkh.clone())
+    };
     let refund_lock_root = hash_lock_primitives_list(refund_lock, &arena, &ctx)?;
     let (refund_note_data, _) = build_note_data_with_lock(&mut arena, refund_lock)?;
 
@@ -1580,6 +2314,8 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
                 &mut arena,
                 note,
                 source_pkh,
+                source_multisig.as_ref(),
+                input.source_or_lock.as_ref(),
                 &ctx,
                 coinbase_rel_min,
                 fee_policy.bythos_phase,
@@ -1603,7 +2339,7 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
             return Err(js_err("output amount must be > 0"));
         }
         output_total = output_total.saturating_add(output.amount);
-        let seed = build_output_seed_spec(&mut arena, &output.recipient, output.amount, &ctx)?;
+        let seed = build_output_seed_spec(&mut arena, output, &ctx)?;
         seeds.push(seed);
     }
     seeds.sort_by(|a, b| b.gift.cmp(&a.gift));
@@ -1616,7 +2352,7 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
         source_pkh,
         refund_lock_root,
         refund_note_data,
-        &input.source_pkh,
+        &refund_recipient_b58,
         current_height,
         fee_policy,
     )?;
@@ -1639,7 +2375,7 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
             note.witness_unsigned,
             refund_lock_root,
             refund_note_data,
-            &input.source_pkh,
+            &refund_recipient_b58,
         )?;
 
         spends_map = canonical_zmap_put(&mut arena, spends_map, note.name_noun, built.spend)
@@ -1774,6 +2510,11 @@ mod tests {
                 recipient: RecipientInput::Pkh(source_pkh_b58.to_string()),
                 amount: 65_536,
                 alias: None,
+                timelock: None,
+                hashlock: None,
+                burn: false,
+                lock_root_only: false,
+                or_branches: None,
             }],
             coinbase_rel_min: None,
             current_height: Some(BYTHOS_PHASE),
@@ -1781,6 +2522,8 @@ mod tests {
             base_fee: None,
             input_fee_divisor: None,
             min_fee: None,
+            source_multisig: None,
+            source_or_lock: None,
         })
         .expect("compose");
 
@@ -1810,6 +2553,710 @@ mod tests {
             decompose_lock_merkle_proof(lmp, &decode_arena).expect("stub lmp");
         assert!(version.is_none());
         assert_eq!(noun_atom_u64(axis, &decode_arena), Some(1));
+    }
+
+    #[test]
+    fn wallet_tx_v1_multisig_source_reconstructs_multisig_lock() {
+        // Three synthetic signer pkhs and a 2-of-3 lock.
+        let m = 2u64;
+        let signer_b58: Vec<String> = [[1u64, 0, 0, 0, 0], [2, 0, 0, 0, 0], [3, 0, 0, 0, 0]]
+            .iter()
+            .map(|d| hash_to_b58(*d))
+            .collect();
+
+        let mut arena = Arena::new();
+        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
+        let fake_atom = arena.alloc_atom_bytes(b"fake");
+        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
+        let version_atom = arena.alloc_atom_u64(1);
+        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
+        let ctx = TxIdCtx {
+            null_digest,
+            fake_digest,
+            version_digest,
+        };
+
+        // Derive the note's first name from the 2-of-3 multisig lock so the
+        // input reconstruction must match.
+        let mut digests: Vec<[u64; 5]> =
+            signer_b58.iter().map(|b| parse_b58_hash(b).unwrap()).collect();
+        digests.sort();
+        digests.dedup();
+        let ms_lock = build_pkh_lock_multisig(&mut arena, m, &digests).unwrap();
+        let ms_list = build_list(&mut arena, &[ms_lock]);
+        let ms_root = hash_lock_primitives_list(ms_list, &arena, &ctx).unwrap();
+        let note_first = compute_first_name_from_lock_hash(ms_root, &ctx).unwrap();
+
+        // Compose succeeds only if the multisig lock reconstruction matches the
+        // note name (proves source_multisig threading + lock build).
+        let composed = compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+            source_pkh: signer_b58[0].clone(),
+            notes: vec![NoteInput {
+                name_first: hash_to_b58(note_first),
+                name_last: signer_b58[0].clone(),
+                origin_page: 1,
+                assets: 100_000_000,
+                version: 1,
+            }],
+            outputs: vec![OutputInput {
+                recipient: RecipientInput::Pkh(signer_b58[0].clone()),
+                amount: 65_536,
+                alias: None,
+                timelock: None,
+                hashlock: None,
+                burn: false,
+                lock_root_only: false,
+                or_branches: None,
+            }],
+            coinbase_rel_min: None,
+            current_height: Some(BYTHOS_PHASE),
+            bythos_phase: None,
+            base_fee: None,
+            input_fee_divisor: None,
+            min_fee: None,
+            source_multisig: Some(MultisigSourceInput {
+                m,
+                pkhs: signer_b58.clone(),
+            }),
+            source_or_lock: None,
+        })
+        .expect("compose multisig");
+
+        // The input-display lock must be the m-of-n multisig (m == 2).
+        let mut decode_arena = Arena::new();
+        let tx_noun =
+            tx_types::pokenoun::cue(&composed.wallet_jam, &mut decode_arena).expect("cue");
+        let (_tag, _name, _spends, display, _wd) = tuple5(tx_noun, &decode_arena).expect("tuple5");
+        let (inputs, _outputs) = tuple2(display, &decode_arena).expect("display");
+        let (_in_tag, in_map) = tuple2(inputs, &decode_arena).expect("inputs");
+        let lock_list = first_zmap_value(in_map, &decode_arena);
+        let (pkh_prim, _rest) = uncons(lock_list, &decode_arena).expect("lock list head");
+        let (_header, body) = tuple2(pkh_prim, &decode_arena).expect("pkh prim");
+        let (m_noun, _set) = tuple2(body, &decode_arena).expect("pkh body");
+        assert_eq!(noun_atom_u64(m_noun, &decode_arena), Some(2));
+    }
+
+    #[test]
+    fn wallet_tx_v1_timelock_output_changes_lock_root() {
+        let source_pkh_b58 = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let source_pkh = parse_b58_hash(source_pkh_b58).unwrap();
+
+        let mut arena = Arena::new();
+        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
+        let fake_atom = arena.alloc_atom_bytes(b"fake");
+        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
+        let version_atom = arena.alloc_atom_u64(1);
+        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
+        let ctx = TxIdCtx {
+            null_digest,
+            fake_digest,
+            version_digest,
+        };
+        let simple_pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
+        let simple_lock = build_list(&mut arena, &[simple_pkh]);
+        let simple_lock_hash = hash_lock_primitives_list(simple_lock, &arena, &ctx).unwrap();
+        let note_first = compute_first_name_from_lock_hash(simple_lock_hash, &ctx).unwrap();
+
+        let make = |timelock: Option<TimelockSpec>| {
+            compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+                source_pkh: source_pkh_b58.to_string(),
+                notes: vec![NoteInput {
+                    name_first: hash_to_b58(note_first),
+                    name_last: source_pkh_b58.to_string(),
+                    origin_page: 1,
+                    assets: 100_000_000,
+                    version: 1,
+                }],
+                outputs: vec![OutputInput {
+                    recipient: RecipientInput::Pkh(source_pkh_b58.to_string()),
+                    amount: 65_536,
+                    alias: None,
+                    timelock,
+                    hashlock: None,
+                    burn: false,
+                    lock_root_only: false,
+                    or_branches: None,
+                }],
+                coinbase_rel_min: None,
+                current_height: Some(BYTHOS_PHASE),
+                bythos_phase: None,
+                base_fee: None,
+                input_fee_divisor: None,
+                min_fee: None,
+                source_multisig: None,
+                source_or_lock: None,
+            })
+            .expect("compose")
+        };
+
+        let plain = make(None);
+        let timelocked = make(Some(TimelockSpec {
+            rel_min: None,
+            rel_max: None,
+            abs_min: Some(120_000),
+            abs_max: None,
+        }));
+        // The timelocked output's lock (pkh + tim) hashes differently, so the
+        // whole transaction id changes — proving the %tim primitive is in the
+        // output's spend-condition. (The no-bounds rejection path returns a
+        // JsValue error, which only runs under wasm, so it isn't asserted here.)
+        assert_ne!(plain.tx_id, timelocked.tx_id);
+    }
+
+    #[test]
+    fn wallet_tx_v1_hashlock_and_burn_outputs() {
+        let source_pkh_b58 = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let source_pkh = parse_b58_hash(source_pkh_b58).unwrap();
+
+        let mut arena = Arena::new();
+        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
+        let fake_atom = arena.alloc_atom_bytes(b"fake");
+        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
+        let version_atom = arena.alloc_atom_u64(1);
+        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
+        let ctx = TxIdCtx {
+            null_digest,
+            fake_digest,
+            version_digest,
+        };
+        let simple_pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
+        let simple_lock = build_list(&mut arena, &[simple_pkh]);
+        let simple_lock_hash = hash_lock_primitives_list(simple_lock, &arena, &ctx).unwrap();
+        let note_first = compute_first_name_from_lock_hash(simple_lock_hash, &ctx).unwrap();
+
+        let commit_a = hash_to_b58([7u64, 0, 0, 0, 0]);
+        let commit_b = hash_to_b58([8u64, 0, 0, 0, 0]);
+        let make = |hashlock: Option<Vec<String>>, burn: bool| {
+            compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+                source_pkh: source_pkh_b58.to_string(),
+                notes: vec![NoteInput {
+                    name_first: hash_to_b58(note_first),
+                    name_last: source_pkh_b58.to_string(),
+                    origin_page: 1,
+                    assets: 100_000_000,
+                    version: 1,
+                }],
+                outputs: vec![OutputInput {
+                    recipient: RecipientInput::Pkh(source_pkh_b58.to_string()),
+                    amount: 65_536,
+                    alias: None,
+                    timelock: None,
+                    hashlock,
+                    burn,
+                    lock_root_only: false,
+                    or_branches: None,
+                }],
+                coinbase_rel_min: None,
+                current_height: Some(BYTHOS_PHASE),
+                bythos_phase: None,
+                base_fee: None,
+                input_fee_divisor: None,
+                min_fee: None,
+                source_multisig: None,
+                source_or_lock: None,
+            })
+            .expect("compose")
+        };
+
+        let plain = make(None, false);
+        let hax_a = make(Some(vec![commit_a.clone()]), false);
+        let hax_b = make(Some(vec![commit_b.clone()]), false);
+        let burned = make(None, true);
+
+        // Hashlock changes the lock, and — critically — DIFFERENT commitments
+        // produce DIFFERENT tx-ids. This is the regression guard for the old
+        // `%hax` stub that hashed a fixed placeholder instead of the z-set.
+        assert_ne!(plain.tx_id, hax_a.tx_id);
+        assert_ne!(hax_a.tx_id, hax_b.tx_id);
+        // Burn is also a distinct lock.
+        assert_ne!(plain.tx_id, burned.tx_id);
+    }
+
+    // Build a TxIdCtx for tests.
+    fn test_ctx(arena: &mut Arena) -> TxIdCtx {
+        let null_digest = hash_noun_varlen(arena.atom0(), arena).unwrap();
+        let fake_atom = arena.alloc_atom_bytes(b"fake");
+        let fake_digest = hash_noun_varlen(fake_atom, arena).unwrap();
+        let version_atom = arena.alloc_atom_u64(1);
+        let version_digest = hash_noun_varlen(version_atom, arena).unwrap();
+        TxIdCtx {
+            null_digest,
+            fake_digest,
+            version_digest,
+        }
+    }
+
+    /// Golden lock-root vectors copied verbatim from nockchain-wallet's own
+    /// tests (`crates/nockchain-wallet/src/tests.rs`,
+    /// `planner_recipient_outputs_match_hoon_lock_root_vectors`). Proves our
+    /// pkh / multisig lock hashing matches the canonical wallet exactly —
+    /// which also validates the per-leaf hashing OR-composed locks reuse.
+    #[test]
+    fn lock_roots_match_nockchain_wallet_vectors() {
+        const ADDRESS_A: &str = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        const ADDRESS_B: &str = "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt";
+        const EXPECTED_PKH_ROOT: &str = "DKrgXqE8bXR1uBZ3t4vU13m2KquGCDbnn1PeoPL7dxSHTucGPFDPt53";
+        const EXPECTED_MULTISIG_2_OF_2: &str =
+            "4eMAT3BuhLPjYFronoYJ9RSLVSgveCL3nQB7RHSLZzjBTiYCxEzkzEH";
+
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let a = parse_b58_hash(ADDRESS_A).unwrap();
+        let b = parse_b58_hash(ADDRESS_B).unwrap();
+
+        // 1-of-1 P2PKH lock root.
+        let pkh = build_pkh_lock(&mut arena, a).unwrap();
+        let lock = build_list(&mut arena, &[pkh]);
+        let root = hash_lock_primitives_list(lock, &arena, &ctx).unwrap();
+        assert_eq!(hash_to_b58(root), EXPECTED_PKH_ROOT);
+
+        // 2-of-2 multisig lock root.
+        let mut digests = vec![a, b];
+        digests.sort();
+        digests.dedup();
+        let ms = build_pkh_lock_multisig(&mut arena, 2, &digests).unwrap();
+        let ms_lock = build_list(&mut arena, &[ms]);
+        let ms_root = hash_lock_primitives_list(ms_lock, &arena, &ctx).unwrap();
+        assert_eq!(hash_to_b58(ms_root), EXPECTED_MULTISIG_2_OF_2);
+    }
+
+    #[test]
+    fn inspect_tx_builds_tree_for_composed_draft() {
+        let source = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let source_pkh = parse_b58_hash(source).unwrap();
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
+        let lock = build_list(&mut arena, &[pkh]);
+        let note_first =
+            compute_first_name_from_lock_hash(hash_lock_primitives_list(lock, &arena, &ctx).unwrap(), &ctx)
+                .unwrap();
+
+        let composed = compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+            source_pkh: source.to_string(),
+            notes: vec![NoteInput {
+                name_first: hash_to_b58(note_first),
+                name_last: source.to_string(),
+                origin_page: 1,
+                assets: 100_000_000,
+                version: 1,
+            }],
+            outputs: vec![OutputInput {
+                recipient: RecipientInput::Pkh(source.to_string()),
+                amount: 65_536,
+                alias: None,
+                timelock: Some(TimelockSpec {
+                    rel_min: None,
+                    rel_max: None,
+                    abs_min: Some(99_000),
+                    abs_max: None,
+                }),
+                hashlock: None,
+                burn: false,
+                lock_root_only: false,
+                or_branches: None,
+            }],
+            coinbase_rel_min: None,
+            current_height: Some(BYTHOS_PHASE),
+            bythos_phase: None,
+            base_fee: None,
+            input_fee_divisor: None,
+            min_fee: None,
+            source_multisig: None,
+            source_or_lock: None,
+        })
+        .expect("compose");
+
+        // The typed inspector decodes the composed draft into a labeled tree.
+        let tree = crate::review_v1::inspect_tx(&composed.wallet_jam).expect("inspect");
+        assert_eq!(tree.label, "transaction");
+        assert!(!tree.children.is_empty());
+        // The composed jam serializes (round-trips through the inspector) and
+        // surfaces the timelock somewhere in the tree.
+        fn has_label(n: &crate::review_v1::TxTreeNode, want: &str) -> bool {
+            n.label == want || n.children.iter().any(|c| has_label(c, want))
+        }
+        assert!(has_label(&tree, "timelock"));
+
+        // Merging the signed tx with itself must produce a structurally valid
+        // re-jammed wallet tx (no corruption; signature union is exercised).
+        let merged = merge_signed_tx(&composed.wallet_jam, &composed.wallet_jam).expect("merge");
+        let mut merge_arena = Arena::new();
+        let merged_noun = cue(&merged, &mut merge_arena).expect("cue merged");
+        assert!(tuple5(merged_noun, &merge_arena).is_some());
+        let merged_tree = crate::review_v1::inspect_tx(&merged).expect("inspect merged");
+        assert_eq!(merged_tree.label, "transaction");
+    }
+
+    /// Golden vectors for timelock, hashlock, and OR-composed (`%2`/`%4`)
+    /// lock roots, copied from nockchain's `lock_hash_matches_known_hoon_vectors`
+    /// (`crates/nockchain-types/.../tx.rs`). Closes the OR-composed fund-safety
+    /// gap: the tree hashing now matches the canonical source on real vectors.
+    #[test]
+    fn or_composed_lock_roots_match_nockchain_vectors() {
+        const ADDRESS_A: &str = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        const ADDRESS_B: &str = "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt";
+        const EXPECTED_TIM: &str = "66FLtgznHvE7v4Fi4wZ6aA9EzsPD6pfaL3qL85apJuiBF8unRKXVsor";
+        const EXPECTED_HAX: &str = "4kwz3RMCacfRXY3ydNoQ1tsUKuzaBEzGSpX9GpSWf8T3Rj24Ucuj6v4";
+        const EXPECTED_V2: &str = "e3qeUqDf6ZTkayiiQDpKpax6RqXMBAMRLtrppvL41EdyJYFj743ZKB";
+        const EXPECTED_V4: &str = "6ezbUN1ozEvZi9TUGVN1pY2TcCJc5KWoCzjj519ihE6LGupvJpnysjo";
+
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let a = parse_b58_hash(ADDRESS_A).unwrap();
+        let b = parse_b58_hash(ADDRESS_B).unwrap();
+
+        // Single-condition timelock: [tim(rel 3..10, abs 20..)].
+        let tim = build_tim_lock_full(&mut arena, Some(3), Some(10), Some(20), None);
+        let tim_sc = build_list(&mut arena, &[tim]);
+        let tim_root = hash_lock_primitives_list(tim_sc, &arena, &ctx).unwrap();
+        assert_eq!(hash_to_b58(tim_root), EXPECTED_TIM);
+
+        // Single-condition hashlock over {A, B}.
+        let hax = build_hax_lock(&mut arena, &{
+            let mut v = vec![a, b];
+            v.sort();
+            v.dedup();
+            v
+        })
+        .unwrap();
+        let hax_sc = build_list(&mut arena, &[hax]);
+        let hax_root = hash_lock_primitives_list(hax_sc, &arena, &ctx).unwrap();
+        assert_eq!(hash_to_b58(hax_root), EXPECTED_HAX);
+
+        // Spend-condition hashes for the tree leaves.
+        let pkh_a = build_pkh_lock(&mut arena, a).unwrap();
+        let sc_pkh = build_list(&mut arena, &[pkh_a]);
+        let h_pkh = hash_lock_primitives_list(sc_pkh, &arena, &ctx).unwrap();
+        let h_tim = tim_root;
+        let h_hax = hax_root;
+        let brn = build_brn_lock(&mut arena);
+        let sc_brn = build_list(&mut arena, &[brn]);
+        let h_brn = hash_lock_primitives_list(sc_brn, &arena, &ctx).unwrap();
+
+        // %2 tree: [pkh(1,[A]), tim].
+        let v2_root = hash_lock_tree_root(&mut arena, &[h_pkh, h_tim], 2).unwrap();
+        assert_eq!(hash_to_b58(v2_root), EXPECTED_V2);
+
+        // %4 tree: V4{ V2{pkh, tim}, V2{hax, burn} } → leaves [pkh, tim, hax, burn].
+        let v4_root = hash_lock_tree_root(&mut arena, &[h_pkh, h_tim, h_hax, h_brn], 4).unwrap();
+        assert_eq!(hash_to_b58(v4_root), EXPECTED_V4);
+    }
+
+    /// For every leaf of an OR lock, the prover's (axis, path) must verify back
+    /// to the lock root via the chain's verifier — and that root must equal the
+    /// wallet-validated `hash_lock_tree_root`. This is the fund-safety oracle
+    /// for spending OR-composed inputs (HTLC claim/refund).
+    /// Spend from an OR-composed (HTLC-shaped) input: branch 0 = recipient +
+    /// preimage, branch 1 = refund pkh + timelock. Compose spending branch 0
+    /// and confirm the input witness is a full lock-merkle-proof that verifies
+    /// back to the input's lock root.
+    #[test]
+    fn lock_root_only_output_has_empty_note_data() {
+        let source = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let source_pkh = parse_b58_hash(source).unwrap();
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
+        let lock = build_list(&mut arena, &[pkh]);
+        let note_first =
+            compute_first_name_from_lock_hash(hash_lock_primitives_list(lock, &arena, &ctx).unwrap(), &ctx)
+                .unwrap();
+        let make = |lock_root_only: bool| {
+            compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+                source_pkh: source.to_string(),
+                notes: vec![NoteInput {
+                    name_first: hash_to_b58(note_first),
+                    name_last: source.to_string(),
+                    origin_page: 1,
+                    assets: 100_000_000,
+                    version: 1,
+                }],
+                outputs: vec![OutputInput {
+                    recipient: RecipientInput::Pkh(source.to_string()),
+                    amount: 65_536,
+                    alias: None,
+                    timelock: None,
+                    hashlock: None,
+                    burn: false,
+                    lock_root_only,
+                    or_branches: None,
+                }],
+                coinbase_rel_min: None,
+                current_height: Some(BYTHOS_PHASE),
+                bythos_phase: None,
+                base_fee: None,
+                input_fee_divisor: None,
+                min_fee: None,
+                source_multisig: None,
+                source_or_lock: None,
+            })
+            .expect("compose")
+        };
+        // The hidden lock changes note_data → a different transaction.
+        assert_ne!(make(false).tx_id, make(true).tx_id);
+
+        // At least one output seed of the private tx has empty note_data.
+        let composed = make(true);
+        let mut da = Arena::new();
+        let tx = cue(&composed.wallet_jam, &mut da).unwrap();
+        let (_t, _n, spends, _d, _w) = tuple5(tx, &da).unwrap();
+        let (node, _l, _r) = decompose_map(spends, &da).unwrap();
+        let (_name, spend) = decompose_pair(node, &da).unwrap();
+        let (_tag, body) = tuple2(spend, &da).unwrap();
+        let (_witness, seeds, _fee) = tuple3(body, &da).unwrap();
+        // Walk the seed z-set looking for an empty (atom0) note_data.
+        let mut empty_found = false;
+        let mut stack = vec![seeds];
+        while let Some(s) = stack.pop() {
+            if s == da.atom0() {
+                continue;
+            }
+            if let Some((seed, lr)) = uncons(s, &da) {
+                if let Some((_src, _root, nd, _gift, _parent)) = tuple5(seed, &da) {
+                    if nd == da.atom0() {
+                        empty_found = true;
+                    }
+                }
+                if let Some((left, right)) = uncons(lr, &da) {
+                    stack.push(left);
+                    stack.push(right);
+                }
+            }
+        }
+        assert!(empty_found, "expected an output seed with empty note_data");
+    }
+
+    #[test]
+    fn compose_spends_or_composed_input_branch() {
+        let a = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let b = "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt";
+        let commit = hash_to_b58([123u64, 0, 0, 0, 0]);
+
+        let branches = vec![
+            LockBranch {
+                recipient: Some(RecipientInput::Pkh(a.to_string())),
+                timelock: None,
+                hashlock: Some(vec![commit.clone()]),
+                burn: false,
+            },
+            LockBranch {
+                recipient: Some(RecipientInput::Pkh(b.to_string())),
+                timelock: Some(TimelockSpec {
+                    rel_min: None,
+                    rel_max: None,
+                    abs_min: Some(80_000),
+                    abs_max: None,
+                }),
+                hashlock: None,
+                burn: false,
+            },
+        ];
+
+        // Derive the input note name from the OR lock root.
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let (_lock, root, _wit, _signers) = build_or_input(&mut arena, &branches, 0, &ctx).unwrap();
+        let note_first = compute_first_name_from_lock_hash(root, &ctx).unwrap();
+
+        let composed = compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+            source_pkh: a.to_string(),
+            notes: vec![NoteInput {
+                name_first: hash_to_b58(note_first),
+                name_last: a.to_string(),
+                origin_page: 1,
+                assets: 100_000_000,
+                version: 1,
+            }],
+            outputs: vec![OutputInput {
+                recipient: RecipientInput::Pkh(a.to_string()),
+                amount: 65_536,
+                alias: None,
+                timelock: None,
+                hashlock: None,
+                burn: false,
+                lock_root_only: false,
+                or_branches: None,
+            }],
+            coinbase_rel_min: None,
+            current_height: Some(BYTHOS_PHASE),
+            bythos_phase: None,
+            base_fee: None,
+            input_fee_divisor: None,
+            min_fee: None,
+            source_multisig: None,
+            source_or_lock: Some(OrSourceInput {
+                branches: branches.clone(),
+                spend_branch: 0,
+            }),
+        })
+        .expect("compose OR-input spend");
+
+        // Decode the witness's lock-merkle-proof and verify it against the root.
+        let mut da = Arena::new();
+        let tx = cue(&composed.wallet_jam, &mut da).unwrap();
+        let (_t, _n, spends, _d, _w) = tuple5(tx, &da).unwrap();
+        let (node, _l, _r) = decompose_map(spends, &da).unwrap();
+        let (_name, spend) = decompose_pair(node, &da).unwrap();
+        let (_tag, body) = tuple2(spend, &da).unwrap();
+        let (witness, _seeds, _fee) = tuple3(body, &da).unwrap();
+        let (lmp, _pkh, _hax, _tim) = tuple4(witness, &da).unwrap();
+        // Full lmp: [%full spend-condition axis [root path]].
+        let (ver, sc, axis_noun, merk) = tuple4(lmp, &da).unwrap();
+        assert!(da.atom_eq_bytes(
+            match ver {
+                Noun::Atom(id) => id,
+                _ => panic!("version not atom"),
+            },
+            LOCK_MERKLE_PROOF_FULL_TAG
+        ));
+        let axis = noun_atom_u64(axis_noun, &da).unwrap();
+        let (root_noun, path_noun) = tuple2(merk, &da).unwrap();
+        let proof_root = parse_hash(root_noun, &da).unwrap();
+        assert_eq!(proof_root, root);
+        // Collect path hashes and verify the spend-condition hashes to the root.
+        let mut path = Vec::new();
+        let mut cur = path_noun;
+        while cur != da.atom0() {
+            let (h, t) = uncons(cur, &da).unwrap();
+            path.push(parse_hash(h, &da).unwrap());
+            cur = t;
+        }
+        let leaf_hash = hash_lock_primitives_list(sc, &da, &ctx).unwrap();
+        let verified = merk_verify_root(leaf_hash, axis, &path).unwrap();
+        assert_eq!(verified, Some(root));
+    }
+
+    #[test]
+    fn lock_merkle_proof_round_trips_to_canonical_root() {
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let a = parse_b58_hash("9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV").unwrap();
+        let b = parse_b58_hash("9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt").unwrap();
+
+        // Build leaf spend-condition hashes for a few tree shapes.
+        let sc_hash = |arena: &mut Arena, prim: Noun, ctx: &TxIdCtx| -> [u64; 5] {
+            let sc = build_list(arena, &[prim]);
+            hash_lock_primitives_list(sc, arena, ctx).unwrap()
+        };
+
+        for size in [2usize, 4] {
+            // Distinct leaves: pkh(A), tim, [hax, burn padding...] as needed.
+            let mut leaves = Vec::new();
+            let pkh = build_pkh_lock(&mut arena, a);
+            leaves.push(sc_hash(&mut arena, pkh.unwrap(), &ctx));
+            let tim = build_tim_lock_full(&mut arena, Some(3), Some(10), Some(20), None);
+            leaves.push(sc_hash(&mut arena, tim, &ctx));
+            while leaves.len() < size {
+                let hax = build_hax_lock(&mut arena, &[a, b]).unwrap();
+                leaves.push(sc_hash(&mut arena, hax, &ctx));
+            }
+
+            let expected_root = hash_lock_tree_root(&mut arena, &leaves, size).unwrap();
+            let tree = or_hashable_tree(&mut arena, &leaves, size);
+
+            for leaf_number in 1..=size as u64 {
+                // hashable index = leaf_number + 1 (the tag occupies leaf 1).
+                let (prove_root, path, axis) = htree_prove(&tree, leaf_number + 1).unwrap();
+                assert_eq!(prove_root, expected_root, "prove root (size {size}, leaf {leaf_number})");
+                // The chain verifier reconstructs the same root from this leaf's
+                // spend-condition hash + the proof.
+                let leaf_hash = leaves[(leaf_number - 1) as usize];
+                let verified = merk_verify_root(leaf_hash, axis, &path).unwrap();
+                assert_eq!(
+                    verified,
+                    Some(expected_root),
+                    "verify (size {size}, leaf {leaf_number}, axis {axis})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn or_lock_root_matches_spec_formula() {
+        let a = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let b = hash_to_b58([42u64, 0, 0, 0, 0]);
+
+        let mut arena = Arena::new();
+        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
+        let fake_atom = arena.alloc_atom_bytes(b"fake");
+        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
+        let version_atom = arena.alloc_atom_u64(1);
+        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
+        let ctx = TxIdCtx {
+            null_digest,
+            fake_digest,
+            version_digest,
+        };
+
+        // Two branches: a plain pkh and a timelocked pkh.
+        let branches = vec![
+            LockBranch {
+                recipient: Some(RecipientInput::Pkh(a.to_string())),
+                timelock: None,
+                hashlock: None,
+                burn: false,
+            },
+            LockBranch {
+                recipient: Some(RecipientInput::Pkh(b.clone())),
+                timelock: Some(TimelockSpec {
+                    rel_min: None,
+                    rel_max: None,
+                    abs_min: Some(50_000),
+                    abs_max: None,
+                }),
+                hashlock: None,
+                burn: false,
+            },
+        ];
+        let (_lock, root) = build_or_lock(&mut arena, &branches, &ctx).unwrap();
+
+        // Recompute the expected root independently: each branch's
+        // spend-condition hash, then hash-pair(leaf(2), hash-pair(h_a, h_b)).
+        let (sc_a, _) = build_spend_condition(
+            &mut arena,
+            Some(&RecipientInput::Pkh(a.to_string())),
+            None,
+            None,
+            false,
+            &ctx,
+        )
+        .unwrap();
+        let (sc_b, _) = build_spend_condition(
+            &mut arena,
+            Some(&RecipientInput::Pkh(b.clone())),
+            Some(&TimelockSpec {
+                rel_min: None,
+                rel_max: None,
+                abs_min: Some(50_000),
+                abs_max: None,
+            }),
+            None,
+            false,
+            &ctx,
+        )
+        .unwrap();
+        let h_a = hash_lock_primitives_list(sc_a, &arena, &ctx).unwrap();
+        let h_b = hash_lock_primitives_list(sc_b, &arena, &ctx).unwrap();
+        let tag2 = arena.alloc_atom_u64(2);
+        let tag2_digest = hash_noun_varlen(tag2, &arena).unwrap();
+        let pair = hash_ten_cell(h_a, h_b).unwrap();
+        let expected = hash_ten_cell(tag2_digest, pair).unwrap();
+        assert_eq!(root, expected);
+
+        // Three branches pad to a %4 tree (≠ the 2-branch root).
+        let three = vec![
+            branches[0].clone(),
+            branches[1].clone(),
+            LockBranch {
+                recipient: None,
+                timelock: None,
+                hashlock: None,
+                burn: true,
+            },
+        ];
+        let (_l3, root3) = build_or_lock(&mut arena, &three, &ctx).unwrap();
+        assert_ne!(root, root3);
     }
 
     #[test]
@@ -1849,6 +3296,11 @@ mod tests {
                 recipient: RecipientInput::Pkh(source_pkh_b58.to_string()),
                 amount: 65_536,
                 alias: None,
+                timelock: None,
+                hashlock: None,
+                burn: false,
+                lock_root_only: false,
+                or_branches: None,
             }],
             coinbase_rel_min: None,
             current_height: Some(BYTHOS_PHASE),
@@ -1856,6 +3308,8 @@ mod tests {
             base_fee: None,
             input_fee_divisor: None,
             min_fee: None,
+            source_multisig: None,
+            source_or_lock: None,
         })
         .expect("compose");
 
@@ -1920,6 +3374,11 @@ mod tests {
                 recipient: RecipientInput::Pkh(source_pkh_b58.to_string()),
                 amount: output_amount,
                 alias: None,
+                timelock: None,
+                hashlock: None,
+                burn: false,
+                lock_root_only: false,
+                or_branches: None,
             }],
             coinbase_rel_min: None,
             current_height: Some(BYTHOS_PHASE),
@@ -1927,6 +3386,8 @@ mod tests {
             base_fee: None,
             input_fee_divisor: None,
             min_fee: None,
+            source_multisig: None,
+            source_or_lock: None,
         })
         .expect("compose");
 

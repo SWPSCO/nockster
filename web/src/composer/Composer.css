@@ -260,10 +260,16 @@
 
 .node-card {
   min-width: 230px;
+  height: 100%; /* fill the resized node box (NodeResizer) */
   overflow: visible;
   border: 2px solid var(--color-border);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-pop-sm);
+}
+
+/* let the body take the resized height and scroll if shrunk */
+.node-card > .node-body {
+  overflow: auto;
 }
 
 .node-header {
@@ -617,7 +623,13 @@ details[open] > .composer-summary::after {
 
 .composer-modal {
   width: min(760px, 100%);
-  max-height: 85vh;
+  height: min(70vh, 640px);
+  max-width: 96vw;
+  max-height: 90vh;
+  min-width: 340px;
+  min-height: 220px;
+  /* drag the bottom-right corner to resize and read longer content */
+  resize: both;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -663,3 +675,148 @@ details[open] > .composer-summary::after {
     min-height: 520px;
   }
 }
+
+/* Per-output lock breakdown (device-parity preview) */
+.composer-output-list {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.composer-output-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.composer-output-row strong {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.composer-lock-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  opacity: 0.7;
+}
+.composer-lock-badge.multisig {
+  opacity: 1;
+  font-weight: 600;
+}
+.composer-output-addr {
+  flex: 1 1 auto;
+  min-width: 0; /* allow the address to use the box width and ellipsis only when it actually overflows */
+  font-family: ui-monospace, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-output-note {
+  font-size: 9px;
+  opacity: 0.5;
+  margin-top: 2px;
+}
+
+.composer-review { margin-top: 6px; }
+.composer-review-msig {
+  font-size: 11px;
+  padding: 2px 0;
+  font-weight: 600;
+}
+
+.composer-lock-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* Typed transaction tree (inspect_tx) */
+.composer-inspect, .composer-raw-noun { margin-top: 6px; }
+.composer-inspect > summary, .composer-raw-noun > summary {
+  cursor: pointer;
+  font-size: 11px;
+  opacity: 0.75;
+  user-select: none;
+}
+.txtree { margin-top: 4px; font-size: 11px; line-height: 1.5; }
+.txtree-row { display: flex; align-items: baseline; gap: 4px; }
+.txtree-toggle {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10px;
+  width: 12px;
+  padding: 0;
+  opacity: 0.7;
+}
+.txtree-leaf-dot { cursor: default; opacity: 0.4; }
+.txtree-label { opacity: 0.6; }
+.txtree-value {
+  font-family: ui-monospace, monospace;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.txtree-value:hover { text-decoration: underline; }
+.txtree-children { border-left: 1px solid currentColor; border-color: rgba(128,128,128,0.25); }
+
+.composer-canvas-controls {
+  padding: 6px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+}
+
+.composer-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Inspect (magnifier) chip in node headers — monochrome, subtle until hover */
+.node-inspect-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+  opacity: 0.45;
+  cursor: pointer;
+}
+.node-inspect-btn:hover {
+  opacity: 1;
+  background: rgba(127, 127, 127, 0.18);
+}
+.composer-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+/* Title takes the left space so the inspect chip sits beside the type chip. */
+.node-header > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-inspect-btn { order: 1; }     /* before the ::after type chip */

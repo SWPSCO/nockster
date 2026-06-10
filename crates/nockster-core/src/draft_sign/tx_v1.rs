@@ -1737,39 +1737,50 @@ pub fn draft_outputs_v1(
     Ok(draft_review_v1(draft_jam, cfg)?.outputs)
 }
 
+/// Tip5 pkh digest of a Cheetah pubkey (`hash-noun-varlen [x y inf=1]`).
+fn pkh_digest_from_pk(pk: ([u64; 6], [u64; 6])) -> Result<[u64; 5], SignDraftError> {
+    let mut arena = Arena::new();
+    let x_elems = [
+        arena.alloc_atom_u64(pk.0[0]),
+        arena.alloc_atom_u64(pk.0[1]),
+        arena.alloc_atom_u64(pk.0[2]),
+        arena.alloc_atom_u64(pk.0[3]),
+        arena.alloc_atom_u64(pk.0[4]),
+        arena.alloc_atom_u64(pk.0[5]),
+    ];
+    let x_noun = build_tuple(&mut arena, &x_elems);
+    let y_elems = [
+        arena.alloc_atom_u64(pk.1[0]),
+        arena.alloc_atom_u64(pk.1[1]),
+        arena.alloc_atom_u64(pk.1[2]),
+        arena.alloc_atom_u64(pk.1[3]),
+        arena.alloc_atom_u64(pk.1[4]),
+        arena.alloc_atom_u64(pk.1[5]),
+    ];
+    let y_noun = build_tuple(&mut arena, &y_elems);
+    let inf_noun = arena.alloc_atom_u64(1);
+    let pk_noun = build_tuple(&mut arena, &[x_noun, y_noun, inf_noun]);
+    Ok(tip5::hash_noun_varlen(pk_noun, &arena)?)
+}
+
 pub fn draft_review_v1(
     draft_jam: &[u8],
     cfg: &SignerConfig,
 ) -> Result<DraftReviewV1, SignDraftError> {
     let pk_coords = cheetah_pub_from_sk_tuple(cfg.sk_be);
+    let signer_pkh = pkh_digest_from_pk(pk_coords)?;
+    draft_review_v1_for_pkh(draft_jam, signer_pkh)
+}
 
+/// Review a draft against a known signer pkh digest, for hosts that hold only
+/// the watch-only address (no secret key) — e.g. the composer previewing what
+/// the device will display.
+pub fn draft_review_v1_for_pkh(
+    draft_jam: &[u8],
+    signer_pkh: [u64; 5],
+) -> Result<DraftReviewV1, SignDraftError> {
     let mut arena = Arena::new();
     let root = cue(draft_jam, &mut arena)?;
-
-    // Build pubkey noun: [x y inf]
-    let x_elems = [
-        arena.alloc_atom_u64(pk_coords.0[0]),
-        arena.alloc_atom_u64(pk_coords.0[1]),
-        arena.alloc_atom_u64(pk_coords.0[2]),
-        arena.alloc_atom_u64(pk_coords.0[3]),
-        arena.alloc_atom_u64(pk_coords.0[4]),
-        arena.alloc_atom_u64(pk_coords.0[5]),
-    ];
-    let x_noun = build_tuple(&mut arena, &x_elems);
-
-    let y_elems = [
-        arena.alloc_atom_u64(pk_coords.1[0]),
-        arena.alloc_atom_u64(pk_coords.1[1]),
-        arena.alloc_atom_u64(pk_coords.1[2]),
-        arena.alloc_atom_u64(pk_coords.1[3]),
-        arena.alloc_atom_u64(pk_coords.1[4]),
-        arena.alloc_atom_u64(pk_coords.1[5]),
-    ];
-    let y_noun = build_tuple(&mut arena, &y_elems);
-
-    let inf_noun = arena.alloc_atom_u64(1);
-    let pk_noun = build_tuple(&mut arena, &[x_noun, y_noun, inf_noun]);
-    let signer_pkh = tip5::hash_noun_varlen(pk_noun, &arena)?;
 
     // Detect outer wrapper (same shapes as `sign_draft_v1`).
     enum Outer {

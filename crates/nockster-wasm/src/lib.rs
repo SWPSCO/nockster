@@ -7,6 +7,7 @@ use tx_types::hashing::hashable::Hashable;
 use tx_types::transaction_types::{Hash, SchnorrPubkey, F6LT};
 
 mod compose_v1;
+mod review_v1;
 mod tip5;
 
 #[wasm_bindgen(start)]
@@ -1070,4 +1071,39 @@ mod noun_inspect {
 pub fn inspect_noun(bytes: &[u8]) -> Result<JsValue, JsValue> {
     let view = noun_inspect::inspect(bytes).map_err(|e| JsValue::from_str(&e))?;
     serde_wasm_bindgen::to_value(&view).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Review a jammed v1 draft / `.psnt` against a watch-only source pkh (base58),
+/// returning the same facts the device shows: outputs (recipient, gift,
+/// refund, bridge EVM address, lock primitives), per-input multisig
+/// coordination, and totals. Device verifies lock-roots; this host view does
+/// not.
+#[wasm_bindgen]
+pub fn review_draft(jam: &[u8], source_pkh_b58: &str) -> Result<JsValue, JsValue> {
+    let view = review_v1::review(jam, source_pkh_b58).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&view).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// True if `s` is a well-formed base58 pkh/lock-root hash (decodes to a 5-belt
+/// Hash). Lets the composer validate addresses up-front with clear errors
+/// instead of failing deep in compose.
+#[wasm_bindgen]
+pub fn is_valid_pkh(s: &str) -> bool {
+    Hash::from_b58(s).is_ok()
+}
+
+/// Decode a base58 Tip5 hash into its 5 u64 limbs (for `signHash`).
+#[wasm_bindgen]
+pub fn hash_b58_to_limbs(s: &str) -> Result<Vec<u64>, JsValue> {
+    let h = Hash::from_b58(s).map_err(|e| JsValue::from_str(&e))?;
+    Ok(h.values.to_vec())
+}
+
+/// Inspect a jammed v1 transaction/draft as a human-meaningful typed tree:
+/// labeled nodes with b58 hashes, readable amounts, and decoded lock
+/// primitives (m-of-n signers, timelock bounds, hashlock commitments).
+#[wasm_bindgen]
+pub fn inspect_tx(jam: &[u8]) -> Result<JsValue, JsValue> {
+    let tree = review_v1::inspect_tx(jam).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&tree).map_err(|e| JsValue::from_str(&e.to_string()))
 }

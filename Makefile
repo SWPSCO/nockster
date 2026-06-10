@@ -267,12 +267,12 @@ emu: serve-fw
 
 js:
 	@cd nockster-js; \
-	npm install; \
+	npm ci; \
 	npm run build
 
 js-test:
 	@cd nockster-js; \
-	npm install; \
+	npm ci; \
 	npm test
 
 nockster-site-assets: fw-wasm
@@ -285,7 +285,7 @@ nockster-site-assets: fw-wasm
 
 web: wasm js nockster-site-assets
 	@cd web; \
-	npm install; \
+	npm ci; \
 	npm run build
 
 serve: web

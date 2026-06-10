@@ -1091,6 +1091,22 @@ pub fn render_tx_review_overlay(
                 pos = end;
                 baseline += line_h;
             }
+
+            // Verbatim lock facts (timelock bounds, m-of-n, hashlock, burn,
+            // bridge, verification) — the per-output "inspection".
+            let detail = out.detail.as_str();
+            if !detail.is_empty() {
+                baseline += TX_REVIEW_LINE_GAP;
+                let dbytes = detail.as_bytes();
+                let mut dpos: usize = 0;
+                while dpos < dbytes.len() && baseline <= bottom {
+                    let end = (dpos + max_chars).min(dbytes.len());
+                    let part = core::str::from_utf8(&dbytes[dpos..end]).unwrap_or("");
+                    let _ = Text::new(part, Point::new(left, baseline), summary_style).draw(display);
+                    dpos = end;
+                    baseline += line_h;
+                }
+            }
         }
     }
 

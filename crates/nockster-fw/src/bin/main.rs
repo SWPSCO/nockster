@@ -589,11 +589,24 @@ fn annotate_output_recipient(
     }
     let mut out = HString::<64>::new();
     if let Some(lock) = &output.lock {
+        if !lock.verified {
+            let _ = out.push_str("?! ");
+        }
         for prim in &lock.primitives {
-            if let LockPrimitiveV1::Pkh { m, n } = prim {
-                if n > m {
+            match prim {
+                LockPrimitiveV1::Pkh { m, n } if n > m => {
                     let _ = core::write!(out, "{}of{} ", m, n);
                 }
+                LockPrimitiveV1::Timelock { .. } => {
+                    let _ = out.push_str("tl ");
+                }
+                LockPrimitiveV1::Hax { .. } => {
+                    let _ = out.push_str("hl ");
+                }
+                LockPrimitiveV1::Burn => {
+                    let _ = out.push_str("burn ");
+                }
+                _ => {}
             }
         }
     }
@@ -601,6 +614,59 @@ fn annotate_output_recipient(
     let room = 64 - out.len();
     let take = base.len().min(room);
     let _ = out.push_str(&base.as_str()[..take]);
+    out
+}
+
+/// Verbatim, human-readable lock facts for an output, shown in the
+/// tap-to-expand detail. No chain-height comparison — bounds are reported
+/// as-is. Empty for a plain single-sig payment.
+fn output_detail(output: &nockster_core::draft_sign::DraftOutputV1) -> HString<96> {
+    use nockster_core::draft_sign::LockPrimitiveV1;
+    let mut out = HString::<96>::new();
+    if let Some(evm) = &output.bridge_evm_addr {
+        let _ = core::write!(out, "Base bridge -> {}", evm);
+        return out;
+    }
+    let Some(lock) = &output.lock else {
+        return out;
+    };
+    if !lock.verified {
+        let _ = out.push_str("LOCK UNVERIFIED ");
+    }
+    for prim in &lock.primitives {
+        match prim {
+            LockPrimitiveV1::Pkh { m, n } => {
+                let _ = core::write!(out, "{}-of-{} sig ", m, n);
+            }
+            LockPrimitiveV1::Timelock {
+                rel_min,
+                rel_max,
+                abs_min,
+                abs_max,
+            } => {
+                let _ = out.push_str("timelock");
+                if let Some(v) = abs_min {
+                    let _ = core::write!(out, " abs>={}", v);
+                }
+                if let Some(v) = abs_max {
+                    let _ = core::write!(out, " abs<={}", v);
+                }
+                if let Some(v) = rel_min {
+                    let _ = core::write!(out, " rel>={}", v);
+                }
+                if let Some(v) = rel_max {
+                    let _ = core::write!(out, " rel<={}", v);
+                }
+                let _ = out.push(' ');
+            }
+            LockPrimitiveV1::Hax { n } => {
+                let _ = core::write!(out, "hashlock x{} ", n);
+            }
+            LockPrimitiveV1::Burn => {
+                let _ = out.push_str("burn ");
+            }
+        }
+    }
     out
 }
 
@@ -806,11 +872,13 @@ fn begin_confirmation(
     }
 
     if show_spend_outputs {
+        // Host-supplied (SignSpendHash meta) or receive-address rows carry no
+        // verified lock detail.
         ui.request_tx_review_with_header(
             tx_review_header,
             spend_outputs
                 .iter()
-                .map(|(gift, recipient)| (*gift, recipient.as_str())),
+                .map(|(gift, recipient)| (*gift, recipient.as_str(), "")),
         );
     } else {
         let details = if details.is_empty() {
@@ -2282,13 +2350,15 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                         let address_book = NvsStore::new()
                             .read_device_address_book()
                             .unwrap_or_default();
-                        let mut review_outputs: HVec<(u64, HString<64>), 24> = HVec::new();
+                        let mut review_outputs: HVec<(u64, HString<64>, HString<96>), 24> =
+                            HVec::new();
                         for output in review.outputs.iter().filter(|o| !o.is_refund) {
                             if review_outputs.is_full() {
                                 break;
                             }
                             let recipient = annotate_output_recipient(output, &address_book);
-                            let _ = review_outputs.push((output.gift, recipient));
+                            let detail = output_detail(output);
+                            let _ = review_outputs.push((output.gift, recipient, detail));
                         }
                         set_device_busy(true);
                         ui.request_tx_review_with_summary(
@@ -2296,7 +2366,9 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                             Some(summary),
                             review_outputs
                                 .iter()
-                                .map(|(gift, recipient)| (*gift, recipient.as_str())),
+                                .map(|(gift, recipient, detail)| {
+                                    (*gift, recipient.as_str(), detail.as_str())
+                                }),
                         );
                         Response::Ok
                     } else {

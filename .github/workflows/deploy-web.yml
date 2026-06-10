@@ -83,7 +83,7 @@ jobs:
       - name: Build nockster-js
         working-directory: nockster-js
         run: |
-          npm install
+          npm ci
           npm run build
 
       - name: Build web app
@@ -93,7 +93,7 @@ jobs:
           # Overridable in-app (localStorage / advanced panel).
           VITE_NOCKSTER_RELEASE_INDEX_URL: https://bin.aeroe.io/nockster/updates/latest.json
         run: |
-          npm install
+          npm ci
           npm run build
 
       - name: Upload Pages artifact

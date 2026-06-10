@@ -12,7 +12,8 @@ function copy(text: string) {
 
 function TreeRow({ node, depth }: { node: TxTreeNode; depth: number }) {
   const hasChildren = node.children.length > 0;
-  const [open, setOpen] = useState(depth < 3);
+  // Open fully exploded by default; collapse individual branches as needed.
+  const [open, setOpen] = useState(true);
 
   return (
     <div className="txtree-node" style={{ marginLeft: depth === 0 ? 0 : 12 }}>

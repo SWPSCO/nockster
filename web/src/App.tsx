@@ -1859,6 +1859,39 @@ function App() {
     }
   };
 
+  const signHashWithSlot = async (wallet: WalletAddress) => {
+    if (locked !== false) {
+      setStatus('Unlock the device before signing a hash');
+      return;
+    }
+    if (!wasm) {
+      setStatus('WASM not ready yet');
+      return;
+    }
+    const b58 = window.prompt('Base58 Tip5 hash to sign on the device:');
+    if (b58 === null || b58.trim() === '') return;
+    let limbs: bigint[];
+    try {
+      limbs = Array.from(wasm.hash_b58_to_limbs(b58.trim()) as BigUint64Array);
+    } catch (error: any) {
+      setStatus(`Not a valid base58 hash: ${error?.message ?? String(error)}`);
+      return;
+    }
+    deviceBusyRef.current = true;
+    setDeviceBusy(true);
+    setStatus('Review the hash on the device screen, then approve on-device...');
+    try {
+      const { chal, sig } = await device.signHash(wallet.slot, wallet.path, limbs);
+      const hex = (vs: bigint[]) => vs.map((l) => l.toString(16).padStart(16, '0')).join('');
+      setStatus(`Signed hash. chal=${hex(chal)} sig=${hex(sig)}`);
+    } catch (error: any) {
+      setStatus(`Hash signing failed: ${error?.message ?? String(error)}`);
+    } finally {
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
+    }
+  };
+
   const importWalletKeyfile = async (file: File) => {
     if (!wasm) {
       setStatus('WASM not ready yet');
@@ -2551,6 +2584,23 @@ function App() {
                               title="Sign an arbitrary message with this slot's key (reviewed on-device)"
                             >
                               sign message
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void signHashWithSlot(wallet ?? {
+                                  slot: pub.slot,
+                                  path: pub.path,
+                                  pathLabel: formatDerivationPath(pub.path),
+                                  address: walletAddress ?? '',
+                                  alias: storedLabel || `wallet slot ${pub.slot}`,
+                                })
+                              }
+                              className="btn btn-small btn-secondary"
+                              disabled={deviceBusy || locked !== false}
+                              title="Sign a precomputed base58 Tip5 hash with this slot's key (reviewed on-device)"
+                            >
+                              sign hash
                             </button>
                             <button
                               type="button"

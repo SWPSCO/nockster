@@ -1092,6 +1092,13 @@ pub fn is_valid_pkh(s: &str) -> bool {
     Hash::from_b58(s).is_ok()
 }
 
+/// Decode a base58 Tip5 hash into its 5 u64 limbs (for `signHash`).
+#[wasm_bindgen]
+pub fn hash_b58_to_limbs(s: &str) -> Result<Vec<u64>, JsValue> {
+    let h = Hash::from_b58(s).map_err(|e| JsValue::from_str(&e))?;
+    Ok(h.values.to_vec())
+}
+
 /// Inspect a jammed v1 transaction/draft as a human-meaningful typed tree:
 /// labeled nodes with b58 hashes, readable amounts, and decoded lock
 /// primitives (m-of-n signers, timelock bounds, hashlock commitments).

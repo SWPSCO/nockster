@@ -27,6 +27,9 @@ export type AddressNodeData = {
   onChangeAmount: (next: string) => void;
   lock?: OutputLockConfig;
   onChangeLock?: (next: OutputLockConfig) => void;
+  // Semi-anonymous output: commit only the lock-root (empty note_data).
+  lockRootOnly?: boolean;
+  onChangeLockRootOnly?: (v: boolean) => void;
   io?: { isInput: boolean; isOutput: boolean };
 };
 export type NoteNodeData = {
@@ -112,6 +115,7 @@ export type ImportedTxPreview = {
   details: PreviewTxDetails;
   review?: DraftReview | null;
   tree?: TxTreeNode | null;
+  nounView?: unknown; // generic noun tree (NounView) for non-tx jams
   bytes?: Uint8Array; // raw uploaded jam, for signing on device
 };
 

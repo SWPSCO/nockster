@@ -105,6 +105,11 @@ pub struct OutputInput {
     /// Burn: the spend-condition is `[%brn]` (unspendable); recipient ignored.
     #[serde(default)]
     pub burn: bool,
+    /// Semi-anonymous output: commit only the lock-root (empty note_data) so the
+    /// lock structure isn't revealed on-chain until the recipient spends
+    /// (nockchain `include_data = false`).
+    #[serde(default)]
+    pub lock_root_only: bool,
     /// OR-composed lock: any one branch can spend (HTLC / refund-after-timeout
     /// patterns). When set, the flat recipient/timelock/hashlock/burn fields
     /// above are ignored and the lock is the `%2/%4/%8/%16` tree of branches.
@@ -1232,7 +1237,13 @@ fn build_output_seed_spec(
         let display = display.unwrap_or_else(|| hash_to_b58(hash));
         (sc, hash, display)
     };
-    let (note_data, _) = build_note_data_with_lock(arena, lock)?;
+    // Semi-anonymous: commit only the lock-root (empty note_data); else embed
+    // the full lock so the recipient/chain can see it.
+    let note_data = if output.lock_root_only {
+        arena.atom0()
+    } else {
+        build_note_data_with_lock(arena, lock)?.0
+    };
     Ok(SeedSpec {
         lock_root: lock_hash,
         note_data,
@@ -2502,6 +2513,7 @@ mod tests {
                 timelock: None,
                 hashlock: None,
                 burn: false,
+                lock_root_only: false,
                 or_branches: None,
             }],
             coinbase_rel_min: None,
@@ -2593,6 +2605,7 @@ mod tests {
                 timelock: None,
                 hashlock: None,
                 burn: false,
+                lock_root_only: false,
                 or_branches: None,
             }],
             coinbase_rel_min: None,
@@ -2661,6 +2674,7 @@ mod tests {
                     timelock,
                     hashlock: None,
                     burn: false,
+                    lock_root_only: false,
                     or_branches: None,
                 }],
                 coinbase_rel_min: None,
@@ -2729,6 +2743,7 @@ mod tests {
                     timelock: None,
                     hashlock,
                     burn,
+                    lock_root_only: false,
                     or_branches: None,
                 }],
                 coinbase_rel_min: None,
@@ -2838,6 +2853,7 @@ mod tests {
                 }),
                 hashlock: None,
                 burn: false,
+                lock_root_only: false,
                 or_branches: None,
             }],
             coinbase_rel_min: None,
@@ -2936,6 +2952,82 @@ mod tests {
     /// and confirm the input witness is a full lock-merkle-proof that verifies
     /// back to the input's lock root.
     #[test]
+    fn lock_root_only_output_has_empty_note_data() {
+        let source = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
+        let source_pkh = parse_b58_hash(source).unwrap();
+        let mut arena = Arena::new();
+        let ctx = test_ctx(&mut arena);
+        let pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
+        let lock = build_list(&mut arena, &[pkh]);
+        let note_first =
+            compute_first_name_from_lock_hash(hash_lock_primitives_list(lock, &arena, &ctx).unwrap(), &ctx)
+                .unwrap();
+        let make = |lock_root_only: bool| {
+            compose_tx_v1_unsigned_inner(ComposeTxV1Input {
+                source_pkh: source.to_string(),
+                notes: vec![NoteInput {
+                    name_first: hash_to_b58(note_first),
+                    name_last: source.to_string(),
+                    origin_page: 1,
+                    assets: 100_000_000,
+                    version: 1,
+                }],
+                outputs: vec![OutputInput {
+                    recipient: RecipientInput::Pkh(source.to_string()),
+                    amount: 65_536,
+                    alias: None,
+                    timelock: None,
+                    hashlock: None,
+                    burn: false,
+                    lock_root_only,
+                    or_branches: None,
+                }],
+                coinbase_rel_min: None,
+                current_height: Some(BYTHOS_PHASE),
+                bythos_phase: None,
+                base_fee: None,
+                input_fee_divisor: None,
+                min_fee: None,
+                source_multisig: None,
+                source_or_lock: None,
+            })
+            .expect("compose")
+        };
+        // The hidden lock changes note_data → a different transaction.
+        assert_ne!(make(false).tx_id, make(true).tx_id);
+
+        // At least one output seed of the private tx has empty note_data.
+        let composed = make(true);
+        let mut da = Arena::new();
+        let tx = cue(&composed.wallet_jam, &mut da).unwrap();
+        let (_t, _n, spends, _d, _w) = tuple5(tx, &da).unwrap();
+        let (node, _l, _r) = decompose_map(spends, &da).unwrap();
+        let (_name, spend) = decompose_pair(node, &da).unwrap();
+        let (_tag, body) = tuple2(spend, &da).unwrap();
+        let (_witness, seeds, _fee) = tuple3(body, &da).unwrap();
+        // Walk the seed z-set looking for an empty (atom0) note_data.
+        let mut empty_found = false;
+        let mut stack = vec![seeds];
+        while let Some(s) = stack.pop() {
+            if s == da.atom0() {
+                continue;
+            }
+            if let Some((seed, lr)) = uncons(s, &da) {
+                if let Some((_src, _root, nd, _gift, _parent)) = tuple5(seed, &da) {
+                    if nd == da.atom0() {
+                        empty_found = true;
+                    }
+                }
+                if let Some((left, right)) = uncons(lr, &da) {
+                    stack.push(left);
+                    stack.push(right);
+                }
+            }
+        }
+        assert!(empty_found, "expected an output seed with empty note_data");
+    }
+
+    #[test]
     fn compose_spends_or_composed_input_branch() {
         let a = "9yPePjfWAdUnzaQKyxcRXKRa5PpUzKKEwtpECBZsUYt9Jd7egSDEWoV";
         let b = "9phXGACnW4238oqgvn2gpwaUjG3RAqcxq2Ash2vaKp8KjzSd3MQ56Jt";
@@ -2983,6 +3075,7 @@ mod tests {
                 timelock: None,
                 hashlock: None,
                 burn: false,
+                lock_root_only: false,
                 or_branches: None,
             }],
             coinbase_rel_min: None,
@@ -3206,6 +3299,7 @@ mod tests {
                 timelock: None,
                 hashlock: None,
                 burn: false,
+                lock_root_only: false,
                 or_branches: None,
             }],
             coinbase_rel_min: None,
@@ -3283,6 +3377,7 @@ mod tests {
                 timelock: None,
                 hashlock: None,
                 burn: false,
+                lock_root_only: false,
                 or_branches: None,
             }],
             coinbase_rel_min: None,

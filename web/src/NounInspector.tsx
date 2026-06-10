@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 // Mirrors the wasm `NounView` (serde tag = "kind").
-type NounView =
+export type NounView =
   | {
       kind: 'atom';
       num: string | null;
@@ -38,7 +38,8 @@ function AtomView({ node }: { node: Extract<NounView, { kind: 'atom' }> }) {
 }
 
 function NodeView({ node, depth }: { node: NounView; depth: number }) {
-  const [open, setOpen] = useState(depth < 3);
+  // Open fully exploded by default; collapse individual branches as needed.
+  const [open, setOpen] = useState(true);
   if (node.kind === 'atom') return <AtomView node={node} />;
   if (node.kind === 'elided') return <span className="noun-elided">…(elided)</span>;
 
@@ -66,6 +67,15 @@ function NodeView({ node, depth }: { node: NounView; depth: number }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Reusable generic-noun tree renderer (for non-transaction jams). */
+export function NounTree({ view }: { view: NounView }) {
+  return (
+    <div className="noun-tree">
+      <NodeView node={view} depth={0} />
     </div>
   );
 }

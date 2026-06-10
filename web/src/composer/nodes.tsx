@@ -1,8 +1,7 @@
 // Composer React Flow node components, extracted from Composer.tsx.
 // Verbatim move — pure presentational components driven by node data.
-import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react';
 
-import { TxTree } from './TxTree';
 
 import {
   describeRecipient,
@@ -11,7 +10,6 @@ import {
   isHighFeeSummary,
   parseAmountTextToNicks,
   parseComposeSummary,
-  shortAddr,
   shortHash,
   stopNodeInputEvent,
   summaryInputTotal,
@@ -25,7 +23,32 @@ import type {
   UnitMode,
 } from './model';
 
-export function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { unitMode: UnitMode }) {
+// A magnifying-glass button in a node header that opens the inspector.
+function InspectButton({ onInspect }: { onInspect?: () => void }) {
+  if (!onInspect) return null;
+  return (
+    <button
+      type="button"
+      className="node-inspect-btn nodrag"
+      title="inspect"
+      aria-label="inspect"
+      onPointerDown={stopNodeInputEvent}
+      onClick={(e) => {
+        e.stopPropagation();
+        onInspect();
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <circle cx="6.8" cy="6.8" r="4.6" />
+        <line x1="10.2" y1="10.2" x2="14" y2="14" strokeLinecap="round" />
+      </svg>
+    </button>
+  );
+}
+
+type WithExtras = { unitMode: UnitMode; onInspect?: () => void };
+
+export function AddressNode({ data, unitMode, onInspect }: NodeProps<AddressFlowNode> & WithExtras) {
   const io = data.io ?? { isInput: false, isOutput: false };
   const showNotes = io.isInput || (!io.isOutput && data.noteCount > 0);
   const showAmount = io.isOutput || data.amount.trim().length > 0;
@@ -34,8 +57,10 @@ export function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { u
 
   return (
     <div className="node-card">
+      <NodeResizer minWidth={200} minHeight={80} />
       <div className="node-header address">
         <span>{data.kind === 'multisig' ? 'Multisig' : 'Address'}</span>
+        <InspectButton onInspect={onInspect} />
       </div>
       <div className="node-body">
         <div>{data.alias}</div>
@@ -155,6 +180,17 @@ export function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { u
             )}
           </div>
         )}
+        {io.isOutput && data.onChangeLockRootOnly && (
+          <label className="composer-radio" title="Commit only the lock-root; the lock isn't revealed on-chain until the recipient spends">
+            <input
+              type="checkbox"
+              checked={data.lockRootOnly ?? false}
+              onPointerDown={stopNodeInputEvent}
+              onChange={(e) => data.onChangeLockRootOnly?.(e.target.checked)}
+            />
+            lock-root only (private)
+          </label>
+        )}
       </div>
       <Handle type="target" id="in" position={Position.Left} />
       <Handle type="source" id="out" position={Position.Right} />
@@ -162,11 +198,13 @@ export function AddressNode({ data, unitMode }: NodeProps<AddressFlowNode> & { u
   );
 }
 
-export function NoteNode({ data, unitMode }: NodeProps<NoteFlowNode> & { unitMode: UnitMode }) {
+export function NoteNode({ data, unitMode, onInspect }: NodeProps<NoteFlowNode> & WithExtras) {
   return (
     <div className="node-card">
+      <NodeResizer minWidth={200} minHeight={80} />
       <div className="node-header note">
         <span>Note</span>
+        <InspectButton onInspect={onInspect} />
       </div>
       <div className="node-body">
         <div className="inspector-help">
@@ -181,7 +219,7 @@ export function NoteNode({ data, unitMode }: NodeProps<NoteFlowNode> & { unitMod
   );
 }
 
-export function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: UnitMode }) {
+export function TxNode({ data, unitMode, onInspect }: NodeProps<TxFlowNode> & WithExtras) {
   const composing = data.composing ?? false;
   const onCompose = data.onCompose;
   const summary = parseComposeSummary(data.result?.summaryJson);
@@ -194,8 +232,10 @@ export function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: U
 
   return (
     <div className="node-card">
+      <NodeResizer minWidth={200} minHeight={80} />
       <div className="node-header tx">
         <span>Tx</span>
+        <InspectButton onInspect={onInspect} />
       </div>
       <div className="node-body">
         <div className="node-actions">
@@ -229,6 +269,7 @@ export function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: U
             )}
             {summary?.outputs && summary.outputs.length > 0 && (
               <div className="composer-output-list">
+                <div className="composer-section-title">Outputs &amp; locks (device review)</div>
                 {summary.outputs.map((output, i) => {
                   const { badge, address } = describeRecipient(output.recipient);
                   const isMultisig = badge !== 'p2pkh';
@@ -238,20 +279,13 @@ export function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: U
                         {badge}
                       </span>
                       <span className="composer-output-addr" title={address}>
-                        {output.alias || shortAddr(address)}
+                        {output.alias || address}
                       </span>
                       <strong>{formatAmountWithUnit(Number(output.amount) || 0, unitMode)}</strong>
                     </div>
                   );
                 })}
-                <div className="composer-output-note">what the device will show</div>
               </div>
-            )}
-            {data.result.tree && (
-              <details className="composer-inspect">
-                <summary>inspect transaction</summary>
-                <TxTree node={data.result.tree} />
-              </details>
             )}
             {highFee && <div className="validation-text">Fee exceeds calculated minimum.</div>}
             <div className="composer-row composer-action-row">
@@ -288,7 +322,7 @@ export function TxNode({ data, unitMode }: NodeProps<TxFlowNode> & { unitMode: U
   );
 }
 
-export function PreviewNode({ data, unitMode }: NodeProps<PreviewFlowNode> & { unitMode: UnitMode }) {
+export function PreviewNode({ data, unitMode, onInspect }: NodeProps<PreviewFlowNode> & WithExtras) {
   const amountMeta = [
     data.feeNicks === undefined ? '' : `fee ${formatAmountWithUnit(data.feeNicks, unitMode)}`,
     data.giftNicks === undefined ? '' : formatAmountWithUnit(data.giftNicks, unitMode),
@@ -300,8 +334,10 @@ export function PreviewNode({ data, unitMode }: NodeProps<PreviewFlowNode> & { u
 
   return (
     <div className="node-card preview-node-card">
+      <NodeResizer minWidth={200} minHeight={80} />
       <div className="node-header preview">
         <span>{data.label}</span>
+        <InspectButton onInspect={onInspect} />
       </div>
       <div className="node-body">
         <div>{data.title}</div>

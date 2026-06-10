@@ -24,8 +24,10 @@ import {
   inspect_tx,
   merge_signed_tx,
   is_valid_pkh,
+  inspect_noun,
 } from 'nockster-wasm';
 import { TxTree } from './TxTree';
+import { NounTree, type NounView } from '../NounInspector';
 import type { TxTreeNode } from './model';
 
 // One branch of an OR-composed lock (mirrors wasm LockBranch).
@@ -45,7 +47,6 @@ import {
 import './Composer.css';
 
 import {
-  shortAddr,
   describePrimitive,
   describeReviewOutputBadge,
   shortHash,
@@ -231,15 +232,21 @@ export function Composer({
     }
   }, [entryFormKind, entryFormMultisigM, entryFormMultisigPkhs, wasmReady]);
 
-  const nodeTypes: NodeTypes = useMemo(
-    () => ({
-      address: ((props: any) => <AddressNode {...props} unitMode={unitMode} />) as any,
-      note: ((props: any) => <NoteNode {...props} unitMode={unitMode} />) as any,
-      tx: ((props: any) => <TxNode {...props} unitMode={unitMode} />) as any,
-      preview: ((props: any) => <PreviewNode {...props} unitMode={unitMode} />) as any,
-    }),
-    [unitMode]
-  );
+  const nodeTypes: NodeTypes = useMemo(() => {
+    const inspect = (props: any) => () => setSelectedNodeId(props.id);
+    return {
+      address: ((props: any) => (
+        <AddressNode {...props} unitMode={unitMode} onInspect={inspect(props)} />
+      )) as any,
+      note: ((props: any) => (
+        <NoteNode {...props} unitMode={unitMode} onInspect={inspect(props)} />
+      )) as any,
+      tx: ((props: any) => <TxNode {...props} unitMode={unitMode} onInspect={inspect(props)} />) as any,
+      preview: ((props: any) => (
+        <PreviewNode {...props} unitMode={unitMode} onInspect={inspect(props)} />
+      )) as any,
+    };
+  }, [unitMode]);
 
   const entryById = useCallback((id: string) => addressBook.find((e) => e.id === id) ?? null, [addressBook]);
 
@@ -520,6 +527,52 @@ export function Composer({
     queueMicrotask(() => rfInstance.current?.fitView?.({ padding: 0.3, maxZoom: 0.9 }));
   }, [setEdges, setNodes]);
 
+  // "Gravity": nudge overlapping boxes apart along their smaller-overlap axis.
+  // A few relaxation passes resolve most overlaps without visible jitter.
+  const separateOverlaps = useCallback(() => {
+    setNodes((current) => {
+      const PAD = 18;
+      const boxes = current.map((n) => ({
+        id: n.id,
+        x: n.position.x,
+        y: n.position.y,
+        w: (n as any).measured?.width ?? (n as any).width ?? 240,
+        h: (n as any).measured?.height ?? (n as any).height ?? 130,
+      }));
+      let moved = false;
+      for (let iter = 0; iter < 8; iter++) {
+        for (let i = 0; i < boxes.length; i++) {
+          for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i];
+            const b = boxes[j];
+            const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+            const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+            if (ox > -PAD && oy > -PAD) {
+              if (ox < oy) {
+                const push = (ox + PAD) / 2;
+                const dir = a.x <= b.x ? 1 : -1;
+                a.x -= dir * push;
+                b.x += dir * push;
+              } else {
+                const push = (oy + PAD) / 2;
+                const dir = a.y <= b.y ? 1 : -1;
+                a.y -= dir * push;
+                b.y += dir * push;
+              }
+              moved = true;
+            }
+          }
+        }
+      }
+      if (!moved) return current;
+      const pos = new Map(boxes.map((box) => [box.id, { x: box.x, y: box.y }]));
+      return current.map((n) => {
+        const p = pos.get(n.id);
+        return p ? { ...n, position: p } : n;
+      });
+    });
+  }, [setNodes]);
+
   const clearImportedPreviewGraph = useCallback(() => {
     setEdges((current) => current.filter((edge) => !edge.id.startsWith('preview-')));
     setNodes((current) => current.filter((node) => node.type !== 'preview'));
@@ -542,11 +595,23 @@ export function Composer({
       const hiddenCount = Math.max(0, spends.length - visibleSpends.length)
         + Math.max(0, outputs.length - visibleOutputs.length);
 
+      // Left→right flow: inputs | tx | outputs, with the tx node vertically
+      // centered against the taller column and consistent row spacing so
+      // nothing overlaps and edges read cleanly.
+      const SPEND_X = 40;
+      const TX_X = 520;
+      const OUT_X = 1000;
+      const ROW_H = 210;
+      const TOP = 20;
+      const spendRows = Math.max(visibleSpends.length, 1);
+      const outputRows = Math.max(visibleOutputs.length, 1);
+      const txY = TOP + ((Math.max(spendRows, outputRows) - 1) * ROW_H) / 2;
+
       const previewNodes: ComposerNode[] = [
         {
           id: txNodeId,
           type: 'preview',
-          position: { x: 520, y: 180 },
+          position: { x: TX_X, y: txY },
           data: {
             label: 'Imported tx',
             title: shortHash(preview.info.tx_id, 6),
@@ -567,7 +632,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 60, y: 180 },
+          position: { x: SPEND_X, y: txY },
           data: {
             label: 'Spends',
             title: 'No parsed spend detail',
@@ -594,7 +659,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 60, y: 40 + index * 190 },
+          position: { x: SPEND_X, y: TOP + index * ROW_H },
           data: {
             label: `Spend ${index + 1}`,
             title: first || last ? `${shortHash(first, 5)} ${shortHash(last, 5)}` : 'Input note',
@@ -620,7 +685,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 980, y: 180 },
+          position: { x: OUT_X, y: txY },
           data: {
             label: 'Outputs',
             title: 'No parsed output detail',
@@ -646,7 +711,7 @@ export function Composer({
         previewNodes.push({
           id,
           type: 'preview',
-          position: { x: 980, y: 40 + index * 165 },
+          position: { x: OUT_X, y: TOP + index * ROW_H },
           data: {
             label: `Output ${index + 1}`,
             title: recipient ? shortHash(recipient, 6) : lockRoot ? shortHash(lockRoot, 6) : 'Recipient',
@@ -671,7 +736,7 @@ export function Composer({
         previewNodes.push({
           id: `${base}-hidden`,
           type: 'preview',
-          position: { x: 520, y: 380 },
+          position: { x: TX_X, y: TOP + Math.max(spendRows, outputRows) * ROW_H },
           data: {
             label: 'Preview',
             title: `+${hiddenCount} hidden row${hiddenCount === 1 ? '' : 's'}`,
@@ -812,6 +877,7 @@ export function Composer({
             timelock?: { abs_min: number };
             hashlock?: string[];
             burn?: boolean;
+            lock_root_only?: boolean;
             or_branches?: OutputLockBranch[];
           }[] = [];
           const outputErrors: string[] = [];
@@ -893,6 +959,7 @@ export function Composer({
                 amount: parsedAmount.nicks,
                 alias: rData.alias,
                 or_branches: orBranches,
+                lock_root_only: rData.lockRootOnly,
               });
             } else if (rData.kind === 'multisig') {
               if (!rData.multisig || !Array.isArray(rData.multisig.pkhs) || rData.multisig.pkhs.length === 0) {
@@ -910,6 +977,7 @@ export function Composer({
                 timelock,
                 hashlock,
                 burn,
+                lock_root_only: rData.lockRootOnly,
               });
             } else {
               outputs.push({
@@ -919,6 +987,7 @@ export function Composer({
                 timelock,
                 hashlock,
                 burn,
+                lock_root_only: rData.lockRootOnly,
               });
             }
           }
@@ -1060,6 +1129,8 @@ export function Composer({
               onChangeAmount: (next: string) => updateNodeData(id, { amount: next }),
               lock: { kind: 'plain' },
               onChangeLock: (next) => updateNodeData(id, { lock: next }),
+              lockRootOnly: false,
+              onChangeLockRootOnly: (v) => updateNodeData(id, { lockRootOnly: v }),
             } satisfies AddressNodeData,
           })
         );
@@ -1220,10 +1291,18 @@ export function Composer({
         review = null;
       }
       let tree: TxTreeNode | null = null;
+      let nounView: NounView | null = null;
       try {
         tree = inspect_tx(bytes) as TxTreeNode;
       } catch {
+        // Not a v1 transaction (e.g. keys.export / .sig) — fall back to the
+        // generic typed-noun tree so any jam is still inspectable.
         tree = null;
+        try {
+          nounView = inspect_noun(bytes) as NounView;
+        } catch {
+          nounView = null;
+        }
       }
       const preview: ImportedTxPreview = {
         name: file.name,
@@ -1231,6 +1310,7 @@ export function Composer({
         details,
         review,
         tree,
+        nounView,
         bytes,
       };
       setImportedTxPreview(preview);
@@ -1992,7 +2072,7 @@ export function Composer({
                     </div>
                     {importedTxPreview.review && (
                       <div className="composer-review">
-                        <div className="composer-output-note">what the device will show</div>
+                        <div className="composer-section-title">Outputs &amp; locks (device review)</div>
                         {importedTxPreview.review.multisig_inputs.map((ms, i) => (
                           <div className="composer-review-msig" key={`ms-${i}`}>
                             spend {ms.m}-of-{ms.n} · {ms.present}/{ms.m} signed
@@ -2013,7 +2093,7 @@ export function Composer({
                                   {badge}
                                 </span>
                                 <span className="composer-output-addr" title={addr}>
-                                  {shortAddr(addr)}
+                                  {addr}
                                 </span>
                                 <strong>
                                   {formatAmountWithUnit(Number(output.gift) || 0, unitMode)}
@@ -2028,6 +2108,12 @@ export function Composer({
                       <div className="composer-review">
                         <div className="composer-output-note">transaction structure</div>
                         <TxTree node={importedTxPreview.tree} />
+                      </div>
+                    )}
+                    {!importedTxPreview.tree && importedTxPreview.nounView != null && (
+                      <div className="composer-review">
+                        <div className="composer-output-note">noun structure (not a v1 transaction)</div>
+                        <NounTree view={importedTxPreview.nounView as NounView} />
                       </div>
                     )}
                     {importedTxPreview.bytes && (
@@ -2631,7 +2717,8 @@ export function Composer({
             onInit={(inst) => {
               rfInstance.current = inst;
             }}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+            onNodeDoubleClick={(_, node) => setSelectedNodeId(node.id)}
+            onNodeDragStop={() => separateOverlaps()}
             onPaneClick={() => setSelectedNodeId(null)}
             onDrop={onDrop}
             onDragOver={onDragOver}
@@ -2693,7 +2780,11 @@ export function Composer({
                             download .psnt
                           </button>
                         </div>
-                        <pre className="inspector-pre">{formatSummaryJson(data.result.summaryJson)}</pre>
+                        {data.result.tree ? (
+                          <TxTree node={data.result.tree} />
+                        ) : (
+                          <pre className="inspector-pre">{formatSummaryJson(data.result.summaryJson)}</pre>
+                        )}
                       </>
                     );
                   }

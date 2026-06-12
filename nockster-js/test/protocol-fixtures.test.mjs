@@ -163,6 +163,10 @@ const requestBuilders = {
     path: [44],
     digest5: [1n, 2n, 3n, 4n, 0xffffffffffffffffn],
   },
+  AddCoil: {
+    type: 'AddCoil',
+    coil64: Uint8Array.from({ length: 64 }, (_, i) => i),
+  },
 };
 
 const frameBuilders = {

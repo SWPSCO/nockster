@@ -76,6 +76,7 @@ fn request_variant_reminder(req: Request) {
         Request::ShowAddress { .. } => {}
         Request::SignMessage { .. } => {}
         Request::SignHash { .. } => {}
+        Request::AddCoil { .. } => {}
     }
 }
 
@@ -353,6 +354,18 @@ fn request_fixtures() -> Vec<(&'static str, Request)> {
                 slot: 0,
                 path: path(&[44]),
                 digest5: [1, 2, 3, 4, u64::MAX],
+            },
+        ),
+        (
+            "AddCoil",
+            Request::AddCoil {
+                coil64: {
+                    let mut coil = [0u8; 64];
+                    for (i, b) in coil.iter_mut().enumerate() {
+                        *b = i as u8;
+                    }
+                    coil
+                },
             },
         ),
     ]

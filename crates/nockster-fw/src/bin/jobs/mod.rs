@@ -77,6 +77,12 @@ pub enum SeedOp {
         seed64: [u8; 64],
         master_key: [u8; 32],
     },
+    /// Store a raw master coil (`sk ‖ cc`) as-is — e.g. a host-parsed zprv —
+    /// skipping the seed→coil conversion of `Add`.
+    AddCoil {
+        coil64: [u8; 64],
+        master_key: [u8; 32],
+    },
     Delete {
         slot: u8,
         master_key: [u8; 32],

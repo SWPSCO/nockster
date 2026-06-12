@@ -334,6 +334,11 @@ pub struct SeedArgs {
     #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","list","select","delete"])]
     pub keyfile: Option<PathBuf>,
 
+    /// nockchain-wallet zprv extended private key; imported directly as a
+    /// master coil (no BIP39 step, --passphrase does not apply)
+    #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","keyfile","list","select","delete"])]
+    pub zprv: Option<String>,
+
     /// list seed slots and root PKHs
     #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","select","delete"])]
     pub list: bool,

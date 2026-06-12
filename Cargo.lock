@@ -3795,6 +3795,7 @@ dependencies = [
 name = "nockster-wasm"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "bytes",
  "console_error_panic_hook",
  "js-sys",
@@ -3804,6 +3805,7 @@ dependencies = [
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
+ "sha2",
  "tx-types",
  "wasm-bindgen",
  "web-sys",

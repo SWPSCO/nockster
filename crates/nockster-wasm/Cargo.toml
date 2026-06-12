@@ -19,6 +19,8 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 tx-types = { workspace = true, features = ["std"] }
+bs58 = "0.5"
+sha2 = "0.10"
 nockapp = {workspace = true }
 nockvm = { workspace = true, features = ["malloc"] }
 noun-serde = { workspace = true }

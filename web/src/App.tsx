@@ -274,6 +274,15 @@ function App() {
   const [syncingAddressBook, setSyncingAddressBook] = useState(false);
   const [walletPanelView, setWalletPanelView] = useState<'slots' | 'addresses' | 'vault'>('slots');
 
+  // Signature verification tool + watch-only zpub export state
+  const [verifyMode, setVerifyMode] = useState<'message' | 'hash'>('message');
+  const [verifyPubkey, setVerifyPubkey] = useState('');
+  const [verifyPayload, setVerifyPayload] = useState('');
+  const [verifyChal, setVerifyChal] = useState('');
+  const [verifySig, setVerifySig] = useState('');
+  const [verifyResult, setVerifyResult] = useState('');
+  const [watchOnlyZpub, setWatchOnlyZpub] = useState<{ slot: number; zpub: string } | null>(null);
+
   // Preimage vault state
   const [vaultEntries, setVaultEntries] = useState<VaultEntryInfo[] | null>(null);
   const [vaultBusy, setVaultBusy] = useState(false);
@@ -406,7 +415,40 @@ function App() {
   const trimmedMnemonicValue = mnemonic.trim();
   const wordCount = trimmedMnemonicValue ? trimmedMnemonicValue.split(/\s+/).filter(Boolean).length : 0;
   const wordCountValid = wordCount === 0 || isValidMnemonicWordCount(wordCount);
-  const canSubmitSeed = trimmedMnemonicValue.length > 0 && seedPinReady && wordCountValid;
+  // The seed field doubles as a zprv import: a pasted nockchain-wallet
+  // extended private key is parsed host-side and lands on the device as a
+  // raw master coil (AddCoil) instead of a BIP39 seed.
+  const isZprvInput =
+    trimmedMnemonicValue.startsWith('zprv') && !/\s/.test(trimmedMnemonicValue);
+  const zprvCheck = useMemo<{
+    info?: { protocol_version: number; depth: number; index: number };
+    error?: string;
+  } | null>(() => {
+    if (!isZprvInput) return null;
+    if (!wasm) return { error: 'WASM not ready yet' };
+    try {
+      const info = wasm.extended_key_info(trimmedMnemonicValue) as {
+        kind: string;
+        protocol_version: number;
+        depth: number;
+        index: number;
+      };
+      if (info.kind !== 'private') {
+        return { error: 'That is a zpub (public key); import needs the zprv.' };
+      }
+      if (info.protocol_version !== 1) {
+        return {
+          error: `Key uses protocol version ${info.protocol_version}; only version 1 (current addressing) can be imported.`,
+        };
+      }
+      return { info };
+    } catch (error: any) {
+      return { error: error?.message ?? String(error) };
+    }
+  }, [isZprvInput, trimmedMnemonicValue, wasm]);
+  const canSubmitSeed = isZprvInput
+    ? !!zprvCheck?.info && !isInitialSeed
+    : trimmedMnemonicValue.length > 0 && seedPinReady && wordCountValid;
   const slotSummary = Array.from(new Map(deviceKeys.map((pub) => [pub.slot, pub])).values()).sort(
     (a, b) => a.slot - b.slot
   );
@@ -987,6 +1029,42 @@ function App() {
     try {
       if (!showSeedForm) {
         throw new Error('Connect and unlock the device first');
+      }
+      if (isZprvInput) {
+        if (!wasm) {
+          throw new Error('WASM not ready yet');
+        }
+        if (isInitialSeed) {
+          throw new Error(
+            'Initialize the device with a seed phrase and PIN first; a zprv is imported as an additional wallet slot',
+          );
+        }
+        if (zprvCheck?.error) {
+          throw new Error(zprvCheck.error);
+        }
+        deviceBusyRef.current = true;
+        setDeviceBusy(true);
+        setSeeding(true);
+        setStatus('Importing extended key...');
+        const coil = wasm.zprv_to_coil(trimmedMnemonic);
+        const prevSlots = deviceKeys.map((key) => key.slot);
+        await device.addCoil(coil);
+        const infoAfter = await device.getInfo();
+        if (infoAfter.type !== 'Info') {
+          throw new Error('Unexpected response from device after importing key');
+        }
+        const pubsAfter = Array.isArray(infoAfter.cheetah_pubs)
+          ? infoAfter.cheetah_pubs
+          : [];
+        const newSlots = pubsAfter.map((pub) => Number(pub.slot));
+        const addedSlot = newSlots.find((slot) => !prevSlots.includes(slot));
+        await refreshStatus(addedSlot, infoAfter);
+        setStatus('Extended key imported as a new wallet slot');
+        setAddSeedExpanded(false);
+        setMnemonic('');
+        setSeedPassphrase('');
+        setSeedPin('');
+        return;
       }
       validateMnemonicWords(trimmedMnemonic);
       if (seedPinRequired && !trimmedPin) {
@@ -1806,8 +1884,19 @@ function App() {
       );
       const name = label ? label.replace(/[^a-zA-Z0-9-_]/g, '-') : `slot-${slot}`;
       downloadBytesAs(`master-pubkey-${name}.export`, bytes);
+      try {
+        const zpub = wasm.master_pubkey_to_zpub(
+          x.map((limb) => limb.toString()),
+          y.map((limb) => limb.toString()),
+          chain_code,
+        );
+        setWatchOnlyZpub({ slot, zpub });
+      } catch {
+        setWatchOnlyZpub(null);
+      }
       setStatus(
-        'Watch-only keyfile downloaded. Import it with: nockchain-wallet import-master-pubkey --file <path>',
+        'Watch-only keyfile downloaded. Import it with: nockchain-wallet import-master-pubkey ' +
+          '--file <path> — or copy the zpub below for nockchain-wallet import-extended.',
       );
     } catch (error: any) {
       setStatus(`Watch-only export failed: ${error?.message ?? String(error)}`);
@@ -1833,6 +1922,81 @@ function App() {
     }
   };
 
+  // After an on-device signing, drop everything needed to re-check the
+  // signature into the Verify panel (the signing key's raw point b58, the
+  // payload, and the chal/sig scalars).
+  const prefillVerify = (
+    mode: 'message' | 'hash',
+    wallet: WalletAddress,
+    payload: string,
+    chalHex: string,
+    sigHex: string,
+  ) => {
+    setVerifyMode(mode);
+    setVerifyPayload(payload);
+    setVerifyChal(chalHex);
+    setVerifySig(sigHex);
+    setVerifyResult('');
+    if (!wasm) return;
+    const pub = deviceKeys.find(
+      (k) => k.slot === wallet.slot && k.path.join('/') === wallet.path.join('/'),
+    );
+    if (pub) {
+      try {
+        setVerifyPubkey(
+          wasm.cheetah_point_b58(
+            pub.x.map((n) => n.toString()),
+            pub.y.map((n) => n.toString()),
+          ),
+        );
+      } catch {
+        setVerifyPubkey('');
+      }
+    }
+  };
+
+  const runVerify = () => {
+    if (!wasm) {
+      setVerifyResult('WASM not ready yet');
+      return;
+    }
+    try {
+      const ok =
+        verifyMode === 'message'
+          ? wasm.verify_message(
+              verifyPubkey.trim(),
+              new TextEncoder().encode(verifyPayload),
+              verifyChal.trim(),
+              verifySig.trim(),
+            )
+          : wasm.verify_hash(
+              verifyPubkey.trim(),
+              verifyPayload.trim(),
+              verifyChal.trim(),
+              verifySig.trim(),
+            );
+      setVerifyResult(ok ? 'VALID signature' : 'INVALID signature');
+    } catch (error: any) {
+      setVerifyResult(`Verify failed: ${error?.message ?? String(error)}`);
+    }
+  };
+
+  const loadVerifySigFile = async (file: File) => {
+    if (!wasm) {
+      setVerifyResult('WASM not ready yet');
+      return;
+    }
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const parts = wasm.sig_file_to_hex(bytes) as { chal_hex: string; sig_hex: string };
+      setVerifyChal(parts.chal_hex);
+      setVerifySig(parts.sig_hex);
+      setVerifyResult('Signature loaded; fill in the signer pubkey and the message or hash.');
+    } catch (error: any) {
+      setVerifyResult(`Could not read .sig file: ${error?.message ?? String(error)}`);
+    }
+  };
+
   const signMessageWithSlot = async (wallet: WalletAddress) => {
     if (locked !== false) {
       setStatus('Unlock the device before signing a message');
@@ -1851,7 +2015,8 @@ function App() {
       );
       const hex = (limbs: bigint[]) =>
         limbs.map((l) => l.toString(16).padStart(16, '0')).join('');
-      setStatus(`Signed. chal=${hex(chal)} sig=${hex(sig)}`);
+      prefillVerify('message', wallet, message, hex(chal), hex(sig));
+      setStatus(`Signed. chal=${hex(chal)} sig=${hex(sig)} — fields prefilled in Verify signature.`);
     } catch (error: any) {
       setStatus(`Message signing failed: ${error?.message ?? String(error)}`);
     } finally {
@@ -1884,7 +2049,8 @@ function App() {
     try {
       const { chal, sig } = await device.signHash(wallet.slot, wallet.path, limbs);
       const hex = (vs: bigint[]) => vs.map((l) => l.toString(16).padStart(16, '0')).join('');
-      setStatus(`Signed hash. chal=${hex(chal)} sig=${hex(sig)}`);
+      prefillVerify('hash', wallet, b58.trim(), hex(chal), hex(sig));
+      setStatus(`Signed hash. chal=${hex(chal)} sig=${hex(sig)} — fields prefilled in Verify signature.`);
     } catch (error: any) {
       setStatus(`Hash signing failed: ${error?.message ?? String(error)}`);
     } finally {
@@ -2647,6 +2813,21 @@ function App() {
                             </button>
                           </div>
                           )}
+                          {selectedSlot === pub.slot && watchOnlyZpub?.slot === pub.slot && (
+                            <div className="wallet-slot-address">
+                              <span className="pubkey-text">{watchOnlyZpub.zpub}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(watchOnlyZpub.zpub);
+                                  setStatus('Copied zpub to clipboard');
+                                }}
+                                className="btn btn-small copy-btn"
+                              >
+                                copy zpub
+                              </button>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -2882,14 +3063,18 @@ function App() {
               <p className="seed-subtitle">
                 {isInitialSeed
                   ? 'Device ready to seed. Make sure your keys are written on something that isn\'t a computer!'
-                  : 'Add another BIP39 seedphrase to this device. Keep it unlocked; no new PIN required.'}
+                  : 'Add another BIP39 seedphrase — or paste a nockchain-wallet zprv extended key — to this device. Keep it unlocked; no new PIN required.'}
               </p>
               <div className="seed-form">
                 <textarea
                   className="input mnemonic-input"
                   value={mnemonic}
                   onChange={(e) => setMnemonic(e.target.value)}
-                  placeholder="twelve or twenty-four words, separated by spaces"
+                  placeholder={
+                    isInitialSeed
+                      ? 'twelve or twenty-four words, separated by spaces'
+                      : 'twelve or twenty-four words — or a zprv extended key'
+                  }
                   spellCheck={false}
                   disabled={deviceBusy || seeding}
                 />
@@ -2910,7 +3095,7 @@ function App() {
                   value={seedPassphrase}
                   onChange={(e) => setSeedPassphrase(e.target.value)}
                   placeholder="optional bip39 passphrase"
-                  disabled={deviceBusy || seeding}
+                  disabled={deviceBusy || seeding || isZprvInput}
                 />
                 <div className="seed-actions">
                   <button
@@ -2919,7 +3104,15 @@ function App() {
                     disabled={deviceBusy || seeding || !canSubmitSeed}
                     className="btn btn-success"
                   >
-                    {seeding ? 'seeding...' : isInitialSeed ? 'load seed' : 'add seed'}
+                    {seeding
+                      ? isZprvInput
+                        ? 'importing...'
+                        : 'seeding...'
+                      : isZprvInput
+                        ? 'import key'
+                        : isInitialSeed
+                          ? 'load seed'
+                          : 'add seed'}
                   </button>
                   <button
                     type="button"
@@ -2934,9 +3127,27 @@ function App() {
                     clear
                   </button>
                 </div>
-                {mnemonic.trim() && !wordCountValid && (
+                {mnemonic.trim() && !isZprvInput && !wordCountValid && (
                   <div className="validation-text">
                     Seed words should contain 12, 15, 18, 21, or 24 words (currently {wordCount}).
+                  </div>
+                )}
+                {isZprvInput && zprvCheck?.error && (
+                  <div className="validation-text">{zprvCheck.error}</div>
+                )}
+                {isZprvInput && zprvCheck?.info && isInitialSeed && (
+                  <div className="validation-text">
+                    Initialize the device with a seed phrase and PIN first; a zprv is then
+                    imported as an additional wallet slot.
+                  </div>
+                )}
+                {isZprvInput && zprvCheck?.info && !isInitialSeed && (
+                  <div className="seed-hint">
+                    Nockchain extended private key, protocol v{zprvCheck.info.protocol_version}
+                    {zprvCheck.info.depth > 0
+                      ? ` (depth-${zprvCheck.info.depth} child key — imported as a standalone wallet)`
+                      : ' (master key)'}
+                    . The BIP39 passphrase does not apply.
                   </div>
                 )}
                 <div className="seed-hint">
@@ -3498,6 +3709,99 @@ function App() {
                     )}
                   </div>
                 </div>
+              )}
+            </div>
+          )}
+
+          {wasmReady && (
+            <div className="section device-panel device-verify-panel">
+              <h2>Verify signature</h2>
+              <p className="seed-subtitle">
+                Check a Schnorr signature from this device or from nockchain-wallet
+                (verify-message / verify-hash). Runs locally; no keys involved.
+              </p>
+              <div className="button-group">
+                <button
+                  type="button"
+                  className={`btn btn-small ${verifyMode === 'message' ? '' : 'btn-secondary'}`}
+                  onClick={() => setVerifyMode('message')}
+                >
+                  message
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-small ${verifyMode === 'hash' ? '' : 'btn-secondary'}`}
+                  onClick={() => setVerifyMode('hash')}
+                >
+                  hash
+                </button>
+              </div>
+              <input
+                type="text"
+                className="input"
+                value={verifyPubkey}
+                onChange={(e) => setVerifyPubkey(e.target.value)}
+                placeholder="signer pubkey (base58 cheetah point)"
+                spellCheck={false}
+              />
+              {verifyMode === 'message' ? (
+                <textarea
+                  className="input"
+                  value={verifyPayload}
+                  onChange={(e) => setVerifyPayload(e.target.value)}
+                  placeholder="signed message text"
+                  spellCheck={false}
+                />
+              ) : (
+                <input
+                  type="text"
+                  className="input"
+                  value={verifyPayload}
+                  onChange={(e) => setVerifyPayload(e.target.value)}
+                  placeholder="signed Tip5 hash (base58)"
+                  spellCheck={false}
+                />
+              )}
+              <input
+                type="text"
+                className="input"
+                value={verifyChal}
+                onChange={(e) => setVerifyChal(e.target.value)}
+                placeholder="chal (128 hex chars)"
+                spellCheck={false}
+              />
+              <input
+                type="text"
+                className="input"
+                value={verifySig}
+                onChange={(e) => setVerifySig(e.target.value)}
+                placeholder="sig (128 hex chars)"
+                spellCheck={false}
+              />
+              <div className="button-group">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={runVerify}
+                  disabled={!verifyPubkey.trim() || !verifyChal.trim() || !verifySig.trim()}
+                >
+                  verify
+                </button>
+                <label className="keyfile-import-label">
+                  <input
+                    type="file"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) void loadVerifySigFile(file);
+                      e.target.value = '';
+                    }}
+                  />
+                  <span className="keyfile-import-link">load .sig file</span>
+                </label>
+              </div>
+              {verifyResult && (
+                <div className="status-message">{verifyResult}</div>
               )}
             </div>
           )}

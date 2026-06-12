@@ -448,6 +448,25 @@ export class NocksterDevice {
     return resp;
   }
 
+  /**
+   * Store a raw master coil (sk ‖ cc) — e.g. parsed from a nockchain-wallet
+   * zprv extended private key — as a new wallet slot. The caller is
+   * responsible for having validated the encoding (base58 checksum etc.).
+   */
+  async addCoil(coil64: Uint8Array) {
+    if (coil64.length !== 64) {
+      throw new Error('coil must be 64 bytes');
+    }
+    const resp = await this.call({ type: 'AddCoil', coil64 }, 60000);
+    if (resp.type === 'Err') {
+      throw new Error(getErrorMessage(resp.code));
+    }
+    if (resp.type !== 'Ok') {
+      throw new Error(`unexpected response: ${resp.type}`);
+    }
+    return resp;
+  }
+
   async deleteSeed(slot: number) {
     const resp = await this.call({ type: 'DeleteSeed', slot });
     if (resp.type === 'Err') {

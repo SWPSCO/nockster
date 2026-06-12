@@ -240,6 +240,35 @@ pub fn compute_seed_op_outcome(mut request: SeedOpRequest) -> SeedOpOutcome {
             master_key.zeroize();
             outcome
         }
+        SeedOp::AddCoil { coil64, master_key } => {
+            let mut nvs = NvsStore::new();
+            // The host already validated the encoding (zprv checksum etc.);
+            // the 64 bytes are stored exactly as a seed-derived coil would be.
+            let mut coil = *coil64;
+            coil64.zeroize();
+            let pub_xy = root_pub_from_coil(&coil);
+            let outcome = match nvs.add_seed_with_key(master_key, &coil, pub_xy) {
+                Ok(slot) => SeedOpOutcome::Added {
+                    msg_id,
+                    slot,
+                    seed64: coil,
+                },
+                Err(err) => {
+                    coil.zeroize();
+                    match err {
+                        NvsError::WrongPin => SeedOpOutcome::WrongPin { msg_id },
+                        NvsError::LockedOut => SeedOpOutcome::LockedOut { msg_id },
+                        NvsError::Full => SeedOpOutcome::Full { msg_id },
+                        NvsError::Flash => SeedOpOutcome::Flash { msg_id },
+                        NvsError::Crypto => SeedOpOutcome::Crypto { msg_id },
+                        NvsError::NotInitialized => SeedOpOutcome::NotInitialized { msg_id },
+                        _ => SeedOpOutcome::Failed { msg_id },
+                    }
+                }
+            };
+            master_key.zeroize();
+            outcome
+        }
         SeedOp::Delete { slot, master_key } => {
             let mut nvs = NvsStore::new();
             let outcome = match nvs.delete_seed_with_key(master_key, *slot as usize) {

@@ -10,6 +10,10 @@ mod compose_v1;
 mod review_v1;
 mod tip5;
 
+pub use compose_v1::{
+    estimate_tx_v1_fee, ComposeTxV1Input, NoteInput, OutputInput, RecipientInput,
+};
+
 #[wasm_bindgen(start)]
 pub fn init() {
     // pre-grow memory before setting up panic hook or doing any allocations
@@ -663,6 +667,33 @@ pub fn cheetah_pkh_b58(pubkey_x: Vec<String>, pubkey_y: Vec<String>) -> Result<S
     Ok(digest.to_b58())
 }
 
+/// Base58 of the raw 97-byte cheetah point — the wallet's pubkey encoding,
+/// and the signer identity `verify_message`/`verify_hash` take.
+#[wasm_bindgen]
+pub fn cheetah_point_b58(pubkey_x: Vec<String>, pubkey_y: Vec<String>) -> Result<String, JsValue> {
+    if pubkey_x.len() != 6 || pubkey_y.len() != 6 {
+        return Err(JsValue::from_str("expected 6 limbs for x and y"));
+    }
+    let mut x = [0u64; 6];
+    let mut y = [0u64; 6];
+    for (i, s) in pubkey_x.iter().enumerate() {
+        x[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in x"))?;
+    }
+    for (i, s) in pubkey_y.iter().enumerate() {
+        y[i] = s
+            .parse::<u64>()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in y"))?;
+    }
+    let pk = SchnorrPubkey {
+        x: F6LT { values: x },
+        y: F6LT { values: y },
+        inf: false,
+    };
+    Ok(pk.to_b58())
+}
+
 // --- Wallet keyfile interop (keys.export / master-pubkey.export) and
 // --- preimage-vault noun helpers. Uses the pokenoun codec so the byte-level
 // --- noun encoding matches the firmware and the nockchain wallet.
@@ -852,6 +883,178 @@ pub fn parse_wallet_keyfile(bytes: &[u8]) -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&summary).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+// --- Nockchain extended keys (zprv/zpub), mirroring the wallet's
+// --- hoon/common/slip10.hoon serialize-extended / from-extended-key.
+// --- Parallel to nockster-core/src/extended_key.rs (canonical, with the
+// --- known-good vector tests); change byte layouts there and here together.
+mod extended_key {
+    use serde::Serialize;
+    use sha2::{Digest, Sha256};
+
+    const ZPRV_TYPE: [u8; 4] = [0x01, 0x10, 0x63, 0x31];
+    const ZPUB_TYPE: [u8; 4] = [0x0c, 0x0e, 0xbb, 0x09];
+    /// type + ver + depth + parent fp + index + chain code
+    const META_LEN: usize = 4 + 1 + 1 + 4 + 4 + 32;
+
+    #[derive(Serialize)]
+    pub struct ExtendedKeyInfo {
+        /// "private" (zprv) or "public" (zpub).
+        pub kind: String,
+        /// Nockchain protocol version (0 = pre-Oct-2025 addressing, 1 = current).
+        pub protocol_version: u8,
+        pub depth: u8,
+        pub index: u32,
+        pub parent_fingerprint_hex: String,
+    }
+
+    fn decode_checked(s: &str) -> Result<Vec<u8>, String> {
+        let raw = bs58::decode(s.trim().as_bytes())
+            .into_vec()
+            .map_err(|_| "not valid base58".to_string())?;
+        if raw.len() < META_LEN + 4 {
+            return Err("too short for an extended key".to_string());
+        }
+        let (payload, checksum) = raw.split_at(raw.len() - 4);
+        let second = Sha256::digest(Sha256::digest(payload));
+        if second[..4] != *checksum {
+            return Err("checksum mismatch (typo in the key?)".to_string());
+        }
+        Ok(payload.to_vec())
+    }
+
+    fn key_len(payload: &[u8]) -> Result<(usize, &'static str), String> {
+        match payload[0..4].try_into().unwrap() {
+            ZPRV_TYPE => Ok((33, "private")),
+            ZPUB_TYPE => Ok((97, "public")),
+            _ => Err("not a nockchain zprv/zpub".to_string()),
+        }
+    }
+
+    pub fn info(s: &str) -> Result<ExtendedKeyInfo, String> {
+        let payload = decode_checked(s)?;
+        let (klen, kind) = key_len(&payload)?;
+        if payload.len() != META_LEN + klen {
+            return Err("extended key has the wrong length".to_string());
+        }
+        Ok(ExtendedKeyInfo {
+            kind: kind.to_string(),
+            protocol_version: payload[4],
+            depth: payload[5],
+            index: u32::from_be_bytes(payload[10..14].try_into().unwrap()),
+            parent_fingerprint_hex: payload[6..10]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+        })
+    }
+
+    /// Encode a 97-byte cheetah point + chain code as a master (depth 0,
+    /// protocol v1) zpub string the nockchain wallet imports with
+    /// `import-extended`.
+    pub fn zpub_from_parts(point97: &[u8], chain_code: &[u8]) -> Result<String, String> {
+        if point97.len() != 97 || point97[0] != 0x01 {
+            return Err("expected a 97-byte cheetah point".to_string());
+        }
+        if chain_code.len() != 32 {
+            return Err("expected a 32-byte chain code".to_string());
+        }
+        let mut payload = Vec::with_capacity(META_LEN + 97 + 4);
+        payload.extend_from_slice(&ZPUB_TYPE);
+        payload.push(1); // protocol version
+        payload.push(0); // depth (master)
+        payload.extend_from_slice(&[0u8; 4]); // parent fingerprint
+        payload.extend_from_slice(&0u32.to_be_bytes()); // index
+        payload.extend_from_slice(chain_code);
+        payload.extend_from_slice(point97);
+        let checksum = Sha256::digest(Sha256::digest(&payload));
+        payload.extend_from_slice(&checksum[..4]);
+        Ok(bs58::encode(&payload).into_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // Same known-good keygen vector as nockster-core's extended_key tests.
+        const VECTOR_ZPUB: &str = "zpub2kRJ7D6VCvzVfDbhh4Y2ZRqze98yfNZ3fBCS9gizoYzgbjYaSXTrCTUiTwWURWzGPs4ySRpu7ZNnF9Jjok4mxW6y3XBmwFcYoaUcgLHbnMZrQvEzPvQecL1DthSYnuvvjKKG3uRo1r9MnxQsmuMF8dRXaUTvtfF2XGfv5hfEjUkKwzABpywvGu9163M71SbwrE91";
+
+        #[test]
+        fn zpub_round_trips_from_parts() {
+            let payload = decode_checked(VECTOR_ZPUB).expect("decode");
+            let chain_code = &payload[14..46];
+            let point97 = &payload[46..];
+            assert_eq!(
+                zpub_from_parts(point97, chain_code).expect("encode"),
+                VECTOR_ZPUB
+            );
+        }
+    }
+
+    /// Extract the 64-byte master coil (sk ‖ cc) from a zprv.
+    pub fn zprv_coil(s: &str) -> Result<Vec<u8>, String> {
+        let payload = decode_checked(s)?;
+        let (klen, kind) = key_len(&payload)?;
+        if kind != "private" {
+            return Err("that is a zpub (public key); import needs the zprv".to_string());
+        }
+        if payload.len() != META_LEN + klen {
+            return Err("extended key has the wrong length".to_string());
+        }
+        if payload[46] != 0x00 {
+            return Err("malformed zprv key data".to_string());
+        }
+        let mut coil = Vec::with_capacity(64);
+        coil.extend_from_slice(&payload[47..79]); // sk
+        coil.extend_from_slice(&payload[14..46]); // chain code
+        Ok(coil)
+    }
+}
+
+/// Inspect a nockchain extended key (zprv/zpub): kind, protocol version,
+/// depth, index, parent fingerprint. Validates the base58 checksum.
+#[wasm_bindgen]
+pub fn extended_key_info(s: &str) -> Result<JsValue, JsValue> {
+    let info = extended_key::info(s).map_err(|e| JsValue::from_str(&e))?;
+    serde_wasm_bindgen::to_value(&info).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Convert a zprv extended private key to the 64-byte master coil (sk ‖ cc)
+/// the device stores, for `device.addCoil`.
+#[wasm_bindgen]
+pub fn zprv_to_coil(s: &str) -> Result<Vec<u8>, JsValue> {
+    extended_key::zprv_coil(s).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Encode a device-exported master pubkey (six decimal u64 limbs for x and y,
+/// 32-byte chain code) as a zpub string for watch-only import with
+/// `nockchain-wallet import-extended`.
+#[wasm_bindgen]
+pub fn master_pubkey_to_zpub(
+    pubkey_x: Vec<String>,
+    pubkey_y: Vec<String>,
+    chain_code: &[u8],
+) -> Result<String, JsValue> {
+    if pubkey_x.len() != 6 || pubkey_y.len() != 6 {
+        return Err(JsValue::from_str("expected 6 limbs for x and y"));
+    }
+    let mut point97 = [0u8; 97];
+    point97[0] = 0x01;
+    // ser_a_pt layout: Y then X, each limb-reversed big-endian.
+    for (i, s) in pubkey_y.iter().rev().enumerate() {
+        let limb: u64 = s
+            .parse()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in y"))?;
+        point97[1 + i * 8..1 + (i + 1) * 8].copy_from_slice(&limb.to_be_bytes());
+    }
+    for (i, s) in pubkey_x.iter().rev().enumerate() {
+        let limb: u64 = s
+            .parse()
+            .map_err(|_| JsValue::from_str("invalid u64 limb in x"))?;
+        point97[49 + i * 8..49 + (i + 1) * 8].copy_from_slice(&limb.to_be_bytes());
+    }
+    extended_key::zpub_from_parts(&point97, chain_code).map_err(|e| JsValue::from_str(&e))
+}
+
 /// Build a `master-pubkey.export` file (jammed coil) the nockchain wallet can
 /// import for watch-only use, from device-exported master pubkey + chain code.
 #[wasm_bindgen]
@@ -916,6 +1119,296 @@ pub fn tip5_limbs_b58(limbs: Vec<String>) -> Result<String, JsValue> {
             .map_err(|_| JsValue::from_str("invalid u64 limb"))?;
     }
     Ok(Hash { values }.to_b58())
+}
+
+// --- Schnorr signature verification over the cheetah curve, mirroring the
+// --- wallet's %verify-message / %verify-hash. Host-side, read-only: lets the
+// --- web UI check signatures produced by the device (or the wallet) without
+// --- touching keys.
+mod verify {
+    use tx_types::pokenoun::{cue, hash_noun_varlen, Arena, Noun};
+    use tx_types::transaction_types::{Hash, SchnorrPubkey, SchnorrSignature, F6LT, T8};
+    use tx_types::validation::schnorr_verify_digest;
+
+    /// Tip5 digest of a message, byte-compatible with the wallet's
+    /// `++page-msg` (and nockster-core's `message_digest_v1`): the cord's
+    /// significant bytes are split into 32-bit little-endian belts and the
+    /// null-terminated belt list is hashed with hash-noun-varlen.
+    pub fn message_digest(message: &[u8]) -> Result<[u64; 5], String> {
+        let mut sig_len = message.len();
+        while sig_len > 0 && message[sig_len - 1] == 0 {
+            sig_len -= 1;
+        }
+        let mut arena = Arena::new();
+        let nil = arena.alloc_atom_u64(0);
+        let mut list = nil;
+        for block in (0..sig_len.div_ceil(4)).rev() {
+            let mut word = 0u64;
+            for j in 0..4 {
+                let idx = block * 4 + j;
+                if idx < sig_len {
+                    word |= (message[idx] as u64) << (8 * j);
+                }
+            }
+            let belt = arena.alloc_atom_u64(word);
+            list = arena.alloc_cell(belt, list);
+        }
+        hash_noun_varlen(list, &arena).map_err(|_| "tip5 hash failed".to_string())
+    }
+
+    /// Parse a base58 97-byte cheetah point (`ser_a_pt` layout: 0x01 prefix,
+    /// then Y and X as six limb-reversed big-endian u64s each).
+    pub fn pubkey_from_b58(s: &str) -> Result<SchnorrPubkey, String> {
+        let bytes = bs58::decode(s.trim().as_bytes())
+            .into_vec()
+            .map_err(|_| "pubkey is not valid base58".to_string())?;
+        if bytes.len() != 97 || bytes[0] != 0x01 {
+            return Err("pubkey must be a base58 97-byte cheetah point".to_string());
+        }
+        let limb = |off: usize, i: usize| {
+            u64::from_be_bytes(bytes[off + i * 8..off + (i + 1) * 8].try_into().unwrap())
+        };
+        let mut x = [0u64; 6];
+        let mut y = [0u64; 6];
+        for i in 0..6 {
+            y[i] = limb(1, 5 - i);
+            x[i] = limb(49, 5 - i);
+        }
+        Ok(SchnorrPubkey {
+            x: F6LT { values: x },
+            y: F6LT { values: y },
+            inf: false,
+        })
+    }
+
+    /// Parse a signature scalar in the hex form the sign flows display:
+    /// 8 u64 limbs, `values[0]` first, 16 hex chars each.
+    pub fn t8_from_hex(s: &str) -> Result<T8, String> {
+        let s = s.trim();
+        if s.len() != 128 {
+            return Err("expected 128 hex chars (8 u64 limbs)".to_string());
+        }
+        let mut values = [0u64; 8];
+        for (i, value) in values.iter_mut().enumerate() {
+            *value = u64::from_str_radix(&s[i * 16..(i + 1) * 16], 16)
+                .map_err(|_| "invalid hex in signature scalar".to_string())?;
+        }
+        Ok(T8 { values })
+    }
+
+    pub fn t8_to_hex(t8: &T8) -> String {
+        t8.values
+            .iter()
+            .map(|v| alloc::format!("{v:016x}"))
+            .collect()
+    }
+
+    fn atom_u64(noun: Noun, arena: &Arena) -> Result<u64, String> {
+        let Noun::Atom(id) = noun else {
+            return Err("expected an atom".to_string());
+        };
+        let bytes = arena.atom_bytes(id);
+        if bytes.len() > 8 {
+            return Err("belt too large".to_string());
+        }
+        let mut buf = [0u8; 8];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        Ok(u64::from_le_bytes(buf))
+    }
+
+    fn t8_from_le_bytes(bytes: &[u8]) -> Result<T8, String> {
+        if bytes.len() > 32 {
+            return Err("scalar too large".to_string());
+        }
+        let mut buf = [0u8; 32];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        let mut values = [0u64; 8];
+        for (i, value) in values.iter_mut().enumerate() {
+            *value = u32::from_le_bytes(buf[i * 4..(i + 1) * 4].try_into().unwrap()) as u64;
+        }
+        Ok(T8 { values })
+    }
+
+    /// A t8 in a jammed noun is either the 8-tuple form `[b0 b1 ... b7]` of
+    /// 32-bit belts (the wallet's schnorr-signature form) or the packed atom
+    /// from `t8-to-atom`.
+    fn t8_from_noun(noun: Noun, arena: &Arena) -> Result<T8, String> {
+        match noun {
+            Noun::Atom(id) => t8_from_le_bytes(arena.atom_bytes(id)),
+            Noun::Cell(_) => {
+                let mut values = [0u64; 8];
+                let mut cur = noun;
+                for i in 0..7 {
+                    let Noun::Cell(id) = cur else {
+                        return Err("malformed t8 tuple".to_string());
+                    };
+                    let cell = arena.cell(id);
+                    values[i] = atom_u64(cell.head, arena)?;
+                    cur = cell.tail;
+                }
+                values[7] = atom_u64(cur, arena)?;
+                Ok(T8 { values })
+            }
+        }
+    }
+
+    /// Split a wallet `message.sig` file (`(jam schnorr-signature)`) into the
+    /// (chal, sig) scalars.
+    pub fn sig_jam_parts(bytes: &[u8]) -> Result<(T8, T8), String> {
+        let mut arena = Arena::new();
+        let root =
+            cue(bytes, &mut arena).map_err(|_| "not a valid jammed noun".to_string())?;
+        let Noun::Cell(id) = root else {
+            return Err("signature file is not a [chal sig] cell".to_string());
+        };
+        let cell = arena.cell(id);
+        let chal = t8_from_noun(cell.head, &arena)?;
+        let sig = t8_from_noun(cell.tail, &arena)?;
+        Ok((chal, sig))
+    }
+
+    pub fn verify(
+        pubkey_b58: &str,
+        digest: [u64; 5],
+        chal: T8,
+        sig: T8,
+    ) -> Result<bool, String> {
+        let pk = pubkey_from_b58(pubkey_b58)?;
+        Ok(schnorr_verify_digest(
+            pk,
+            Hash { values: digest },
+            SchnorrSignature {
+                chal: tx_types::Chal { values: chal },
+                sig: tx_types::Sig { values: sig },
+            },
+        ))
+    }
+
+    extern crate alloc;
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use tx_types::crypto::cheetah::point::cheetah_pub_from_sk;
+        use tx_types::signer::schnorr_sign_digest;
+
+        // Reference digests from nockster-core's message_digest_v1 (itself
+        // pinned to the wallet's ++page-msg).
+        #[test]
+        fn message_digest_matches_core() {
+            assert_eq!(
+                message_digest(b"hello nockchain").unwrap(),
+                [
+                    1489602098703785555,
+                    1798381096220100469,
+                    16768750169902143757,
+                    14118980382263897873,
+                    5477374674122915917
+                ]
+            );
+            assert_eq!(
+                message_digest(b"").unwrap(),
+                [
+                    1730770831742798981,
+                    2676322185709933211,
+                    8329210750824781744,
+                    16756092452590401876,
+                    3547445316740171466
+                ]
+            );
+        }
+
+        #[test]
+        fn sign_verify_round_trip() {
+            let sk_be: [u8; 32] = [7u8; 32];
+            let mut le = sk_be;
+            le.reverse();
+            let mut values = [0u64; 8];
+            for (i, value) in values.iter_mut().enumerate() {
+                *value =
+                    u32::from_le_bytes(le[i * 4..(i + 1) * 4].try_into().unwrap()) as u64;
+            }
+            let sk = T8 { values };
+
+            let pk_coords = cheetah_pub_from_sk(sk_be);
+            let pk = SchnorrPubkey {
+                x: F6LT {
+                    values: pk_coords[0],
+                },
+                y: F6LT {
+                    values: pk_coords[1],
+                },
+                inf: false,
+            };
+            let pk_b58 = pk.to_b58();
+
+            let digest = message_digest(b"hello nockchain").unwrap();
+            let (chal, sig) = schnorr_sign_digest(sk, pk, Hash { values: digest });
+
+            // Round-trip through the display hex format.
+            let chal2 = t8_from_hex(&t8_to_hex(&chal)).unwrap();
+            let sig2 = t8_from_hex(&t8_to_hex(&sig)).unwrap();
+            assert!(verify(&pk_b58, digest, chal2, sig2).unwrap());
+
+            // A different message must not verify.
+            let other = message_digest(b"hello nockchain!").unwrap();
+            assert!(!verify(&pk_b58, other, chal, sig).unwrap());
+        }
+    }
+}
+
+/// Tip5 digest (b58) of a message under the wallet's `++page-msg` framing —
+/// the digest `sign-message`/`verify-message` operate on.
+#[wasm_bindgen]
+pub fn message_digest_b58(message: &[u8]) -> Result<String, JsValue> {
+    let digest = verify::message_digest(message).map_err(|e| JsValue::from_str(&e))?;
+    Ok(Hash { values: digest }.to_b58())
+}
+
+/// Verify a Schnorr signature over a message (wallet `%verify-message`).
+/// chal/sig are the 128-hex-char scalars the sign flows display.
+#[wasm_bindgen]
+pub fn verify_message(
+    pubkey_b58: &str,
+    message: &[u8],
+    chal_hex: &str,
+    sig_hex: &str,
+) -> Result<bool, JsValue> {
+    let digest = verify::message_digest(message).map_err(|e| JsValue::from_str(&e))?;
+    let chal = verify::t8_from_hex(chal_hex).map_err(|e| JsValue::from_str(&e))?;
+    let sig = verify::t8_from_hex(sig_hex).map_err(|e| JsValue::from_str(&e))?;
+    verify::verify(pubkey_b58, digest, chal, sig).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Verify a Schnorr signature over a b58 Tip5 digest (wallet `%verify-hash`).
+#[wasm_bindgen]
+pub fn verify_hash(
+    pubkey_b58: &str,
+    digest_b58: &str,
+    chal_hex: &str,
+    sig_hex: &str,
+) -> Result<bool, JsValue> {
+    let digest = Hash::from_b58(digest_b58.trim()).map_err(|e| JsValue::from_str(&e))?;
+    let chal = verify::t8_from_hex(chal_hex).map_err(|e| JsValue::from_str(&e))?;
+    let sig = verify::t8_from_hex(sig_hex).map_err(|e| JsValue::from_str(&e))?;
+    verify::verify(pubkey_b58, digest.values, chal, sig).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Split a wallet `message.sig` file (jammed schnorr-signature) into the
+/// chal/sig hex scalars the verify functions take.
+#[wasm_bindgen]
+pub fn sig_file_to_hex(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let (chal, sig) = verify::sig_jam_parts(bytes).map_err(|e| JsValue::from_str(&e))?;
+    #[derive(Serialize)]
+    struct SigParts {
+        chal_hex: String,
+        sig_hex: String,
+    }
+    let parts = SigParts {
+        chal_hex: verify::t8_to_hex(&chal),
+        sig_hex: verify::t8_to_hex(&sig),
+    };
+    serde_wasm_bindgen::to_value(&parts).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 // --- Generic noun inspector: cue any jam and render it as a typed tree, the

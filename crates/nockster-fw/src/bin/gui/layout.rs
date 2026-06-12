@@ -112,6 +112,18 @@ pub(crate) fn button_from_point_keypad(point: Point) -> Option<ButtonHit> {
     None
 }
 
+/// Center and ring radius of the hold-to-confirm progress circle, in the free
+/// space above the Deny/Approve buttons (shared by Confirm and TxReview,
+/// whose button rows are identical).
+pub(crate) fn hold_progress_circle() -> (Point, i32) {
+    let radius = 30;
+    let buttons_top = confirm_buttons()[0].top_left.y;
+    (
+        Point::new(SCREEN_WIDTH as i32 / 2, buttons_top - radius - 18),
+        radius,
+    )
+}
+
 pub(crate) fn button_from_point_confirm(point: Point) -> Option<ButtonHit> {
     let bottom_slack: i32 = 16;
     for hit in confirm_buttons() {

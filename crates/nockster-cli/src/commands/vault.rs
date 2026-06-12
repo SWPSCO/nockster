@@ -123,9 +123,21 @@ pub fn run_export_master_pubkey(args: ExportMasterPubkeyArgs) -> anyhow::Result<
         Response::OkMasterPubkey { x, y, chain_code } => {
             let bytes = wallet_keyfile::build_master_pubkey_export(x, y, &chain_code);
             std::fs::write(&args.out, &bytes)?;
+            let zpub = nockster_core::extended_key::encode_zpub(
+                &nockster_core::extended_key::ExtendedPubKey {
+                    point97: nockster_core::cheetah::ser_a_pt(&(x, y)),
+                    chain_code,
+                    depth: 0,
+                    index: 0,
+                    parent_fingerprint: [0u8; 4],
+                    protocol_version: 1,
+                },
+            );
             ui::kv("slot", &args.slot.to_string());
             ui::kv("written", &args.out.display().to_string());
+            ui::kv("zpub", &zpub);
             ui::note("import with: nockchain-wallet import-master-pubkey --file <path>");
+            ui::note("or watch-only via: nockchain-wallet import-extended <zpub>");
             Ok(())
         }
         other => bail_vault("export-master-pubkey", other),

@@ -16,7 +16,7 @@ use nockster_core::{BuildInfo, UpdateTrust, MAX_SEED_SLOTS};
 use super::constants::*;
 use super::layout::header_height;
 use super::palette::{self, Theme};
-use super::render::render_header_with_back;
+use super::render::{draw_hold_hint_on_background, render_header_with_back, HOLD_DELETE_HINT};
 use super::scroll::{self, ScrollContent, ScrollState};
 use super::seed::draw_text_button;
 use super::state::{Button, ButtonHit, MenuItem};
@@ -572,6 +572,7 @@ pub fn render_wallet_delete_confirm(display: &mut GuiDisplay<'_>, row: Option<&W
         ],
     );
 
+    draw_hold_hint_on_background(display, HOLD_DELETE_HINT);
     for hit in wallet_delete_buttons(row.index) {
         draw_wallet_detail_button(display, hit, false);
     }
@@ -643,6 +644,7 @@ pub fn render_vault_delete_confirm(display: &mut GuiDisplay<'_>, row: Option<&Wa
         ],
     );
 
+    draw_hold_hint_on_background(display, HOLD_DELETE_HINT);
     for hit in wallet_delete_buttons(row.index) {
         draw_wallet_detail_button(display, hit, false);
     }

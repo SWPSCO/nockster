@@ -56,10 +56,12 @@ use nockster_core::TouchCalibration;
 use nockster_fw::axs5106l::{Axs5106l, Coordinates, Rotation};
 use nockster_fw::nvs_store::NvsStore;
 use render::{
-    blit_boot_logo, clear_idle_overlay, draw_button, draw_centered_message,
-    draw_header_back_button, draw_keypad, draw_unlock_header, draw_unlock_spinner_frame,
-    render_confirm_overlay, render_header, render_header_with_back, render_idle_overlay,
-    render_touch_calibration_target, render_touch_diagnostics, render_tx_review_overlay,
+    blit_boot_logo, clear_hold_progress_on_background, clear_idle_overlay, draw_button,
+    draw_centered_message, draw_header_back_button, draw_hold_progress_arc,
+    draw_hold_progress_fill, draw_hold_progress_track, draw_keypad, draw_unlock_header,
+    draw_unlock_spinner_frame, render_confirm_overlay, render_header, render_header_with_back,
+    render_idle_overlay, render_touch_calibration_target, render_touch_diagnostics,
+    render_tx_review_overlay, HOLD_DELETE_HINT, HOLD_PROGRESS_FILL_LEVELS, HOLD_PROGRESS_STEPS,
 };
 use state::{
     Button, ButtonHit, InteractionState, TouchDiagnostics, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS,
@@ -103,6 +105,9 @@ pub struct Gui<'d> {
     unlocking_started_at: Option<Instant>,
     current_spinner_frame: u8,
     confirm_result: Option<bool>,
+    /// Progress of the in-flight hold-to-confirm: (last drawn sweep step,
+    /// last drawn fill level). None when no hold is being rendered.
+    hold_progress: Option<(u16, u8)>,
     interaction: InteractionState,
     /// Last time the INT line delivered a touch report (presence polls while
     /// INT is silent do not count).
@@ -239,6 +244,7 @@ impl<'d> Gui<'d> {
             unlocking_started_at: None,
             current_spinner_frame: 0,
             confirm_result: None,
+            hold_progress: None,
             interaction: InteractionState::default(),
             last_int_report_at: None,
             last_presence_poll_at: None,
@@ -339,6 +345,9 @@ impl<'d> Gui<'d> {
     pub fn tick(&mut self) -> Option<GuiInteraction> {
         self.advance_unlocking();
         self.advance_unlock_success();
+        if let Some(event) = self.advance_hold_confirm() {
+            return Some(event);
+        }
 
         let now = Instant::now();
 
@@ -1112,11 +1121,9 @@ impl<'d> Gui<'d> {
                 self.show_vault_detail_current(slot);
                 None
             }
-            Button::WalletDeleteConfirm(slot) => {
-                Some(GuiInteraction::VaultOp(VaultInteraction::DeleteConfirmed {
-                    slot,
-                }))
-            }
+            // Deletion needs a full hold; a tap does nothing.
+            // advance_hold_confirm() fires the delete.
+            Button::WalletDeleteConfirm(_) => None,
             _ => None,
         }
     }
@@ -1156,11 +1163,9 @@ impl<'d> Gui<'d> {
                 self.show_wallet_detail_current(slot);
                 None
             }
-            Button::WalletDeleteConfirm(slot) => {
-                Some(GuiInteraction::Wallet(WalletInteraction::DeleteConfirmed {
-                    slot,
-                }))
-            }
+            // Deletion needs a full hold; a tap does nothing.
+            // advance_hold_confirm() fires the delete.
+            Button::WalletDeleteConfirm(_) => None,
             _ => None,
         }
     }
@@ -1882,12 +1887,108 @@ impl<'d> Gui<'d> {
         }
     }
 
+    /// Drives the Trezor-style hold-to-confirm: while the destructive/
+    /// approving button stays pressed (Approve on Confirm/TxReview, Delete on
+    /// the wallet/vault delete-confirm screens), sweep the progress ring and
+    /// deepen the interior fill; once the hold lasts `HOLD_CONFIRM_DURATION`,
+    /// fire the action. Any disarm (release, slide-off, mode change) resets
+    /// it — overlay modes erase the partial ring via their redraw, the
+    /// plain-background delete screens are wiped here.
+    fn advance_hold_confirm(&mut self) -> Option<GuiInteraction> {
+        let on_background = matches!(
+            self.mode,
+            GuiMode::WalletDeleteConfirm | GuiMode::VaultDeleteConfirm
+        );
+        if !matches!(self.mode, GuiMode::Confirm | GuiMode::TxReview) && !on_background {
+            self.hold_progress = None;
+            return None;
+        }
+
+        let armed_button = match (self.mode, self.interaction.active_button.map(|h| h.button)) {
+            (GuiMode::Confirm | GuiMode::TxReview, Some(Button::Ok)) => Some(Button::Ok),
+            (
+                GuiMode::WalletDeleteConfirm | GuiMode::VaultDeleteConfirm,
+                Some(button @ Button::WalletDeleteConfirm(_)),
+            ) => Some(button),
+            _ => None,
+        };
+        let (button, started) = match (armed_button, self.interaction.press_started_at) {
+            (Some(button), Some(started)) => (button, started),
+            _ => {
+                if self.hold_progress.take().is_some() && on_background {
+                    clear_hold_progress_on_background(&mut self.display, HOLD_DELETE_HINT);
+                }
+                return None;
+            }
+        };
+
+        let now = Instant::now();
+        let elapsed_ms = (now - started).as_micros() / 1_000;
+        let total_ms = HOLD_CONFIRM_DURATION.as_micros() / 1_000;
+        let step =
+            ((elapsed_ms * HOLD_PROGRESS_STEPS as u64) / total_ms).min(HOLD_PROGRESS_STEPS as u64)
+                as u16;
+
+        let base = if on_background {
+            palette::background()
+        } else {
+            palette::panel_base()
+        };
+        let (prev_step, prev_level) = match self.hold_progress {
+            Some(progress) => progress,
+            None => {
+                draw_hold_progress_track(&mut self.display, base);
+                draw_hold_progress_fill(&mut self.display, base, 0);
+                draw_hold_progress_arc(&mut self.display, 0, 0);
+                self.hold_progress = Some((0, 0));
+                (0, 0)
+            }
+        };
+        if step > prev_step {
+            let level = ((step as u32 * HOLD_PROGRESS_FILL_LEVELS as u32)
+                / HOLD_PROGRESS_STEPS as u32) as u8;
+            if level != prev_level {
+                draw_hold_progress_fill(&mut self.display, base, level);
+            }
+            draw_hold_progress_arc(&mut self.display, prev_step + 1, step);
+            self.hold_progress = Some((step, level));
+        }
+
+        if step >= HOLD_PROGRESS_STEPS {
+            self.hold_progress = None;
+            // The finger is still on the glass: nothing may arm until it
+            // lifts, and the cooldown outlives any host-driven screen swap.
+            self.interaction.scroll_consumed = true;
+            self.interaction.cooldown_until = Some(now + HOLD_CONFIRM_RELEASE_COOLDOWN);
+            self.interaction.press_started_at = None;
+            self.interaction.active_seen_at = None;
+            self.deactivate_button();
+            if on_background {
+                clear_hold_progress_on_background(&mut self.display, HOLD_DELETE_HINT);
+            }
+            let event = match (self.mode, button) {
+                (GuiMode::WalletDeleteConfirm, Button::WalletDeleteConfirm(slot)) => {
+                    GuiInteraction::Wallet(WalletInteraction::DeleteConfirmed { slot })
+                }
+                (GuiMode::VaultDeleteConfirm, Button::WalletDeleteConfirm(slot)) => {
+                    GuiInteraction::VaultOp(VaultInteraction::DeleteConfirmed { slot })
+                }
+                _ => {
+                    self.confirm_result = Some(true);
+                    GuiInteraction::ConfirmAccepted
+                }
+            };
+            return Some(event);
+        }
+        None
+    }
+
     fn handle_confirm_button(&mut self, button: Button) -> Option<GuiInteraction> {
         match button {
-            Button::Ok => {
-                self.confirm_result = Some(true);
-                Some(GuiInteraction::ConfirmAccepted)
-            }
+            // Approval needs a full hold; releasing early is a no-op and the
+            // overlay redraw (with its "hold to approve" hint) replaces the
+            // partial ring. advance_hold_confirm() fires the acceptance.
+            Button::Ok => None,
             Button::Clear => {
                 self.confirm_result = Some(false);
                 Some(GuiInteraction::ConfirmRejected)

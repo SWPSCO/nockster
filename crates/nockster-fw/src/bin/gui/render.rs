@@ -12,9 +12,9 @@ use nockster_core::TouchCalibration;
 
 use super::constants::*;
 use super::layout::{
-    confirm_buttons, header_height, keypad_button_hit, keypad_grid, row_height, tx_review_buttons,
-    tx_review_detail_rect, tx_review_list_rect, tx_review_output_item_height,
-    tx_review_summary_height, TX_REVIEW_LINE_GAP, TX_REVIEW_PADDING,
+    confirm_buttons, header_height, hold_progress_circle, keypad_button_hit, keypad_grid,
+    row_height, tx_review_buttons, tx_review_detail_rect, tx_review_list_rect,
+    tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_LINE_GAP, TX_REVIEW_PADDING,
 };
 use super::palette;
 use super::state::{
@@ -566,6 +566,154 @@ pub fn draw_unlock_spinner_frame(display: &mut GuiDisplay<'_>, frame: u8) {
     .draw(display);
 }
 
+/// Hold-to-confirm progress ring: the sweep covers 360 degrees in
+/// `HOLD_PROGRESS_STEPS` increments while the interior "gains opacity" in
+/// `HOLD_PROGRESS_FILL_LEVELS` blend steps (Rgb565 has no alpha, so opacity is
+/// emulated by lerping the fill from the panel base toward the accent color).
+pub const HOLD_PROGRESS_STEPS: u16 = 120;
+pub const HOLD_PROGRESS_FILL_LEVELS: u8 = 24;
+const HOLD_RING_DOT_RADIUS: i32 = 3;
+
+/// sin(deg) * 1024 for deg in 0..=90.
+const SIN1024: [i16; 91] = [
+    0, 18, 36, 54, 71, 89, 107, 125, 143, 160, 178, 195, 213,
+    230, 248, 265, 282, 299, 316, 333, 350, 367, 384, 400, 416, 433,
+    449, 465, 481, 496, 512, 527, 543, 558, 573, 587, 602, 616, 630,
+    644, 658, 672, 685, 698, 711, 724, 737, 749, 761, 773, 784, 796,
+    807, 818, 828, 839, 849, 859, 868, 878, 887, 896, 904, 912, 920,
+    928, 935, 943, 949, 956, 962, 968, 974, 979, 984, 989, 994, 998,
+    1002, 1005, 1008, 1011, 1014, 1016, 1018, 1020, 1022, 1023, 1023, 1024, 1024,
+];
+
+fn sin1024(deg: i32) -> i32 {
+    let d = deg.rem_euclid(360);
+    match d {
+        0..=90 => SIN1024[d as usize] as i32,
+        91..=180 => SIN1024[(180 - d) as usize] as i32,
+        181..=270 => -(SIN1024[(d - 180) as usize] as i32),
+        _ => -(SIN1024[(360 - d) as usize] as i32),
+    }
+}
+
+fn cos1024(deg: i32) -> i32 {
+    sin1024(90 - deg)
+}
+
+fn blend565(from: Rgb565, to: Rgb565, num: u16, den: u16) -> Rgb565 {
+    let mix = |a: u8, b: u8| -> u8 {
+        (a as i32 + (b as i32 - a as i32) * num as i32 / den as i32) as u8
+    };
+    Rgb565::new(
+        mix(from.r(), to.r()),
+        mix(from.g(), to.g()),
+        mix(from.b(), to.b()),
+    )
+}
+
+/// Point on the sweep at `step`, starting at 12 o'clock and going clockwise.
+fn hold_arc_point(center: Point, radius: i32, step: u16) -> Point {
+    let deg = step as i32 * 360 / HOLD_PROGRESS_STEPS as i32;
+    Point::new(
+        center.x + (radius * sin1024(deg) + 512).div_euclid(1024),
+        center.y - (radius * cos1024(deg) + 512).div_euclid(1024),
+    )
+}
+
+/// Hint shown where the hold ring appears on the delete-confirm screens.
+pub const HOLD_DELETE_HINT: &str = "hold to delete";
+
+fn wipe_hold_area(display: &mut GuiDisplay<'_>, base: Rgb565) {
+    let (center, radius) = hold_progress_circle();
+    // The hint band under the circle is wider than the ring; wipe it across
+    // the screen so no text fragments outlive the sweep.
+    let _ = Rectangle::new(
+        Point::new(7, center.y - 15),
+        Size::new(SCREEN_WIDTH as u32 - 14, 30),
+    )
+    .into_styled(PrimitiveStyleBuilder::new().fill_color(base).build())
+    .draw(display);
+    let outer = radius + HOLD_RING_DOT_RADIUS + 1;
+    let _ = Circle::with_center(center, outer as u32 * 2 + 1)
+        .into_styled(PrimitiveStyleBuilder::new().fill_color(base).build())
+        .draw(display);
+}
+
+/// Wipe the circle area to `base` (the color behind it: panel on the
+/// Confirm/TxReview overlays, background on the delete screens) and draw the
+/// faint full ring the sweep traces over. Call once when a hold starts.
+pub fn draw_hold_progress_track(display: &mut GuiDisplay<'_>, base: Rgb565) {
+    let (center, radius) = hold_progress_circle();
+    wipe_hold_area(display, base);
+    let _ = Circle::with_center(center, radius as u32 * 2 + 1)
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .stroke_color(palette::divider())
+                .stroke_width(2)
+                .build(),
+        )
+        .draw(display);
+}
+
+/// Repaint the interior at opacity `level` (0..=HOLD_PROGRESS_FILL_LEVELS).
+pub fn draw_hold_progress_fill(display: &mut GuiDisplay<'_>, base: Rgb565, level: u8) {
+    let (center, radius) = hold_progress_circle();
+    let inner = radius - HOLD_RING_DOT_RADIUS - 2;
+    if inner <= 0 {
+        return;
+    }
+    let color = blend565(
+        base,
+        palette::accent_primary(),
+        level as u16,
+        HOLD_PROGRESS_FILL_LEVELS as u16,
+    );
+    let _ = Circle::with_center(center, inner as u32 * 2 + 1)
+        .into_styled(PrimitiveStyleBuilder::new().fill_color(color).build())
+        .draw(display);
+}
+
+/// Hint line at the hold-circle position for screens whose body is the plain
+/// background (the delete-confirm screens; the Confirm overlay draws its own).
+pub fn draw_hold_hint_on_background(display: &mut GuiDisplay<'_>, text: &str) {
+    let (center, _) = hold_progress_circle();
+    let subtle = MonoTextStyle::new(&FONT_8X13, palette::text_subtle());
+    let _ = Text::with_alignment(
+        text,
+        Point::new(
+            SCREEN_WIDTH as i32 / 2,
+            center.y + FONT_8X13.character_size.height as i32 / 3,
+        ),
+        subtle,
+        Alignment::Center,
+    )
+    .draw(display);
+}
+
+/// Erase a partial hold ring from a plain-background screen and restore the
+/// hint (the overlay modes repaint themselves on deactivation instead).
+pub fn clear_hold_progress_on_background(display: &mut GuiDisplay<'_>, hint: &str) {
+    wipe_hold_area(display, palette::background());
+    draw_hold_hint_on_background(display, hint);
+}
+
+/// Extend the sweep from `from_step` to `to_step` (inclusive) by stamping
+/// overlapping dots along the ring; only the new increment is drawn, so a
+/// full hold costs one dot per tick.
+pub fn draw_hold_progress_arc(display: &mut GuiDisplay<'_>, from_step: u16, to_step: u16) {
+    let (center, radius) = hold_progress_circle();
+    let style = PrimitiveStyleBuilder::new()
+        .fill_color(palette::accent_primary())
+        .build();
+    let mut step = from_step;
+    while step <= to_step && step <= HOLD_PROGRESS_STEPS {
+        let p = hold_arc_point(center, radius, step);
+        let _ = Circle::with_center(p, HOLD_RING_DOT_RADIUS as u32 * 2 + 1)
+            .into_styled(style)
+            .draw(display);
+        step += 1;
+    }
+}
+
 fn draw_panel(display: &mut GuiDisplay<'_>, top_left: Point, size: Size) {
     let panel = Rectangle::new(top_left, size);
     let _ = panel
@@ -755,6 +903,18 @@ pub fn render_confirm_overlay(
             .draw(display);
             baseline += line_h;
         }
+    }
+
+    {
+        let (hint_center, _) = hold_progress_circle();
+        let subtle = MonoTextStyle::new(&FONT_8X13, palette::text_subtle());
+        let _ = Text::with_alignment(
+            "hold to approve",
+            Point::new(center_x, hint_center.y + FONT_8X13.character_size.height as i32 / 3),
+            subtle,
+            Alignment::Center,
+        )
+        .draw(display);
     }
 
     for hit in buttons {

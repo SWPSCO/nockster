@@ -259,7 +259,8 @@ export type Request =
   | { type: 'GetMasterPubkey'; slot: number }
   | { type: 'ShowAddress'; slot: number; path: number[] }
   | { type: 'SignMessage'; slot: number; path: number[]; message: Uint8Array }
-  | { type: 'SignHash'; slot: number; path: number[]; digest5: bigint[] };
+  | { type: 'SignHash'; slot: number; path: number[]; digest5: bigint[] }
+  | { type: 'AddCoil'; coil64: Uint8Array };
 
 export interface CheetahPubInfo {
   slot: number;
@@ -1477,6 +1478,10 @@ export function serializeRequest(req: Request): Uint8Array {
       for (const limb of req.digest5) {
         w.writeU64Varint(limb);
       }
+      break;
+    case 'AddCoil':
+      w.writeVarint(50);
+      w.writeFixedBytes(expectBytes(req.coil64, 64, 'coil64'));
       break;
   }
 

@@ -17,7 +17,8 @@ pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
     }
     let labeling = args.label.is_some();
     let managing_slot = args.list || args.select.is_some() || args.delete.is_some() || labeling;
-    let mut adding_seed = args.seedphrase.is_some() || args.seed_hex.is_some();
+    let mut adding_seed =
+        args.seedphrase.is_some() || args.seed_hex.is_some() || args.zprv.is_some();
 
     ui::header("seed");
 
@@ -132,8 +133,38 @@ pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
         anyhow::bail!("must provide --pin when adding or initializing a seed");
     };
 
+    // import a zprv extended private key as a raw master coil
+    if let Some(zprv) = args.zprv.as_deref() {
+        if args.out.is_some() {
+            anyhow::bail!("--out is not supported with --zprv");
+        }
+        let key = nockster_core::extended_key::parse_zprv(zprv)
+            .map_err(|e| anyhow::anyhow!("invalid zprv: {e:?}"))?;
+        if key.protocol_version != 1 {
+            anyhow::bail!(
+                "zprv uses protocol version {}; only version 1 (current addressing) can be imported",
+                key.protocol_version
+            );
+        }
+        if key.depth != 0 {
+            ui::note(&format!(
+                "depth-{} child key; importing as a standalone wallet",
+                key.depth
+            ));
+        }
+        if !device_has_seed(&mut *sp)? {
+            anyhow::bail!(
+                "device not initialized; load a seed phrase with a PIN first, then import \
+                 the zprv as an additional slot"
+            );
+        }
+        let slot = unlock_and_add_coil(&mut *sp, pin, key.coil64())?;
+        if let Some(label) = args.label.as_deref() {
+            set_seed_label(&mut *sp, slot, label)?;
+        }
+
     // seed via mnemonic
-    if let Some(m) = args.seedphrase.as_deref() {
+    } else if let Some(m) = args.seedphrase.as_deref() {
         let seed64 = keys::bip39_seed_from_mnemonic(m, &args.passphrase);
 
         let slot = initialize_or_add_seed(&mut *sp, pin, seed64)?;
@@ -274,6 +305,53 @@ fn unlock_and_add_seed(sp: &mut dyn Link, pin: &str, seed64: [u8; 64]) -> anyhow
             anyhow::bail!("add-seed failed: {} (code {code})", describe_error(code))
         }
         other => anyhow::bail!("unexpected add-seed response: {other:?}"),
+    }
+}
+
+fn unlock_and_add_coil(sp: &mut dyn Link, pin: &str, coil64: [u8; 64]) -> anyhow::Result<u8> {
+    match send_call(
+        sp,
+        0x41,
+        Request::Unlock {
+            pin: pin.to_string(),
+        },
+    )? {
+        Response::Ok => {}
+        Response::Err {
+            code: ERR_WRONG_PIN,
+        } => anyhow::bail!("incorrect PIN"),
+        Response::Err {
+            code: ERR_PIN_LOCKED_OUT,
+        } => anyhow::bail!("pin locked out"),
+        Response::Err { code: ERR_NO_SEED } => {
+            anyhow::bail!("device not initialized; retry seed initialization")
+        }
+        other => anyhow::bail!("unexpected unlock response: {other:?}"),
+    }
+
+    let slot = seed_slot_count(sp)?;
+    match send_call(sp, 0x48, Request::AddCoil { coil64 })? {
+        Response::Ok => {
+            ui::ok(&format!("imported extended key into slot {slot}"));
+            Ok(slot)
+        }
+        Response::Err {
+            code: ERR_DEVICE_LOCKED,
+        } => anyhow::bail!("device locked; unlock before importing a key"),
+        Response::Err { code: ERR_OVERFLOW } => anyhow::bail!("seed storage is full"),
+        Response::Err { code } if code == ERR_FLASH => {
+            anyhow::bail!("import failed: device flash error (code {code})")
+        }
+        Response::Err { code } if code == ERR_CRYPTO => {
+            anyhow::bail!("import failed: device crypto/RNG error (code {code})")
+        }
+        Response::Err { code } if code == ERR_BAD_COBS_OR_POSTCARD => {
+            anyhow::bail!("import failed: firmware does not understand AddCoil — update the firmware")
+        }
+        Response::Err { code } => {
+            anyhow::bail!("import failed: {} (code {code})", describe_error(code))
+        }
+        other => anyhow::bail!("unexpected import response: {other:?}"),
     }
 }
 

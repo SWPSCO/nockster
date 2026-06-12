@@ -2244,6 +2244,22 @@ pub fn compose_tx_v1_unsigned(input: JsValue) -> Result<ComposedTransactionV1, J
     compose_tx_v1_unsigned_inner(input)
 }
 
+pub fn estimate_tx_v1_fee(input: ComposeTxV1Input) -> Result<u64, String> {
+    let composed = compose_tx_v1_unsigned_inner(input).map_err(js_value_to_string)?;
+    let summary: serde_json::Value = serde_json::from_str(&composed.summary_json)
+        .map_err(|e| format!("bad composed transaction summary: {e}"))?;
+    summary
+        .get("total_fees")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "composed transaction summary is missing total_fees".to_string())
+}
+
+fn js_value_to_string(value: JsValue) -> String {
+    value
+        .as_string()
+        .unwrap_or_else(|| format!("compose transaction failed: {value:?}"))
+}
+
 fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTransactionV1, JsValue> {
     if input.outputs.is_empty() {
         return Err(js_err("at least one output is required"));

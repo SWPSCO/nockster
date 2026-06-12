@@ -1932,6 +1932,50 @@ fn main() -> ! {
                                                     },
                                                 })
                                             }
+                                        } else if let Frame::One(Request::AddCoil { coil64 }) =
+                                            &m.msg
+                                        {
+                                            if is_device_locked() {
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err {
+                                                        code: ERR_DEVICE_LOCKED,
+                                                    },
+                                                })
+                                            } else if let Some(master_key) = master_key_copy() {
+                                                let request = SeedOpRequest {
+                                                    msg_id: m.id,
+                                                    op: SeedOp::AddCoil {
+                                                        coil64: *coil64,
+                                                        master_key,
+                                                    },
+                                                };
+                                                if let Some(ui) = ui.as_mut() {
+                                                    ui.show_unlocking_stage("Key: import");
+                                                }
+                                                let outcome =
+                                                    seed_store::compute_seed_op_outcome(request);
+                                                let (msg_id, body, _) = {
+                                                    let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
+                                                    handle_seed_op_outcome(
+                                                        outcome, ui_ref, &mut hid,
+                                                    )
+                                                };
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: msg_id,
+                                                    msg: body,
+                                                })
+                                            } else {
+                                                Some(Msg {
+                                                    v: PROTO_V1,
+                                                    id: m.id,
+                                                    msg: Response::Err {
+                                                        code: ERR_DEVICE_LOCKED,
+                                                    },
+                                                })
+                                            }
                                         } else if let Frame::One(Request::ResetPIN {
                                             current_pin,
                                             new_pin,
@@ -2449,6 +2493,7 @@ fn handle_request_v1(req: &Request, ui: Option<&mut Gui<'_>>) -> Response {
         }
         Request::InitializePIN { .. }
         | Request::AddSeed { .. }
+        | Request::AddCoil { .. }
         | Request::DeleteSeed { .. }
         | Request::Unlock { .. } => Response::Err {
             code: ERR_UNSUPPORTED_VERSION,

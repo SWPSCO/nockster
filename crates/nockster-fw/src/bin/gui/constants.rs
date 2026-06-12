@@ -28,3 +28,10 @@ pub const PIN_BUFFER_LEN: usize = 16;
 pub const MAX_PIN_DIGITS: usize = 12;
 
 pub const AUTO_LOCK_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Hold-to-confirm: how long Approve must be held before a confirmation
+/// fires (the progress ring sweeps 360 degrees over this window).
+pub const HOLD_CONFIRM_DURATION: Duration = Duration::from_millis(3_000);
+/// After a hold completes the finger is still on the glass and the host may
+/// swap screens under it; block arming for longer than a tap's cooldown.
+pub const HOLD_CONFIRM_RELEASE_COOLDOWN: Duration = Duration::from_millis(600);

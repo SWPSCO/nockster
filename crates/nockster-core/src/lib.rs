@@ -3,6 +3,7 @@ extern crate alloc;
 
 pub mod cheetah;
 pub mod draft_sign;
+pub mod extended_key;
 pub mod math;
 pub mod noun;
 pub mod update;
@@ -480,6 +481,16 @@ pub enum Request {
         slot: u8,
         path: alloc_path::Path,
         digest5: [u64; 5],
+    },
+    /// Store a raw master coil (`sk ‖ cc`) as a wallet slot, bypassing the
+    /// BIP39 seed→coil conversion of AddSeed. This is how a `zprv` extended
+    /// private key (or a raw wallet-keyfile coil) lands on the device: the
+    /// host parses and validates the encoding and sends the 64 bytes. The
+    /// coil is stored as a protocol-v1 master key. New variants append here:
+    /// postcard encodes the enum discriminant by position.
+    AddCoil {
+        #[serde(with = "BigArray")]
+        coil64: [u8; 64],
     },
 }
 

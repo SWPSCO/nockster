@@ -694,6 +694,75 @@ pub fn cheetah_point_b58(pubkey_x: Vec<String>, pubkey_y: Vec<String>) -> Result
     Ok(pk.to_b58())
 }
 
+/// Split a 64-byte master coil into `n` Shamir shares (threshold `k`). The
+/// caller supplies `SECRET_LEN*(k-1)` CSPRNG bytes from
+/// `crypto.getRandomValues` as `randomness`. Returns the share strings.
+#[wasm_bindgen]
+pub fn shamir_split_coil(
+    coil: &[u8],
+    k: u8,
+    n: u8,
+    randomness: &[u8],
+) -> Result<JsValue, JsValue> {
+    let coil: [u8; 64] = coil
+        .try_into()
+        .map_err(|_| JsValue::from_str("coil must be 64 bytes"))?;
+    let needed = 64usize * (k.saturating_sub(1) as usize);
+    if randomness.len() < needed {
+        return Err(JsValue::from_str(&format!(
+            "need {needed} random bytes for k={k}"
+        )));
+    }
+    let mut cursor = 0usize;
+    let mut fill = |buf: &mut [u8]| -> Result<(), ()> {
+        let end = cursor + buf.len();
+        if end > randomness.len() {
+            return Err(());
+        }
+        buf.copy_from_slice(&randomness[cursor..end]);
+        cursor = end;
+        Ok(())
+    };
+    let shares = nockster_core::shamir::split_coil(&coil, k, n, &mut fill)
+        .map_err(|e| JsValue::from_str(&format!("split failed: {e:?}")))?;
+    serde_wasm_bindgen::to_value(&shares).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Reconstruct the 64-byte coil from Shamir shares (any `k` of one split).
+#[wasm_bindgen]
+pub fn shamir_combine_shares(shares: Vec<String>) -> Result<Vec<u8>, JsValue> {
+    let refs: Vec<&str> = shares.iter().map(|s| s.as_str()).collect();
+    let coil = nockster_core::shamir::combine_shares(&refs)
+        .map_err(|e| JsValue::from_str(&format!("combine failed: {e:?}")))?;
+    Ok(coil.to_vec())
+}
+
+/// Inspect a Shamir share without combining: threshold, total, index, and the
+/// hex of its secret-digest tag (shares of one split share the same tag).
+#[wasm_bindgen]
+pub fn shamir_share_info(share: &str) -> Result<JsValue, JsValue> {
+    let info = nockster_core::shamir::share_info(share)
+        .map_err(|e| JsValue::from_str(&format!("bad share: {e:?}")))?;
+    #[derive(Serialize)]
+    struct Info {
+        threshold: u8,
+        total: u8,
+        index: u8,
+        digest_hex: String,
+    }
+    let out = Info {
+        threshold: info.threshold,
+        total: info.total,
+        index: info.index,
+        digest_hex: info
+            .secret_digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    };
+    serde_wasm_bindgen::to_value(&out).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 // --- Wallet keyfile interop (keys.export / master-pubkey.export) and
 // --- preimage-vault noun helpers. Uses the pokenoun codec so the byte-level
 // --- noun encoding matches the firmware and the nockchain wallet.
@@ -1199,7 +1268,7 @@ mod verify {
     pub fn t8_to_hex(t8: &T8) -> String {
         t8.values
             .iter()
-            .map(|v| alloc::format!("{v:016x}"))
+            .map(|v| format!("{v:016x}"))
             .collect()
     }
 

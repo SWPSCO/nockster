@@ -5,6 +5,7 @@ pub mod cheetah;
 pub mod draft_sign;
 pub mod extended_key;
 pub mod math;
+pub mod shamir;
 pub mod noun;
 pub mod update;
 pub mod wallet_keyfile;

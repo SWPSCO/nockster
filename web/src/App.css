@@ -2126,3 +2126,29 @@ body.app-device .tab-btn {
 .noun-atom-primary { font-weight: 600; }
 .noun-atom-hex { opacity: 0.5; }
 .noun-elided { opacity: 0.5; font-style: italic; }
+
+/* Shamir backup tool */
+.shamir-knobs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.shamir-knobs label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  opacity: 0.8;
+}
+.input.shamir-num {
+  width: 56px;
+  text-align: center;
+}
+.shamir-shares {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.shamir-shares .pubkey-text { word-break: break-all; }

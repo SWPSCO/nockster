@@ -19,8 +19,16 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
 tx-types = { workspace = true, features = ["std"] }
+# core, for its tested Shamir GF(256) math — keeps the share format from
+# diverging across host and device. std features match the rest of the build
+# (tx-types is already pinned to std here).
+nockster-core = { path = "../nockster-core" }
 bs58 = "0.5"
 sha2 = "0.10"
+# nockster-core's std deps pull getrandom 0.2, which needs the js backend on
+# wasm32 (same as nockster-fw-emu). We don't call it; this only satisfies the
+# target gate.
+getrandom = { version = "0.2", features = ["js"] }
 nockapp = {workspace = true }
 nockvm = { workspace = true, features = ["malloc"] }
 noun-serde = { workspace = true }

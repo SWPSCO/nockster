@@ -283,6 +283,15 @@ function App() {
   const [verifyResult, setVerifyResult] = useState('');
   const [watchOnlyZpub, setWatchOnlyZpub] = useState<{ slot: number; zpub: string } | null>(null);
 
+  // Shamir backup tool state
+  const [shamirMode, setShamirMode] = useState<'split' | 'restore'>('split');
+  const [shamirSource, setShamirSource] = useState(''); // zprv or coil-hex
+  const [shamirK, setShamirK] = useState(3);
+  const [shamirN, setShamirN] = useState(5);
+  const [shamirShares, setShamirShares] = useState<string[]>([]);
+  const [shamirRestoreInput, setShamirRestoreInput] = useState('');
+  const [shamirStatus, setShamirStatus] = useState('');
+
   // Preimage vault state
   const [vaultEntries, setVaultEntries] = useState<VaultEntryInfo[] | null>(null);
   const [vaultBusy, setVaultBusy] = useState(false);
@@ -1952,6 +1961,103 @@ function App() {
       } catch {
         setVerifyPubkey('');
       }
+    }
+  };
+
+  // Split a pasted zprv or 64-byte coil-hex into Shamir shares. The coil only
+  // ever exists in this tab's memory; the device never exports its own key
+  // (that is the firmware trusted-display flow).
+  const runShamirSplit = () => {
+    if (!wasm) {
+      setShamirStatus('WASM not ready yet');
+      return;
+    }
+    const src = shamirSource.trim();
+    if (!src) {
+      setShamirStatus('Paste a zprv or a 64-byte coil hex to back up');
+      return;
+    }
+    if (shamirK < 2 || shamirN < shamirK || shamirN > 16) {
+      setShamirStatus('Need 2 ≤ threshold ≤ shares ≤ 16');
+      return;
+    }
+    let coil: Uint8Array;
+    try {
+      coil = src.startsWith('zprv')
+        ? wasm.zprv_to_coil(src)
+        : hexToBytes(src.replace(/^0x/, ''));
+    } catch (error: any) {
+      setShamirStatus(`Could not read key: ${error?.message ?? String(error)}`);
+      return;
+    }
+    if (coil.length !== 64) {
+      setShamirStatus('Coil must be 64 bytes (128 hex chars)');
+      return;
+    }
+    try {
+      const randomness = new Uint8Array(64 * (shamirK - 1));
+      crypto.getRandomValues(randomness);
+      const shares = wasm.shamir_split_coil(coil, shamirK, shamirN, randomness) as string[];
+      setShamirShares(shares);
+      setShamirStatus(
+        `Split into ${shamirN} shares; any ${shamirK} restore the wallet. Write each one down separately.`,
+      );
+    } catch (error: any) {
+      setShamirStatus(`Split failed: ${error?.message ?? String(error)}`);
+    } finally {
+      coil.fill(0);
+    }
+  };
+
+  const runShamirRestore = async () => {
+    if (!wasm) {
+      setShamirStatus('WASM not ready yet');
+      return;
+    }
+    const shares = shamirRestoreInput
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (shares.length < 2) {
+      setShamirStatus('Paste your shares (whitespace-separated), at least the threshold count');
+      return;
+    }
+    let coil: Uint8Array;
+    try {
+      coil = wasm.shamir_combine_shares(shares);
+    } catch (error: any) {
+      setShamirStatus(`Combine failed: ${error?.message ?? String(error)}`);
+      return;
+    }
+    if (locked !== false) {
+      setShamirStatus(
+        'Recovered the coil. Unlock the device to import it as a new wallet slot.',
+      );
+      coil.fill(0);
+      return;
+    }
+    deviceBusyRef.current = true;
+    setDeviceBusy(true);
+    setShamirStatus('Recovered the coil — confirm import on the device...');
+    try {
+      const prevSlots = deviceKeys.map((k) => k.slot);
+      await device.addCoil(coil);
+      const infoAfter = await device.getInfo();
+      const pubsAfter =
+        infoAfter.type === 'Info' && Array.isArray(infoAfter.cheetah_pubs)
+          ? infoAfter.cheetah_pubs
+          : [];
+      const newSlots = pubsAfter.map((p) => Number(p.slot));
+      const addedSlot = newSlots.find((s) => !prevSlots.includes(s));
+      await refreshStatus(addedSlot, infoAfter.type === 'Info' ? infoAfter : undefined);
+      setShamirStatus('Restored from shares as a new wallet slot.');
+      setShamirRestoreInput('');
+    } catch (error: any) {
+      setShamirStatus(`Restore failed: ${error?.message ?? String(error)}`);
+    } finally {
+      coil.fill(0);
+      deviceBusyRef.current = false;
+      setDeviceBusy(false);
     }
   };
 
@@ -3803,6 +3909,118 @@ function App() {
               {verifyResult && (
                 <div className="status-message">{verifyResult}</div>
               )}
+            </div>
+          )}
+
+          {wasmReady && (
+            <div className="section device-panel device-shamir-panel">
+              <h2>Shamir backup</h2>
+              <p className="seed-subtitle">
+                Split a key into k-of-n shares so any k restore it and any fewer reveal
+                nothing. Splitting works on a zprv or raw coil you paste here; restoring
+                combines shares and imports the result as a new wallet slot. Anyone holding
+                the threshold controls the funds — store shares separately.
+              </p>
+              <div className="button-group">
+                <button
+                  type="button"
+                  className={`btn btn-small ${shamirMode === 'split' ? '' : 'btn-secondary'}`}
+                  onClick={() => setShamirMode('split')}
+                >
+                  split
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-small ${shamirMode === 'restore' ? '' : 'btn-secondary'}`}
+                  onClick={() => setShamirMode('restore')}
+                >
+                  restore
+                </button>
+              </div>
+
+              {shamirMode === 'split' ? (
+                <>
+                  <textarea
+                    className="input"
+                    value={shamirSource}
+                    onChange={(e) => setShamirSource(e.target.value)}
+                    placeholder="zprv… or 64-byte coil hex to back up"
+                    spellCheck={false}
+                  />
+                  <div className="shamir-knobs">
+                    <label>
+                      need&nbsp;
+                      <input
+                        type="number"
+                        min={2}
+                        max={16}
+                        className="input shamir-num"
+                        value={shamirK}
+                        onChange={(e) => setShamirK(Number(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      of&nbsp;
+                      <input
+                        type="number"
+                        min={2}
+                        max={16}
+                        className="input shamir-num"
+                        value={shamirN}
+                        onChange={(e) => setShamirN(Number(e.target.value))}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={runShamirSplit}
+                      disabled={!shamirSource.trim()}
+                    >
+                      split
+                    </button>
+                  </div>
+                  {shamirShares.length > 0 && (
+                    <div className="shamir-shares">
+                      {shamirShares.map((share, i) => (
+                        <div key={i} className="wallet-slot-address">
+                          <span className="pubkey-text">
+                            <strong>#{i + 1}</strong>&nbsp;{share}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-small copy-btn"
+                            onClick={() => {
+                              navigator.clipboard.writeText(share);
+                              setShamirStatus(`Copied share ${i + 1}`);
+                            }}
+                          >
+                            copy
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <textarea
+                    className="input"
+                    value={shamirRestoreInput}
+                    onChange={(e) => setShamirRestoreInput(e.target.value)}
+                    placeholder="paste your shares, separated by spaces or newlines"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void runShamirRestore()}
+                    disabled={deviceBusy || !shamirRestoreInput.trim()}
+                  >
+                    {locked === false ? 'restore to device' : 'recover coil'}
+                  </button>
+                </>
+              )}
+              {shamirStatus && <div className="status-message">{shamirStatus}</div>}
             </div>
           )}
         </div>

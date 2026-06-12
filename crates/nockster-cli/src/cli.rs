@@ -79,6 +79,49 @@ pub enum Cmd {
 
     /// derive addresses from a seed offline, no device (shows v0 and v1 forms)
     Derive(DeriveArgs),
+
+    /// offline Shamir backup: split a coil into k-of-n shares, or combine them
+    Shamir(ShamirArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct ShamirArgs {
+    #[command(subcommand)]
+    pub action: ShamirAction,
+}
+
+#[derive(Subcommand, Clone)]
+pub enum ShamirAction {
+    /// split a master coil into k-of-n shares (offline, no device)
+    Split {
+        /// 64-byte master coil (sk‖cc) in hex
+        #[arg(long, conflicts_with_all = &["zprv", "seedphrase", "seed_hex"])]
+        coil_hex: Option<String>,
+        /// nockchain-wallet zprv extended private key
+        #[arg(long, conflicts_with_all = &["coil_hex", "seedphrase", "seed_hex"])]
+        zprv: Option<String>,
+        /// bip39 mnemonic (coil derived via master_from_seed)
+        #[arg(long, conflicts_with_all = &["coil_hex", "zprv", "seed_hex"])]
+        seedphrase: Option<String>,
+        /// 64-byte bip39 seed in hex
+        #[arg(long, conflicts_with_all = &["coil_hex", "zprv", "seedphrase"])]
+        seed_hex: Option<String>,
+        /// optional bip39 passphrase (with --seedphrase)
+        #[arg(long, default_value = "")]
+        passphrase: String,
+        /// threshold: how many shares are needed to restore
+        #[arg(long, short = 'k')]
+        threshold: u8,
+        /// total shares to produce
+        #[arg(long, short = 'n')]
+        shares: u8,
+    },
+    /// reconstruct a coil from shares (offline, no device)
+    Combine {
+        /// a share string; pass --share once per share you have
+        #[arg(long = "share", required = true)]
+        share: Vec<String>,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -338,6 +381,11 @@ pub struct SeedArgs {
     /// master coil (no BIP39 step, --passphrase does not apply)
     #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","keyfile","list","select","delete"])]
     pub zprv: Option<String>,
+
+    /// raw 64-byte master coil (sk‖cc) in hex, e.g. from `shamir combine`;
+    /// imported directly as a coil slot (no BIP39 step)
+    #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","keyfile","zprv","list","select","delete"])]
+    pub coil_hex: Option<String>,
 
     /// list seed slots and root PKHs
     #[arg(long, conflicts_with_all=&["seed_hex","seedphrase","select","delete"])]
@@ -723,5 +771,6 @@ pub fn run() -> anyhow::Result<()> {
             args.version,
             args.count,
         ),
+        Cmd::Shamir(args) => commands::shamir::run(args),
     }
 }

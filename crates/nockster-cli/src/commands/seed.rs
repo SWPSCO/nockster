@@ -17,8 +17,10 @@ pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
     }
     let labeling = args.label.is_some();
     let managing_slot = args.list || args.select.is_some() || args.delete.is_some() || labeling;
-    let mut adding_seed =
-        args.seedphrase.is_some() || args.seed_hex.is_some() || args.zprv.is_some();
+    let mut adding_seed = args.seedphrase.is_some()
+        || args.seed_hex.is_some()
+        || args.zprv.is_some()
+        || args.coil_hex.is_some();
 
     ui::header("seed");
 
@@ -159,6 +161,28 @@ pub fn run(mut args: SeedArgs) -> anyhow::Result<()> {
             );
         }
         let slot = unlock_and_add_coil(&mut *sp, pin, key.coil64())?;
+        if let Some(label) = args.label.as_deref() {
+            set_seed_label(&mut *sp, slot, label)?;
+        }
+
+    // import a raw master coil (e.g. from `shamir combine`)
+    } else if let Some(coil_hex) = args.coil_hex.as_deref() {
+        if args.out.is_some() {
+            anyhow::bail!("--out is not supported with --coil-hex");
+        }
+        let bytes = hex::decode(coil_hex.trim())
+            .map_err(|_| anyhow::anyhow!("--coil-hex must be hex"))?;
+        let coil64: [u8; 64] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("coil must be 64 bytes (128 hex chars)"))?;
+        if !device_has_seed(&mut *sp)? {
+            anyhow::bail!(
+                "device not initialized; load a seed phrase with a PIN first, then import \
+                 the coil as an additional slot"
+            );
+        }
+        let slot = unlock_and_add_coil(&mut *sp, pin, coil64)?;
         if let Some(label) = args.label.as_deref() {
             set_seed_label(&mut *sp, slot, label)?;
         }

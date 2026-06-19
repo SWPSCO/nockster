@@ -561,7 +561,7 @@ jobs:
             --code-signature-flags runtime \
             --entitlements-xml-path ./Entitlements.plist \
             "$CLI_BIN"
-          rcodesign verify "$CLI_BIN"
+          codesign --verify --strict --verbose=2 "$CLI_BIN"
 
           rcodesign sign \
             --p12-file app-signing.p12 \
@@ -570,7 +570,7 @@ jobs:
             --code-signature-flags runtime \
             --entitlements-xml-path ./Entitlements.plist \
             "$APP_BUNDLE"
-          rcodesign verify "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
           mkdir -p dist pkgroot
           tar -czf dist/nockster-cli-macos-aarch64.tar.gz -C "$(dirname "$CLI_BIN")" nockster-cli

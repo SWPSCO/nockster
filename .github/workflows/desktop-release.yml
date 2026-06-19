@@ -248,7 +248,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux-x64
           path: dist/*
@@ -392,7 +392,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-linux-aarch64
           path: dist/*
@@ -623,7 +623,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-macos-aarch64
           path: dist/*
@@ -636,19 +636,19 @@ jobs:
     outputs:
       content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: ${{ needs.build-linux-x64.result == 'success' }}
         with:
           name: desktop-linux-x64
           path: ./linux
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: ${{ needs.build-linux-aarch64.result == 'success' }}
         with:
           name: desktop-linux-aarch64
           path: ./linux-arm64
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: ${{ needs.build-macos-aarch64.result == 'success' }}
         with:
           name: desktop-macos-aarch64
@@ -680,7 +680,7 @@ jobs:
           fi
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: packaged-desktop-release
           path: out/*
@@ -706,14 +706,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: packaged-desktop-release
           path: ./out
 
       - name: Download provenance
         if: ${{ needs.provenance.result == 'success' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ needs.provenance.outputs.provenance-name }}
           path: ./prov

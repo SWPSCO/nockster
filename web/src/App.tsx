@@ -2543,6 +2543,9 @@ function App() {
         >
           composer
         </button>
+        <a className="tab-btn tab-link" href="/manual/">
+          manual
+        </a>
       </div>
 
       {activeTab === 'composer' && (

@@ -16,12 +16,14 @@ name: Deploy web (GitHub Pages)
 #   - Pages -> Build and deployment -> Source: "GitHub Actions"
 #   - Pages -> Custom domain: my.nockster.com  (the web/public/CNAME file pins it)
 #   - DNS: CNAME my.nockster.com -> <owner>.github.io
+#   - User manual is built with mdBook and published under /manual/
 
 on:
   push:
     branches: [master]
     paths:
       - 'web/**'
+      - 'manual/**'
       - 'nockster-js/**'
       - 'crates/nockster-wasm/**'
       - 'crates/nockster-core/**'
@@ -48,7 +50,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install Rust (wasm) + wasm-pack
         uses: dtolnay/rust-toolchain@nightly
@@ -95,6 +97,13 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Install mdBook
+        run: cargo install mdbook --version 0.5.3 --locked
+
+      - name: Build user manual
+        working-directory: manual
+        run: mdbook build --dest-dir ../web/dist/manual
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

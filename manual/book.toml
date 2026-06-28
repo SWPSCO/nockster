@@ -1,0 +1,10 @@
+[book]
+authors = ["Southwestern Pool Supply Co"]
+language = "en"
+src = "src"
+title = "Nockster Manual"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/SWPSCO/nockster"

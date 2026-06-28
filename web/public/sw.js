@@ -28,6 +28,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // cross-origin: let the network handle it
   if (url.pathname.startsWith('/updates/')) return; // OTA must always be fresh
+  if (url.pathname.startsWith('/manual/')) return; // mdBook pages are separate static docs
 
   // App shell / navigations: network-first, offline fallback to cached index.
   if (req.mode === 'navigate') {

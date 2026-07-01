@@ -1,6 +1,6 @@
 {
   "name": "@swps/nockster-js",
-  "version": "0.2.2",
+  "version": "1.0.0",
   "description": "TypeScript library for communicating with Nockster hardware wallet",
   "type": "module",
   "main": "./dist/index.js",

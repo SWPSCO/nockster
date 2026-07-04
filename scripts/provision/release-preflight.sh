@@ -264,6 +264,8 @@ check_update_signing_key_trust_hash() {
 check_secure_boot_key_file() {
   local path="$1"
   local required="$2"
+  local key_checker
+  local output
 
   if [[ -z "${path}" ]]; then
     if [[ "${required}" == "required" ]]; then
@@ -286,6 +288,18 @@ check_secure_boot_key_file() {
     ok "secure boot signing key looks like a PEM private key"
   else
     warn "secure boot signing key does not look like a PEM private key"
+  fi
+
+  key_checker="${repo_root}/scripts/provision/check-secure-boot-v2-key.sh"
+  if [[ ! -x "${key_checker}" ]]; then
+    fail "missing secure boot key checker: ${key_checker}"
+    return
+  fi
+  if output="$("${key_checker}" "${path}" "secure boot signing key" 2>&1)"; then
+    ok "secure boot signing key is RSA3072 for ESP32-S3 secure boot v2"
+  else
+    fail "secure boot signing key is not valid for ESP32-S3 secure boot v2"
+    printf '%s\n' "${output}" >&2
   fi
 }
 

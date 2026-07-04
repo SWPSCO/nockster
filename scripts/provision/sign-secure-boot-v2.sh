@@ -8,7 +8,7 @@ espsecure_cmd="${ESPSECURE:-espsecure}"
 script_dir="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 if [[ -z "${key_file}" || -z "${input_image}" || -z "${output_image}" ]]; then
-  echo "usage: $0 /path/to/secure-boot-v2.pem /path/to/unsigned-app.bin /path/to/signed-app.bin" >&2
+  echo "usage: $0 /path/to/secure-boot-v2-rsa.pem /path/to/unsigned-app.bin /path/to/signed-app.bin" >&2
   exit 2
 fi
 
@@ -18,6 +18,7 @@ if [[ ! -f "${key_file}" ]]; then
   echo "missing secure boot signing key: ${key_file}" >&2
   exit 2
 fi
+bash "${script_dir}/check-secure-boot-v2-key.sh" "${key_file}" "secure boot v2 key file"
 
 if [[ ! -f "${input_image}" ]]; then
   echo "missing unsigned app image: ${input_image}" >&2

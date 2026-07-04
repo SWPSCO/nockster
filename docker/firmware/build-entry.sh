@@ -14,6 +14,7 @@ fi
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 source "$HOME/export-esp.sh"
+export PATH="${ESPTOOL_VENV:-$HOME/.venv/esptool}/bin:$HOME/.local/bin:$PATH"
 
 if [[ -n "${ESPSECURE:-}" ]]; then
   if ! command -v "$ESPSECURE" >/dev/null 2>&1; then

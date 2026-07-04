@@ -44,6 +44,7 @@ NOCKSTER_UPDATE_PUBKEY_SHA256_HEX ?= 5aa46209222080a2ce107e25d427c3d9ada6cb77be2
 UPDATE_ARTIFACT_DIR ?= target/update
 UPDATE_BUNDLE ?= $(UPDATE_ARTIFACT_DIR)/nockster-fw.update.json
 UPDATE_FIRMWARE ?= $(UPDATE_ARTIFACT_DIR)/nockster-fw.bin
+UPDATE_UNSIGNED_FIRMWARE ?= $(UPDATE_ARTIFACT_DIR)/nockster-fw.unsigned.bin
 UPDATE_INDEX ?= latest.json
 UPDATE_BUNDLE_URL ?=
 UPDATE_FIRMWARE_URL ?=
@@ -78,7 +79,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight flash-prod-e2e generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts flash-encrypted-secure-boot-v2 provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update signed-update-secure-boot-v2 sign-update-bundle update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight flash-prod-e2e generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts flash-encrypted-secure-boot-v2 provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
 
 all: build
 
@@ -138,6 +139,42 @@ update-firmware-image: fw
 		"update firmware image"
 
 signed-update: check-update-trust update-firmware-image
+	@$(MAKE) sign-update-bundle \
+		FW_PROFILE="$(EFFECTIVE_FW_PROFILE)" \
+		NOCKSTER_RELEASE_VERSION="$(NOCKSTER_RELEASE_VERSION)" \
+		NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" \
+		UPDATE_SIGNING_KEY_FILE="$(UPDATE_SIGNING_KEY_FILE)" \
+		UPDATE_FIRMWARE="$(UPDATE_FIRMWARE)" \
+		UPDATE_BUNDLE="$(UPDATE_BUNDLE)" \
+		NOCKSTER_CLI="$(NOCKSTER_CLI)"
+
+signed-update-secure-boot-v2: check-update-trust
+	@set -e; \
+	if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
+		exit 1; \
+	fi; \
+	$(MAKE) update-firmware-image \
+		FW_PROFILE="$(EFFECTIVE_FW_PROFILE)" \
+		FW_FEATURES="$(FW_FEATURES)" \
+		NOCKSTER_RELEASE_VERSION="$(NOCKSTER_RELEASE_VERSION)" \
+		NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" \
+		ALLOW_UNSIGNED_PRODUCTION="$(ALLOW_UNSIGNED_PRODUCTION)" \
+		UPDATE_FIRMWARE="$(UPDATE_UNSIGNED_FIRMWARE)"; \
+	$(MAKE) release-sign-secure-boot-v2 \
+		SECURE_BOOT_KEY_FILE="$(SECURE_BOOT_KEY_FILE)" \
+		SECURE_BOOT_IMAGE="$(UPDATE_UNSIGNED_FIRMWARE)" \
+		SECURE_BOOT_SIGNED_IMAGE="$(UPDATE_FIRMWARE)"; \
+	$(MAKE) sign-update-bundle \
+		FW_PROFILE="$(EFFECTIVE_FW_PROFILE)" \
+		NOCKSTER_RELEASE_VERSION="$(NOCKSTER_RELEASE_VERSION)" \
+		NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" \
+		UPDATE_SIGNING_KEY_FILE="$(UPDATE_SIGNING_KEY_FILE)" \
+		UPDATE_FIRMWARE="$(UPDATE_FIRMWARE)" \
+		UPDATE_BUNDLE="$(UPDATE_BUNDLE)" \
+		NOCKSTER_CLI="$(NOCKSTER_CLI)"
+
+sign-update-bundle: check-update-trust
 	@set -e; \
 	if [[ -z "$(UPDATE_SIGNING_KEY_FILE)" ]]; then \
 		echo "Set UPDATE_SIGNING_KEY_FILE=/path/to/release-signing-key.hex"; \
@@ -830,6 +867,7 @@ help:
 	@echo "    make fw-chip-security - Build firmware with read-only chip security status"
 	@echo "    make fw-production - Refuse until signed/encrypted release flow is explicit"
 	@echo "    make signed-update - Build OTA .bin and signed update bundle"
+	@echo "    make signed-update-secure-boot-v2 - Build Secure Boot v2-signed OTA .bin and bundle"
 	@echo "    make wipe       - Build signed update artifacts; serial flashes+wipes, HID resets storage"
 	@echo "    make provision-summary - Show eFuse summary (PROVISION_PORT=/dev/ttyACM0)"
 	@echo "    make provision-plan - Print a non-destructive provisioning checklist"

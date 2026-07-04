@@ -150,7 +150,26 @@ make signed-update NOCKSTER_RELEASE_VERSION=2 FW_PROFILE=production ALLOW_UNSIGN
 It writes `target/update/nockster-fw.bin` and
 `target/update/nockster-fw.update.json` by default.
 
-Manual equivalent:
+For boards with ESP Secure Boot v2 enabled, the OTA app image must also carry
+the ESP secure-boot signature block. Use the secure-boot-aware target for
+production release artifacts:
+
+```sh
+make signed-update-secure-boot-v2 \
+  NOCKSTER_RELEASE_VERSION=2 \
+  FW_PROFILE=production \
+  ALLOW_UNSIGNED_PRODUCTION=1 \
+  UPDATE_SIGNING_KEY_FILE=../nockster-secrets/release-signing-key.hex \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem
+```
+
+That target builds `target/update/nockster-fw.unsigned.bin`, signs it with the
+ESP Secure Boot v2 RSA key into `target/update/nockster-fw.bin`, then signs the
+OTA manifest over the secure-boot-signed image. The GitHub
+`firmware-release` workflow uses this path for `FW_PROFILE=production`; it
+requires both `UPDATE_SIGNING_KEY` and `SECURE_BOOT_V2_KEY` repository secrets.
+
+Manual equivalent for the update-manifest signing step:
 
 ```sh
 nockster-cli update sign \

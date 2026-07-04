@@ -2,7 +2,7 @@ name: Firmware release
 
 # Builds + signs a Nockster firmware release INSIDE a container (docker/firmware/
 # Dockerfile) for portability/reproducibility, then publishes a GitHub Release with:
-#   - nockster-fw.bin            (raw OTA image, built --release)
+#   - nockster-fw.bin            (OTA app image; Secure Boot v2-signed for production)
 #   - nockster-fw.update.json    (signed update bundle/manifest)
 #   - latest.json                (OTA release index; relative asset URLs)
 #
@@ -17,6 +17,9 @@ name: Firmware release
 # Required repo secrets:
 #   UPDATE_SIGNING_KEY  — firmware update signing key (hex or raw, per nockster-cli).
 #                         Must match the fixed on-device trust anchor below.
+#   SECURE_BOOT_V2_KEY  — ESP32-S3 Secure Boot v2 RSA3072 PEM. Required for
+#                         production releases so OTA app images boot on
+#                         secure-booted boards.
 #   RCLONE_B64          — base64-encoded rclone.conf with an `r2:` remote for the
 #                         swpsco bucket (same secret used by other SWPSCO repos).
 
@@ -66,15 +69,25 @@ jobs:
           echo "profile=$PROFILE" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Write signing key (host, outside repo)
+      - name: Write signing keys (host, outside repo)
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          SECURE_BOOT_V2_KEY: ${{ secrets.SECURE_BOOT_V2_KEY }}
         run: |
           if [ -z "$UPDATE_SIGNING_KEY" ]; then
             echo "::error::missing repo secret UPDATE_SIGNING_KEY"
             exit 1
           fi
           printf '%s' "$UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/signing.key"
+          if [ "${{ steps.meta.outputs.profile }}" = "production" ]; then
+            if [ -z "$SECURE_BOOT_V2_KEY" ]; then
+              echo "::error::missing repo secret SECURE_BOOT_V2_KEY"
+              exit 1
+            fi
+            printf '%s' "$SECURE_BOOT_V2_KEY" > "$RUNNER_TEMP/secure-boot-v2-rsa.pem"
+          else
+            : > "$RUNNER_TEMP/secure-boot-v2-rsa.pem"
+          fi
 
       - name: Build firmware builder image
         run: docker build -t nockster-fw -f docker/firmware/Dockerfile .
@@ -90,6 +103,7 @@ jobs:
             -e FW_PROFILE="${{ steps.meta.outputs.profile }}" \
             -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX \
             -v "$RUNNER_TEMP/signing.key:/keys/signing.key:ro" \
+            -v "$RUNNER_TEMP/secure-boot-v2-rsa.pem:/keys/secure-boot-v2-rsa.pem:ro" \
             -v "$PWD/out:/out" \
             nockster-fw
 

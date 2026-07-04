@@ -83,6 +83,16 @@ For a stricter production pass, provide the local secret paths from outside the
 repo plus the public update artifacts:
 
 ```sh
+make signed-update-secure-boot-v2 \
+  FW_PROFILE=production \
+  ALLOW_UNSIGNED_PRODUCTION=1 \
+  NOCKSTER_RELEASE_VERSION=1 \
+  NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=<sha256-of-compressed-release-pubkey> \
+  UPDATE_SIGNING_KEY_FILE=../nockster-secrets/release-signing-key.hex \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem
+```
+
+```sh
 make release-preflight \
   FW_PROFILE=production \
   RELEASE_PREFLIGHT_STRICT=1 \
@@ -92,8 +102,8 @@ make release-preflight \
   UPDATE_SIGNING_KEY_FILE=../nockster-secrets/release-signing-key.hex \
   SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
   FLASH_ENCRYPTION_KEY_FILE=../nockster-secrets/flash-encryption-key.bin \
-  UPDATE_BUNDLE=nockster-fw.update.json \
-  UPDATE_FIRMWARE=target/xtensa-esp32s3-none-elf/release/nockster-fw.bin
+  UPDATE_BUNDLE=target/update/nockster-fw.update.json \
+  UPDATE_FIRMWARE=target/update/nockster-fw.bin
 ```
 
 It verifies the signed update bundle against the configured trust anchor and

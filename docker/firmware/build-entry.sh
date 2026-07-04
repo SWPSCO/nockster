@@ -19,21 +19,37 @@ source "$HOME/export-esp.sh"
 : "${FW_PROFILE:=production}"
 : "${NOCKSTER_UPDATE_PUBKEY_SHA256_HEX:?set NOCKSTER_UPDATE_PUBKEY_SHA256_HEX (public trust anchor)}"
 KEY_FILE="${UPDATE_SIGNING_KEY_FILE:-/keys/signing.key}"
+SECURE_BOOT_KEY_FILE="${SECURE_BOOT_KEY_FILE:-/keys/secure-boot-v2-rsa.pem}"
 
 if [[ ! -f "$KEY_FILE" ]]; then
   echo "signing key not found at $KEY_FILE (mount it read-only)" >&2
   exit 1
 fi
+if [[ "$FW_PROFILE" == "production" && ! -f "$SECURE_BOOT_KEY_FILE" ]]; then
+  echo "secure boot v2 key not found at $SECURE_BOOT_KEY_FILE (mount it read-only for production releases)" >&2
+  exit 1
+fi
 
 export NOCKSTER_UPDATE_PUBKEY_SHA256_HEX
 
-# Chains fw (--release) -> save-image -> sign -> verify. The production guard
-# is bypassed here because this release-only path signs immediately afterward.
-make signed-update \
-  FW_PROFILE="$FW_PROFILE" \
-  NOCKSTER_RELEASE_VERSION="$RELEASE_VERSION" \
-  UPDATE_SIGNING_KEY_FILE="$KEY_FILE" \
-  ALLOW_UNSIGNED_PRODUCTION=1
+if [[ "$FW_PROFILE" == "production" ]]; then
+  # Production OTA images must be signed for ESP Secure Boot v2 before the
+  # update manifest is signed, so the manifest hash covers the bootable image.
+  make signed-update-secure-boot-v2 \
+    FW_PROFILE="$FW_PROFILE" \
+    NOCKSTER_RELEASE_VERSION="$RELEASE_VERSION" \
+    UPDATE_SIGNING_KEY_FILE="$KEY_FILE" \
+    SECURE_BOOT_KEY_FILE="$SECURE_BOOT_KEY_FILE" \
+    ALLOW_UNSIGNED_PRODUCTION=1
+else
+  # Dev/chip-security OTA bundles are useful for reversible update testing on
+  # non-secure-booted boards.
+  make signed-update \
+    FW_PROFILE="$FW_PROFILE" \
+    NOCKSTER_RELEASE_VERSION="$RELEASE_VERSION" \
+    UPDATE_SIGNING_KEY_FILE="$KEY_FILE" \
+    ALLOW_UNSIGNED_PRODUCTION=1
+fi
 
 # OTA release index with relative asset URLs (published to R2 at
 # bin.aeroe.io/nockster/updates/ by the firmware-release workflow).

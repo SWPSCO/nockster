@@ -13,6 +13,7 @@
 #     -e RELEASE_VERSION=7 -e FW_PROFILE=production \
 #     -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=<pubkey-sha256> \
 #     -v "$PWD/release-signing.key:/keys/signing.key:ro" \
+#     -v "$PWD/secure-boot-v2-rsa.pem:/keys/secure-boot-v2-rsa.pem:ro" \
 #     -v "$PWD/out:/out" \
 #     nockster-fw
 #

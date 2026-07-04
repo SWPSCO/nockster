@@ -68,7 +68,7 @@ make release-preflight \
   NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=<sha256-of-compressed-release-pubkey> \
   HMAC_KEY_FILE=../nockster-secrets/hmac-up.bin \
   UPDATE_SIGNING_KEY_FILE=../nockster-secrets/release-signing-key.hex \
-  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2.pem \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
   FLASH_ENCRYPTION_KEY_FILE=../nockster-secrets/flash-encryption-key.bin \
   UPDATE_BUNDLE=nockster-fw.update.json \
   UPDATE_FIRMWARE=target/xtensa-esp32s3-none-elf/release/nockster-fw.bin
@@ -163,20 +163,48 @@ Secure boot v2 release signing:
 
 ```sh
 make generate-secure-boot-v2-key \
-  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2.pem
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem
+
+make update-firmware-image \
+  FW_PROFILE=production ALLOW_UNSIGNED_PRODUCTION=1 \
+  NOCKSTER_RELEASE_VERSION=<n> \
+  NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=<sha256-of-release-pubkey> \
+  UPDATE_FIRMWARE=target/secure-boot-v2/nockster-fw.factory.bin
 
 make release-sign-secure-boot-v2 \
-  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2.pem \
-  SECURE_BOOT_IMAGE=/path/to/unsigned-app-image.bin \
-  SECURE_BOOT_SIGNED_IMAGE=/path/to/signed-app-image.bin
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
+  SECURE_BOOT_IMAGE=target/secure-boot-v2/nockster-fw.factory.bin \
+  SECURE_BOOT_SIGNED_IMAGE=target/secure-boot-v2/nockster-fw.factory.signed.bin
+
+make release-build-secure-boot-v2-bootloader \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem
 ```
 
 `generate-secure-boot-v2-key` only creates a local secure-boot signing key,
 refuses to write inside the repo, refuses to overwrite an existing file, and
-sets restrictive permissions. It does not touch eFuses.
+sets restrictive permissions. For ESP32-S3 it creates an RSA3072 key. It does
+not touch eFuses.
 `release-sign-secure-boot-v2` refuses in-place signing, refuses to overwrite an
 existing signed output, and first checks that the input looks like an ESP app
 image that fits the configured app slot.
+`release-build-secure-boot-v2-bootloader` uses ESP-IDF to build a signed
+secure-boot-enabled second-stage bootloader and matching partition-table
+binary.
+
+Put the board in serial bootloader/download mode and flash the signed
+bootloader plus signed app without a normal reset:
+
+```sh
+make flash-secure-boot-v2 \
+  FLASH_PORT=/dev/ttyACM0 \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
+  SECURE_BOOT_SIGNED_IMAGE=target/secure-boot-v2/nockster-fw.factory.signed.bin
+```
+
+`flash-secure-boot-v2` writes the signed secure-boot bootloader at `0x0`, the
+partition table at `0x8000`, erases `otadata`, writes the signed app at
+`0x10000`, and leaves the chip in serial bootloader mode. Burn the digest and
+`SECURE_BOOT_EN` before the first normal reset.
 
 Secure boot digest provisioning is irreversible and intentionally separate from
 release signing:
@@ -185,19 +213,34 @@ release signing:
 make provision-summary PROVISION_PORT=/dev/ttyACM0
 make provision-secure-boot-v2-digest \
   PROVISION_PORT=/dev/ttyACM0 \
-  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2.pem \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
   CONFIRM_IRREVERSIBLE=burn-secure-boot-v2
+
+make provision-secure-boot-v2-enable \
+  PROVISION_PORT=/dev/ttyACM0 \
+  CONFIRM_IRREVERSIBLE=enable-secure-boot-v2
 ```
 
 `provision-secure-boot-v2-digest` prints the current eFuse summary and asks for
 an additional interactive confirmation before it calls
 `espefuse burn-key-digest`.
+`provision-secure-boot-v2-enable` separately burns `SECURE_BOOT_EN`; run it
+only after the signed bootloader/app and matching RSA digest are in place.
 
 Flash encryption provisioning guards:
 
 ```sh
 make generate-flash-encryption-key \
   FLASH_ENCRYPTION_KEY_FILE=../nockster-secrets/flash-encryption-key.bin
+
+make release-build-secure-boot-v2-bootloader \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
+  SECURE_BOOT_BOOTLOADER_FLASH_ENCRYPTION=1
+
+make release-encrypt-flash-v2-artifacts \
+  FLASH_ENCRYPTION_KEY_FILE=../nockster-secrets/flash-encryption-key.bin \
+  SECURE_BOOT_KEY_FILE=../nockster-secrets/secure-boot-v2-rsa.pem \
+  SECURE_BOOT_SIGNED_IMAGE=target/secure-boot-v2/nockster-fw.factory.signed.bin
 
 make provision-summary PROVISION_PORT=/dev/ttyACM0
 
@@ -206,6 +249,9 @@ make provision-flash-encryption-key \
   FLASH_ENCRYPTION_KEY_FILE=../nockster-secrets/flash-encryption-key.bin \
   FLASH_ENCRYPTION_KEY_BLOCK=BLOCK_KEY4 \
   CONFIRM_IRREVERSIBLE=burn-flash-encryption-key
+
+make flash-encrypted-secure-boot-v2 \
+  FLASH_PORT=/dev/ttyACM0
 
 make provision-flash-encryption-enable \
   PROVISION_PORT=/dev/ttyACM0 \
@@ -216,10 +262,25 @@ make provision-flash-encryption-enable \
 to write inside the repo, refuses to overwrite an existing file, and sets
 restrictive permissions. It does not touch eFuses.
 
+`release-encrypt-flash-v2-artifacts` host-encrypts the signed secure-boot
+bootloader at `0x0`, partition table at `0x8000`, signed factory app at
+`0x10000`, and blank `otadata` at `0x310000` using ESP32-S3 AES-XTS flash
+encryption. `flash-encrypted-secure-boot-v2` writes only those ciphertext
+artifacts and leaves the board in serial bootloader mode.
+
 `provision-flash-encryption-key` burns the key with purpose `XTS_AES_128_KEY`
 and prints the current eFuse summary first. `provision-flash-encryption-enable`
 burns `SPI_BOOT_CRYPT_CNT` separately. Keep these separate until a
 sacrificial-board run has proven the signed/encrypted image and recovery flow.
+Do not reset between `flash-encrypted-secure-boot-v2` and
+`provision-flash-encryption-enable`.
+
+After reset, validate both secure boot and flash encryption:
+
+```sh
+nockster-cli security --port hid \
+  --expect-chip-security --expect-secure-boot --expect-flash-encryption
+```
 
 Production lockdown guards:
 

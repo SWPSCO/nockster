@@ -5,7 +5,7 @@ key_file="${1:-}"
 espsecure_cmd="${ESPSECURE:-espsecure}"
 
 if [[ -z "${key_file}" ]]; then
-  echo "usage: $0 /path/to/secure-boot-v2.pem" >&2
+  echo "usage: $0 /path/to/secure-boot-v2-rsa.pem" >&2
   exit 2
 fi
 
@@ -50,7 +50,7 @@ trap cleanup EXIT
 umask 077
 "${espsecure_cmd}" generate-signing-key \
   --version 2 \
-  --scheme ecdsa256 \
+  --scheme rsa3072 \
   "${tmp}"
 chmod 600 -- "${tmp}"
 

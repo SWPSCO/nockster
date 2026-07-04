@@ -20,9 +20,23 @@ SECURE_BOOT_KEY_FILE ?=
 SECURE_BOOT_IMAGE ?=
 SECURE_BOOT_SIGNED_IMAGE ?=
 SECURE_BOOT_DIGEST_BLOCK ?= BLOCK_KEY0
+SECURE_BOOT_DIGEST_PURPOSE ?=
+SECURE_BOOT_BOOTLOADER_IMAGE ?= target/secure-boot-v2/bootloader.bin
+SECURE_BOOT_PARTITION_TABLE_BIN ?= target/secure-boot-v2/partition-table.bin
+SECURE_BOOT_BOOTLOADER_FLASH_ENCRYPTION ?= 0
 FLASH_ENCRYPTION_KEY_FILE ?=
 FLASH_ENCRYPTION_KEY_BLOCK ?= BLOCK_KEY4
 FLASH_CRYPT_CNT_VALUE ?= 0x7
+FLASH_ENCRYPTION_ARTIFACT_DIR ?= target/secure-boot-v2/encrypted
+FLASH_ENCRYPTION_BOOTLOADER_IMAGE ?= $(FLASH_ENCRYPTION_ARTIFACT_DIR)/bootloader.enc.bin
+FLASH_ENCRYPTION_PARTITION_TABLE_BIN ?= $(FLASH_ENCRYPTION_ARTIFACT_DIR)/partition-table.enc.bin
+FLASH_ENCRYPTION_SIGNED_IMAGE ?= $(FLASH_ENCRYPTION_ARTIFACT_DIR)/nockster-fw.factory.signed.enc.bin
+FLASH_ENCRYPTION_OTADATA_BIN ?= $(FLASH_ENCRYPTION_ARTIFACT_DIR)/otadata.blank.enc.bin
+FLASH_ENCRYPTION_BOOTLOADER_OFFSET ?= 0x0
+FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET ?= 0x8000
+FLASH_ENCRYPTION_APP_OFFSET ?= 0x10000
+FLASH_ENCRYPTION_OTADATA_OFFSET ?= 0x310000
+FLASH_ENCRYPTION_OTADATA_SIZE ?= 8192
 NVS_PARTITION_ENCRYPTION_VALIDATED ?= 0
 LOCAL_UPDATE_SIGNING_KEY_FILE ?= .secrets/update-signing.key
 UPDATE_SIGNING_KEY_FILE ?= $(LOCAL_UPDATE_SIGNING_KEY_FILE)
@@ -60,7 +74,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-sign-secure-boot-v2 provision-secure-boot-v2-digest generate-flash-encryption-key provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts flash-encrypted-secure-boot-v2 provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
 
 all: build
 
@@ -344,9 +358,16 @@ provision-plan:
 	SECURE_BOOT_IMAGE="$(SECURE_BOOT_IMAGE)" \
 	SECURE_BOOT_SIGNED_IMAGE="$(SECURE_BOOT_SIGNED_IMAGE)" \
 	SECURE_BOOT_DIGEST_BLOCK="$(SECURE_BOOT_DIGEST_BLOCK)" \
+	SECURE_BOOT_DIGEST_PURPOSE="$(SECURE_BOOT_DIGEST_PURPOSE)" \
+	SECURE_BOOT_BOOTLOADER_IMAGE="$(SECURE_BOOT_BOOTLOADER_IMAGE)" \
+	SECURE_BOOT_PARTITION_TABLE_BIN="$(SECURE_BOOT_PARTITION_TABLE_BIN)" \
 	FLASH_ENCRYPTION_KEY_FILE="$(FLASH_ENCRYPTION_KEY_FILE)" \
 	FLASH_ENCRYPTION_KEY_BLOCK="$(FLASH_ENCRYPTION_KEY_BLOCK)" \
 	FLASH_CRYPT_CNT_VALUE="$(FLASH_CRYPT_CNT_VALUE)" \
+	FLASH_ENCRYPTION_BOOTLOADER_IMAGE="$(FLASH_ENCRYPTION_BOOTLOADER_IMAGE)" \
+	FLASH_ENCRYPTION_PARTITION_TABLE_BIN="$(FLASH_ENCRYPTION_PARTITION_TABLE_BIN)" \
+	FLASH_ENCRYPTION_SIGNED_IMAGE="$(FLASH_ENCRYPTION_SIGNED_IMAGE)" \
+	FLASH_ENCRYPTION_OTADATA_BIN="$(FLASH_ENCRYPTION_OTADATA_BIN)" \
 	UPDATE_BUNDLE="$(UPDATE_BUNDLE)" \
 	UPDATE_FIRMWARE="$(UPDATE_FIRMWARE)" \
 	bash scripts/provision/provision-plan.sh
@@ -457,14 +478,26 @@ provision-hmac-up:
 
 generate-secure-boot-v2-key:
 	@if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
-		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2.pem"; \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
 		exit 1; \
 	fi; \
 	bash scripts/provision/generate-secure-boot-v2-key.sh "$(SECURE_BOOT_KEY_FILE)"
 
+release-build-secure-boot-v2-bootloader:
+	@if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
+		exit 1; \
+	fi; \
+	SECURE_BOOT_BOOTLOADER_FLASH_ENCRYPTION="$(SECURE_BOOT_BOOTLOADER_FLASH_ENCRYPTION)" \
+	bash scripts/provision/build-secure-boot-v2-bootloader.sh \
+		"$(SECURE_BOOT_KEY_FILE)" \
+		"$(PARTITION_TABLE)" \
+		"$(SECURE_BOOT_BOOTLOADER_IMAGE)" \
+		"$(SECURE_BOOT_PARTITION_TABLE_BIN)"
+
 release-sign-secure-boot-v2:
 	@if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
-		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2.pem"; \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
 		exit 1; \
 	fi; \
 	if [[ -z "$(SECURE_BOOT_IMAGE)" ]]; then \
@@ -477,6 +510,44 @@ release-sign-secure-boot-v2:
 	fi; \
 	bash scripts/provision/sign-secure-boot-v2.sh "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_IMAGE)" "$(SECURE_BOOT_SIGNED_IMAGE)"
 
+flash-secure-boot-v2:
+	@set -e; \
+	if [[ -z "$(FLASH_PORT)" ]]; then \
+		echo "Set FLASH_PORT=/dev/ttyACM0"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
+		exit 1; \
+	fi; \
+	if [[ ! -f "$(SECURE_BOOT_BOOTLOADER_IMAGE)" ]]; then \
+		echo "missing signed secure-boot bootloader: $(SECURE_BOOT_BOOTLOADER_IMAGE)"; \
+		exit 1; \
+	fi; \
+	if [[ ! -f "$(SECURE_BOOT_PARTITION_TABLE_BIN)" ]]; then \
+		echo "missing partition table binary: $(SECURE_BOOT_PARTITION_TABLE_BIN)"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(SECURE_BOOT_SIGNED_IMAGE)" || ! -f "$(SECURE_BOOT_SIGNED_IMAGE)" ]]; then \
+		echo "Set SECURE_BOOT_SIGNED_IMAGE=/path/to/signed-app-image.bin"; \
+		exit 1; \
+	fi; \
+	bash scripts/provision/check-secure-boot-v2-key.sh "$(SECURE_BOOT_KEY_FILE)" "secure boot v2 key file"; \
+	espsecure verify-signature --version 2 --keyfile "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_BOOTLOADER_IMAGE)"; \
+	espsecure verify-signature --version 2 --keyfile "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_SIGNED_IMAGE)"; \
+	PORT_PATH="$(FLASH_PORT)"; \
+	if [[ "$$PORT_PATH" != /dev/* ]]; then \
+		PORT_PATH="/dev/$$PORT_PATH"; \
+	fi; \
+	if [[ "$$OSTYPE" != "darwin"* ]]; then \
+		fuser -k "$$PORT_PATH" 2>/dev/null || true; \
+	fi; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --after no-reset 0x0 "$(SECURE_BOOT_BOOTLOADER_IMAGE)"; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset 0x8000 "$(SECURE_BOOT_PARTITION_TABLE_BIN)"; \
+	espflash erase-parts --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" --no-stub --before no-reset --after no-reset otadata; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset 0x10000 "$(SECURE_BOOT_SIGNED_IMAGE)"; \
+	echo "Signed bootloader/app flashed; device left in serial bootloader mode. Burn/check secure-boot eFuses before resetting."
+
 provision-secure-boot-v2-digest:
 	@if [[ "$(CONFIRM_IRREVERSIBLE)" != "burn-secure-boot-v2" ]]; then \
 		echo "Refusing irreversible secure-boot eFuse write."; \
@@ -488,10 +559,22 @@ provision-secure-boot-v2-digest:
 		exit 1; \
 	fi; \
 	if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
-		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2.pem"; \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
 		exit 1; \
 	fi; \
-	bash scripts/provision/burn-secure-boot-v2-digest.sh "$(PROVISION_PORT)" "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_DIGEST_BLOCK)"
+	bash scripts/provision/burn-secure-boot-v2-digest.sh "$(PROVISION_PORT)" "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_DIGEST_BLOCK)" "$(SECURE_BOOT_DIGEST_PURPOSE)"
+
+provision-secure-boot-v2-enable:
+	@if [[ "$(CONFIRM_IRREVERSIBLE)" != "enable-secure-boot-v2" ]]; then \
+		echo "Refusing irreversible SECURE_BOOT_EN eFuse write."; \
+		echo "Flash signed bootloader/app first, then rerun with CONFIRM_IRREVERSIBLE=enable-secure-boot-v2."; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(PROVISION_PORT)" ]]; then \
+		echo "Set PROVISION_PORT=/dev/ttyACM0"; \
+		exit 1; \
+	fi; \
+	bash scripts/provision/enable-secure-boot-v2.sh "$(PROVISION_PORT)"
 
 generate-flash-encryption-key:
 	@if [[ -z "$(FLASH_ENCRYPTION_KEY_FILE)" ]]; then \
@@ -499,6 +582,72 @@ generate-flash-encryption-key:
 		exit 1; \
 	fi; \
 	bash scripts/provision/generate-flash-encryption-key.sh "$(FLASH_ENCRYPTION_KEY_FILE)"
+
+release-encrypt-flash-v2-artifacts:
+	@set -e; \
+	if [[ -z "$(FLASH_ENCRYPTION_KEY_FILE)" ]]; then \
+		echo "Set FLASH_ENCRYPTION_KEY_FILE=/path/to/flash-encryption-key.bin"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(SECURE_BOOT_SIGNED_IMAGE)" || ! -f "$(SECURE_BOOT_SIGNED_IMAGE)" ]]; then \
+		echo "Set SECURE_BOOT_SIGNED_IMAGE=/path/to/signed-app-image.bin"; \
+		exit 1; \
+	fi; \
+	if [[ ! -f "$(SECURE_BOOT_BOOTLOADER_IMAGE)" ]]; then \
+		echo "missing signed secure-boot bootloader: $(SECURE_BOOT_BOOTLOADER_IMAGE)"; \
+		exit 1; \
+	fi; \
+	if [[ ! -f "$(SECURE_BOOT_PARTITION_TABLE_BIN)" ]]; then \
+		echo "missing partition table binary: $(SECURE_BOOT_PARTITION_TABLE_BIN)"; \
+		exit 1; \
+	fi; \
+	bash scripts/provision/check-secure-boot-v2-key.sh "$(SECURE_BOOT_KEY_FILE)" "secure boot v2 key file"; \
+	bash scripts/provision/check-flash-encryption-key.sh "$(FLASH_ENCRYPTION_KEY_FILE)" "flash encryption key file"; \
+	espsecure verify-signature --version 2 --keyfile "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_BOOTLOADER_IMAGE)"; \
+	espsecure verify-signature --version 2 --keyfile "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_SIGNED_IMAGE)"; \
+	FLASH_ENCRYPTION_BOOTLOADER_OFFSET="$(FLASH_ENCRYPTION_BOOTLOADER_OFFSET)" \
+	FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET="$(FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET)" \
+	FLASH_ENCRYPTION_APP_OFFSET="$(FLASH_ENCRYPTION_APP_OFFSET)" \
+	FLASH_ENCRYPTION_OTADATA_OFFSET="$(FLASH_ENCRYPTION_OTADATA_OFFSET)" \
+	FLASH_ENCRYPTION_OTADATA_SIZE="$(FLASH_ENCRYPTION_OTADATA_SIZE)" \
+	bash scripts/provision/encrypt-flash-artifacts.sh \
+		"$(FLASH_ENCRYPTION_KEY_FILE)" \
+		"$(SECURE_BOOT_BOOTLOADER_IMAGE)" \
+		"$(SECURE_BOOT_PARTITION_TABLE_BIN)" \
+		"$(SECURE_BOOT_SIGNED_IMAGE)" \
+		"$(FLASH_ENCRYPTION_BOOTLOADER_IMAGE)" \
+		"$(FLASH_ENCRYPTION_PARTITION_TABLE_BIN)" \
+		"$(FLASH_ENCRYPTION_SIGNED_IMAGE)" \
+		"$(FLASH_ENCRYPTION_OTADATA_BIN)"
+
+flash-encrypted-secure-boot-v2:
+	@set -e; \
+	if [[ -z "$(FLASH_PORT)" ]]; then \
+		echo "Set FLASH_PORT=/dev/ttyACM0"; \
+		exit 1; \
+	fi; \
+	for artifact in "$(FLASH_ENCRYPTION_BOOTLOADER_IMAGE)" "$(FLASH_ENCRYPTION_PARTITION_TABLE_BIN)" "$(FLASH_ENCRYPTION_SIGNED_IMAGE)" "$(FLASH_ENCRYPTION_OTADATA_BIN)"; do \
+		if [[ ! -f "$$artifact" ]]; then \
+			echo "missing encrypted flash artifact: $$artifact"; \
+			exit 1; \
+		fi; \
+	done; \
+	PORT_PATH="$(FLASH_PORT)"; \
+	if [[ "$$PORT_PATH" != /dev/* ]]; then \
+		PORT_PATH="/dev/$$PORT_PATH"; \
+	fi; \
+	if [[ "$$OSTYPE" != "darwin"* ]]; then \
+		fuser -k "$$PORT_PATH" 2>/dev/null || true; \
+	fi; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --after no-reset "$(FLASH_ENCRYPTION_BOOTLOADER_OFFSET)" "$(FLASH_ENCRYPTION_BOOTLOADER_IMAGE)"; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset "$(FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET)" "$(FLASH_ENCRYPTION_PARTITION_TABLE_BIN)"; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset "$(FLASH_ENCRYPTION_OTADATA_OFFSET)" "$(FLASH_ENCRYPTION_OTADATA_BIN)"; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset "$(FLASH_ENCRYPTION_APP_OFFSET)" "$(FLASH_ENCRYPTION_SIGNED_IMAGE)"; \
+	echo "Encrypted bootloader/app flashed; device left in serial bootloader mode. Burn SPI_BOOT_CRYPT_CNT before resetting."
 
 provision-flash-encryption-key:
 	@if [[ "$(CONFIRM_IRREVERSIBLE)" != "burn-flash-encryption-key" ]]; then \
@@ -653,9 +802,14 @@ help:
 	@echo "    make generate-hmac-up-key - Generate a local 32-byte HMAC_UP key file"
 	@echo "    make provision-hmac-up - Explicit HMAC_UP eFuse provisioning guard"
 	@echo "    make generate-secure-boot-v2-key - Generate a local secure boot v2 signing key"
+	@echo "    make release-build-secure-boot-v2-bootloader - Build signed secure boot v2 bootloader"
 	@echo "    make release-sign-secure-boot-v2 - Sign a built app image for secure boot v2"
+	@echo "    make flash-secure-boot-v2 - Flash signed secure bootloader/app without resetting"
 	@echo "    make provision-secure-boot-v2-digest - Explicit secure boot v2 digest burn guard"
+	@echo "    make provision-secure-boot-v2-enable - Explicit SECURE_BOOT_EN burn guard"
 	@echo "    make generate-flash-encryption-key - Generate a local flash encryption key"
+	@echo "    make release-encrypt-flash-v2-artifacts - Host-encrypt signed bootloader/app artifacts"
+	@echo "    make flash-encrypted-secure-boot-v2 - Flash encrypted secure-boot artifacts without resetting"
 	@echo "    make provision-flash-encryption-key - Explicit flash encryption key burn guard"
 	@echo "    make provision-flash-encryption-enable - Explicit SPI_BOOT_CRYPT_CNT burn guard"
 	@echo "    make provision-lockdown-jtag - Explicit production JTAG lockdown guard"

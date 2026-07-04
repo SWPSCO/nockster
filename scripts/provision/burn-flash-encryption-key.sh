@@ -18,12 +18,7 @@ if [[ ! -f "${key_file}" ]]; then
   echo "missing flash encryption key file: ${key_file}" >&2
   exit 2
 fi
-
-size="$(wc -c <"${key_file}" | tr -d '[:space:]')"
-if [[ "${size}" != "32" ]]; then
-  echo "flash encryption key file must be exactly 32 bytes, got ${size}" >&2
-  exit 2
-fi
+bash "${script_dir}/check-flash-encryption-key.sh" "${key_file}" "flash encryption key file"
 
 case "${block}" in
   BLOCK_KEY0|BLOCK_KEY1|BLOCK_KEY2|BLOCK_KEY3|BLOCK_KEY4|BLOCK_KEY5) ;;

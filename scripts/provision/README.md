@@ -20,6 +20,28 @@ This prints the ordered commands for HMAC_UP, secure boot v2, flash encryption,
 strict release preflight, and final lockdown validation. It does not invoke
 `espflash`, `espsecure`, `espefuse`, or `nockster-cli`.
 
+Fresh-board one-shot provisioning:
+
+```sh
+make flash-prod-e2e
+```
+
+`flash-prod-e2e` is the single-confirmation shortcut for a fresh sacrificial
+board. It defaults to `/dev/ttyACM0`, `../nockster-secrets/`, release version
+`1` when `NOCKSTER_RELEASE_VERSION=0`, secure-boot digest slot `BLOCK_KEY0`,
+and flash-encryption key slot `BLOCK_KEY4`. It generates missing key files
+outside the repo, builds/signs/encrypts a fresh production image set under
+`target/prod-e2e/<time>/`, prints the current eFuse summary, then asks once for
+`FLASH-PROD-E2E`.
+
+After that one prompt it burns HMAC_UP, flashes the signed secure-boot image,
+burns the secure-boot digest, burns the flash-encryption key, enables secure
+boot, flashes only encrypted artifacts, enables flash encryption, resets, and
+validates over HID. It refuses to start the burn phase if the selected key
+slots, `SECURE_BOOT_EN`, or `SPI_BOOT_CRYPT_CNT` are already set. Use
+`PROD_E2E_DRY_RUN=1` to print the command order. Final lockdown and
+power-glitch fuses remain separate targets.
+
 Non-destructive device validation:
 
 ```sh

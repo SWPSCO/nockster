@@ -57,6 +57,10 @@ RELEASE_PREFLIGHT_STRICT ?=
 NOCKSTER_CLI ?=
 CONFIRM_IRREVERSIBLE ?=
 PROVISION_STAGE ?= production
+PROD_E2E_ARTIFACT_DIR ?=
+PROD_E2E_RELEASE_VERSION ?= 1
+PROD_E2E_VALIDATE_PORT ?= hid
+PROD_E2E_DRY_RUN ?= 0
 VALIDATE_STAGE ?= smoke
 VALIDATE_PORT ?= hid
 VALIDATE_BAUD ?= 115200
@@ -74,7 +78,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts flash-encrypted-secure-boot-v2 provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight flash-prod-e2e generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts flash-encrypted-secure-boot-v2 provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
 
 all: build
 
@@ -346,6 +350,42 @@ release-preflight:
 	RELEASE_PREFLIGHT_STRICT="$(RELEASE_PREFLIGHT_STRICT)" \
 	NOCKSTER_CLI="$(NOCKSTER_CLI)" \
 	bash scripts/provision/release-preflight.sh
+
+flash-prod-e2e:
+	@PROVISION_PORT="$(PROVISION_PORT)" \
+	FLASH_PORT="$(FLASH_PORT)" \
+	PROD_E2E_ARTIFACT_DIR="$(PROD_E2E_ARTIFACT_DIR)" \
+	PROD_E2E_RELEASE_VERSION="$(PROD_E2E_RELEASE_VERSION)" \
+	PROD_E2E_VALIDATE_PORT="$(PROD_E2E_VALIDATE_PORT)" \
+	PROD_E2E_DRY_RUN="$(PROD_E2E_DRY_RUN)" \
+	NOCKSTER_SECRET_DIR="$(NOCKSTER_SECRET_DIR)" \
+	NOCKSTER_RELEASE_VERSION="$(NOCKSTER_RELEASE_VERSION)" \
+	NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" \
+	NOCKSTER_APP_SLOT_SIZE_BYTES="$(NOCKSTER_APP_SLOT_SIZE_BYTES)" \
+	PARTITION_TABLE="$(PARTITION_TABLE)" \
+	ESP_CHIP="$(ESP_CHIP)" \
+	HMAC_KEY_FILE="$(HMAC_KEY_FILE)" \
+	SECURE_BOOT_KEY_FILE="$(SECURE_BOOT_KEY_FILE)" \
+	SECURE_BOOT_IMAGE="$(SECURE_BOOT_IMAGE)" \
+	SECURE_BOOT_SIGNED_IMAGE="$(SECURE_BOOT_SIGNED_IMAGE)" \
+	SECURE_BOOT_DIGEST_BLOCK="$(SECURE_BOOT_DIGEST_BLOCK)" \
+	SECURE_BOOT_DIGEST_PURPOSE="$(SECURE_BOOT_DIGEST_PURPOSE)" \
+	SECURE_BOOT_BOOTLOADER_IMAGE="$(if $(filter command line environment environment override,$(origin SECURE_BOOT_BOOTLOADER_IMAGE)),$(SECURE_BOOT_BOOTLOADER_IMAGE),)" \
+	SECURE_BOOT_PARTITION_TABLE_BIN="$(if $(filter command line environment environment override,$(origin SECURE_BOOT_PARTITION_TABLE_BIN)),$(SECURE_BOOT_PARTITION_TABLE_BIN),)" \
+	FLASH_ENCRYPTION_KEY_FILE="$(FLASH_ENCRYPTION_KEY_FILE)" \
+	FLASH_ENCRYPTION_KEY_BLOCK="$(FLASH_ENCRYPTION_KEY_BLOCK)" \
+	FLASH_CRYPT_CNT_VALUE="$(FLASH_CRYPT_CNT_VALUE)" \
+	FLASH_ENCRYPTION_BOOTLOADER_IMAGE="$(if $(filter command line environment environment override,$(origin FLASH_ENCRYPTION_BOOTLOADER_IMAGE)),$(FLASH_ENCRYPTION_BOOTLOADER_IMAGE),)" \
+	FLASH_ENCRYPTION_PARTITION_TABLE_BIN="$(if $(filter command line environment environment override,$(origin FLASH_ENCRYPTION_PARTITION_TABLE_BIN)),$(FLASH_ENCRYPTION_PARTITION_TABLE_BIN),)" \
+	FLASH_ENCRYPTION_SIGNED_IMAGE="$(if $(filter command line environment environment override,$(origin FLASH_ENCRYPTION_SIGNED_IMAGE)),$(FLASH_ENCRYPTION_SIGNED_IMAGE),)" \
+	FLASH_ENCRYPTION_OTADATA_BIN="$(if $(filter command line environment environment override,$(origin FLASH_ENCRYPTION_OTADATA_BIN)),$(FLASH_ENCRYPTION_OTADATA_BIN),)" \
+	FLASH_ENCRYPTION_BOOTLOADER_OFFSET="$(FLASH_ENCRYPTION_BOOTLOADER_OFFSET)" \
+	FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET="$(FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET)" \
+	FLASH_ENCRYPTION_APP_OFFSET="$(FLASH_ENCRYPTION_APP_OFFSET)" \
+	FLASH_ENCRYPTION_OTADATA_OFFSET="$(FLASH_ENCRYPTION_OTADATA_OFFSET)" \
+	FLASH_ENCRYPTION_OTADATA_SIZE="$(FLASH_ENCRYPTION_OTADATA_SIZE)" \
+	NOCKSTER_CLI="$(NOCKSTER_CLI)" \
+	bash scripts/provision/flash-prod-e2e.sh
 
 provision-plan:
 	@PROVISION_STAGE="$(PROVISION_STAGE)" \
@@ -795,6 +835,7 @@ help:
 	@echo "    make provision-plan - Print a non-destructive provisioning checklist"
 	@echo "    make validate-device-state - Run scriptable device security/update checks"
 	@echo "    make release-preflight - Non-destructive release/provisioning checks"
+	@echo "    make flash-prod-e2e - One-confirmation fresh-board HMAC+secure-boot+flash-encryption flow"
 	@echo "    make generate-update-signing-key - Generate a local update release signing key"
 	@echo "    make update-pubkey - Print update release public key and trust hash"
 	@echo "    make update-index - Generate latest.json for browser firmware updates"

@@ -20,6 +20,12 @@ if [[ ! -f "${key_file}" ]]; then
 fi
 bash "${script_dir}/check-secure-boot-v2-key.sh" "${key_file}" "secure boot v2 key file"
 
+if ! command -v "${espsecure_cmd}" >/dev/null 2>&1; then
+  echo "missing espsecure command: ${espsecure_cmd}" >&2
+  echo "install Espressif tooling or set ESPSECURE=/path/to/espsecure" >&2
+  exit 2
+fi
+
 if [[ ! -f "${input_image}" ]]; then
   echo "missing unsigned app image: ${input_image}" >&2
   exit 2

@@ -38,7 +38,11 @@ RUN apt-get update \
 USER esp
 
 # espflash turns the ELF into a flashable/OTA image (make update-firmware-image).
-# The idf-rust base usually ships espflash already, so only install if missing.
+# espsecure signs ESP Secure Boot v2 images. The idf-rust base image usually
+# carries Espressif Python tooling, but install a pinned esptool package so
+# firmware releases do not depend on whichever helper scripts the base exposes.
+# espflash is separate Rust tooling and is installed only if missing.
+RUN bash -lc 'source "$HOME/export-esp.sh" >/dev/null && python -m pip install --no-cache-dir esptool==5.1.0'
 RUN command -v espflash >/dev/null 2>&1 || cargo install espflash --locked
 
 WORKDIR /work

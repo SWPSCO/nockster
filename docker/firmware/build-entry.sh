@@ -15,6 +15,21 @@ export CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 source "$HOME/export-esp.sh"
 
+if [[ -n "${ESPSECURE:-}" ]]; then
+  if ! command -v "$ESPSECURE" >/dev/null 2>&1; then
+    echo "configured ESPSECURE is not executable: $ESPSECURE" >&2
+    exit 1
+  fi
+elif command -v espsecure >/dev/null 2>&1; then
+  export ESPSECURE="$(command -v espsecure)"
+elif command -v espsecure.py >/dev/null 2>&1; then
+  export ESPSECURE="$(command -v espsecure.py)"
+else
+  echo "espsecure not found; install esptool or set ESPSECURE=/path/to/espsecure" >&2
+  exit 1
+fi
+echo "Using ESPSECURE=$ESPSECURE"
+
 : "${RELEASE_VERSION:?set RELEASE_VERSION (integer u32)}"
 : "${FW_PROFILE:=production}"
 : "${NOCKSTER_UPDATE_PUBKEY_SHA256_HEX:?set NOCKSTER_UPDATE_PUBKEY_SHA256_HEX (public trust anchor)}"

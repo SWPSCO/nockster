@@ -34,6 +34,12 @@ const NOCKSTER_HID_PRODUCT_ID = 0x2001;
 const NOCKSTER_HID_REPORT_ID = 1;
 const NOCKSTER_HID_REPORT_DATA_LEN = 63; // excluding report ID
 const NOCKSTER_HID_PAYLOAD_MAX = NOCKSTER_HID_REPORT_DATA_LEN - 1; // first byte is payload length
+const NOCKSTER_HID_REPORT_WRITE_DELAY_MS = 2;
+const NOCKSTER_HID_UPDATE_CHUNK_LEN = 256;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function hidOpenError(error: unknown): Error {
   const name = error instanceof DOMException ? error.name : error instanceof Error ? error.name : 'Error';
@@ -243,6 +249,9 @@ export class NocksterDevice {
       report.set(data.subarray(off, off + take), 1);
       await this.hidDevice.sendReport(NOCKSTER_HID_REPORT_ID, report);
       off += take;
+      if (off < data.length) {
+        await delay(NOCKSTER_HID_REPORT_WRITE_DELAY_MS);
+      }
     }
   }
 
@@ -810,7 +819,7 @@ export class NocksterDevice {
     } = {},
   ): Promise<UpdateStatus> {
     const writeFlash = options.writeFlash ?? false;
-    const chunkSize = options.chunkSize ?? MAX_UPDATE_CHUNK_LEN;
+    const chunkSize = options.chunkSize ?? (this.hidDevice ? NOCKSTER_HID_UPDATE_CHUNK_LEN : MAX_UPDATE_CHUNK_LEN);
     const timeoutMs = options.timeoutMs ?? 120000;
     const allowResume = options.resume ?? true;
 

@@ -37,6 +37,13 @@ echo "Using ESPSECURE=$ESPSECURE"
 KEY_FILE="${UPDATE_SIGNING_KEY_FILE:-/keys/signing.key}"
 SECURE_BOOT_KEY_FILE="${SECURE_BOOT_KEY_FILE:-/keys/secure-boot-v2-rsa.pem}"
 
+if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+$ ]]; then
+  echo "RELEASE_VERSION must be an integer u32 (got '$RELEASE_VERSION')" >&2
+  exit 1
+fi
+FIRMWARE_ARTIFACT="nockster-fw-v${RELEASE_VERSION}.bin"
+BUNDLE_ARTIFACT="nockster-fw-v${RELEASE_VERSION}.update.json"
+
 if [[ ! -f "$KEY_FILE" ]]; then
   echo "signing key not found at $KEY_FILE (mount it read-only)" >&2
   exit 1
@@ -67,17 +74,20 @@ else
     ALLOW_UNSIGNED_PRODUCTION=1
 fi
 
-# OTA release index with relative asset URLs (published to R2 at
-# bin.aeroe.io/nockster/updates/ by the firmware-release workflow).
+# OTA release index with versioned relative asset URLs (published to R2 at
+# bin.aeroe.io/nockster/updates/ by the firmware-release workflow). Keep the
+# artifact URLs immutable so a fresh latest.json cannot pair with a cached old
+# nockster-fw.bin from a previous release.
 cargo run -q -p nockster-cli --bin nockster-cli -- update index \
   --bundle target/update/nockster-fw.update.json \
   --firmware target/update/nockster-fw.bin \
+  --bundle-url "$BUNDLE_ARTIFACT" \
+  --firmware-url "$FIRMWARE_ARTIFACT" \
   --out target/update/latest.json
 
 mkdir -p /out
-cp target/update/nockster-fw.bin \
-   target/update/nockster-fw.update.json \
-   target/update/latest.json \
-   /out/
+cp target/update/nockster-fw.bin "/out/$FIRMWARE_ARTIFACT"
+cp target/update/nockster-fw.update.json "/out/$BUNDLE_ARTIFACT"
+cp target/update/latest.json /out/latest.json
 echo "Artifacts written to /out:"
 ls -l /out

@@ -143,8 +143,10 @@ make release-preflight \
 ```
 
 Publish `latest.json`, the bundle JSON, and the firmware image under the web
-updater's configured release path. The target calls `nockster-cli update index`,
-which hashes the firmware against the signed manifest before writing the index.
+updater's configured release path. Keep `latest.json` mutable, but publish the
+bundle and firmware under versioned names referenced by the index. The target
+calls `nockster-cli update index`, which hashes the firmware against the signed
+manifest before writing the index.
 End users should consume that hosted index through the browser updater's
 `update firmware` button; these CLI and Make commands are release-operator
 tooling, not the normal upgrade path. The intended release UX is a hosted page:

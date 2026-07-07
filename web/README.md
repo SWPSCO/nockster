@@ -74,9 +74,13 @@ nockster-cli update index \
   --bundle nockster-fw.update.json \
   --firmware target/xtensa-esp32s3-none-elf/release/nockster-fw.bin \
   --out latest.json \
-  --bundle-url nockster-fw.update.json \
-  --firmware-url nockster-fw.bin
+  --bundle-url nockster-fw-v1.update.json \
+  --firmware-url nockster-fw-v1.bin
 ```
+
+Keep `latest.json` as the only mutable hosted OTA object. Publish the bundle and
+firmware under versioned names so cached artifacts from older releases cannot be
+paired with a newer index.
 
 The browser fetches the index and artifacts, validates metadata and image hash
 locally, then sends the signed manifest and image bytes to the device. The

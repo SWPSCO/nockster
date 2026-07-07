@@ -2,9 +2,9 @@ name: Firmware release
 
 # Builds + signs a Nockster firmware release INSIDE a container (docker/firmware/
 # Dockerfile) for portability/reproducibility, then publishes a GitHub Release with:
-#   - nockster-fw.bin            (OTA app image; Secure Boot v2-signed for production)
-#   - nockster-fw.update.json    (signed update bundle/manifest)
-#   - latest.json                (OTA release index; relative asset URLs)
+#   - nockster-fw-v<N>.bin         (OTA app image; Secure Boot v2-signed for production)
+#   - nockster-fw-v<N>.update.json (signed update bundle/manifest)
+#   - latest.json                  (OTA release index; versioned relative asset URLs)
 #
 # These are ALSO published to Cloudflare R2 (r2:swpsco/nockster/updates/) and served
 # at https://bin.aeroe.io/nockster/updates/latest.json. The web app fetches the index
@@ -107,13 +107,54 @@ jobs:
             -v "$PWD/out:/out" \
             nockster-fw
 
+      - name: Validate OTA artifact set
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          out = pathlib.Path("out")
+          index_path = out / "latest.json"
+          index = json.loads(index_path.read_text())
+          firmware_url = index.get("firmware_url")
+          bundle_url = index.get("bundle_url")
+          if not isinstance(firmware_url, str) or "/" in firmware_url:
+              sys.exit(f"unexpected firmware_url in latest.json: {firmware_url!r}")
+          if not isinstance(bundle_url, str) or "/" in bundle_url:
+              sys.exit(f"unexpected bundle_url in latest.json: {bundle_url!r}")
+          if firmware_url == "nockster-fw.bin" or bundle_url == "nockster-fw.update.json":
+              sys.exit("latest.json must reference versioned artifacts, not mutable legacy names")
+
+          firmware_path = out / firmware_url
+          bundle_path = out / bundle_url
+          if not firmware_path.is_file():
+              sys.exit(f"firmware artifact missing: {firmware_path}")
+          if not bundle_path.is_file():
+              sys.exit(f"bundle artifact missing: {bundle_path}")
+
+          firmware = firmware_path.read_bytes()
+          actual_sha = hashlib.sha256(firmware).hexdigest()
+          expected_sha = index.get("image_sha256_hex")
+          if actual_sha != expected_sha:
+              sys.exit(f"firmware sha256 mismatch: latest.json expects {expected_sha}, got {actual_sha}")
+          actual_size = len(firmware)
+          expected_size = index.get("image_size")
+          if actual_size != expected_size:
+              sys.exit(f"firmware size mismatch: latest.json expects {expected_size}, got {actual_size}")
+
+          print(f"validated {firmware_url}: {actual_size} bytes {actual_sha}")
+          print(f"validated {bundle_url}")
+          PY
+
       - name: Publish GitHub Release (host)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ steps.meta.outputs.tag }}" \
-            out/nockster-fw.bin \
-            out/nockster-fw.update.json \
+            "out/nockster-fw-v${{ steps.meta.outputs.version }}.bin" \
+            "out/nockster-fw-v${{ steps.meta.outputs.version }}.update.json" \
             out/latest.json \
             --title "Firmware ${{ steps.meta.outputs.tag }}" \
             --notes "Signed Nockster firmware — release version ${{ steps.meta.outputs.version }}, profile ${{ steps.meta.outputs.profile }}, trust anchor ${NOCKSTER_UPDATE_PUBKEY_SHA256_HEX}." \
@@ -130,8 +171,8 @@ jobs:
           curl https://rclone.org/install.sh | sudo bash
           mkdir -p ~/.config/rclone
           echo "$RCLONE_B64" | base64 -d > ~/.config/rclone/rclone.conf
-          # Upload the assets first, then the index last, so the index never
-          # references an object that hasn't landed yet.
-          rclone copy out/nockster-fw.bin         r2:swpsco/nockster/updates/ --progress
-          rclone copy out/nockster-fw.update.json r2:swpsco/nockster/updates/ --progress
-          rclone copy out/latest.json             r2:swpsco/nockster/updates/ --progress
+          # Upload the immutable versioned assets first, then the mutable index
+          # last, so the index never references an object that hasn't landed yet.
+          rclone copy "out/nockster-fw-v${{ steps.meta.outputs.version }}.bin"         r2:swpsco/nockster/updates/ --progress
+          rclone copy "out/nockster-fw-v${{ steps.meta.outputs.version }}.update.json" r2:swpsco/nockster/updates/ --progress
+          rclone copy out/latest.json                                                r2:swpsco/nockster/updates/ --progress

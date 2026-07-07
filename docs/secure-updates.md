@@ -241,8 +241,8 @@ nockster-cli update index \
   --bundle nockster-fw.update.json \
   --firmware target/xtensa-esp32s3-none-elf/release/nockster-fw.bin \
   --out latest.json \
-  --bundle-url nockster-fw.update.json \
-  --firmware-url nockster-fw.bin
+  --bundle-url nockster-fw-v1.update.json \
+  --firmware-url nockster-fw-v1.bin
 ```
 
 The same index generator is exposed through Make:
@@ -429,8 +429,8 @@ serve `/updates/latest.json` from the same site. The index is JSON:
 ```json
 {
   "format": "nockster-release-index-v1",
-  "bundle_url": "nockster-fw.update.json",
-  "firmware_url": "nockster-fw.bin",
+  "bundle_url": "nockster-fw-v1.update.json",
+  "firmware_url": "nockster-fw-v1.bin",
   "release_version": 1,
   "image_size": 123456,
   "image_sha256_hex": "...",
@@ -441,6 +441,10 @@ serve `/updates/latest.json` from the same site. The index is JSON:
   "tx_types_rev": "..."
 }
 ```
+
+`latest.json` is the only mutable URL in the hosted release path. The bundle
+and firmware URLs it names should be versioned/immutable so a newly fetched
+index cannot be paired with a cached firmware object from an older release.
 
 Only `bundle_url` and `firmware_url` are required by the browser; the CLI adds
 manifest metadata for operator review, cache/debug visibility, and an early

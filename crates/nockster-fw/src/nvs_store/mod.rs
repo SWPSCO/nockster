@@ -6,7 +6,6 @@ use core::result::Result;
 use core::sync::atomic::{AtomicBool, Ordering};
 use embedded_storage::ReadStorage;
 use esp_hal::delay::Delay;
-use esp_storage::FlashStorage;
 use hmac::Hmac;
 use nockster_core::alloc_path as pathmod;
 use nockster_core::cheetah;
@@ -19,11 +18,13 @@ use pbkdf2::pbkdf2;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
+use crate::raw_flash::RawFlashStorage;
+
 const PBKDF2_ROUNDS: u32 = 100_000;
 const MAX_PIN_ATTEMPTS: u8 = 10;
 
 const NVS_BASE_ADDR: u32 = 0x9000;
-const NVS_SECTOR_SIZE: usize = FlashStorage::SECTOR_SIZE as usize;
+const NVS_SECTOR_SIZE: usize = RawFlashStorage::SECTOR_SIZE as usize;
 const NVS_WRITE_CHUNK_SIZE: usize = 256;
 const HEADER_SIZE: usize = 64;
 const SLOT_SIZE: usize = 192;
@@ -69,10 +70,12 @@ const VAULT_RECORD_USED: u8 = 0x01;
 const VAULT_MAGIC: [u8; 4] = *b"NCVL";
 const VAULT_VERSION: u8 = 1;
 const VAULT_KEY_DOMAIN: &[u8] = b"nockster-vault-v1";
-const _: () = assert!(VAULT_HEADER_SIZE + MAX_VAULT_ENTRIES * VAULT_RECORD_SIZE <= VAULT_STORAGE_SIZE);
-// flag + label_len + label + commitment + nonce + ct_len + ct(+tag)
 const _: () =
-    assert!(1 + 1 + MAX_SEED_LABEL_LEN + 40 + 12 + 2 + MAX_VAULT_PREIMAGE_LEN + 16 <= VAULT_RECORD_SIZE);
+    assert!(VAULT_HEADER_SIZE + MAX_VAULT_ENTRIES * VAULT_RECORD_SIZE <= VAULT_STORAGE_SIZE);
+// flag + label_len + label + commitment + nonce + ct_len + ct(+tag)
+const _: () = assert!(
+    1 + 1 + MAX_SEED_LABEL_LEN + 40 + 12 + 2 + MAX_VAULT_PREIMAGE_LEN + 16 <= VAULT_RECORD_SIZE
+);
 const NVS_STORAGE_END: u32 = VAULT_END;
 // partitions.csv: nvs, 0x9000, 28K
 const _: () = assert!(NVS_STORAGE_END <= NVS_BASE_ADDR + 28 * 1024);
@@ -177,7 +180,7 @@ pub enum NvsError {
 }
 
 pub struct NvsStore {
-    flash: FlashStorage,
+    flash: RawFlashStorage,
 }
 
 pub struct PreparedSeedInit {
@@ -489,7 +492,7 @@ fn zeroize_seed_vec(seeds: &mut Vec<[u8; 64]>) {
 impl NvsStore {
     pub fn new() -> Self {
         Self {
-            flash: FlashStorage::new(),
+            flash: RawFlashStorage::new(),
         }
     }
 
@@ -1931,7 +1934,8 @@ impl NvsStore {
         }
         let mut out = Vec::new();
         for slot in 0..MAX_VAULT_ENTRIES {
-            if let Some(entry) = Self::vault_parse_record(slot, &region[Self::vault_record_range(slot)])
+            if let Some(entry) =
+                Self::vault_parse_record(slot, &region[Self::vault_record_range(slot)])
             {
                 out.push(entry);
             }
@@ -2205,7 +2209,8 @@ impl NvsStore {
         if region.len() != region_len as usize {
             return Err(NvsError::Flash);
         }
-        if NVS_WRITE_CHUNK_SIZE == 0 || NVS_WRITE_CHUNK_SIZE % FlashStorage::WORD_SIZE as usize != 0
+        if NVS_WRITE_CHUNK_SIZE == 0
+            || NVS_WRITE_CHUNK_SIZE % RawFlashStorage::WORD_SIZE as usize != 0
         {
             return Err(NvsError::Flash);
         }

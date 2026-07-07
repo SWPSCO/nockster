@@ -3,4 +3,5 @@ extern crate alloc;
 
 pub mod axs5106l;
 pub mod nvs_store;
+pub mod raw_flash;
 pub mod security;

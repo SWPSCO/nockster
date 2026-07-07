@@ -37,6 +37,11 @@ FLASH_ENCRYPTION_PARTITION_TABLE_OFFSET ?= 0x8000
 FLASH_ENCRYPTION_APP_OFFSET ?= 0x10000
 FLASH_ENCRYPTION_OTADATA_OFFSET ?= 0x310000
 FLASH_ENCRYPTION_OTADATA_SIZE ?= 8192
+PROD_RECOVERY_ARTIFACT_DIR ?= target/prod-recovery
+PROD_RECOVERY_RELEASE_VERSION ?= 2
+PROD_RECOVERY_UNSIGNED_IMAGE ?= $(PROD_RECOVERY_ARTIFACT_DIR)/nockster-fw.factory.bin
+PROD_RECOVERY_SIGNED_IMAGE ?= $(PROD_RECOVERY_ARTIFACT_DIR)/nockster-fw.factory.signed.bin
+PROD_RECOVERY_ENCRYPTED_IMAGE ?= $(PROD_RECOVERY_ARTIFACT_DIR)/nockster-fw.factory.signed.enc.bin
 NVS_PARTITION_ENCRYPTION_VALIDATED ?= 0
 LOCAL_UPDATE_SIGNING_KEY_FILE ?= .secrets/update-signing.key
 UPDATE_SIGNING_KEY_FILE ?= $(LOCAL_UPDATE_SIGNING_KEY_FILE)
@@ -79,7 +84,7 @@ FW_PROFILE_FEATURES := chip-security
 endif
 FW_EFFECTIVE_FEATURES := $(if $(strip $(FW_FEATURES)),$(strip $(FW_FEATURES)),$(FW_PROFILE_FEATURES))
 FW_FEATURE_ARGS := $(if $(strip $(FW_EFFECTIVE_FEATURES)),--features "$(FW_EFFECTIVE_FEATURES)",)
-.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update signed-update-secure-boot-v2 sign-update-bundle update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight flash-prod-e2e generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts flash-encrypted-secure-boot-v2 provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
+.PHONY: all build flash test clean fw fw-dev fw-chip-security fw-production check-update-trust signed-update signed-update-secure-boot-v2 sign-update-bundle update-firmware-image cli core wasm fw-wasm serve-fw emu js js-test web nockster-site-assets tauri tauri-dev tauri-build validate-device-state provision-plan provision-summary release-preflight flash-prod-e2e generate-update-signing-key update-pubkey update-index update-web-assets generate-hmac-up-key provision-hmac-up generate-secure-boot-v2-key release-build-secure-boot-v2-bootloader release-sign-secure-boot-v2 flash-secure-boot-v2 provision-secure-boot-v2-digest provision-secure-boot-v2-enable generate-flash-encryption-key release-encrypt-flash-v2-artifacts release-encrypt-secure-boot-v2-app release-prod-recovery-app flash-encrypted-secure-boot-v2 flash-encrypted-secure-boot-v2-app flash-prod-recovery-app provision-flash-encryption-key provision-flash-encryption-enable provision-lockdown-jtag provision-lockdown-download provision-lockdown-direct-boot provision-power-glitch-protection
 
 all: build
 
@@ -705,6 +710,57 @@ release-encrypt-flash-v2-artifacts:
 		"$(FLASH_ENCRYPTION_SIGNED_IMAGE)" \
 		"$(FLASH_ENCRYPTION_OTADATA_BIN)"
 
+release-encrypt-secure-boot-v2-app:
+	@set -e; \
+	if [[ -z "$(FLASH_ENCRYPTION_KEY_FILE)" ]]; then \
+		echo "Set FLASH_ENCRYPTION_KEY_FILE=/path/to/flash-encryption-key.bin"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(SECURE_BOOT_KEY_FILE)" ]]; then \
+		echo "Set SECURE_BOOT_KEY_FILE=/path/to/secure-boot-v2-rsa.pem"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(SECURE_BOOT_SIGNED_IMAGE)" || ! -f "$(SECURE_BOOT_SIGNED_IMAGE)" ]]; then \
+		echo "Set SECURE_BOOT_SIGNED_IMAGE=/path/to/signed-app-image.bin"; \
+		exit 1; \
+	fi; \
+	if [[ -z "$(FLASH_ENCRYPTION_SIGNED_IMAGE)" ]]; then \
+		echo "Set FLASH_ENCRYPTION_SIGNED_IMAGE=/path/to/encrypted-signed-app.bin"; \
+		exit 1; \
+	fi; \
+	bash scripts/provision/check-secure-boot-v2-key.sh "$(SECURE_BOOT_KEY_FILE)" "secure boot v2 key file"; \
+	bash scripts/provision/check-flash-encryption-key.sh "$(FLASH_ENCRYPTION_KEY_FILE)" "flash encryption key file"; \
+	espsecure verify-signature --version 2 --keyfile "$(SECURE_BOOT_KEY_FILE)" "$(SECURE_BOOT_SIGNED_IMAGE)"; \
+	mkdir -p "$(dir $(FLASH_ENCRYPTION_SIGNED_IMAGE))"; \
+	tmp_output="$$(mktemp "$${TMPDIR:-/tmp}/nockster-app-enc.XXXXXX")"; \
+	trap 'rm -f -- "$$tmp_output"' EXIT; \
+	espsecure encrypt-flash-data \
+		--aes-xts \
+		--keyfile "$(FLASH_ENCRYPTION_KEY_FILE)" \
+		--address "$(FLASH_ENCRYPTION_APP_OFFSET)" \
+		--output "$$tmp_output" \
+		"$(SECURE_BOOT_SIGNED_IMAGE)"; \
+	mv -- "$$tmp_output" "$(FLASH_ENCRYPTION_SIGNED_IMAGE)"; \
+	echo "wrote encrypted signed app: $(FLASH_ENCRYPTION_SIGNED_IMAGE)"
+
+release-prod-recovery-app:
+	@rm -f -- "$(PROD_RECOVERY_SIGNED_IMAGE)" "$(PROD_RECOVERY_ENCRYPTED_IMAGE)"
+	@$(MAKE) update-firmware-image \
+		FW_PROFILE=production \
+		ALLOW_UNSIGNED_PRODUCTION=1 \
+		NOCKSTER_RELEASE_VERSION="$(PROD_RECOVERY_RELEASE_VERSION)" \
+		NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" \
+		UPDATE_FIRMWARE="$(PROD_RECOVERY_UNSIGNED_IMAGE)"
+	@$(MAKE) release-sign-secure-boot-v2 \
+		SECURE_BOOT_KEY_FILE="$(SECURE_BOOT_KEY_FILE)" \
+		SECURE_BOOT_IMAGE="$(PROD_RECOVERY_UNSIGNED_IMAGE)" \
+		SECURE_BOOT_SIGNED_IMAGE="$(PROD_RECOVERY_SIGNED_IMAGE)"
+	@$(MAKE) release-encrypt-secure-boot-v2-app \
+		SECURE_BOOT_KEY_FILE="$(SECURE_BOOT_KEY_FILE)" \
+		FLASH_ENCRYPTION_KEY_FILE="$(FLASH_ENCRYPTION_KEY_FILE)" \
+		SECURE_BOOT_SIGNED_IMAGE="$(PROD_RECOVERY_SIGNED_IMAGE)" \
+		FLASH_ENCRYPTION_SIGNED_IMAGE="$(PROD_RECOVERY_ENCRYPTED_IMAGE)"
+
 flash-encrypted-secure-boot-v2:
 	@set -e; \
 	if [[ -z "$(FLASH_PORT)" ]]; then \
@@ -729,6 +785,31 @@ flash-encrypted-secure-boot-v2:
 	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset "$(FLASH_ENCRYPTION_OTADATA_OFFSET)" "$(FLASH_ENCRYPTION_OTADATA_BIN)"; \
 	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset "$(FLASH_ENCRYPTION_APP_OFFSET)" "$(FLASH_ENCRYPTION_SIGNED_IMAGE)"; \
 	echo "Encrypted bootloader/app flashed; device left in serial bootloader mode. Burn SPI_BOOT_CRYPT_CNT before resetting."
+
+flash-encrypted-secure-boot-v2-app:
+	@set -e; \
+	if [[ -z "$(FLASH_PORT)" ]]; then \
+		echo "Set FLASH_PORT=/dev/ttyACM0"; \
+		exit 1; \
+	fi; \
+	if [[ ! -f "$(FLASH_ENCRYPTION_SIGNED_IMAGE)" ]]; then \
+		echo "missing encrypted signed app artifact: $(FLASH_ENCRYPTION_SIGNED_IMAGE)"; \
+		exit 1; \
+	fi; \
+	PORT_PATH="$(FLASH_PORT)"; \
+	if [[ "$$PORT_PATH" != /dev/* ]]; then \
+		PORT_PATH="/dev/$$PORT_PATH"; \
+	fi; \
+	if [[ "$$OSTYPE" != "darwin"* ]]; then \
+		fuser -k "$$PORT_PATH" 2>/dev/null || true; \
+	fi; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --after no-reset "$(FLASH_ENCRYPTION_APP_OFFSET)" "$(FLASH_ENCRYPTION_SIGNED_IMAGE)"; \
+	echo "Encrypted signed app flashed at $(FLASH_ENCRYPTION_APP_OFFSET); reboot normally and validate over HID."
+
+flash-prod-recovery-app: release-prod-recovery-app
+	@$(MAKE) flash-encrypted-secure-boot-v2-app \
+		FLASH_PORT="$(FLASH_PORT)" \
+		FLASH_ENCRYPTION_SIGNED_IMAGE="$(PROD_RECOVERY_ENCRYPTED_IMAGE)"
 
 provision-flash-encryption-key:
 	@if [[ "$(CONFIRM_IRREVERSIBLE)" != "burn-flash-encryption-key" ]]; then \
@@ -892,7 +973,9 @@ help:
 	@echo "    make provision-secure-boot-v2-enable - Explicit SECURE_BOOT_EN burn guard"
 	@echo "    make generate-flash-encryption-key - Generate a local flash encryption key"
 	@echo "    make release-encrypt-flash-v2-artifacts - Host-encrypt signed bootloader/app artifacts"
+	@echo "    make flash-prod-recovery-app - Build/sign/encrypt and serial-flash factory app only"
 	@echo "    make flash-encrypted-secure-boot-v2 - Flash encrypted secure-boot artifacts without resetting"
+	@echo "    make flash-encrypted-secure-boot-v2-app - Flash encrypted signed factory app only"
 	@echo "    make provision-flash-encryption-key - Explicit flash encryption key burn guard"
 	@echo "    make provision-flash-encryption-enable - Explicit SPI_BOOT_CRYPT_CNT burn guard"
 	@echo "    make provision-lockdown-jtag - Explicit production JTAG lockdown guard"

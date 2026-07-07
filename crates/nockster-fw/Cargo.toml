@@ -18,7 +18,7 @@ chip-security = []
 esp-bootloader-esp-idf = { version = "0.2.0", features = ["esp32s3"] }
 esp-hal = { version = "=1.0.0-rc.0", features = ["esp32s3", "unstable"] }
 esp-alloc = "0.8.0"
-esp-storage = { version = "0.3", default-features = false, features = ["esp32s3", "storage", "nor-flash", "critical-section"] }
+esp-storage = { version = "0.3", default-features = false, features = ["esp32s3", "storage", "nor-flash", "critical-section", "low-level"] }
 embedded-storage = { version = "0.3", default-features = false }
 embedded-hal = { version = "1.0.0", default-features = false }
 panic-halt = "0.2"

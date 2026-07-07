@@ -565,6 +565,10 @@ pub struct UpdateIndexArgs {
     /// URL written into the index for the firmware. Defaults to the firmware file name.
     #[arg(long)]
     pub firmware_url: Option<String>,
+    /// Use canonical versioned artifact names for omitted URLs:
+    /// nockster-fw-v<release>.update.json and nockster-fw-v<release>.bin.
+    #[arg(long)]
+    pub versioned_urls: bool,
 }
 
 #[derive(Args, Clone)]

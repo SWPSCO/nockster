@@ -174,9 +174,20 @@ fn sign(args: &UpdateSignArgs) -> Result<()> {
 fn index(args: &UpdateIndexArgs) -> Result<()> {
     let (manifest, _, _) = read_bundle(&args.bundle)?;
     verify_firmware_file_matches_manifest(&args.firmware, &manifest)?;
-    let bundle_url = resolve_artifact_url(args.bundle_url.as_deref(), &args.bundle, "bundle")?;
-    let firmware_url =
-        resolve_artifact_url(args.firmware_url.as_deref(), &args.firmware, "firmware")?;
+    let bundle_url = resolve_artifact_url(
+        args.bundle_url.as_deref(),
+        &args.bundle,
+        "bundle",
+        args.versioned_urls
+            .then_some((&manifest, ArtifactKind::Bundle)),
+    )?;
+    let firmware_url = resolve_artifact_url(
+        args.firmware_url.as_deref(),
+        &args.firmware,
+        "firmware",
+        args.versioned_urls
+            .then_some((&manifest, ArtifactKind::Firmware)),
+    )?;
     let index = release_index_from_manifest(&manifest, bundle_url, firmware_url);
     let json = serde_json::to_string_pretty(&index)?;
     fs::write(&args.out, json).with_context(|| format!("write {}", args.out.display()))?;
@@ -1126,6 +1137,21 @@ fn default_artifact_url(path: &Path, label: &str) -> Result<String> {
     Ok(name.to_string())
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ArtifactKind {
+    Bundle,
+    Firmware,
+}
+
+fn versioned_artifact_url(manifest: &UpdateManifest, kind: ArtifactKind) -> String {
+    match kind {
+        ArtifactKind::Bundle => {
+            format!("nockster-fw-v{}.update.json", manifest.release_version)
+        }
+        ArtifactKind::Firmware => format!("nockster-fw-v{}.bin", manifest.release_version),
+    }
+}
+
 fn explicit_url_scheme(value: &str) -> Option<&str> {
     let scheme_end = value.find(':')?;
     let first_delim = value
@@ -1201,7 +1227,12 @@ fn validate_browser_artifact_url(value: &str, label: &str) -> Result<()> {
     }
 }
 
-fn resolve_artifact_url(value: Option<&str>, path: &Path, label: &str) -> Result<String> {
+fn resolve_artifact_url(
+    value: Option<&str>,
+    path: &Path,
+    label: &str,
+    versioned: Option<(&UpdateManifest, ArtifactKind)>,
+) -> Result<String> {
     match value {
         Some(value) if !value.trim().is_empty() => {
             let value = value.trim().to_string();
@@ -1209,7 +1240,10 @@ fn resolve_artifact_url(value: Option<&str>, path: &Path, label: &str) -> Result
             Ok(value)
         }
         Some(_) => Err(anyhow!("{label} URL must be non-empty")),
-        None => default_artifact_url(path, label),
+        None => match versioned {
+            Some((manifest, kind)) => Ok(versioned_artifact_url(manifest, kind)),
+            None => default_artifact_url(path, label),
+        },
     }
 }
 
@@ -1618,16 +1652,53 @@ mod tests {
     }
 
     #[test]
+    fn versioned_artifact_urls_use_manifest_release() {
+        let manifest = manifest_from_json(&sample_manifest_json()).unwrap();
+
+        assert_eq!(
+            resolve_artifact_url(
+                None,
+                Path::new("nockster-fw.update.json"),
+                "bundle",
+                Some((&manifest, ArtifactKind::Bundle)),
+            )
+            .unwrap(),
+            "nockster-fw-v1.update.json"
+        );
+        assert_eq!(
+            resolve_artifact_url(
+                None,
+                Path::new("nockster-fw.bin"),
+                "firmware",
+                Some((&manifest, ArtifactKind::Firmware)),
+            )
+            .unwrap(),
+            "nockster-fw-v1.bin"
+        );
+        assert_eq!(
+            resolve_artifact_url(
+                Some("custom.bin"),
+                Path::new("nockster-fw.bin"),
+                "firmware",
+                Some((&manifest, ArtifactKind::Firmware)),
+            )
+            .unwrap(),
+            "custom.bin"
+        );
+    }
+
+    #[test]
     fn explicit_artifact_url_must_not_be_empty() {
-        let err =
-            resolve_artifact_url(Some("  "), Path::new("nockster-fw.bin"), "firmware").unwrap_err();
+        let err = resolve_artifact_url(Some("  "), Path::new("nockster-fw.bin"), "firmware", None)
+            .unwrap_err();
         assert!(err.to_string().contains("must be non-empty"));
 
         assert_eq!(
             resolve_artifact_url(
                 Some(" updates/nockster-fw.bin "),
                 Path::new("ignored.bin"),
-                "firmware"
+                "firmware",
+                None,
             )
             .unwrap(),
             "updates/nockster-fw.bin"
@@ -1640,7 +1711,8 @@ mod tests {
             resolve_artifact_url(
                 Some("https://updates.example.test/releases/nockster-fw.bin"),
                 Path::new("ignored.bin"),
-                "firmware"
+                "firmware",
+                None,
             )
             .unwrap(),
             "https://updates.example.test/releases/nockster-fw.bin"
@@ -1649,7 +1721,8 @@ mod tests {
             resolve_artifact_url(
                 Some("http://localhost:3000/updates/nockster-fw.bin"),
                 Path::new("ignored.bin"),
-                "firmware"
+                "firmware",
+                None,
             )
             .unwrap(),
             "http://localhost:3000/updates/nockster-fw.bin"
@@ -1658,7 +1731,8 @@ mod tests {
             resolve_artifact_url(
                 Some("http://[::1]:3000/updates/nockster-fw.bin"),
                 Path::new("ignored.bin"),
-                "firmware"
+                "firmware",
+                None,
             )
             .unwrap(),
             "http://[::1]:3000/updates/nockster-fw.bin"
@@ -1668,6 +1742,7 @@ mod tests {
             Some("http://updates.example.test/nockster-fw.bin"),
             Path::new("ignored.bin"),
             "firmware",
+            None,
         )
         .unwrap_err();
         assert!(remote_http.to_string().contains("must use HTTPS"));
@@ -1676,6 +1751,7 @@ mod tests {
             Some("file:///tmp/nockster-fw.bin"),
             Path::new("ignored.bin"),
             "firmware",
+            None,
         )
         .unwrap_err();
         assert!(non_http.to_string().contains("must use http or https"));
@@ -1684,6 +1760,7 @@ mod tests {
             Some("//updates.example.test/nockster-fw.bin"),
             Path::new("ignored.bin"),
             "firmware",
+            None,
         )
         .unwrap_err();
         assert!(protocol_relative

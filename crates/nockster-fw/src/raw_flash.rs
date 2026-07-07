@@ -8,6 +8,8 @@ use embedded_storage::{ReadStorage, Storage};
 use esp_storage::ll;
 
 const FLASH_SIZE_BYTES: usize = 16 * 1024 * 1024;
+const ESP32S3_ROM_SPIFLASH_WRITE_ENCRYPTED: usize = 0x4000096c;
+const ESP32S3_ROM_ESP_FLASH_READ_ENCRYPTED: usize = 0x40001158;
 
 #[repr(C, align(4))]
 struct FlashSectorBuffer {
@@ -100,6 +102,33 @@ impl RawFlashStorage {
 
     #[inline(never)]
     #[link_section = ".rwtext"]
+    fn internal_read_encrypted(
+        &mut self,
+        offset: u32,
+        bytes: &mut [u8],
+    ) -> Result<(), RawFlashError> {
+        let result = unsafe {
+            let read_encrypted: unsafe extern "C" fn(
+                *mut core::ffi::c_void,
+                u32,
+                *mut core::ffi::c_void,
+                u32,
+            ) -> i32 = core::mem::transmute(ESP32S3_ROM_ESP_FLASH_READ_ENCRYPTED);
+            read_encrypted(
+                core::ptr::null_mut(),
+                offset,
+                bytes.as_mut_ptr().cast(),
+                bytes.len() as u32,
+            )
+        };
+        match result {
+            0 => Ok(()),
+            value => Err(RawFlashError::Rom(value)),
+        }
+    }
+
+    #[inline(never)]
+    #[link_section = ".rwtext"]
     fn internal_erase(&mut self, sector: u32) -> Result<(), RawFlashError> {
         self.unlock_once()?;
         unsafe { ll::spiflash_erase_sector(sector) }.map_err(RawFlashError::Rom)
@@ -113,8 +142,52 @@ impl RawFlashStorage {
             .map_err(RawFlashError::Rom)
     }
 
+    #[inline(never)]
+    #[link_section = ".rwtext"]
+    fn internal_write_encrypted(
+        &mut self,
+        offset: u32,
+        bytes: &mut [u8],
+    ) -> Result<(), RawFlashError> {
+        self.unlock_once()?;
+        let result = critical_section::with(|_| unsafe {
+            let write_encrypted: unsafe extern "C" fn(u32, *mut u32, u32) -> i32 =
+                core::mem::transmute(ESP32S3_ROM_SPIFLASH_WRITE_ENCRYPTED);
+            write_encrypted(offset, bytes.as_mut_ptr().cast(), bytes.len() as u32)
+        });
+        match result {
+            0 => Ok(()),
+            value => Err(RawFlashError::Rom(value)),
+        }
+    }
+
     fn is_word_aligned<T: ?Sized>(value: &T) -> bool {
         (core::ptr::from_ref(value).cast::<()>() as usize) % Self::WORD_SIZE as usize == 0
+    }
+
+    pub fn read_encrypted(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), RawFlashError> {
+        self.check_bounds(offset, bytes.len())?;
+        self.internal_read_encrypted(offset, bytes)
+    }
+
+    pub fn write_encrypted(&mut self, offset: u32, mut bytes: &[u8]) -> Result<(), RawFlashError> {
+        self.check_bounds(offset, bytes.len())?;
+        self.check_alignment::<{ Self::SECTOR_SIZE }>(offset, bytes.len())?;
+
+        let mut sector_data = FlashSectorBuffer {
+            data: [0; RawFlashStorage::SECTOR_SIZE as usize],
+        };
+
+        let mut address = offset;
+        while !bytes.is_empty() {
+            sector_data[..].copy_from_slice(&bytes[..Self::SECTOR_SIZE as usize]);
+            self.internal_erase(address / Self::SECTOR_SIZE)?;
+            self.internal_write_encrypted(address, &mut sector_data[..])?;
+            address += Self::SECTOR_SIZE;
+            bytes = &bytes[Self::SECTOR_SIZE as usize..];
+        }
+
+        Ok(())
     }
 }
 

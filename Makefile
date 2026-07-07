@@ -505,6 +505,9 @@ update-index:
 	if [[ -n "$(UPDATE_FIRMWARE_URL)" ]]; then \
 		args+=(--firmware-url "$(UPDATE_FIRMWARE_URL)"); \
 	fi; \
+	if [[ "$(UPDATE_VERSIONED_URLS)" == "1" || "$(UPDATE_VERSIONED_URLS)" == "true" ]]; then \
+		args+=(--versioned-urls); \
+	fi; \
 	if [[ -n "$(NOCKSTER_CLI)" ]]; then \
 		"$(NOCKSTER_CLI)" "$${args[@]}"; \
 	else \
@@ -744,6 +747,10 @@ release-encrypt-secure-boot-v2-app:
 	echo "wrote encrypted signed app: $(FLASH_ENCRYPTION_SIGNED_IMAGE)"
 
 release-prod-recovery-app:
+	@if [[ -z "$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" ]]; then \
+		echo "Set NOCKSTER_UPDATE_PUBKEY_SHA256_HEX=<sha256-of-compressed-release-pubkey>"; \
+		exit 1; \
+	fi
 	@rm -f -- "$(PROD_RECOVERY_SIGNED_IMAGE)" "$(PROD_RECOVERY_ENCRYPTED_IMAGE)"
 	@$(MAKE) update-firmware-image \
 		FW_PROFILE=production \

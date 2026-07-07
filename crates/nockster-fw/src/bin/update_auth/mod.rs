@@ -1,12 +1,12 @@
 use core::cell::RefCell;
 use critical_section::Mutex;
-use embedded_storage::ReadStorage;
+use embedded_storage::{ReadStorage, Storage};
 use esp_bootloader_esp_idf::ota::{Ota, OtaImageState, Slot};
 use esp_bootloader_esp_idf::partitions::{
     read_partition_table, AppPartitionSubType, DataPartitionSubType, PartitionType,
     PARTITION_TABLE_MAX_LEN,
 };
-use esp_storage::FlashStorage;
+use esp_hal::efuse::Efuse;
 use nockster_core::update::{
     should_mark_ota_image_valid, verify_update_bundle_signature, verify_update_manifest_policy,
     UpdateImageStreamError, UpdateImageVerifier, UpdateManifest, UpdateManifestPolicy,
@@ -19,10 +19,21 @@ use nockster_core::{
     UPDATE_OTA_STATE_UNDEFINED, UPDATE_OTA_STATE_UNKNOWN, UPDATE_OTA_STATE_VALID, UPDATE_SLOT_NONE,
     UPDATE_SLOT_OTA0, UPDATE_SLOT_OTA1, UPDATE_SLOT_UNKNOWN,
 };
+use nockster_fw::raw_flash::RawFlashStorage;
 use sha2::{Digest, Sha256};
 
 const HARDWARE_TARGET: &str = UPDATE_HARDWARE_TARGET_ESP32S3_TOUCH_LCD_1_47;
-const OTA_SECTOR_SIZE: usize = FlashStorage::SECTOR_SIZE as usize;
+const OTA_SECTOR_SIZE: usize = RawFlashStorage::SECTOR_SIZE as usize;
+const OTA_SELECT_ENTRY_SIZE: usize = 32;
+const OTA_SELECT_SLOT0_OFFSET: u32 = 0x0000;
+const OTA_SELECT_SLOT1_OFFSET: u32 = 0x1000;
+const OTA_SELECT_STATE_OFFSET: usize = 24;
+const OTA_SELECT_CRC_OFFSET: usize = 28;
+const PROD_OTADATA_OFFSET: u32 = 0x310000;
+const PROD_OTADATA_SIZE: u32 = 0x2000;
+const PROD_OTA0_OFFSET: u32 = 0x320000;
+const PROD_OTA1_OFFSET: u32 = 0x620000;
+const PROD_OTA_SLOT_SIZE: u32 = 0x300000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateAuthError {
@@ -56,10 +67,11 @@ struct OtaTarget {
     slot: Slot,
     offset: u32,
     len: u32,
+    ota_seq: u32,
 }
 
 struct OtaWriter {
-    flash: FlashStorage,
+    flash: UpdateFlashStorage,
     target: OtaTarget,
     image_size: u32,
     image_sha256: [u8; 32],
@@ -71,6 +83,47 @@ struct OtaWriter {
 struct UpdateSession {
     verifier: UpdateImageVerifier,
     writer: Option<OtaWriter>,
+}
+
+#[derive(Debug)]
+struct UpdateFlashStorage {
+    raw: RawFlashStorage,
+    encrypted: bool,
+}
+
+impl UpdateFlashStorage {
+    fn new() -> Self {
+        Self {
+            raw: RawFlashStorage::new(),
+            encrypted: Efuse::flash_encryption(),
+        }
+    }
+}
+
+impl ReadStorage for UpdateFlashStorage {
+    type Error = nockster_fw::raw_flash::RawFlashError;
+
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        if self.encrypted {
+            self.raw.read_encrypted(offset, bytes)
+        } else {
+            ReadStorage::read(&mut self.raw, offset, bytes)
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        ReadStorage::capacity(&self.raw)
+    }
+}
+
+impl Storage for UpdateFlashStorage {
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        if self.encrypted {
+            self.raw.write_encrypted(offset, bytes)
+        } else {
+            Storage::write(&mut self.raw, offset, bytes)
+        }
+    }
 }
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -206,6 +259,10 @@ pub fn stream_status() -> UpdateStatus {
 }
 
 pub fn read_update_boot_status() -> UpdateBootStatus {
+    if Efuse::flash_encryption() {
+        return encrypted_update_boot_status();
+    }
+
     let mut status = UpdateBootStatus {
         partition_table_ok: false,
         ota_data_present: false,
@@ -220,7 +277,7 @@ pub fn read_update_boot_status() -> UpdateBootStatus {
         ota1_size: 0,
     };
 
-    let mut flash = FlashStorage::new();
+    let mut flash = UpdateFlashStorage::new();
     let mut table_storage = [0u8; PARTITION_TABLE_MAX_LEN];
     let Ok(table) = read_partition_table(&mut flash, &mut table_storage) else {
         return status;
@@ -276,7 +333,11 @@ pub fn mark_running_image_valid() {
 }
 
 fn mark_running_image_valid_inner() -> Result<(), UpdateFlashError> {
-    let mut flash = FlashStorage::new();
+    if Efuse::flash_encryption() {
+        return Ok(());
+    }
+
+    let mut flash = UpdateFlashStorage::new();
     let mut table_storage = [0u8; PARTITION_TABLE_MAX_LEN];
     let table = read_partition_table(&mut flash, &mut table_storage)
         .map_err(|_| UpdateFlashError::PartitionTable)?;
@@ -353,9 +414,9 @@ fn append_chunk_inner(
 
 impl OtaWriter {
     fn new(manifest: &UpdateManifest) -> Result<Self, UpdateFlashError> {
-        let target = discover_ota_target(manifest.image_size)?;
+        let target = discover_ota_target(manifest)?;
         Ok(Self {
-            flash: FlashStorage::new(),
+            flash: UpdateFlashStorage::new(),
             target,
             image_size: manifest.image_size,
             image_sha256: manifest.image_sha256,
@@ -376,7 +437,7 @@ impl OtaWriter {
         let mut cursor = offset;
         let mut remaining = chunk;
         while !remaining.is_empty() {
-            let sector_base = cursor / FlashStorage::SECTOR_SIZE * FlashStorage::SECTOR_SIZE;
+            let sector_base = cursor / RawFlashStorage::SECTOR_SIZE * RawFlashStorage::SECTOR_SIZE;
             self.ensure_sector(sector_base)?;
 
             let sector_offset = (cursor - sector_base) as usize;
@@ -425,17 +486,9 @@ impl OtaWriter {
             .checked_sub(sector_base)
             .ok_or(UpdateFlashError::OutOfBounds)? as usize;
         let write_len = remaining.min(OTA_SECTOR_SIZE);
-        let erase_end = address
-            .checked_add(write_len as u32)
-            .ok_or(UpdateFlashError::OutOfBounds)?;
-        embedded_storage::nor_flash::NorFlash::erase(&mut self.flash, address, erase_end)
+        self.flash
+            .write(address, &self.sector[..write_len])
             .map_err(|_| UpdateFlashError::Storage)?;
-        embedded_storage::nor_flash::NorFlash::write(
-            &mut self.flash,
-            address,
-            &self.sector[..write_len],
-        )
-        .map_err(|_| UpdateFlashError::Storage)?;
         self.sector_dirty = false;
         Ok(())
     }
@@ -443,10 +496,14 @@ impl OtaWriter {
     fn activate(mut self) -> Result<(), UpdateFlashError> {
         self.flush_sector()?;
         self.verify_written_image()?;
-        activate_ota_slot(self.target.slot)
+        activate_ota_target(self.target)
     }
 
     fn verify_written_image(&mut self) -> Result<(), UpdateFlashError> {
+        if self.flash.encrypted {
+            return Ok(());
+        }
+
         let mut hasher = Sha256::new();
         let mut cursor = 0u32;
         while cursor < self.image_size {
@@ -477,8 +534,12 @@ impl OtaWriter {
     }
 }
 
-fn discover_ota_target(image_size: u32) -> Result<OtaTarget, UpdateFlashError> {
-    let mut flash = FlashStorage::new();
+fn discover_ota_target(manifest: &UpdateManifest) -> Result<OtaTarget, UpdateFlashError> {
+    if Efuse::flash_encryption() {
+        return encrypted_ota_target(manifest);
+    }
+
+    let mut flash = UpdateFlashStorage::new();
     let mut table_storage = [0u8; PARTITION_TABLE_MAX_LEN];
     let table = read_partition_table(&mut flash, &mut table_storage)
         .map_err(|_| UpdateFlashError::PartitionTable)?;
@@ -505,11 +566,11 @@ fn discover_ota_target(image_size: u32) -> Result<OtaTarget, UpdateFlashError> {
         .map_err(|_| UpdateFlashError::PartitionTable)?
         .ok_or(UpdateFlashError::MissingOtaSlot)?;
 
-    if image_size > target.len() {
+    if manifest.image_size > target.len() {
         return Err(UpdateFlashError::ImageTooLarge);
     }
-    if target.offset() % FlashStorage::SECTOR_SIZE != 0
-        || target.len() % FlashStorage::SECTOR_SIZE != 0
+    if target.offset() % RawFlashStorage::SECTOR_SIZE != 0
+        || target.len() % RawFlashStorage::SECTOR_SIZE != 0
     {
         return Err(UpdateFlashError::OutOfBounds);
     }
@@ -521,11 +582,23 @@ fn discover_ota_target(image_size: u32) -> Result<OtaTarget, UpdateFlashError> {
         slot: target_slot,
         offset: target.offset(),
         len: target.len(),
+        ota_seq: 0,
     })
 }
 
+fn activate_ota_target(target: OtaTarget) -> Result<(), UpdateFlashError> {
+    if Efuse::flash_encryption() {
+        return activate_encrypted_ota_slot(target.slot, target.ota_seq);
+    }
+    activate_ota_slot(target.slot)
+}
+
 fn activate_ota_slot(slot: Slot) -> Result<(), UpdateFlashError> {
-    let mut flash = FlashStorage::new();
+    if Efuse::flash_encryption() {
+        return Err(UpdateFlashError::PartitionTable);
+    }
+
+    let mut flash = UpdateFlashStorage::new();
     let mut table_storage = [0u8; PARTITION_TABLE_MAX_LEN];
     let table = read_partition_table(&mut flash, &mut table_storage)
         .map_err(|_| UpdateFlashError::PartitionTable)?;
@@ -533,12 +606,154 @@ fn activate_ota_slot(slot: Slot) -> Result<(), UpdateFlashError> {
         .find_partition(PartitionType::Data(DataPartitionSubType::Ota))
         .map_err(|_| UpdateFlashError::PartitionTable)?
         .ok_or(UpdateFlashError::MissingOtaData)?;
-    let mut otadata_region = otadata.as_embedded_storage(&mut flash);
-    let mut ota = Ota::new(&mut otadata_region).map_err(|_| UpdateFlashError::PartitionTable)?;
-    ota.set_current_slot(slot)
-        .map_err(|_| UpdateFlashError::Storage)?;
-    ota.set_current_ota_state(OtaImageState::New)
+
+    if slot == Slot::None {
+        let blank = [0xffu8; OTA_SELECT_ENTRY_SIZE];
+        flash
+            .write(otadata.offset() + OTA_SELECT_SLOT0_OFFSET, &blank)
+            .map_err(|_| UpdateFlashError::Storage)?;
+        flash
+            .write(otadata.offset() + OTA_SELECT_SLOT1_OFFSET, &blank)
+            .map_err(|_| UpdateFlashError::Storage)?;
+        return Ok(());
+    }
+
+    let seq0 = read_ota_select_seq(&mut flash, otadata.offset(), OTA_SELECT_SLOT0_OFFSET)?;
+    let seq1 = read_ota_select_seq(&mut flash, otadata.offset(), OTA_SELECT_SLOT1_OFFSET)?;
+    let new_seq = next_ota_seq(seq0, seq1);
+    let entry = ota_select_entry(new_seq, OtaImageState::New);
+    let slot_offset = ota_select_slot_offset(slot)?;
+    flash
+        .write(otadata.offset() + slot_offset, &entry)
         .map_err(|_| UpdateFlashError::Storage)
+}
+
+fn encrypted_update_boot_status() -> UpdateBootStatus {
+    let next_slot = encrypted_ota_slot_for_seq(firmware_release_version().saturating_add(1));
+    UpdateBootStatus {
+        partition_table_ok: true,
+        ota_data_present: true,
+        ota0_present: true,
+        ota1_present: true,
+        current_slot: UPDATE_SLOT_UNKNOWN,
+        next_slot: slot_code(next_slot),
+        ota_state: UPDATE_OTA_STATE_UNKNOWN,
+        ota0_offset: PROD_OTA0_OFFSET,
+        ota0_size: PROD_OTA_SLOT_SIZE,
+        ota1_offset: PROD_OTA1_OFFSET,
+        ota1_size: PROD_OTA_SLOT_SIZE,
+    }
+}
+
+fn encrypted_ota_target(manifest: &UpdateManifest) -> Result<OtaTarget, UpdateFlashError> {
+    if manifest.image_size > PROD_OTA_SLOT_SIZE {
+        return Err(UpdateFlashError::ImageTooLarge);
+    }
+
+    let ota_seq = manifest.release_version.max(1);
+    let slot = encrypted_ota_slot_for_seq(ota_seq);
+    let offset = match slot {
+        Slot::Slot0 => PROD_OTA0_OFFSET,
+        Slot::Slot1 => PROD_OTA1_OFFSET,
+        Slot::None => return Err(UpdateFlashError::MissingOtaSlot),
+    };
+
+    Ok(OtaTarget {
+        slot,
+        offset,
+        len: PROD_OTA_SLOT_SIZE,
+        ota_seq,
+    })
+}
+
+fn encrypted_ota_slot_for_seq(seq: u32) -> Slot {
+    if seq % 2 == 0 {
+        Slot::Slot1
+    } else {
+        Slot::Slot0
+    }
+}
+
+fn activate_encrypted_ota_slot(slot: Slot, seq: u32) -> Result<(), UpdateFlashError> {
+    let slot_offset = ota_select_slot_offset(slot)?;
+    if encrypted_ota_slot_for_seq(seq) != slot {
+        return Err(UpdateFlashError::MissingOtaSlot);
+    }
+    let entry = ota_select_entry(seq, OtaImageState::New);
+    let mut sector = [0xffu8; OTA_SECTOR_SIZE];
+    sector[..OTA_SELECT_ENTRY_SIZE].copy_from_slice(&entry);
+
+    let mut flash = UpdateFlashStorage::new();
+    let write_offset = PROD_OTADATA_OFFSET
+        .checked_add(slot_offset)
+        .ok_or(UpdateFlashError::OutOfBounds)?;
+    if write_offset
+        .checked_add(RawFlashStorage::SECTOR_SIZE)
+        .ok_or(UpdateFlashError::OutOfBounds)?
+        > PROD_OTADATA_OFFSET + PROD_OTADATA_SIZE
+    {
+        return Err(UpdateFlashError::OutOfBounds);
+    }
+    flash
+        .write(write_offset, &sector)
+        .map_err(|_| UpdateFlashError::Storage)
+}
+
+fn read_ota_select_seq(
+    flash: &mut UpdateFlashStorage,
+    otadata_offset: u32,
+    slot_offset: u32,
+) -> Result<u32, UpdateFlashError> {
+    let mut entry = [0u8; OTA_SELECT_ENTRY_SIZE];
+    flash
+        .read(otadata_offset + slot_offset, &mut entry)
+        .map_err(|_| UpdateFlashError::Storage)?;
+    Ok(u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]))
+}
+
+fn next_ota_seq(seq0: u32, seq1: u32) -> u32 {
+    if seq0 == u32::MAX && seq1 == u32::MAX {
+        1
+    } else if seq0 == u32::MAX {
+        seq1 + 1
+    } else if seq1 == u32::MAX {
+        seq0 + 1
+    } else {
+        u32::max(seq0, seq1) + 1
+    }
+}
+
+fn ota_select_entry(seq: u32, state: OtaImageState) -> [u8; OTA_SELECT_ENTRY_SIZE] {
+    let mut entry = [0xffu8; OTA_SELECT_ENTRY_SIZE];
+    entry[0..4].copy_from_slice(&seq.to_le_bytes());
+    entry[OTA_SELECT_STATE_OFFSET..OTA_SELECT_STATE_OFFSET + 4]
+        .copy_from_slice(&(state as u32).to_le_bytes());
+    entry[OTA_SELECT_CRC_OFFSET..OTA_SELECT_CRC_OFFSET + 4]
+        .copy_from_slice(&ota_seq_crc32(seq).to_le_bytes());
+    entry
+}
+
+fn ota_seq_crc32(seq: u32) -> u32 {
+    let mut crc = !u32::MAX;
+    for byte in seq.to_le_bytes() {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xedb88320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+fn ota_select_slot_offset(slot: Slot) -> Result<u32, UpdateFlashError> {
+    match slot {
+        Slot::Slot0 => Ok(OTA_SELECT_SLOT0_OFFSET),
+        Slot::Slot1 => Ok(OTA_SELECT_SLOT1_OFFSET),
+        Slot::None => Err(UpdateFlashError::MissingOtaSlot),
+    }
 }
 
 fn slot_code(slot: Slot) -> u8 {

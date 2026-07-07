@@ -36,10 +36,12 @@ outside the repo, builds/signs/encrypts a fresh production image set under
 
 After that one prompt it burns HMAC_UP, flashes the signed secure-boot image,
 burns the secure-boot digest, burns the flash-encryption key, enables secure
-boot, flashes only encrypted artifacts, enables flash encryption, resets, and
-validates over HID. It refuses to start the burn phase if the selected key
-slots, `SECURE_BOOT_EN`, or `SPI_BOOT_CRYPT_CNT` are already set. Use
-`PROD_E2E_DRY_RUN=1` to print the command order. Final lockdown and
+boot, flashes only encrypted artifacts, enables flash encryption, then pauses
+for a manual normal reboot before validating over HID. At that pause,
+power-cycle the board or press EN/RESET, do not hold BOOT/download, wait for
+HID to re-enumerate, then press Enter. It refuses to start the burn phase if
+the selected key slots, `SECURE_BOOT_EN`, or `SPI_BOOT_CRYPT_CNT` are already
+set. Use `PROD_E2E_DRY_RUN=1` to print the command order. Final lockdown and
 power-glitch fuses remain separate targets.
 
 Non-destructive device validation:
@@ -234,9 +236,9 @@ make flash-secure-boot-v2 \
 ```
 
 `flash-secure-boot-v2` writes the signed secure-boot bootloader at `0x0`, the
-partition table at `0x8000`, erases `otadata`, writes the signed app at
-`0x10000`, and leaves the chip in serial bootloader mode. Burn the digest and
-`SECURE_BOOT_EN` before the first normal reset.
+partition table at `0x8000`, writes blank `otadata` at `0x310000`, writes the
+signed app at `0x10000`, and leaves the chip in serial bootloader mode. Burn
+the digest and `SECURE_BOOT_EN` before the first normal reset.
 
 Secure boot digest provisioning is irreversible and intentionally separate from
 release signing:

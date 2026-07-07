@@ -619,9 +619,13 @@ flash-secure-boot-v2:
 	if [[ "$$OSTYPE" != "darwin"* ]]; then \
 		fuser -k "$$PORT_PATH" 2>/dev/null || true; \
 	fi; \
+	tmpdir="$$(mktemp -d "$${TMPDIR:-/tmp}/nockster-secure-boot-flash.XXXXXX")"; \
+	trap 'rm -rf -- "$$tmpdir"' EXIT; \
+	blank_otadata="$$tmpdir/otadata.blank.bin"; \
+	head -c "$(FLASH_ENCRYPTION_OTADATA_SIZE)" /dev/zero | tr '\000' '\377' >"$$blank_otadata"; \
 	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --after no-reset 0x0 "$(SECURE_BOOT_BOOTLOADER_IMAGE)"; \
 	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset 0x8000 "$(SECURE_BOOT_PARTITION_TABLE_BIN)"; \
-	espflash erase-parts --port "$$PORT_PATH" --partition-table "$(PARTITION_TABLE)" --no-stub --before no-reset --after no-reset otadata; \
+	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset "$(FLASH_ENCRYPTION_OTADATA_OFFSET)" "$$blank_otadata"; \
 	espflash write-bin --chip "$(ESP_CHIP)" --port "$$PORT_PATH" --no-stub --before no-reset --after no-reset 0x10000 "$(SECURE_BOOT_SIGNED_IMAGE)"; \
 	echo "Signed bootloader/app flashed; device left in serial bootloader mode. Burn/check secure-boot eFuses before resetting."
 

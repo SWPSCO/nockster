@@ -174,9 +174,14 @@ check_fresh_board_summary() {
   require_summary_regex "KEY_PURPOSE_${flash_idx}.*=.*USER" \
     "${flash_key_block} is not empty/USER in eFuse summary" \
     "${summary_file}"
-  require_summary_regex "KEY_PURPOSE_${hmac_idx}.*=.*USER" \
-    "${hmac_block} is not empty/USER in eFuse summary" \
-    "${summary_file}"
+  if grep -Eq "KEY_PURPOSE_${hmac_idx}.*=.*HMAC_UP" "${summary_file}"; then
+    hmac_already_burned=1
+    echo "${hmac_block} is already HMAC_UP; continuing without reburning HMAC_UP"
+  elif grep -Eq "KEY_PURPOSE_${hmac_idx}.*=.*USER" "${summary_file}"; then
+    :
+  else
+    fail "${hmac_block} is not empty/USER or HMAC_UP in eFuse summary"
+  fi
 }
 
 resolve_cli() {
@@ -197,6 +202,21 @@ resolve_cli() {
     return
   fi
   return 1
+}
+
+wait_for_manual_normal_boot() {
+  cat <<EOF
+
+Manual normal reboot required.
+
+Power-cycle the board or press EN/RESET now. Let it boot normally; do not hold
+BOOT/download. Wait for the HID device to re-enumerate before continuing.
+EOF
+  if is_true "${dry_run}"; then
+    echo "+ wait for operator to manually reboot into normal HID mode"
+    return
+  fi
+  read -r -p "Press Enter after the board has rebooted into normal/HID mode: " _
 }
 
 port="$(normalize_port "${PROVISION_PORT:-${FLASH_PORT:-/dev/ttyACM0}}")"
@@ -232,6 +252,7 @@ flash_crypt_cnt="${FLASH_CRYPT_CNT_VALUE:-0x7}"
 check_crypt_cnt "${flash_crypt_cnt}"
 
 hmac_block="BLOCK_KEY5"
+hmac_already_burned=0
 if [[ "${secure_boot_digest_block}" == "${hmac_block}" ]]; then
   fail "SECURE_BOOT_DIGEST_BLOCK cannot use ${hmac_block}; it is reserved for HMAC_UP"
 fi
@@ -309,19 +330,25 @@ run_make release-encrypt-flash-v2-artifacts \
 
 check_fresh_board_summary "${artifact_dir}/efuse-summary.before-burn.txt"
 
+if [[ "${hmac_already_burned}" == "1" ]]; then
+  hmac_action="skip HMAC_UP burn; ${hmac_block} is already HMAC_UP"
+else
+  hmac_action="burn HMAC_UP into ${hmac_block} from ${hmac_key_file}"
+fi
+
 cat <<EOF
 
 About to irreversibly provision ${port}.
 
 This single confirmation will:
-  - burn HMAC_UP into ${hmac_block} from ${hmac_key_file}
+  - ${hmac_action}
   - flash signed plaintext secure-boot artifacts without reset
   - burn ${secure_boot_digest_purpose} into ${secure_boot_digest_block}
   - burn XTS_AES_128_KEY into ${flash_key_block} from ${flash_key_file}
   - burn SECURE_BOOT_EN
   - flash encrypted signed production artifacts without reset
   - burn SPI_BOOT_CRYPT_CNT=${flash_crypt_cnt}
-  - reset and validate over ${validate_port}
+  - pause for manual normal reboot, then validate over ${validate_port}
 
 Do not interrupt the board after confirming.
 EOF
@@ -336,8 +363,12 @@ else
   fi
 fi
 
-run_cmd "${espefuse_cmd}" --chip esp32s3 --port "${port}" --do-not-confirm \
-  burn-key "${hmac_block}" "${hmac_key_file}" HMAC_UP
+if [[ "${hmac_already_burned}" == "1" ]]; then
+  echo "+ skip HMAC_UP burn; ${hmac_block} is already HMAC_UP"
+else
+  run_cmd "${espefuse_cmd}" --chip esp32s3 --port "${port}" --do-not-confirm \
+    burn-key "${hmac_block}" "${hmac_key_file}" HMAC_UP
+fi
 
 run_make flash-secure-boot-v2 \
   FLASH_PORT="${port}" \
@@ -365,7 +396,7 @@ run_make flash-encrypted-secure-boot-v2 \
 run_cmd "${espefuse_cmd}" --chip esp32s3 --port "${port}" --before no-reset --do-not-confirm \
   burn-efuse SPI_BOOT_CRYPT_CNT "${flash_crypt_cnt}"
 
-run_cmd "${espflash_cmd}" reset --port "${port}"
+wait_for_manual_normal_boot
 
 if cli="$(resolve_cli)"; then
   if is_true "${dry_run}"; then

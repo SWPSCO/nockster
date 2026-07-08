@@ -133,6 +133,8 @@ type WakeLockNavigator = Navigator & {
 const OFFICIAL_TRUST_ANCHOR = '5aa46209222080a2ce107e25d427c3d9ada6cb77be25d7d2a3df8959b7fa2602';
 const MAX_SEED_LABEL_LEN = 32;
 const AUTO_BALANCE_REFRESH_MS = 60_000;
+const DEVICE_REBOOT_SETTLE_MS = 5_000;
+const DEVICE_DISCONNECT_SETTLE_MS = 2_000;
 const NICKS_PER_NOCK = 1n << 16n;
 const NOCK_DEC_SCALE = 10n ** 6n;
 
@@ -262,6 +264,29 @@ function formatNicksCompact(nicks: number): string {
     .padStart(6, '0')
     .replace(/0+$/, '');
   return `${whole.toString()}.${fracStr} N`;
+}
+
+const OPERATION_TIMEOUT = Symbol('operation-timeout');
+
+async function waitForSettledOrTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+): Promise<{ timedOut: boolean; value?: T }> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<typeof OPERATION_TIMEOUT>((resolve) => {
+      timeoutId = setTimeout(() => resolve(OPERATION_TIMEOUT), timeoutMs);
+    });
+    const result = await Promise.race([operation, timeout]);
+    if (result === OPERATION_TIMEOUT) {
+      return { timedOut: true };
+    }
+    return { timedOut: false, value: result as T };
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
 }
 
 function App() {
@@ -1438,11 +1463,17 @@ function App() {
     return finalStatus;
   };
 
-  const rebootConnectedDevice = async (successStatus: string) => {
+  const rebootConnectedDevice = async (
+    successStatus: string,
+    options: { assumeSuccessOnTimeout?: boolean } = {},
+  ) => {
     setStatus('Rebooting device...');
-    await device.reboot();
+    const reboot = await waitForSettledOrTimeout(device.reboot(), DEVICE_REBOOT_SETTLE_MS);
+    if (reboot.timedOut && !options.assumeSuccessOnTimeout) {
+      throw new Error('reboot command timed out');
+    }
     try {
-      await device.disconnect();
+      await waitForSettledOrTimeout(device.disconnect(), DEVICE_DISCONNECT_SETTLE_MS);
     } catch {
       // The USB device may already have disappeared because the reboot succeeded.
     }
@@ -1474,7 +1505,10 @@ function App() {
     }
 
     try {
-      await rebootConnectedDevice('Device rebooting into the installed firmware. Reconnect after it appears.');
+      await rebootConnectedDevice(
+        'Device rebooting into the installed firmware. Reconnect after it appears.',
+        { assumeSuccessOnTimeout: true },
+      );
     } catch (error: any) {
       const message = error?.message ?? error?.toString() ?? 'unknown error';
       setStatus(`${installStatus}; reboot command failed: ${message}. Press reset or replug to finish.`);

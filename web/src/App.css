@@ -2032,6 +2032,10 @@ body.app-device .tab-btn {
   gap: 12px;
 }
 
+.ota-progress-modal {
+  width: min(500px, 100%);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -2070,6 +2074,66 @@ body.app-device .tab-btn {
   opacity: 1;
   white-space: pre-line;
   line-height: 1.45;
+}
+
+.ota-progress-lede {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.ota-progress-spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+}
+
+.ota-progress-detail {
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.ota-progress-subtitle {
+  margin-top: 3px;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.ota-warning {
+  padding: 10px 12px;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-panel-soft);
+  color: var(--color-text);
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.ota-progress-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ota-modal-progress {
+  margin: 2px 0 0;
+}
+
+.update-progress-bar.indeterminate .update-progress-fill {
+  width: 38%;
+  animation: ota-progress-indeterminate 1.05s ease-in-out infinite;
+}
+
+@keyframes ota-progress-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(270%);
+  }
 }
 
 /* Verified badge shown when the device trust anchor is the official SWPSCo key. */

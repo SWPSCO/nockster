@@ -109,6 +109,25 @@ type ConfirmOptions = {
   danger?: boolean;
 };
 
+type OtaProgressModalState = {
+  title: string;
+  detail: string;
+  firmwareName?: string;
+  releaseVersion?: number;
+  writeFlash: boolean;
+};
+
+type ScreenWakeLockSentinel = {
+  released?: boolean;
+  release: () => Promise<void>;
+};
+
+type WakeLockNavigator = Navigator & {
+  wakeLock?: {
+    request: (type: 'screen') => Promise<ScreenWakeLockSentinel>;
+  };
+};
+
 // The official SWPSCo firmware-update signing key (SHA-256 of the public key).
 // When the device's configured trust anchor matches this, we show a verified badge.
 const OFFICIAL_TRUST_ANCHOR = '5aa46209222080a2ce107e25d427c3d9ada6cb77be25d7d2a3df8959b7fa2602';
@@ -346,6 +365,7 @@ function App() {
   const [updateBootStatus, setUpdateBootStatus] = useState<UpdateBootStatus | null>(null);
   const [updatingFirmware, setUpdatingFirmware] = useState(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateStatus | null>(null);
+  const [otaProgressModal, setOtaProgressModal] = useState<OtaProgressModalState | null>(null);
   const [releaseBundleUrl, setReleaseBundleUrl] = useState('');
   const [releaseFirmwareUrl, setReleaseFirmwareUrl] = useState('');
   const [releaseBearerToken, setReleaseBearerToken] = useState('');
@@ -488,6 +508,12 @@ function App() {
   const updatePercent = updateProgress && updateProgress.image_size > 0
     ? Math.min(100, Math.round((updateProgress.bytes_received / updateProgress.image_size) * 100))
     : 0;
+  const otaProgressText = updateProgress
+    ? `${updateProgress.bytes_received} / ${updateProgress.image_size} bytes · ${updatePercent}%`
+    : fetchingRelease
+      ? 'Downloading release artifacts...'
+      : 'Preparing update...';
+  const otaProgressModalActive = otaProgressModal !== null;
   const seedLabelMap = useMemo(() => {
     const labels = new Map<number, string>();
     for (const entry of seedLabels) {
@@ -502,6 +528,57 @@ function App() {
       return 'invalid release index';
     }
   })();
+
+  useEffect(() => {
+    if (!otaProgressModalActive) {
+      return;
+    }
+
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [otaProgressModalActive]);
+
+  useEffect(() => {
+    if (!otaProgressModalActive) {
+      return;
+    }
+
+    let stopped = false;
+    let wakeLock: ScreenWakeLockSentinel | null = null;
+
+    const requestWakeLock = async () => {
+      const wakeLockApi = (navigator as WakeLockNavigator).wakeLock;
+      if (!wakeLockApi || document.visibilityState !== 'visible') {
+        return;
+      }
+      try {
+        wakeLock = await wakeLockApi.request('screen');
+      } catch {
+        // Wake Lock is best-effort and unavailable in some browsers/contexts.
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (!stopped && document.visibilityState === 'visible' && (!wakeLock || wakeLock.released)) {
+        void requestWakeLock();
+      }
+    };
+
+    void requestWakeLock();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      stopped = true;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (wakeLock && !wakeLock.released) {
+        void wakeLock.release().catch(() => undefined);
+      }
+    };
+  }, [otaProgressModalActive]);
 
   useEffect(() => {
     if (isInitialSeed) {
@@ -1332,9 +1409,28 @@ function App() {
 
     const finalStatus = await device.streamUpdateBundle(bundle, firmware, {
       writeFlash,
-      onProgress: (progress) => setUpdateProgress(progress),
+      onProgress: (progress) => {
+        setUpdateProgress(progress);
+        setOtaProgressModal((modal) => {
+          if (!modal) {
+            return modal;
+          }
+          const detail = progress.image_verified
+            ? 'Firmware image verified on the device.'
+            : progress.image_size > 0 && progress.bytes_received >= progress.image_size
+              ? 'Finalizing and verifying the image...'
+              : writeFlash
+                ? 'Writing firmware to the inactive OTA slot...'
+                : 'Streaming firmware to the device for verification...';
+          return { ...modal, detail };
+        });
+      },
     });
     if (writeFlash && canReadUpdateBootStatus) {
+      setOtaProgressModal((modal) => modal
+        ? { ...modal, detail: 'Checking OTA boot selection...' }
+        : modal
+      );
       const bootStatus = await device.getUpdateBootStatus();
       setUpdateBootStatus(bootStatus);
       assertPostInstallUpdateBootStatus(bootStatus);
@@ -1444,11 +1540,19 @@ function App() {
       deviceBusyRef.current = true;
       setDeviceBusy(true);
       setUpdateProgress(null);
+      setOtaProgressModal({
+        title: writeFlash ? 'Installing firmware' : 'Verifying firmware',
+        detail: writeFlash ? 'Preparing OTA install...' : 'Preparing firmware verification...',
+        firmwareName,
+        releaseVersion: updateBundle.manifest.release_version,
+        writeFlash,
+      });
       setStatus(writeFlash ? 'Installing firmware update...' : 'Streaming update for verification...');
       const finalStatus = await runUpdateStream(updateBundle, firmwareBytes, writeFlash);
       const doneStatus = writeFlash
         ? `Firmware installed for next boot (${finalStatus.image_size} bytes verified)`
         : `Firmware image verified on device (${finalStatus.image_size} bytes)`;
+      setOtaProgressModal(null);
       if (writeFlash) {
         await offerPostInstallReboot(doneStatus, deviceRebootAvailable);
       } else {
@@ -1458,6 +1562,7 @@ function App() {
       const message = error?.message ?? error?.toString() ?? 'unknown error';
       setStatus(`Update stream failed: ${message}`);
     } finally {
+      setOtaProgressModal(null);
       setUpdatingFirmware(false);
       deviceBusyRef.current = false;
       setDeviceBusy(false);
@@ -1517,9 +1622,26 @@ function App() {
         return;
       }
 
+      setOtaProgressModal({
+        title: 'Updating firmware',
+        detail: 'Fetching latest signed firmware release...',
+        firmwareName: 'latest firmware',
+        releaseVersion: latestReleaseVersion ?? undefined,
+        writeFlash: true,
+      });
       setStatus('Fetching latest firmware release...');
       const release = await fetchLatestUpdateRelease(snapshot.releaseVersion, snapshot.buildInfo);
       stageUpdateRelease(release);
+      setFetchingRelease(false);
+      setOtaProgressModal((modal) => modal
+        ? {
+            ...modal,
+            detail: 'Preparing OTA install...',
+            firmwareName: release.firmwareName,
+            releaseVersion: release.bundle.manifest.release_version,
+          }
+        : modal
+      );
       setStatus('Installing latest firmware update...');
       const finalStatus = await runUpdateStream(
         release.bundle,
@@ -1528,6 +1650,10 @@ function App() {
         snapshot.releaseVersion,
         snapshot.buildInfo,
         canReadUpdateBootStatus,
+      );
+      setOtaProgressModal((modal) => modal
+        ? { ...modal, detail: 'Rebooting into the installed firmware...' }
+        : modal
       );
       await offerPostInstallReboot(
         `Firmware release ${release.bundle.manifest.release_version} installed for next boot (${finalStatus.image_size} bytes verified)`,
@@ -1538,6 +1664,7 @@ function App() {
       const message = error?.message ?? error?.toString() ?? 'unknown error';
       setStatus(`Latest update failed: ${message}`);
     } finally {
+      setOtaProgressModal(null);
       setFetchingRelease(false);
       setUpdatingFirmware(false);
       deviceBusyRef.current = false;
@@ -2520,6 +2647,59 @@ function App() {
                   ? 'install latest'
                   : 'connect & install latest'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {otaProgressModal && (
+        <div className="modal-overlay ota-progress-overlay">
+          <div
+            className="modal-card ota-progress-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ota-progress-title"
+          >
+            <div className="modal-header">
+              <div className="modal-title" id="ota-progress-title">{otaProgressModal.title}</div>
+            </div>
+            <div className="modal-body">
+              <div className="ota-progress-lede">
+                <span className="spinner ota-progress-spinner" aria-hidden="true" />
+                <div>
+                  <div className="ota-progress-detail">{otaProgressModal.detail}</div>
+                  <div className="ota-progress-subtitle">
+                    Keep this tab open and this computer awake until the update finishes.
+                  </div>
+                </div>
+              </div>
+              <div className="ota-warning" role="alert">
+                Do not restart this computer, close this tab, unplug the USB cable, or power-cycle Nockster.
+              </div>
+              <div className="ota-progress-meta">
+                {otaProgressModal.releaseVersion !== undefined && (
+                  <div className="status-item full-width">
+                    <span className="label">release:</span>
+                    <span className="value">{otaProgressModal.releaseVersion}</span>
+                  </div>
+                )}
+                <div className="status-item full-width">
+                  <span className="label">firmware:</span>
+                  <span className="value update-hash">
+                    {otaProgressModal.firmwareName || firmwareName || 'firmware image'}
+                  </span>
+                </div>
+              </div>
+              <div className="update-progress ota-modal-progress">
+                <div className={`update-progress-bar ${updateProgress ? '' : 'indeterminate'}`}>
+                  <div
+                    className="update-progress-fill"
+                    style={updateProgress ? { width: `${updatePercent}%` } : undefined}
+                  />
+                </div>
+                <div className="update-progress-text">
+                  {otaProgressText}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -3613,16 +3793,6 @@ function App() {
                 </div>
               )}
             </div>
-            {updateProgress && (
-              <div className="update-progress">
-                <div className="update-progress-bar">
-                  <div className="update-progress-fill" style={{ width: `${updatePercent}%` }} />
-                </div>
-                <div className="update-progress-text">
-                  {updateProgress.bytes_received} / {updateProgress.image_size} bytes · {updatePercent}%
-                </div>
-              </div>
-            )}
             {advancedUpdateExpanded && (
               <div className="update-advanced">
                 <details className="device-subdetails">

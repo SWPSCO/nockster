@@ -368,17 +368,7 @@ impl<'d> Gui<'d> {
                         self.auto_lock_deadline = None;
                         self.lock_button_active = false;
                         self.lock_button_pressed_at = None;
-                        if matches!(
-                            self.mode,
-                            GuiMode::Unlocked | GuiMode::Confirm | GuiMode::TxReview
-                        ) {
-                            self.mark_header_dirty();
-                            self.render_unlock_header();
-                        }
-                        if self.mode == GuiMode::Unlocked {
-                            self.stop_unlock_demo();
-                        }
-                        return Some(GuiInteraction::LockRequested);
+                        return Some(GuiInteraction::AutoLockRequested);
                     }
                 }
                 None => self.refresh_auto_lock(now),
@@ -670,6 +660,11 @@ impl<'d> Gui<'d> {
         if self.auto_lock_enabled() {
             self.auto_lock_deadline = Some(now + AUTO_LOCK_TIMEOUT);
         }
+    }
+
+    pub fn defer_auto_lock(&mut self) {
+        self.clear_lock_button();
+        self.refresh_auto_lock(Instant::now());
     }
 
     fn clear_auto_lock(&mut self) {

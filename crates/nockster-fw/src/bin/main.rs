@@ -1440,14 +1440,19 @@ fn main() -> ! {
                     GuiInteraction::ConfirmRejected => {
                         usb_debug(&mut hid, b"confirm rejected\r\n");
                     }
-                    GuiInteraction::LockRequested => {
-                        wipe_seed();
-                        // Locking (incl. auto-lock) while a confirmation is on
-                        // screen must answer the host and clear DEVICE_BUSY,
-                        // or the device rejects every request until reboot.
-                        cancel_pending_confirmation(&mut hid, &mut plain, &mut enc);
-                        ui.begin_unlock(None);
-                        usb_debug(&mut hid, b"locked\r\n");
+                    GuiInteraction::AutoLockRequested | GuiInteraction::LockRequested => {
+                        if update_auth::stream_active() {
+                            ui.defer_auto_lock();
+                            usb_debug(&mut hid, b"lock deferred during ota\r\n");
+                        } else {
+                            wipe_seed();
+                            // Locking while a confirmation is on screen must answer
+                            // the host and clear DEVICE_BUSY, or the device rejects
+                            // every request until reboot.
+                            cancel_pending_confirmation(&mut hid, &mut plain, &mut enc);
+                            ui.begin_unlock(None);
+                            usb_debug(&mut hid, b"locked\r\n");
+                        }
                     }
                     GuiInteraction::Seed(seed_interaction) => match seed_interaction {
                         SeedInteraction::EntryCompleted(phrase) => {

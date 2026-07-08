@@ -119,6 +119,7 @@ pub enum GuiInteraction {
     ConfirmAccepted,
     ConfirmRejected,
     RawTouch(ScreenPoint),
+    AutoLockRequested,
     LockRequested,
     Seed(SeedInteraction),
     TouchCalibrationComplete(nockster_core::TouchCalibration),

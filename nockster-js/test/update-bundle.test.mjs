@@ -8,10 +8,12 @@ import {
   UPDATE_MANIFEST_VERSION,
   UPDATE_OTA_STATE_INVALID,
   UPDATE_OTA_STATE_NEW,
+  UPDATE_OTA_STATE_UNKNOWN,
   UPDATE_RELEASE_INDEX_FORMAT,
   UPDATE_SLOT_NONE,
   UPDATE_SLOT_OTA0,
   UPDATE_SLOT_OTA1,
+  UPDATE_SLOT_UNKNOWN,
   assertPrivateUpdateReleaseUrls,
   assertPostInstallUpdateBootStatus,
   assertUpdateBundleCompatible,
@@ -436,6 +438,16 @@ test('post-install OTA boot status helper validates activation metadata', () => 
   assert.equal(updateOtaStateName(UPDATE_OTA_STATE_INVALID), 'invalid');
   assert.deepEqual(getPostInstallUpdateBootStatusFailures(bootStatus()), []);
   assert.doesNotThrow(() => assertPostInstallUpdateBootStatus(bootStatus()));
+  assert.deepEqual(getPostInstallUpdateBootStatusFailures(bootStatus({
+    current_slot: UPDATE_SLOT_UNKNOWN,
+    next_slot: UPDATE_SLOT_OTA1,
+    ota_state: UPDATE_OTA_STATE_UNKNOWN,
+  })), []);
+  assert.doesNotThrow(() => assertPostInstallUpdateBootStatus(bootStatus({
+    current_slot: UPDATE_SLOT_UNKNOWN,
+    next_slot: UPDATE_SLOT_OTA1,
+    ota_state: UPDATE_OTA_STATE_UNKNOWN,
+  })));
 
   const failures = getPostInstallUpdateBootStatusFailures(bootStatus({
     partition_table_ok: false,

@@ -472,13 +472,16 @@ fn confirm_install_activation(sp: &mut dyn Link) -> Result<()> {
     if !status.ota0_present || !status.ota1_present {
         failures.push("both OTA app slots must be present".to_string());
     }
-    if !matches!(status.current_slot, UPDATE_SLOT_OTA0 | UPDATE_SLOT_OTA1) {
+    let encrypted_production_selected = encrypted_production_selected_slot_unknown(&status);
+    if !encrypted_production_selected
+        && !matches!(status.current_slot, UPDATE_SLOT_OTA0 | UPDATE_SLOT_OTA1)
+    {
         failures.push(format!(
             "selected boot slot is {}, expected ota_0 or ota_1",
             slot_name(status.current_slot)
         ));
     }
-    if status.ota_state != UPDATE_OTA_STATE_NEW {
+    if !encrypted_production_selected && status.ota_state != UPDATE_OTA_STATE_NEW {
         failures.push(format!(
             "selected OTA image state is {}, expected new",
             ota_state_name(status.ota_state)
@@ -494,6 +497,12 @@ fn confirm_install_activation(sp: &mut dyn Link) -> Result<()> {
 
     ui::ok("update activation: ok");
     Ok(())
+}
+
+fn encrypted_production_selected_slot_unknown(status: &UpdateBootStatus) -> bool {
+    status.current_slot == UPDATE_SLOT_UNKNOWN
+        && matches!(status.next_slot, UPDATE_SLOT_OTA0 | UPDATE_SLOT_OTA1)
+        && status.ota_state == UPDATE_OTA_STATE_UNKNOWN
 }
 
 fn pubkey(args: &UpdatePubkeyArgs) -> Result<()> {

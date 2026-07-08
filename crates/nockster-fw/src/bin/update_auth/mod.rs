@@ -629,20 +629,88 @@ fn activate_ota_slot(slot: Slot) -> Result<(), UpdateFlashError> {
 }
 
 fn encrypted_update_boot_status() -> UpdateBootStatus {
-    let next_slot = encrypted_ota_slot_for_seq(firmware_release_version().saturating_add(1));
-    UpdateBootStatus {
+    let fallback_next_slot =
+        encrypted_ota_slot_for_seq(firmware_release_version().saturating_add(1));
+    let mut status = UpdateBootStatus {
         partition_table_ok: true,
         ota_data_present: true,
         ota0_present: true,
         ota1_present: true,
         current_slot: UPDATE_SLOT_UNKNOWN,
-        next_slot: slot_code(next_slot),
+        next_slot: slot_code(fallback_next_slot),
         ota_state: UPDATE_OTA_STATE_UNKNOWN,
         ota0_offset: PROD_OTA0_OFFSET,
         ota0_size: PROD_OTA_SLOT_SIZE,
         ota1_offset: PROD_OTA1_OFFSET,
         ota1_size: PROD_OTA_SLOT_SIZE,
+    };
+
+    let mut flash = UpdateFlashStorage::new();
+    let slot0 = read_encrypted_ota_select_status(&mut flash, Slot::Slot0)
+        .ok()
+        .flatten();
+    let slot1 = read_encrypted_ota_select_status(&mut flash, Slot::Slot1)
+        .ok()
+        .flatten();
+    let selected = match (slot0, slot1) {
+        (Some(a), Some(b)) => Some(if a.seq >= b.seq { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+
+    if let Some(selected) = selected {
+        status.current_slot = slot_code(selected.slot);
+        status.next_slot = slot_code(encrypted_ota_slot_for_seq(selected.seq.saturating_add(1)));
+        status.ota_state = selected.state;
     }
+
+    status
+}
+
+#[derive(Clone, Copy)]
+struct OtaSelectStatus {
+    slot: Slot,
+    seq: u32,
+    state: u8,
+}
+
+fn read_encrypted_ota_select_status(
+    flash: &mut UpdateFlashStorage,
+    slot: Slot,
+) -> Result<Option<OtaSelectStatus>, UpdateFlashError> {
+    let slot_offset = ota_select_slot_offset(slot)?;
+    let mut entry = [0u8; OTA_SELECT_ENTRY_SIZE];
+    flash
+        .read(PROD_OTADATA_OFFSET + slot_offset, &mut entry)
+        .map_err(|_| UpdateFlashError::Storage)?;
+
+    let seq = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+    if seq == u32::MAX {
+        return Ok(None);
+    }
+
+    let crc = u32::from_le_bytes([
+        entry[OTA_SELECT_CRC_OFFSET],
+        entry[OTA_SELECT_CRC_OFFSET + 1],
+        entry[OTA_SELECT_CRC_OFFSET + 2],
+        entry[OTA_SELECT_CRC_OFFSET + 3],
+    ]);
+    if crc != ota_seq_crc32(seq) {
+        return Ok(None);
+    }
+
+    let raw_state = u32::from_le_bytes([
+        entry[OTA_SELECT_STATE_OFFSET],
+        entry[OTA_SELECT_STATE_OFFSET + 1],
+        entry[OTA_SELECT_STATE_OFFSET + 2],
+        entry[OTA_SELECT_STATE_OFFSET + 3],
+    ]);
+    Ok(Some(OtaSelectStatus {
+        slot,
+        seq,
+        state: ota_state_code_from_raw(raw_state),
+    }))
 }
 
 fn encrypted_ota_target(manifest: &UpdateManifest) -> Result<OtaTarget, UpdateFlashError> {
@@ -772,6 +840,18 @@ fn ota_state_code(state: OtaImageState) -> u8 {
         OtaImageState::Invalid => UPDATE_OTA_STATE_INVALID,
         OtaImageState::Aborted => UPDATE_OTA_STATE_ABORTED,
         OtaImageState::Undefined => UPDATE_OTA_STATE_UNDEFINED,
+    }
+}
+
+fn ota_state_code_from_raw(state: u32) -> u8 {
+    match state {
+        0 => UPDATE_OTA_STATE_NEW,
+        1 => UPDATE_OTA_STATE_PENDING_VERIFY,
+        2 => UPDATE_OTA_STATE_VALID,
+        3 => UPDATE_OTA_STATE_INVALID,
+        4 => UPDATE_OTA_STATE_ABORTED,
+        u32::MAX => UPDATE_OTA_STATE_UNDEFINED,
+        _ => UPDATE_OTA_STATE_UNKNOWN,
     }
 }
 

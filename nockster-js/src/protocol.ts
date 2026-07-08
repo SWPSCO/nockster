@@ -942,10 +942,18 @@ export function getPostInstallUpdateBootStatusFailures(status: UpdateBootStatus)
   if (!status.ota0_present || !status.ota1_present) {
     failures.push('both OTA app slots must be present');
   }
-  if (status.current_slot !== UPDATE_SLOT_OTA0 && status.current_slot !== UPDATE_SLOT_OTA1) {
+  const encryptedProductionSelected =
+    status.current_slot === UPDATE_SLOT_UNKNOWN &&
+    (status.next_slot === UPDATE_SLOT_OTA0 || status.next_slot === UPDATE_SLOT_OTA1) &&
+    status.ota_state === UPDATE_OTA_STATE_UNKNOWN;
+  if (
+    !encryptedProductionSelected &&
+    status.current_slot !== UPDATE_SLOT_OTA0 &&
+    status.current_slot !== UPDATE_SLOT_OTA1
+  ) {
     failures.push(`selected boot slot is ${updateSlotName(status.current_slot)}, expected ota_0 or ota_1`);
   }
-  if (status.ota_state !== UPDATE_OTA_STATE_NEW) {
+  if (!encryptedProductionSelected && status.ota_state !== UPDATE_OTA_STATE_NEW) {
     failures.push(`selected OTA image state is ${updateOtaStateName(status.ota_state)}, expected new`);
   }
   return failures;

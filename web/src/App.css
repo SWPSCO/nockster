@@ -2036,6 +2036,10 @@ body.app-device .tab-btn {
   width: min(500px, 100%);
 }
 
+.ota-progress-overlay {
+  z-index: 1300;
+}
+
 .modal-header {
   display: flex;
   align-items: center;

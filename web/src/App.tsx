@@ -807,14 +807,18 @@ function App() {
     }
   };
 
-  const connectDevice = async (): Promise<DeviceStatusSnapshot | null> => {
-    console.log('Connect requested, isTauri:', isTauri);
-    setStatus('Connecting...');
-
+  const applySelectedPort = () => {
     if (isTauri && transport && selectedPort && transport.setSelectedPort) {
       console.log('Setting port:', selectedPort);
       transport.setSelectedPort(selectedPort);
     }
+  };
+
+  const connectDevice = async (): Promise<DeviceStatusSnapshot | null> => {
+    console.log('Connect requested, isTauri:', isTauri);
+    setStatus('Connecting...');
+
+    applySelectedPort();
 
     await device.connect();
     setConnected(true);
@@ -1487,10 +1491,10 @@ function App() {
     installStatus: string,
     canReboot: boolean,
     options: { autoReboot?: boolean } = {},
-  ) => {
+  ): Promise<boolean> => {
     if (!canReboot) {
       setStatus(`${installStatus}; press reset or replug to boot it.`);
-      return;
+      return false;
     }
 
     if (!options.autoReboot) {
@@ -1502,7 +1506,7 @@ function App() {
       });
       if (!rebootNow) {
         setStatus(`${installStatus}; reboot when ready to start it.`);
-        return;
+        return false;
       }
     }
 
@@ -1511,9 +1515,11 @@ function App() {
         'Device rebooting into the installed firmware. Reconnect after it appears.',
         { assumeSuccessOnTimeout: true },
       );
+      return true;
     } catch (error: any) {
       const message = error?.message ?? error?.toString() ?? 'unknown error';
       setStatus(`${installStatus}; reboot command failed: ${message}. Press reset or replug to finish.`);
+      return false;
     }
   };
 
@@ -1607,11 +1613,57 @@ function App() {
   };
 
   const readUpdateDeviceSnapshot = async (): Promise<DeviceStatusSnapshot> => {
-    const snapshot = connected ? await refreshStatus() : await connectDevice();
-    if (!snapshot?.info) {
+    if (!connected) {
+      setStatus('Connecting for firmware update...');
+      applySelectedPort();
+      await device.connect();
+    }
+
+    const deviceInfo = await device.getInfo();
+    if (deviceInfo.type !== 'Info') {
       throw new Error('Could not read device firmware metadata');
     }
-    return snapshot;
+
+    let nextReleaseVersion: number | null = null;
+    let nextBuildInfo: BuildInfo | null = null;
+    let nextUpdateBootStatus: UpdateBootStatus | null = null;
+
+    setInfo(deviceInfo);
+
+    if ((deviceInfo.features & FEATURE_RELEASE_INFO) !== 0) {
+      try {
+        const release = await device.getReleaseInfo();
+        nextReleaseVersion = Number(release.release_version);
+      } catch (err: any) {
+        console.warn('getReleaseInfo failed', err);
+      }
+    }
+    setFirmwareReleaseVersion(nextReleaseVersion);
+
+    if ((deviceInfo.features & FEATURE_BUILD_INFO) !== 0) {
+      try {
+        nextBuildInfo = await device.getBuildInfo();
+      } catch (err: any) {
+        console.warn('getBuildInfo failed', err);
+      }
+    }
+    setFirmwareBuildInfo(nextBuildInfo);
+
+    if ((deviceInfo.features & FEATURE_UPDATE_BOOT_STATUS) !== 0) {
+      try {
+        nextUpdateBootStatus = await device.getUpdateBootStatus();
+      } catch (err: any) {
+        console.warn('getUpdateBootStatus failed', err);
+      }
+    }
+    setUpdateBootStatus(nextUpdateBootStatus);
+
+    return {
+      info: deviceInfo,
+      releaseVersion: nextReleaseVersion,
+      buildInfo: nextBuildInfo,
+      updateBootStatus: nextUpdateBootStatus,
+    };
   };
 
   const installLatestUpdate = async () => {
@@ -1619,6 +1671,8 @@ function App() {
       setStatus('WebHID/Web Serial API not supported in this browser');
       return;
     }
+
+    let updateOnlyConnection = !connected;
 
     try {
       setUpdatesModalOpen(false);
@@ -1689,15 +1743,26 @@ function App() {
         ? { ...modal, detail: 'Rebooting into the installed firmware...' }
         : modal
       );
-      await offerPostInstallReboot(
+      const rebootHandled = await offerPostInstallReboot(
         `Firmware release ${release.bundle.manifest.release_version} installed for next boot (${finalStatus.image_size} bytes verified)`,
         canRebootDevice,
         { autoReboot: true },
       );
+      if (rebootHandled) {
+        updateOnlyConnection = false;
+      }
     } catch (error: any) {
       const message = error?.message ?? error?.toString() ?? 'unknown error';
       setStatus(`Latest update failed: ${message}`);
     } finally {
+      if (updateOnlyConnection) {
+        try {
+          await waitForSettledOrTimeout(device.disconnect(), DEVICE_DISCONNECT_SETTLE_MS);
+        } catch {
+          // Best-effort cleanup for update-only connections.
+        }
+        clearConnectedDeviceState();
+      }
       setOtaProgressModal(null);
       setFetchingRelease(false);
       setUpdatingFirmware(false);

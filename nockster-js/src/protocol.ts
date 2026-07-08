@@ -934,13 +934,13 @@ export function updateOtaStateName(state: number): string {
 export function getPostInstallUpdateBootStatusFailures(status: UpdateBootStatus): string[] {
   const failures: string[] = [];
   if (!status.partition_table_ok) {
-    failures.push('partition table is not readable');
+    failures.push('device update system is not readable');
   }
   if (!status.ota_data_present) {
-    failures.push('otadata partition is missing');
+    failures.push('device update state is missing');
   }
   if (!status.ota0_present || !status.ota1_present) {
-    failures.push('both OTA app slots must be present');
+    failures.push('device update storage is incomplete');
   }
   const encryptedProductionSelected =
     status.current_slot === UPDATE_SLOT_UNKNOWN &&
@@ -951,10 +951,10 @@ export function getPostInstallUpdateBootStatusFailures(status: UpdateBootStatus)
     status.current_slot !== UPDATE_SLOT_OTA0 &&
     status.current_slot !== UPDATE_SLOT_OTA1
   ) {
-    failures.push(`selected boot slot is ${updateSlotName(status.current_slot)}, expected ota_0 or ota_1`);
+    failures.push('installed firmware is not selected for restart');
   }
   if (!encryptedProductionSelected && status.ota_state !== UPDATE_OTA_STATE_NEW) {
-    failures.push(`selected OTA image state is ${updateOtaStateName(status.ota_state)}, expected new`);
+    failures.push('installed firmware is not ready to start');
   }
   return failures;
 }
@@ -962,7 +962,7 @@ export function getPostInstallUpdateBootStatusFailures(status: UpdateBootStatus)
 export function assertPostInstallUpdateBootStatus(status: UpdateBootStatus): void {
   const failures = getPostInstallUpdateBootStatusFailures(status);
   if (failures.length) {
-    throw new Error(`post-install activation validation failed: ${failures.join('; ')}`);
+    throw new Error(`installed firmware validation failed: ${failures.join('; ')}`);
   }
 }
 

@@ -456,16 +456,16 @@ test('post-install OTA boot status helper validates activation metadata', () => 
     ota_state: UPDATE_OTA_STATE_INVALID,
   }));
   assert.deepEqual(failures, [
-    'partition table is not readable',
-    'both OTA app slots must be present',
-    'selected boot slot is factory/none, expected ota_0 or ota_1',
-    'selected OTA image state is invalid, expected new',
+    'device update system is not readable',
+    'device update storage is incomplete',
+    'installed firmware is not selected for restart',
+    'installed firmware is not ready to start',
   ]);
   assert.throws(
     () => assertPostInstallUpdateBootStatus(bootStatus({
       ota_data_present: false,
     })),
-    /post-install activation validation failed: otadata partition is missing/,
+    /installed firmware validation failed: device update state is missing/,
   );
 });
 

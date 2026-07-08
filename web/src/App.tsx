@@ -10,8 +10,6 @@ import {
   assertUpdateFirmwareMatchesBundle,
   getUpdateBundleCompatibilityBlocker,
   assertPostInstallUpdateBootStatus,
-  updateSlotName,
-  updateOtaStateName,
   fetchUpdateReleaseArtifacts,
   fetchLatestUpdateRelease as fetchLatestUpdateReleaseFromIndex,
   parseUpdateReleaseIndexJson,
@@ -156,13 +154,6 @@ function formatMac(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(':');
 }
 
-function updatePartitionLabel(present: boolean, offset: number, size: number): string {
-  if (!present) {
-    return 'missing';
-  }
-  return `0x${offset.toString(16)} · ${size} bytes`;
-}
-
 function parseReleaseUrl(value: string, label: string): URL {
   try {
     const url = new URL(value);
@@ -287,6 +278,17 @@ async function waitForSettledOrTimeout<T>(
       clearTimeout(timeoutId);
     }
   }
+}
+
+function waitForNextPaint(): Promise<void> {
+  if (typeof requestAnimationFrame !== 'function') {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
 }
 
 function App() {
@@ -1445,7 +1447,7 @@ function App() {
             : progress.image_size > 0 && progress.bytes_received >= progress.image_size
               ? 'Finalizing and verifying the image...'
               : writeFlash
-                ? 'Writing firmware to the inactive OTA slot...'
+                ? 'Writing firmware to Nockster...'
                 : 'Streaming firmware to the device for verification...';
           return { ...modal, detail };
         });
@@ -1453,7 +1455,7 @@ function App() {
     });
     if (writeFlash && canReadUpdateBootStatus) {
       setOtaProgressModal((modal) => modal
-        ? { ...modal, detail: 'Checking OTA boot selection...' }
+        ? { ...modal, detail: 'Checking the installed firmware...' }
         : modal
       );
       const bootStatus = await device.getUpdateBootStatus();
@@ -1561,7 +1563,7 @@ function App() {
       }
       const confirmed = await askConfirm({
         title: 'Install firmware',
-        message: 'Install this firmware into the inactive OTA slot and activate it for next boot?',
+        message: 'Install this firmware on Nockster? Keep the cable connected until the update finishes.',
         confirmLabel: 'Install',
       });
       if (!confirmed) {
@@ -1576,11 +1578,12 @@ function App() {
       setUpdateProgress(null);
       setOtaProgressModal({
         title: writeFlash ? 'Installing firmware' : 'Verifying firmware',
-        detail: writeFlash ? 'Preparing OTA install...' : 'Preparing firmware verification...',
+        detail: writeFlash ? 'Preparing firmware install...' : 'Preparing firmware verification...',
         firmwareName,
         releaseVersion: updateBundle.manifest.release_version,
         writeFlash,
       });
+      await waitForNextPaint();
       setStatus(writeFlash ? 'Installing firmware update...' : 'Streaming update for verification...');
       const finalStatus = await runUpdateStream(updateBundle, firmwareBytes, writeFlash);
       const doneStatus = writeFlash
@@ -1616,14 +1619,23 @@ function App() {
       setStatus('WebHID/Web Serial API not supported in this browser');
       return;
     }
-    setUpdatesModalOpen(false);
 
     try {
+      setUpdatesModalOpen(false);
       setFetchingRelease(true);
       setUpdatingFirmware(true);
       deviceBusyRef.current = true;
       setDeviceBusy(true);
       setUpdateProgress(null);
+      setOtaProgressModal({
+        title: 'Updating firmware',
+        detail: connected ? 'Checking connected device...' : 'Connecting to device...',
+        firmwareName: 'latest firmware',
+        releaseVersion: latestReleaseVersion ?? undefined,
+        writeFlash: true,
+      });
+      await waitForNextPaint();
+
       const snapshot = await readUpdateDeviceSnapshot();
       const features = snapshot.info?.features ?? 0;
       const canReadUpdateBootStatus = (features & FEATURE_UPDATE_BOOT_STATUS) !== 0;
@@ -1643,26 +1655,14 @@ function App() {
         latestReleaseVersion <= snapshot.releaseVersion
       ) {
         setStatus(`Already on the latest firmware (release ${snapshot.releaseVersion})`);
+        setOtaProgressModal(null);
         return;
       }
 
-      const confirmed = await askConfirm({
-        title: 'Update firmware',
-        message: 'Fetch the latest signed firmware and install it into the inactive OTA slot?',
-        confirmLabel: 'Fetch & install',
-      });
-      if (!confirmed) {
-        setStatus('Firmware update cancelled');
-        return;
-      }
-
-      setOtaProgressModal({
-        title: 'Updating firmware',
-        detail: 'Fetching latest signed firmware release...',
-        firmwareName: 'latest firmware',
-        releaseVersion: latestReleaseVersion ?? undefined,
-        writeFlash: true,
-      });
+      setOtaProgressModal((modal) => modal
+        ? { ...modal, detail: 'Fetching latest signed firmware release...' }
+        : modal
+      );
       setStatus('Fetching latest firmware release...');
       const release = await fetchLatestUpdateRelease(snapshot.releaseVersion, snapshot.buildInfo);
       stageUpdateRelease(release);
@@ -1670,7 +1670,7 @@ function App() {
       setOtaProgressModal((modal) => modal
         ? {
             ...modal,
-            detail: 'Preparing OTA install...',
+            detail: 'Preparing firmware install...',
             firmwareName: release.firmwareName,
             releaseVersion: release.bundle.manifest.release_version,
           }
@@ -2648,7 +2648,7 @@ function App() {
                 {connected && updateUpToDate
                   ? 'Your device is already on the latest release.'
                   : connected && updateIsNewer
-                  ? 'A newer release is available. Installing writes it to the inactive OTA slot and verifies it on-device before activation.'
+                  ? 'A newer release is available. Installing verifies it on-device before restarting into it.'
                   : 'Connecting reads the version installed on your device and installs the latest signed firmware only if it is newer.'}
               </p>
             </div>
@@ -3769,24 +3769,19 @@ function App() {
                 </div>
               )}
               {updateBootStatusAvailable && (
-                <>
-                  <div className="status-item full-width">
-                    <span className="label">OTA boot:</span>
-                    <span className="value update-hash">
-                      {updateBootStatus
-                        ? `table ${updateBootStatus.partition_table_ok ? 'ok' : 'error'} · otadata ${updateBootStatus.ota_data_present ? 'present' : 'missing'} · current ${updateSlotName(updateBootStatus.current_slot)} · next ${updateSlotName(updateBootStatus.next_slot)} · ${updateOtaStateName(updateBootStatus.ota_state)}`
-                        : 'not loaded'}
-                    </span>
-                  </div>
-                  {updateBootStatus && (
-                    <div className="status-item full-width">
-                      <span className="label">OTA slots:</span>
-                      <span className="value update-hash">
-                        ota_0 {updatePartitionLabel(updateBootStatus.ota0_present, updateBootStatus.ota0_offset, updateBootStatus.ota0_size)} · ota_1 {updatePartitionLabel(updateBootStatus.ota1_present, updateBootStatus.ota1_offset, updateBootStatus.ota1_size)}
-                      </span>
-                    </div>
-                  )}
-                </>
+                <div className="status-item full-width">
+                  <span className="label">update system:</span>
+                  <span className="value">
+                    {updateBootStatus
+                      ? updateBootStatus.partition_table_ok &&
+                        updateBootStatus.ota_data_present &&
+                        updateBootStatus.ota0_present &&
+                        updateBootStatus.ota1_present
+                        ? 'ready'
+                        : 'needs recovery install'
+                      : 'not loaded'}
+                  </span>
+                </div>
               )}
               <div className="status-item full-width">
                 <span className="label">trust anchor:</span>

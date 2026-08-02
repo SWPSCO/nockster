@@ -697,11 +697,7 @@ fn zmap_count_real_sigs(map: Noun, arena: &Arena, limit: u64) -> Result<u64, Sig
 
 /// True when the signer's pkh already holds a real (non-placeholder)
 /// signature in the witness map.
-fn zmap_has_real_sig_for(
-    map: Noun,
-    arena: &Arena,
-    want: [u64; 5],
-) -> Result<bool, SignDraftError> {
+fn zmap_has_real_sig_for(map: Noun, arena: &Arena, want: [u64; 5]) -> Result<bool, SignDraftError> {
     if map == arena.atom0() {
         return Ok(false);
     }
@@ -978,7 +974,10 @@ mod message_tests {
             message_digest_v1(&[0, 0, 0]).unwrap()
         );
         // Different content -> different digest.
-        assert_ne!(message_digest_v1(b"abcd").unwrap(), message_digest_v1(b"abce").unwrap());
+        assert_ne!(
+            message_digest_v1(b"abcd").unwrap(),
+            message_digest_v1(b"abce").unwrap()
+        );
         // A trailing zero byte is not significant (cord = LE atom).
         assert_eq!(
             message_digest_v1(b"abc").unwrap(),
@@ -1005,6 +1004,30 @@ pub fn cheetah_pubkey_pkh_v1(pk_coords: ([u64; 6], [u64; 6])) -> Result<String, 
     let pk_noun = cheetah_pubkey_noun(&mut arena, pk_coords);
     let pkh_digest = tip5::hash_noun_varlen(pk_noun, &arena)?;
     Ok(digest_to_b58(pkh_digest))
+}
+
+/// Base58 lock-root for the standard V1 1-of-1 PKH spend condition belonging
+/// to a Cheetah public key.
+pub fn cheetah_pubkey_pkh_lock_root_v1(
+    pk_coords: ([u64; 6], [u64; 6]),
+) -> Result<String, SignDraftError> {
+    let mut arena = Arena::new();
+    let pk_noun = cheetah_pubkey_noun(&mut arena, pk_coords);
+    let pkh_digest = tip5::hash_noun_varlen(pk_noun, &arena)?;
+
+    // SpendCondition [ %pkh [m=1 h=(z-set pkh)] ]. A singleton z-set is
+    // [value left=~ right=~].
+    let pkh_noun = build_hash_noun(&mut arena, pkh_digest);
+    let nil = arena.atom0();
+    let allowed = build_tuple(&mut arena, &[pkh_noun, nil, nil]);
+    let one = arena.alloc_atom_u64(1);
+    let body = build_tuple(&mut arena, &[one, allowed]);
+    let tag = arena.alloc_atom_bytes(b"pkh");
+    let primitive = build_tuple(&mut arena, &[tag, body]);
+    let spend_condition = arena.alloc_cell(primitive, nil);
+    let ctx = tx_id_ctx(&mut arena)?;
+    let lock_root = hash_lock_primitives_list(spend_condition, &arena, &ctx)?;
+    Ok(digest_to_b58(lock_root))
 }
 
 fn hash_nname_hashable(noun: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
@@ -1596,8 +1619,7 @@ fn collect_multisig_inputs(
     let (ver, body) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
     if noun_atom_u64(ver, arena) == Some(1) {
         let (witness, _seeds, _fee) = tuple3(body, arena).ok_or(SignDraftError::Malformed)?;
-        let (lmp, pkh_map, _hax, _tim) =
-            tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+        let (lmp, pkh_map, _hax, _tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
         let (_v, spend_condition, _axis, _merk) = decompose_lock_merkle_proof(lmp, arena)?;
         if let Some((m, allowed)) = spend_condition_pkh_lock(spend_condition, arena)? {
             let n = zset_count_members(allowed, arena, 64)?;
@@ -1647,7 +1669,8 @@ fn collect_outputs_from_seeds(
         _ => return Err(SignDraftError::Malformed),
     };
     if gift != 0 {
-        let lock_root_digest = parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
+        let lock_root_digest =
+            parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
         let recipient = seed_recipient_pkh(note_data, arena)?.unwrap_or(lock_root_digest);
         if recipient == signer_pkh {
             let next = refund
@@ -1716,7 +1739,16 @@ fn collect_outputs_from_spends(
         .ok_or(SignDraftError::Malformed)?;
     collect_outputs_from_seeds(seeds, arena, signer_pkh, ctx, acc, refund)?;
 
-    collect_outputs_from_spends(left, arena, signer_pkh, ctx, acc, refund, input_count, fee_total)?;
+    collect_outputs_from_spends(
+        left,
+        arena,
+        signer_pkh,
+        ctx,
+        acc,
+        refund,
+        input_count,
+        fee_total,
+    )?;
     collect_outputs_from_spends(
         right,
         arena,

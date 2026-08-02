@@ -79,28 +79,28 @@ either = "1.13"
 
 # nockchain / tx-types pins
 # nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
-nockvm = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f", default-features = false }
-nockapp = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f", default-features = false }
-zkvm-jetpack = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockchain-libp2p-io = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f", default-features = false }
+nockvm = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942", default-features = false }
+nockapp = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942", default-features = false }
+zkvm-jetpack = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockchain-libp2p-io = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942", default-features = false }
 # kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
-noun-serde-derive = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-noun-serde = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-tx-types = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f", default-features = false }
-pokenoun = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f", default-features = false }
+noun-serde-derive = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+noun-serde = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+tx-types = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942", default-features = false }
+pokenoun = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942", default-features = false }
 
 [patch."https://github.com/SWPSCO/nockchain.git"]
-noun-serde = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-noun-serde-derive = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockapp = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockvm = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockchain-libp2p-io = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockchain-math = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-zkvm-jetpack = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-murmur3 = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
-nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "9cc052650110218543c2acb80d318f0ec497f87f" }
+noun-serde = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+noun-serde-derive = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockapp = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockvm = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockchain-libp2p-io = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockchain-math = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+zkvm-jetpack = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+murmur3 = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
+nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "645ea9b263b402aa9a8b36eede70d439339bf942" }
 
 [workspace.lints.rust]

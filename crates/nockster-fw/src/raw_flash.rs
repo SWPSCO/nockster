@@ -8,7 +8,6 @@ use esp_storage::ll;
 
 const FLASH_SIZE_BYTES: usize = 16 * 1024 * 1024;
 const ESP32S3_ROM_SPIFLASH_WRITE_ENCRYPTED: usize = 0x4000096c;
-const ESP32S3_ROM_ESP_FLASH_READ_ENCRYPTED: usize = 0x40001158;
 
 #[repr(C, align(4))]
 struct FlashSectorBuffer {
@@ -33,6 +32,8 @@ impl DerefMut for FlashSectorBuffer {
 pub enum RawFlashError {
     NotAligned,
     OutOfBounds,
+    EncryptedReadUnsupported,
+    WorkerPause,
     Rom(i32),
 }
 
@@ -41,7 +42,9 @@ impl NorFlashError for RawFlashError {
         match self {
             Self::NotAligned => NorFlashErrorKind::NotAligned,
             Self::OutOfBounds => NorFlashErrorKind::OutOfBounds,
-            Self::Rom(_) => NorFlashErrorKind::Other,
+            Self::EncryptedReadUnsupported | Self::WorkerPause | Self::Rom(_) => {
+                NorFlashErrorKind::Other
+            }
         }
     }
 }
@@ -101,33 +104,6 @@ impl RawFlashStorage {
 
     #[inline(never)]
     #[link_section = ".rwtext"]
-    fn internal_read_encrypted(
-        &mut self,
-        offset: u32,
-        bytes: &mut [u8],
-    ) -> Result<(), RawFlashError> {
-        let result = unsafe {
-            let read_encrypted: unsafe extern "C" fn(
-                *mut core::ffi::c_void,
-                u32,
-                *mut core::ffi::c_void,
-                u32,
-            ) -> i32 = core::mem::transmute(ESP32S3_ROM_ESP_FLASH_READ_ENCRYPTED);
-            read_encrypted(
-                core::ptr::null_mut(),
-                offset,
-                bytes.as_mut_ptr().cast(),
-                bytes.len() as u32,
-            )
-        };
-        match result {
-            0 => Ok(()),
-            value => Err(RawFlashError::Rom(value)),
-        }
-    }
-
-    #[inline(never)]
-    #[link_section = ".rwtext"]
     fn internal_erase(&mut self, sector: u32) -> Result<(), RawFlashError> {
         self.unlock_once()?;
         unsafe { ll::spiflash_erase_sector(sector) }.map_err(RawFlashError::Rom)
@@ -162,11 +138,6 @@ impl RawFlashStorage {
 
     fn is_word_aligned<T: ?Sized>(value: &T) -> bool {
         (core::ptr::from_ref(value).cast::<()>() as usize) % Self::WORD_SIZE as usize == 0
-    }
-
-    pub fn read_encrypted(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), RawFlashError> {
-        self.check_bounds(offset, bytes.len())?;
-        self.internal_read_encrypted(offset, bytes)
     }
 
     pub fn write_encrypted(&mut self, offset: u32, mut bytes: &[u8]) -> Result<(), RawFlashError> {

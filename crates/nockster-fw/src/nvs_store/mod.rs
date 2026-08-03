@@ -76,7 +76,19 @@ const _: () =
 const _: () = assert!(
     1 + 1 + MAX_SEED_LABEL_LEN + 40 + 12 + 2 + MAX_VAULT_PREIMAGE_LEN + 16 <= VAULT_RECORD_SIZE
 );
-const NVS_STORAGE_END: u32 = VAULT_END;
+// A non-secret OTA confirmation journal. Keeping this outside the OTA-data
+// partition lets encrypted builds avoid ROM mmap APIs that are not initialized
+// by the bare-metal runtime. One sector also makes confirmation power-loss
+// safe: erase, then program the self-checking 32-byte record.
+const OTA_CONFIRM_ADDR: u32 = VAULT_END;
+const OTA_CONFIRM_STORAGE_SIZE: usize = NVS_SECTOR_SIZE;
+const OTA_CONFIRM_END: u32 = OTA_CONFIRM_ADDR + OTA_CONFIRM_STORAGE_SIZE as u32;
+const OTA_CONFIRM_RECORD_SIZE: usize = 32;
+const OTA_CONFIRM_MAGIC: [u8; 4] = *b"NCOT";
+const OTA_CONFIRM_VERSION: u8 = 1;
+const OTA_CONFIRM_RELEASE_OFFSET: usize = 8;
+const OTA_CONFIRM_CRC_OFFSET: usize = 28;
+const NVS_STORAGE_END: u32 = OTA_CONFIRM_END;
 // partitions.csv: nvs, 0x9000, 28K
 const _: () = assert!(NVS_STORAGE_END <= NVS_BASE_ADDR + 28 * 1024);
 const FLASH_PAUSE_TIMEOUT_MS: u16 = 2_000;
@@ -163,6 +175,13 @@ impl Drop for FlashPauseGuard {
         FLASH_PAUSE_REQUESTED.store(false, Ordering::SeqCst);
         FLASH_PAUSE_WORKER_PARKED.store(false, Ordering::SeqCst);
     }
+}
+
+/// Stop the app-core worker while an operation disables or mutates SPI flash.
+/// Code outside the NVS module must use this wrapper for raw flash writes too.
+pub fn with_flash_worker_paused<R>(operation: impl FnOnce() -> R) -> Result<R, NvsError> {
+    let _pause = FlashPauseGuard::acquire()?;
+    Ok(operation())
 }
 
 #[derive(Debug)]
@@ -481,6 +500,48 @@ pub fn nvs_v2_pepper_message(salt: &[u8; 32], mac: &[u8; 6]) -> [u8; NVS_V2_PEPP
     out
 }
 
+fn ota_confirmation_record(release: u32) -> [u8; OTA_CONFIRM_RECORD_SIZE] {
+    let mut record = [0xffu8; OTA_CONFIRM_RECORD_SIZE];
+    record[..OTA_CONFIRM_MAGIC.len()].copy_from_slice(&OTA_CONFIRM_MAGIC);
+    record[4] = OTA_CONFIRM_VERSION;
+    record[OTA_CONFIRM_RELEASE_OFFSET..OTA_CONFIRM_RELEASE_OFFSET + 4]
+        .copy_from_slice(&release.to_le_bytes());
+    let crc = crc32(&record[..OTA_CONFIRM_CRC_OFFSET]);
+    record[OTA_CONFIRM_CRC_OFFSET..].copy_from_slice(&crc.to_le_bytes());
+    record
+}
+
+fn parse_ota_confirmation_record(record: &[u8; OTA_CONFIRM_RECORD_SIZE]) -> Option<u32> {
+    if record[..OTA_CONFIRM_MAGIC.len()] != OTA_CONFIRM_MAGIC || record[4] != OTA_CONFIRM_VERSION {
+        return None;
+    }
+    let expected = u32::from_le_bytes(record[OTA_CONFIRM_CRC_OFFSET..].try_into().ok()?);
+    if crc32(&record[..OTA_CONFIRM_CRC_OFFSET]) != expected {
+        return None;
+    }
+    let release = u32::from_le_bytes(
+        record[OTA_CONFIRM_RELEASE_OFFSET..OTA_CONFIRM_RELEASE_OFFSET + 4]
+            .try_into()
+            .ok()?,
+    );
+    (release != 0 && release != u32::MAX).then_some(release)
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0u32;
+    for byte in bytes {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 {
+                (crc >> 1) ^ 0xedb88320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
 fn zeroize_optional_secret(value: &mut Option<[u8; 32]>) {
     if let Some(secret) = value.as_mut() {
         secret.zeroize();
@@ -534,6 +595,29 @@ impl NvsStore {
                 slot_count: 0,
             },
         }
+    }
+
+    pub fn confirmed_ota_release(&mut self) -> Result<Option<u32>, NvsError> {
+        let mut record = [0u8; OTA_CONFIRM_RECORD_SIZE];
+        self.flash
+            .read(OTA_CONFIRM_ADDR, &mut record)
+            .map_err(|_| NvsError::Flash)?;
+        Ok(parse_ota_confirmation_record(&record))
+    }
+
+    pub fn confirm_ota_release(&mut self, release: u32) -> Result<(), NvsError> {
+        if release == 0 {
+            return Err(NvsError::Flash);
+        }
+        if self.confirmed_ota_release()? == Some(release) {
+            return Ok(());
+        }
+
+        let record = ota_confirmation_record(release);
+        let _pause = FlashPauseGuard::acquire()?;
+        self.erase_flash_region(OTA_CONFIRM_ADDR, OTA_CONFIRM_END)?;
+        embedded_storage::nor_flash::NorFlash::write(&mut self.flash, OTA_CONFIRM_ADDR, &record)
+            .map_err(|_| NvsError::Flash)
     }
 
     fn seed_slots_present(&mut self, header: &Header) -> Result<bool, NvsError> {
@@ -2245,5 +2329,23 @@ impl NvsStore {
             offset = end;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod ota_confirmation_tests {
+    use super::*;
+
+    #[test]
+    fn ota_confirmation_record_round_trips_and_rejects_corruption() {
+        let mut record = ota_confirmation_record(11);
+        assert_eq!(parse_ota_confirmation_record(&record), Some(11));
+
+        record[OTA_CONFIRM_RELEASE_OFFSET] ^= 1;
+        assert_eq!(parse_ota_confirmation_record(&record), None);
+        assert_eq!(
+            parse_ota_confirmation_record(&[0xff; OTA_CONFIRM_RECORD_SIZE]),
+            None
+        );
     }
 }

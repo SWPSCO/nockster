@@ -1183,6 +1183,10 @@ fn main() -> ! {
     let mut app_core_state = AppCoreState {
         nvs_pepper: nvs_pepper::AppNvsPepper::new(),
     };
+    // Confirm a newly booted OTA image before starting the second core. Flash
+    // metadata updates disable the cache and must not race flash-backed worker
+    // code during early boot.
+    update_auth::mark_running_image_valid();
     let mut cpu_control = CpuControl::new(p.CPU_CTRL);
     let _app_core_guard = cpu_control
         .start_app_core(unsafe { APP_CORE_STACK.as_mut() }, move || {
@@ -1228,8 +1232,6 @@ fn main() -> ! {
         .strings(&strings)
         .expect("usb strings")
         .build();
-    update_auth::mark_running_image_valid();
-
     // Bigger working buffers to accommodate TX_CHUNK
     let mut rx: HVec<u8, 512> = HVec::new();
     let mut plain = [0u8; usb_hid::PLAIN_BUF_LEN];

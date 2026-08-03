@@ -94,10 +94,31 @@ type DeviceStatusSnapshot = {
   info: InfoResponse | null;
   releaseVersion: number | null;
   buildInfo: BuildInfo | null;
+  securityStatus: SecurityStatus | null;
   updateBootStatus: UpdateBootStatus | null;
 };
 const DEFAULT_RELEASE_INDEX_PATH = 'https://bin.aeroe.io/nockster/updates/latest.json';
 const RELEASE_INDEX_STORAGE_KEY = 'nockster.update.releaseIndexUrl.v1';
+const ENCRYPTED_BOOT_STATUS_SAFE_RELEASE = 11;
+
+function canSafelyReadUpdateBootStatus(
+  info: InfoResponse | null,
+  releaseVersion: number | null,
+  security: SecurityStatus | null,
+): boolean {
+  if (!info || (info.features & FEATURE_UPDATE_BOOT_STATUS) === 0) {
+    return false;
+  }
+  // Releases through 10 jumped into an ESP-IDF ROM mmap routine which is not
+  // initialized by the bare-metal firmware. On encrypted production devices
+  // the query resets the device, so lack of a version is treated conservatively.
+  if (security === null) {
+    return releaseVersion !== null && releaseVersion >= ENCRYPTED_BOOT_STATUS_SAFE_RELEASE;
+  }
+  return !security.flash_encryption || (
+    releaseVersion !== null && releaseVersion >= ENCRYPTED_BOOT_STATUS_SAFE_RELEASE
+  );
+}
 
 type ConfirmOptions = {
   title?: string;
@@ -514,6 +535,11 @@ function App() {
   const releaseInfoAvailable = !!info && (info.features & FEATURE_RELEASE_INFO) !== 0;
   const buildInfoAvailable = !!info && (info.features & FEATURE_BUILD_INFO) !== 0;
   const updateBootStatusAvailable = !!info && (info.features & FEATURE_UPDATE_BOOT_STATUS) !== 0;
+  const safeUpdateBootStatusAvailable = canSafelyReadUpdateBootStatus(
+    info,
+    firmwareReleaseVersion,
+    securityStatus,
+  );
   const deviceRebootAvailable = !!info && (info.features & FEATURE_DEVICE_REBOOT) !== 0;
   const deviceAddressBookAvailable = !!info && (info.features & FEATURE_DEVICE_ADDRESS_BOOK) !== 0;
   const updateBlockReason = getUpdateBundleCompatibilityBlocker(updateBundle, {
@@ -883,6 +909,7 @@ function App() {
       if (deviceInfo.type === 'Info') {
         let nextReleaseVersion: number | null = null;
         let nextBuildInfo: BuildInfo | null = null;
+        let nextSecurityStatus: SecurityStatus | null = null;
         let nextUpdateBootStatus: UpdateBootStatus | null = null;
 
         setInfo(deviceInfo);
@@ -907,15 +934,13 @@ function App() {
 
         if ((deviceInfo.features & FEATURE_SECURITY_STATUS) !== 0) {
           try {
-            setSecurityStatus(await device.getSecurityStatus());
+            nextSecurityStatus = await device.getSecurityStatus();
           } catch (err: any) {
             console.warn('getSecurityStatus failed', err);
-            setSecurityStatus(null);
           }
-        } else {
-          setSecurityStatus(null);
         }
-        if ((deviceInfo.features & FEATURE_UPDATE_BOOT_STATUS) !== 0) {
+        setSecurityStatus(nextSecurityStatus);
+        if (canSafelyReadUpdateBootStatus(deviceInfo, nextReleaseVersion, nextSecurityStatus)) {
           try {
             nextUpdateBootStatus = await device.getUpdateBootStatus();
           } catch (err: any) {
@@ -987,6 +1012,7 @@ function App() {
             info: deviceInfo,
             releaseVersion: nextReleaseVersion,
             buildInfo: nextBuildInfo,
+            securityStatus: nextSecurityStatus,
             updateBootStatus: nextUpdateBootStatus,
           };
         }
@@ -1018,6 +1044,7 @@ function App() {
           info: deviceInfo,
           releaseVersion: nextReleaseVersion,
           buildInfo: nextBuildInfo,
+          securityStatus: nextSecurityStatus,
           updateBootStatus: nextUpdateBootStatus,
         };
       }
@@ -1025,6 +1052,7 @@ function App() {
         info: null,
         releaseVersion: null,
         buildInfo: null,
+        securityStatus: null,
         updateBootStatus: null,
       };
     } catch (error: any) {
@@ -1268,6 +1296,10 @@ function App() {
   };
 
   const refreshUpdateBootStatus = async () => {
+    if (!safeUpdateBootStatusAvailable) {
+      setStatus('Boot status is disabled on this encrypted firmware release; updating remains available');
+      return;
+    }
     try {
       const bootStatus = await device.getUpdateBootStatus();
       setUpdateBootStatus(bootStatus);
@@ -1421,7 +1453,8 @@ function App() {
     writeFlash: boolean,
     deviceReleaseVersion: number | null = firmwareReleaseVersion,
     deviceBuildInfo: BuildInfo | null = firmwareBuildInfo,
-    canReadUpdateBootStatus: boolean = updateBootStatusAvailable,
+    canReadUpdateBootStatus: boolean = safeUpdateBootStatusAvailable,
+    deviceSecurityStatus: SecurityStatus | null = securityStatus,
   ): Promise<UpdateStatus> => {
     try {
       await assertUpdateFirmwareMatchesBundle(bundle, firmware);
@@ -1436,6 +1469,15 @@ function App() {
     });
     if (blocker) {
       throw new Error(blocker);
+    }
+    if (
+      writeFlash &&
+      (deviceSecurityStatus === null || deviceSecurityStatus.flash_encryption) &&
+      bundle.manifest.release_version < ENCRYPTED_BOOT_STATUS_SAFE_RELEASE
+    ) {
+      throw new Error(
+        `Release ${bundle.manifest.release_version} is not safe on flash-encrypted devices; install release ${ENCRYPTED_BOOT_STATUS_SAFE_RELEASE} or newer`,
+      );
     }
 
     const finalStatus = await device.streamUpdateBundle(bundle, firmware, {
@@ -1563,10 +1605,6 @@ function App() {
       return;
     }
     if (writeFlash) {
-      if (!updateBootStatusAvailable) {
-        setStatus('Firmware install requires update boot status support');
-        return;
-      }
       const confirmed = await askConfirm({
         title: 'Install firmware',
         message: 'Install this firmware on Nockster? Keep the cable connected until the update finishes.',
@@ -1626,6 +1664,7 @@ function App() {
 
     let nextReleaseVersion: number | null = null;
     let nextBuildInfo: BuildInfo | null = null;
+    let nextSecurityStatus: SecurityStatus | null = null;
     let nextUpdateBootStatus: UpdateBootStatus | null = null;
 
     setInfo(deviceInfo);
@@ -1649,7 +1688,16 @@ function App() {
     }
     setFirmwareBuildInfo(nextBuildInfo);
 
-    if ((deviceInfo.features & FEATURE_UPDATE_BOOT_STATUS) !== 0) {
+    if ((deviceInfo.features & FEATURE_SECURITY_STATUS) !== 0) {
+      try {
+        nextSecurityStatus = await device.getSecurityStatus();
+      } catch (err: any) {
+        console.warn('getSecurityStatus failed', err);
+      }
+    }
+    setSecurityStatus(nextSecurityStatus);
+
+    if (canSafelyReadUpdateBootStatus(deviceInfo, nextReleaseVersion, nextSecurityStatus)) {
       try {
         nextUpdateBootStatus = await device.getUpdateBootStatus();
       } catch (err: any) {
@@ -1662,6 +1710,7 @@ function App() {
       info: deviceInfo,
       releaseVersion: nextReleaseVersion,
       buildInfo: nextBuildInfo,
+      securityStatus: nextSecurityStatus,
       updateBootStatus: nextUpdateBootStatus,
     };
   };
@@ -1692,15 +1741,15 @@ function App() {
 
       const snapshot = await readUpdateDeviceSnapshot();
       const features = snapshot.info?.features ?? 0;
-      const canReadUpdateBootStatus = (features & FEATURE_UPDATE_BOOT_STATUS) !== 0;
+      const canReadUpdateBootStatus = canSafelyReadUpdateBootStatus(
+        snapshot.info,
+        snapshot.releaseVersion,
+        snapshot.securityStatus,
+      );
       const canRebootDevice = (features & FEATURE_DEVICE_REBOOT) !== 0;
       if ((features & FEATURE_SECURE_UPDATE) === 0) {
         throw new Error('Secure update is not available on this firmware');
       }
-      if (!canReadUpdateBootStatus) {
-        throw new Error('Firmware install requires update boot status support');
-      }
-
       // Now that the device version is known, refuse to "update" to the same or
       // an older release instead of surprising the user with a rollback error.
       if (
@@ -1738,6 +1787,7 @@ function App() {
         snapshot.releaseVersion,
         snapshot.buildInfo,
         canReadUpdateBootStatus,
+        snapshot.securityStatus,
       );
       setOtaProgressModal((modal) => modal
         ? { ...modal, detail: 'Rebooting into the installed firmware...' }
@@ -3756,7 +3806,7 @@ function App() {
                 <button
                   type="button"
                   onClick={refreshUpdateBootStatus}
-                  disabled={deviceBusy || !updateBootStatusAvailable}
+                  disabled={deviceBusy || !safeUpdateBootStatusAvailable}
                   className="btn btn-small btn-secondary seed-toggle"
                 >
                   check boot
@@ -3777,7 +3827,6 @@ function App() {
                     updatingFirmware ||
                     fetchingRelease ||
                     !secureUpdateAvailable ||
-                    !updateBootStatusAvailable ||
                     updateUpToDate
                   }
                   className="btn btn-small btn-primary seed-toggle"
@@ -3837,7 +3886,9 @@ function App() {
                 <div className="status-item full-width">
                   <span className="label">update system:</span>
                   <span className="value">
-                    {updateBootStatus
+                    {!safeUpdateBootStatusAvailable
+                      ? 'boot check disabled on this release'
+                      : updateBootStatus
                       ? updateBootStatus.partition_table_ok &&
                         updateBootStatus.ota_data_present &&
                         updateBootStatus.ota0_present &&
@@ -4022,7 +4073,7 @@ function App() {
                   <button
                     type="button"
                     onClick={() => streamUpdate(true)}
-                    disabled={deviceBusy || updatingFirmware || !secureUpdateAvailable || !updateBootStatusAvailable || !updateBundle || !firmwareBytes || updateBlocked}
+                    disabled={deviceBusy || updatingFirmware || !secureUpdateAvailable || !updateBundle || !firmwareBytes || updateBlocked}
                     className="btn btn-success"
                   >
                     {updatingFirmware ? 'working...' : 'install'}

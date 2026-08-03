@@ -8,6 +8,7 @@ use nockster_fw::nvs_store::{
     worker_flash_pause_requested, worker_flash_pause_set_online, worker_flash_pause_set_parked,
     PreparedSeedInit, PreparedSeedRewrite,
 };
+use zeroize::Zeroize;
 
 use crate::gui::SeedPhrase;
 
@@ -619,8 +620,10 @@ where
         } else if let Some(request) = take_seed_derive_request() {
             let outcome = compute_seed_derive(state, request);
             store_seed_derive_result(outcome);
-        } else if let Some(request) = take_unlock_request() {
+        } else if let Some(mut request) = take_unlock_request() {
             let outcome = compute_unlock(state, request.pin.as_str());
+            unsafe { request.pin.as_mut_str().as_bytes_mut() }.zeroize();
+            request.pin.clear();
             store_unlock_result(outcome);
         } else if let Some(request) = take_sign_draft_request() {
             let outcome = compute_sign_draft(state, request);

@@ -36,12 +36,17 @@ outside the repo, builds/signs/encrypts a fresh production image set under
 
 After that one prompt it burns HMAC_UP, flashes the signed secure-boot image,
 burns the secure-boot digest, burns the flash-encryption key, enables secure
-boot, flashes only encrypted artifacts, enables flash encryption, then pauses
-for a manual normal reboot before validating over HID. At that pause,
+boot, flashes only encrypted artifacts, enables flash encryption, burns the
+flash-time Unix timestamp into `BLOCK_USR_DATA`, and write-protects that eFuse
+block before pausing for a manual normal reboot and HID validation. The
+timestamp is the device's USB serial and survives every firmware update. A
+production build refuses wallet initialization when this serial or the HMAC_UP
+pepper is missing. At the reboot pause,
 power-cycle the board or press EN/RESET, do not hold BOOT/download, wait for
 HID to re-enumerate, then press Enter. It refuses to start the burn phase if
-the selected key slots, `SECURE_BOOT_EN`, or `SPI_BOOT_CRYPT_CNT` are already
-set. Use `PROD_E2E_DRY_RUN=1` to print the command order. Final lockdown and
+the selected key slots, `BLOCK_USR_DATA`, `SECURE_BOOT_EN`, or
+`SPI_BOOT_CRYPT_CNT` are already set. Use `PROD_E2E_DRY_RUN=1` to print the
+command order. Final lockdown and
 power-glitch fuses remain separate targets.
 
 Non-destructive device validation:
@@ -224,8 +229,8 @@ not touch eFuses.
 existing signed output, and first checks that the input looks like an ESP app
 image that fits the configured app slot.
 `release-build-secure-boot-v2-bootloader` uses ESP-IDF to build a signed
-secure-boot-enabled second-stage bootloader and matching partition-table
-binary.
+secure-boot-enabled second-stage bootloader with OTA rollback enabled, plus a
+matching partition-table binary.
 
 Put the board in serial bootloader/download mode and flash the signed
 bootloader plus signed app without a normal reset:

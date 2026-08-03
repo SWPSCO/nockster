@@ -15,12 +15,13 @@ mod touch;
 
 pub use label::{LabelEntryContext, LabelInteraction};
 pub use menu::{AboutInfo, WalletRow, WalletRows};
-pub use seed::{SeedInteraction, SeedPhrase};
+pub use seed::{zeroize_seed_phrase, SeedInteraction, SeedPhrase};
 pub use state::{
     GuiInteraction, GuiMode, MenuItem, TxReviewSummary, VaultInteraction, WalletInteraction,
     TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_LOCK_UNVERIFIED, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_MULTISIG,
-    TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
+    TX_REVIEW_DETAIL_MAX, TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
+    TX_REVIEW_MAX_OUTPUTS,
 };
 pub use touch::{default_touch_calibration, touch_calibration_valid, ScreenPoint};
 
@@ -42,11 +43,11 @@ use esp_hal::{
     Blocking,
 };
 use heapless::{String as HString, Vec as HVec};
+use zeroize::Zeroize;
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review,
     header_back_button, header_height, lock_button_rect, point_in_header_back,
-    point_in_header_settings_menu, tx_review_detail_rect, tx_review_list_rect,
-    tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_PADDING,
+    point_in_header_settings_menu, tx_review_content_rect,
 };
 use mipidsi::{
     error::InitError as DisplayInitError, models::ST7789, options::Orientation,
@@ -61,11 +62,10 @@ use render::{
     draw_hold_progress_fill, draw_hold_progress_track, draw_keypad, draw_unlock_header,
     draw_unlock_spinner_frame, render_confirm_overlay, render_header, render_header_with_back,
     render_idle_overlay, render_touch_calibration_target, render_touch_diagnostics,
-    render_tx_review_overlay, HOLD_DELETE_HINT, HOLD_PROGRESS_FILL_LEVELS, HOLD_PROGRESS_STEPS,
+    render_tx_review_overlay, tx_review_page_content_height, HOLD_DELETE_HINT,
+    HOLD_PROGRESS_FILL_LEVELS, HOLD_PROGRESS_STEPS,
 };
-use state::{
-    Button, ButtonHit, InteractionState, TouchDiagnostics, TxReviewOutput, TX_REVIEW_MAX_OUTPUTS,
-};
+use state::{Button, ButtonHit, InteractionState, TouchDiagnostics, TxReviewOutput};
 use time::{Duration, Instant};
 use touch::{default_touch_calibration as default_calibration, transform_raw_touch, TouchSample};
 
@@ -100,7 +100,7 @@ pub struct Gui<'d> {
     pin_expected: Option<u8>,
     pin_entered: HVec<u8, PIN_BUFFER_LEN>,
     confirm_prompt: HString<64>,
-    idle_message: HString<48>,
+    idle_message: HString<96>,
     unlock_anim: u16,
     unlocking_started_at: Option<Instant>,
     current_spinner_frame: u8,
@@ -126,11 +126,12 @@ pub struct Gui<'d> {
     seed_entry_state: seed::SeedEntryState,
     tx_review_outputs: HVec<TxReviewOutput, TX_REVIEW_MAX_OUTPUTS>,
     tx_review_summary: Option<TxReviewSummary>,
+    tx_review_page: usize,
+    tx_review_completed_pages: u32,
     tx_review_scroll_y: i32,
+    tx_review_seen_bottom: bool,
     tx_review_last_drag_y: Option<i32>,
-    tx_review_expanded_index: Option<usize>,
     tx_review_touch_start: Option<ScreenPoint>,
-    tx_review_tap_index: Option<usize>,
     tx_review_drag_active: bool,
     tx_review_ignore_until_release: bool,
     touch_diagnostics: TouchDiagnostics,
@@ -261,11 +262,12 @@ impl<'d> Gui<'d> {
             seed_entry_state: seed::SeedEntryState::new(),
             tx_review_outputs: HVec::new(),
             tx_review_summary: None,
+            tx_review_page: 0,
+            tx_review_completed_pages: 0,
             tx_review_scroll_y: 0,
+            tx_review_seen_bottom: true,
             tx_review_last_drag_y: None,
-            tx_review_expanded_index: None,
             tx_review_touch_start: None,
-            tx_review_tap_index: None,
             tx_review_drag_active: false,
             tx_review_ignore_until_release: false,
             touch_diagnostics: TouchDiagnostics::new(),
@@ -611,12 +613,15 @@ impl<'d> Gui<'d> {
                 );
             }
             GuiMode::TxReview => {
+                let page_count = self.tx_review_page_count();
                 render_tx_review_overlay(
                     &mut self.display,
                     self.tx_review_outputs.as_slice(),
                     self.tx_review_summary,
+                    self.tx_review_page,
+                    page_count,
                     self.tx_review_scroll_y,
-                    self.tx_review_expanded_index,
+                    self.tx_review_seen_bottom,
                     self.interaction.active_button.map(|hit| hit.button),
                 );
             }
@@ -1208,11 +1213,25 @@ impl<'d> Gui<'d> {
         seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
     }
 
+    pub fn show_seed_dice(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::SeedDice;
+        seed::render_seed_dice(&mut self.display, &self.seed_entry_state);
+    }
+
     pub fn show_seed_confirm(&mut self) {
         self.disarm_active();
         self.stop_unlock_demo();
         self.mode = GuiMode::SeedConfirm;
         seed::render_seed_confirm(&mut self.display, &self.seed_entry_state);
+    }
+
+    fn show_seed_verify(&mut self) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.mode = GuiMode::SeedVerify;
+        seed::render_seed_verify(&mut self.display, &self.seed_entry_state);
     }
 
     pub fn clear_seed_entry_state(&mut self) {
@@ -1243,35 +1262,45 @@ impl<'d> Gui<'d> {
         self.refresh_auto_lock(Instant::now());
     }
 
-    fn tx_review_max_scroll(&self) -> i32 {
-        let rect = tx_review_list_rect();
-        let summary_h = tx_review_summary_height(self.tx_review_summary.is_some());
-        let inner_h = rect.size.height as i32 - TX_REVIEW_PADDING * 2 - summary_h;
-        if inner_h <= 0 {
-            return 0;
-        }
-        let item_h = tx_review_output_item_height();
-        let total_h: i32 = (self.tx_review_outputs.len() as i32).saturating_mul(item_h);
-        (total_h - inner_h).max(0)
+    fn tx_review_page_count(&self) -> usize {
+        let summary_pages = usize::from(self.tx_review_summary.is_some());
+        (summary_pages + self.tx_review_outputs.len()).max(1)
     }
 
-    fn tx_review_tap_index(&self, pt: Point) -> Option<usize> {
-        if self.tx_review_outputs.is_empty() {
-            return None;
+    fn tx_review_required_pages_mask(&self) -> u32 {
+        let count = self.tx_review_page_count().min(31);
+        (1u32 << count) - 1
+    }
+
+    fn tx_review_max_scroll(&self) -> i32 {
+        let content = tx_review_content_rect();
+        let content_height = tx_review_page_content_height(
+            self.tx_review_outputs.as_slice(),
+            self.tx_review_summary,
+            self.tx_review_page,
+        );
+        (content_height - content.size.height as i32).max(0)
+    }
+
+    fn complete_current_review_page_if_ready(&mut self) {
+        let max_scroll = self.tx_review_max_scroll();
+        if max_scroll == 0 || self.tx_review_scroll_y >= max_scroll {
+            self.tx_review_completed_pages |= 1u32 << self.tx_review_page.min(31);
         }
-        let rect = tx_review_list_rect();
-        let summary_h = tx_review_summary_height(self.tx_review_summary.is_some());
-        let inner_top = rect.top_left.y + TX_REVIEW_PADDING + summary_h;
-        let y = pt.y - inner_top + self.tx_review_scroll_y;
-        if y < 0 {
-            return None;
-        }
-        let item_h = tx_review_output_item_height();
-        let idx = (y / item_h) as usize;
-        if idx >= self.tx_review_outputs.len() {
-            return None;
-        }
-        Some(idx)
+        self.tx_review_seen_bottom = self.tx_review_completed_pages
+            & self.tx_review_required_pages_mask()
+            == self.tx_review_required_pages_mask();
+    }
+
+    fn set_tx_review_page(&mut self, page: usize) {
+        self.tx_review_page = page.min(self.tx_review_page_count().saturating_sub(1));
+        self.tx_review_scroll_y = 0;
+        self.tx_review_last_drag_y = None;
+        self.tx_review_touch_start = None;
+        self.tx_review_drag_active = false;
+        self.complete_current_review_page_if_ready();
+        self.mark_overlay_dirty();
+        self.render_current_overlay();
     }
 
     pub fn request_tx_review_with_header<'a, I>(&mut self, header: &str, outputs: I)
@@ -1298,9 +1327,8 @@ impl<'d> Gui<'d> {
             let max = 64usize;
             let take = recipient_b58.len().min(max);
             let _ = recipient_buf.push_str(&recipient_b58[..take]);
-            let mut detail_buf = HString::<96>::new();
-            let dtake = detail.len().min(96);
-            let _ = detail_buf.push_str(&detail[..dtake]);
+            let mut detail_buf = HString::<TX_REVIEW_DETAIL_MAX>::new();
+            let _ = detail_buf.push_str(detail);
             let _ = self.tx_review_outputs.push(TxReviewOutput {
                 gift,
                 recipient_b58: recipient_buf,
@@ -1309,13 +1337,15 @@ impl<'d> Gui<'d> {
         }
 
         self.tx_review_summary = summary;
+        self.tx_review_page = 0;
+        self.tx_review_completed_pages = 0;
         self.tx_review_scroll_y = 0;
+        self.tx_review_seen_bottom = false;
         self.tx_review_last_drag_y = None;
-        self.tx_review_expanded_index = None;
         self.tx_review_touch_start = None;
-        self.tx_review_tap_index = None;
         self.tx_review_drag_active = false;
         self.tx_review_ignore_until_release = false;
+        self.complete_current_review_page_if_ready();
         self.mark_overlay_dirty();
         self.disarm_active();
         self.confirm_result = None;
@@ -1338,25 +1368,11 @@ impl<'d> Gui<'d> {
                 return;
             }
             let pt = Point::new(point.x as i32, point.y as i32);
-            if self.tx_review_expanded_index.is_some() {
-                self.clear_pending();
-                self.deactivate_button();
-
-                if !tx_review_detail_rect().contains(pt) {
-                    self.tx_review_expanded_index = None;
-                    self.tx_review_ignore_until_release = true;
-                    self.mark_overlay_dirty();
-                    self.render_current_overlay();
-                }
-                self.tx_review_last_drag_y = None;
-                self.tx_review_touch_start = None;
-                self.tx_review_tap_index = None;
-                self.tx_review_drag_active = false;
-                return;
-            }
-            if button_from_point_tx_review(pt).is_none() {
-                let list_rect = tx_review_list_rect();
-                if list_rect.contains(pt) {
+            if button_from_point_tx_review(pt, self.tx_review_page, self.tx_review_page_count())
+                .is_none()
+            {
+                let content_rect = tx_review_content_rect();
+                if content_rect.contains(pt) {
                     self.clear_pending();
                     self.deactivate_button();
 
@@ -1364,7 +1380,6 @@ impl<'d> Gui<'d> {
                     let is_first = self.tx_review_touch_start.is_none();
                     if is_first {
                         self.tx_review_touch_start = Some(point);
-                        self.tx_review_tap_index = self.tx_review_tap_index(pt);
                         self.tx_review_drag_active = false;
                         self.tx_review_last_drag_y = Some(point.y as i32);
                         return;
@@ -1378,7 +1393,6 @@ impl<'d> Gui<'d> {
                         {
                             self.tx_review_drag_active = true;
                             self.interaction.scroll_consumed = true;
-                            self.tx_review_tap_index = None;
                             let delta = start.y as i32 - point.y as i32;
                             if delta != 0 {
                                 self.tx_review_scroll_y =
@@ -1386,6 +1400,7 @@ impl<'d> Gui<'d> {
                                 let max_scroll = self.tx_review_max_scroll();
                                 self.tx_review_scroll_y =
                                     self.tx_review_scroll_y.clamp(0, max_scroll);
+                                self.complete_current_review_page_if_ready();
                                 self.mark_overlay_dirty();
                                 self.render_current_overlay();
                             }
@@ -1403,6 +1418,7 @@ impl<'d> Gui<'d> {
                                 let max_scroll = self.tx_review_max_scroll();
                                 self.tx_review_scroll_y =
                                     self.tx_review_scroll_y.clamp(0, max_scroll);
+                                self.complete_current_review_page_if_ready();
                                 self.mark_overlay_dirty();
                                 self.render_current_overlay();
                             }
@@ -1414,7 +1430,6 @@ impl<'d> Gui<'d> {
             }
             self.tx_review_last_drag_y = None;
             self.tx_review_touch_start = None;
-            self.tx_review_tap_index = None;
             self.tx_review_drag_active = false;
         }
         if self.mode == GuiMode::Unlocked {
@@ -1521,15 +1536,22 @@ impl<'d> Gui<'d> {
                 GuiMode::Confirm => button_from_point_confirm(pt),
                 GuiMode::TxReview => {
                     self.tx_review_touch_start = None;
-                    self.tx_review_tap_index = None;
                     self.tx_review_drag_active = false;
-                    button_from_point_tx_review(pt)
+                    button_from_point_tx_review(
+                        pt,
+                        self.tx_review_page,
+                        self.tx_review_page_count(),
+                    )
                 }
                 GuiMode::SeedFirstBoot => {
                     seed::button_from_point_seed_setup(pt, self.seed_flow_is_add)
                 }
                 GuiMode::SeedEntry => seed::button_from_point_seed_entry(pt),
+                GuiMode::SeedDice => {
+                    seed::button_from_point_seed_dice(pt, &self.seed_entry_state)
+                }
                 GuiMode::SeedConfirm => seed::button_from_point_seed_confirm(pt),
+                GuiMode::SeedVerify => seed::button_from_point_seed_verify(pt),
                 _ => None,
             }
         };
@@ -1603,19 +1625,8 @@ impl<'d> Gui<'d> {
                     self.wallet_drag.reset();
                     let scrolled = self.interaction.scroll_consumed;
                     self.interaction.scroll_consumed = false;
-                    let open_tx_review_detail = if self.mode == GuiMode::TxReview
-                        && !scrolled
-                        && self.interaction.active_button.is_none()
-                        && self.tx_review_expanded_index.is_none()
-                        && !self.tx_review_drag_active
-                    {
-                        self.tx_review_tap_index
-                    } else {
-                        None
-                    };
                     self.tx_review_last_drag_y = None;
                     self.tx_review_touch_start = None;
-                    self.tx_review_tap_index = None;
                     self.tx_review_drag_active = false;
                     self.clear_pending();
                     if self.interaction.cooldown_until.is_some() {
@@ -1630,14 +1641,6 @@ impl<'d> Gui<'d> {
                         self.interaction.active_seen_at = None;
                     } else if let Some(result) = self.finalize_press(now) {
                         return Some(result);
-                    }
-                    if let Some(idx) = open_tx_review_detail {
-                        if idx < self.tx_review_outputs.len() {
-                            self.tx_review_expanded_index = Some(idx);
-                            self.mark_overlay_dirty();
-                            self.render_current_overlay();
-                        }
-                        return None;
                     }
                     if self.mode == GuiMode::Unlocked {
                         return self.finalize_lock_button(now);
@@ -1673,7 +1676,11 @@ impl<'d> Gui<'d> {
                 return match self.mode {
                     GuiMode::Locked => self.handle_pin_button(hit.button),
                     GuiMode::Confirm | GuiMode::TxReview => self.handle_confirm_button(hit.button),
-                    GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
+                    GuiMode::SeedFirstBoot
+                    | GuiMode::SeedEntry
+                    | GuiMode::SeedDice
+                    | GuiMode::SeedConfirm
+                    | GuiMode::SeedVerify => {
                         self.handle_seed_button(hit.button)
                     }
                     GuiMode::Menu => self.handle_menu_button(hit.button),
@@ -1699,6 +1706,12 @@ impl<'d> Gui<'d> {
             return;
         }
         self.deactivate_button();
+        if self.mode == GuiMode::TxReview
+            && hit.button == Button::Ok
+            && !self.tx_review_seen_bottom
+        {
+            return;
+        }
         if hit.button == Button::Back {
             draw_header_back_button(&mut self.display, true);
             self.interaction.active_button = Some(hit);
@@ -1714,7 +1727,11 @@ impl<'d> Gui<'d> {
                 self.mark_overlay_dirty();
                 self.render_current_overlay();
             }
-            GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
+            GuiMode::SeedFirstBoot
+            | GuiMode::SeedEntry
+            | GuiMode::SeedDice
+            | GuiMode::SeedConfirm
+            | GuiMode::SeedVerify => {
                 seed::draw_seed_button(
                     &mut self.display,
                     self.mode,
@@ -1786,7 +1803,11 @@ impl<'d> Gui<'d> {
                     self.mark_overlay_dirty();
                     self.render_current_overlay();
                 }
-                GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
+                GuiMode::SeedFirstBoot
+                | GuiMode::SeedEntry
+                | GuiMode::SeedDice
+                | GuiMode::SeedConfirm
+                | GuiMode::SeedVerify => {
                     seed::draw_seed_button(
                         &mut self.display,
                         self.mode,
@@ -1871,6 +1892,8 @@ impl<'d> Gui<'d> {
             }
             Button::Seed(_)
             | Button::Back
+            | Button::ReviewPrevious
+            | Button::ReviewNext
             | Button::Menu(_)
             | Button::Theme(_)
             | Button::WalletRow(_)
@@ -1988,6 +2011,20 @@ impl<'d> Gui<'d> {
                 self.confirm_result = Some(false);
                 Some(GuiInteraction::ConfirmRejected)
             }
+            Button::ReviewPrevious => {
+                if self.mode == GuiMode::TxReview && self.tx_review_page > 0 {
+                    self.set_tx_review_page(self.tx_review_page - 1);
+                }
+                None
+            }
+            Button::ReviewNext => {
+                if self.mode == GuiMode::TxReview
+                    && self.tx_review_page + 1 < self.tx_review_page_count()
+                {
+                    self.set_tx_review_page(self.tx_review_page + 1);
+                }
+                None
+            }
             Button::Digit(_) => None,
             Button::Seed(_)
             | Button::Back
@@ -2026,6 +2063,39 @@ impl<'d> Gui<'d> {
                 }
                 return None;
             }
+            SeedButton::DiceSeed => {
+                self.seed_entry_state.reset();
+                self.show_seed_dice();
+                return None;
+            }
+            SeedButton::DiceFace(face) => {
+                if self.mode == GuiMode::SeedDice && self.seed_entry_state.push_dice_roll(face) {
+                    seed::render_seed_dice(&mut self.display, &self.seed_entry_state);
+                }
+                return None;
+            }
+            SeedButton::VerifyChoice(choice) => {
+                if self.mode != GuiMode::SeedVerify {
+                    return None;
+                }
+                match self.seed_entry_state.verify_choice(choice as usize) {
+                    seed::SeedVerificationResult::More => {
+                        seed::render_seed_verify(&mut self.display, &self.seed_entry_state);
+                        return None;
+                    }
+                    seed::SeedVerificationResult::Incorrect => {
+                        self.show_seed_confirm();
+                        return None;
+                    }
+                    seed::SeedVerificationResult::Complete => {
+                        if let Some(phrase) = self.seed_entry_state.take_finished() {
+                            SeedInteraction::EntryCompleted(phrase)
+                        } else {
+                            return None;
+                        }
+                    }
+                }
+            }
             SeedButton::Key(digit) => {
                 if self.seed_entry_state.push_digit(digit) {
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
@@ -2033,6 +2103,12 @@ impl<'d> Gui<'d> {
                 return None;
             }
             SeedButton::Backspace => {
+                if self.mode == GuiMode::SeedDice {
+                    if self.seed_entry_state.pop_dice_roll() {
+                        seed::render_seed_dice(&mut self.display, &self.seed_entry_state);
+                    }
+                    return None;
+                }
                 let _ = self.seed_entry_state.backspace();
                 seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
                 SeedInteraction::WordRemoved
@@ -2044,9 +2120,11 @@ impl<'d> Gui<'d> {
                 return None;
             }
             SeedButton::CommitWord => {
-                if self.seed_entry_state.commit_current().is_some() {
+                if let Some(mut committed) = self.seed_entry_state.commit_current() {
+                    unsafe { committed.as_mut_str().as_bytes_mut() }.zeroize();
+                    committed.clear();
                     seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
-                    if let Some(phrase) = self.seed_entry_state.finish() {
+                    if let Some(phrase) = self.seed_entry_state.take_finished() {
                         SeedInteraction::EntryCompleted(phrase)
                     } else {
                         SeedInteraction::WordCommitted
@@ -2056,9 +2134,17 @@ impl<'d> Gui<'d> {
                 }
             }
             SeedButton::Finish => {
+                if self.mode == GuiMode::SeedDice {
+                    if self.seed_entry_state.dice_rolls_complete()
+                        && self.seed_entry_state.load_dice_generated()
+                    {
+                        self.show_seed_confirm();
+                    }
+                    return None;
+                }
                 // If we're in entry mode, show confirmation screen
                 if self.mode == GuiMode::SeedEntry {
-                    if self.seed_entry_state.finish().is_some() {
+                    if self.seed_entry_state.is_complete() {
                         self.mode = GuiMode::SeedConfirm;
                         seed::render_seed_confirm(&mut self.display, &self.seed_entry_state);
                         return None;
@@ -2068,7 +2154,13 @@ impl<'d> Gui<'d> {
                 }
                 // If we're in confirm mode, actually finish
                 if self.mode == GuiMode::SeedConfirm {
-                    if let Some(phrase) = self.seed_entry_state.finish() {
+                    if self.seed_entry_state.is_generated() {
+                        if self.seed_entry_state.begin_verification() {
+                            self.show_seed_verify();
+                        }
+                        return None;
+                    }
+                    if let Some(phrase) = self.seed_entry_state.take_finished() {
                         SeedInteraction::EntryCompleted(phrase)
                     } else {
                         return None;
@@ -2078,6 +2170,19 @@ impl<'d> Gui<'d> {
                 }
             }
             SeedButton::Cancel => {
+                if self.mode == GuiMode::SeedVerify {
+                    self.seed_entry_state.cancel_verification();
+                    self.show_seed_confirm();
+                    return None;
+                }
+                if self.mode == GuiMode::SeedDice {
+                    if self.seed_flow_is_add {
+                        self.show_add_seed();
+                    } else {
+                        self.show_seed_setup();
+                    }
+                    return Some(GuiInteraction::Seed(SeedInteraction::EntryCancelled));
+                }
                 // From confirm of a typed-in phrase, go back to the keypad to fix
                 // a word. A generated phrase has no keypad state to return to, so
                 // it (and the first-boot screen) goes back to setup.

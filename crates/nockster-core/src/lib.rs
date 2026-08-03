@@ -2,6 +2,7 @@
 extern crate alloc;
 
 pub mod cheetah;
+pub mod diceware;
 pub mod draft_sign;
 pub mod extended_key;
 pub mod math;

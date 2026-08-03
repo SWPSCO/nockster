@@ -1,4 +1,3 @@
-use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
 
 use embedded_storage::nor_flash::{
@@ -200,8 +199,9 @@ impl ReadStorage for RawFlashStorage {
         let mut data_offset = offset % Self::WORD_SIZE;
         let mut aligned_offset = offset - data_offset;
 
-        let mut sector_data = MaybeUninit::<FlashSectorBuffer>::uninit();
-        let sector_data = unsafe { sector_data.assume_init_mut() };
+        let mut sector_data = FlashSectorBuffer {
+            data: [0; RawFlashStorage::SECTOR_SIZE as usize],
+        };
 
         while !bytes.is_empty() {
             let len = bytes.len().min((Self::SECTOR_SIZE - data_offset) as usize);
@@ -231,8 +231,9 @@ impl Storage for RawFlashStorage {
         let mut data_offset = offset % Self::SECTOR_SIZE;
         let mut aligned_offset = offset - data_offset;
 
-        let mut sector_data = MaybeUninit::<FlashSectorBuffer>::uninit();
-        let sector_data = unsafe { sector_data.assume_init_mut() };
+        let mut sector_data = FlashSectorBuffer {
+            data: [0; RawFlashStorage::SECTOR_SIZE as usize],
+        };
 
         while !bytes.is_empty() {
             self.internal_read(aligned_offset, &mut sector_data[..])?;
@@ -270,8 +271,9 @@ impl ReadNorFlash for RawFlashStorage {
                 self.internal_read(offset, chunk)?;
             }
         } else {
-            let mut buffer = MaybeUninit::<FlashSectorBuffer>::uninit();
-            let buffer = unsafe { buffer.assume_init_mut() };
+            let mut buffer = FlashSectorBuffer {
+                data: [0; RawFlashStorage::SECTOR_SIZE as usize],
+            };
 
             for (offset, chunk) in (offset..)
                 .step_by(Self::SECTOR_SIZE as usize)
@@ -317,8 +319,9 @@ impl NorFlash for RawFlashStorage {
                 self.internal_write(offset, chunk)?;
             }
         } else {
-            let mut buffer = MaybeUninit::<FlashSectorBuffer>::uninit();
-            let buffer = unsafe { buffer.assume_init_mut() };
+            let mut buffer = FlashSectorBuffer {
+                data: [0; RawFlashStorage::SECTOR_SIZE as usize],
+            };
 
             for (offset, chunk) in (offset..)
                 .step_by(Self::SECTOR_SIZE as usize)

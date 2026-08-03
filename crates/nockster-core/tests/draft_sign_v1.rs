@@ -44,6 +44,16 @@ fn empty_full_lock_merkle_proof(spend_condition: SpendCondition) -> LockMerklePr
     )
 }
 
+fn note_data_for_lock(spend_condition: &SpendCondition) -> NoteData {
+    let lock_data = tx_types::tx_builder_v1::LockData::V0(spend_condition.clone());
+    let mut map = ZMap::new();
+    map.put(
+        "lock".to_string(),
+        tx_types::tx_builder_v1::lock_data_to_untyped_noun(&lock_data),
+    );
+    NoteData { map }
+}
+
 fn runtime_signer_scalar() -> [u8; 32] {
     let mut rng = OsRng;
     let mut scalar = [0u8; 32];
@@ -208,7 +218,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
         }],
     };
     let witness = Witness {
-        lmp: empty_stub_lock_merkle_proof(spend_condition),
+        lmp: empty_stub_lock_merkle_proof(spend_condition.clone()),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -367,7 +377,7 @@ fn draft_review_v1_reports_totals_and_refund() {
         }],
     };
     let witness = Witness {
-        lmp: empty_stub_lock_merkle_proof(spend_condition),
+        lmp: empty_stub_lock_merkle_proof(spend_condition.clone()),
         pkh: PkhSignature { map: ZMap::new() },
         hax: ZMap::<Hash, UntypedNoun>::new(),
         tim: 0,
@@ -376,27 +386,64 @@ fn draft_review_v1_reports_totals_and_refund() {
     let external_hash = Hash {
         values: [41, 42, 43, 44, 45],
     };
+    let mut external_allowed = ZSet::new();
+    external_allowed.put(external_hash.clone());
+    let external_condition = SpendCondition {
+        p: vec![tx_types::transaction_types_v1::LockPrimitive {
+            header: "pkh".to_string(),
+            body: tx_types::transaction_types_v1::LockPrimitiveBody::Pkh(
+                tx_types::transaction_types_v1::Pkh {
+                    m: 1,
+                    h: external_allowed,
+                },
+            ),
+        }],
+    };
+    let external_lock_root = external_condition.to_hash();
+    let external_note_data = note_data_for_lock(&external_condition);
     let external_seed = SeedV1 {
         output_source: None,
-        lock_root: external_hash.clone(),
-        note_data: NoteData { map: ZMap::new() },
+        lock_root: external_lock_root.clone(),
+        note_data: external_note_data.clone(),
         gift: Coins { value: 9 },
         parent_hash: Hash {
             values: [51, 52, 53, 54, 55],
         },
     };
+    let second_external_seed = SeedV1 {
+        output_source: None,
+        lock_root: external_lock_root,
+        note_data: external_note_data,
+        gift: Coins { value: 5 },
+        parent_hash: Hash {
+            values: [56, 57, 58, 59, 60],
+        },
+    };
     let refund_seed = SeedV1 {
         output_source: None,
-        lock_root: pkh.clone(),
-        note_data: NoteData { map: ZMap::new() },
+        lock_root: spend_condition.to_hash(),
+        note_data: note_data_for_lock(&spend_condition),
         gift: Coins { value: 4 },
         parent_hash: Hash {
             values: [61, 62, 63, 64, 65],
         },
     };
+    // A lock root that merely equals our PKH, without a verified plain PKH
+    // lock in note-data, must remain visible and must not be called change.
+    let disguised_refund_seed = SeedV1 {
+        output_source: None,
+        lock_root: pkh.clone(),
+        note_data: NoteData { map: ZMap::new() },
+        gift: Coins { value: 2 },
+        parent_hash: Hash {
+            values: [66, 67, 68, 69, 70],
+        },
+    };
 
     let mut external_seeds: ZSet<SeedV1> = ZSet::new();
     external_seeds.put(external_seed);
+    external_seeds.put(second_external_seed);
+    external_seeds.put(disguised_refund_seed);
     let mut refund_seeds: ZSet<SeedV1> = ZSet::new();
     refund_seeds.put(refund_seed);
 
@@ -449,8 +496,8 @@ fn draft_review_v1_reports_totals_and_refund() {
         nockster_core::draft_sign::draft_review_v1(&draft_jam, &cfg).expect("draft review");
 
     assert_eq!(review.input_count, 2);
-    assert_eq!(review.external_output_count, 1);
-    assert_eq!(review.external_total, 9);
+    assert_eq!(review.external_output_count, 3);
+    assert_eq!(review.external_total, 16);
     assert_eq!(review.refund_total, 4);
     assert_eq!(review.fee_total, 10);
     assert!(review.minimum_fee > 0);
@@ -459,13 +506,22 @@ fn draft_review_v1_reports_totals_and_refund() {
         review.outputs
     );
 
-    let external = review
-        .outputs
+    let external: Vec<_> = review.outputs.iter().filter(|out| !out.is_refund).collect();
+    assert_eq!(external.len(), 2);
+    assert_eq!(external.iter().map(|out| out.gift).sum::<u64>(), 16);
+    let grouped = external
         .iter()
-        .find(|out| !out.is_refund)
-        .expect("external output");
-    assert_eq!(external.gift, 9);
-    assert_eq!(external.recipient_b58, external_hash.to_b58());
+        .find(|out| out.recipient_b58 == external_hash.to_b58())
+        .expect("same-policy outputs are grouped");
+    assert_eq!(grouped.gift, 14);
+    assert_eq!(grouped.note_count, 2);
+    let disguised = external
+        .iter()
+        .find(|out| out.recipient_b58 == pkh.to_b58())
+        .expect("unverified signer-looking output remains visible");
+    assert_eq!(disguised.gift, 2);
+    assert_eq!(disguised.note_count, 1);
+    assert!(!disguised.is_refund);
 
     let refund = review
         .outputs
@@ -473,6 +529,7 @@ fn draft_review_v1_reports_totals_and_refund() {
         .find(|out| out.is_refund)
         .expect("refund output");
     assert_eq!(refund.gift, 4);
+    assert_eq!(refund.note_count, 1);
     assert_eq!(refund.recipient_b58, pkh.to_b58());
 }
 

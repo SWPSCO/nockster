@@ -2,6 +2,7 @@
 #![no_main]
 #![deny(clippy::mem_forget, reason = "unsafe for esp-hal types")]
 mod dispatch;
+mod device_identity;
 mod fragments;
 mod gui;
 mod jobs;
@@ -34,7 +35,8 @@ use gui::{
     TxReviewSummary, VaultInteraction, WalletInteraction, WalletRow, WalletRows,
     TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_LOCK_UNVERIFIED, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_MULTISIG,
-    TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
+    TX_REVIEW_DETAIL_MAX, TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
+    TX_REVIEW_MAX_OUTPUTS,
 };
 use heapless::{String as HString, Vec as HVec};
 use jobs::{
@@ -320,6 +322,12 @@ struct PendingSignDraft {
     expires_at: Instant,
 }
 
+struct PendingAddressBook {
+    msg_id: u32,
+    payload: Vec<u8>,
+    expires_at: Instant,
+}
+
 enum PendingPinChange {
     New {
         msg_id: u32,
@@ -340,6 +348,10 @@ static PENDING_CONFIRMATION: Mutex<RefCell<Option<PendingConfirmation>>> =
 static PENDING_SIGN_DRAFT: Mutex<RefCell<Option<PendingSignDraft>>> =
     Mutex::new(RefCell::new(None));
 
+#[allow(clippy::declare_interior_mutable_const)]
+static PENDING_ADDRESS_BOOK: Mutex<RefCell<Option<PendingAddressBook>>> =
+    Mutex::new(RefCell::new(None));
+
 struct AppCoreState<'d> {
     nvs_pepper: nvs_pepper::AppNvsPepper<'d>,
 }
@@ -348,11 +360,20 @@ fn compute_initpin_outcome(
     state: &mut AppCoreState<'_>,
     request: InitPinRequest,
 ) -> InitPinOutcome {
-    let InitPinRequest { pin, mut seed64 } = request;
+    let InitPinRequest {
+        mut pin,
+        mut seed64,
+    } = request;
+    if !device_identity::production_identity_ready() {
+        zeroize_hstring(&mut pin);
+        seed64.zeroize();
+        return InitPinOutcome::Crypto;
+    }
     set_initpin_progress(InitPinProgress::Worker);
     let mut nvs = NvsStore::new();
     set_initpin_progress(InitPinProgress::CheckNvs);
     if nvs.is_initialized() {
+        zeroize_hstring(&mut pin);
         seed64.zeroize();
         set_initpin_progress(InitPinProgress::Complete);
         return InitPinOutcome::AlreadyInitialized;
@@ -363,13 +384,15 @@ fn compute_initpin_outcome(
     let mut coil = seed_store::coil_from_seed(&seed64);
     seed64.zeroize();
     let pub_xy = root_pub_from_coil(&coil);
-    match nvs.prepare_initialize_pin_with_pepper_and_progress(
+    let prepare_result = nvs.prepare_initialize_pin_with_pepper_and_progress(
         pin.as_str(),
         &coil,
         pub_xy,
         &mut state.nvs_pepper,
         nvs_init_progress,
-    ) {
+    );
+    zeroize_hstring(&mut pin);
+    match prepare_result {
         Ok((prepared, master_key, _slot)) => {
             set_initpin_progress(InitPinProgress::NvsWriteFlash);
             InitPinOutcome::Prepared {
@@ -410,7 +433,7 @@ fn compute_seed_derive_outcome(
         Ok(seed64) => SeedDeriveOutcome::Success { seed64 },
         Err(()) => SeedDeriveOutcome::Failed,
     };
-    phrase.clear();
+    gui::zeroize_seed_phrase(&mut phrase);
     outcome
 }
 
@@ -420,15 +443,18 @@ fn compute_change_pin_outcome(
 ) -> ChangePinOutcome {
     let ChangePinRequest {
         msg_id,
-        current_pin,
-        new_pin,
+        mut current_pin,
+        mut new_pin,
     } = request;
     let mut nvs = NvsStore::new();
-    match nvs.prepare_change_pin_with_pepper_precharged(
+    let result = nvs.prepare_change_pin_with_pepper_precharged(
         current_pin.as_str(),
         new_pin.as_str(),
         &mut state.nvs_pepper,
-    ) {
+    );
+    zeroize_hstring(&mut current_pin);
+    zeroize_hstring(&mut new_pin);
+    match result {
         Ok((prepared, seeds, master_key, old_master_key)) => ChangePinOutcome::Prepared {
             msg_id,
             seeds,
@@ -442,6 +468,11 @@ fn compute_change_pin_outcome(
         Err(NvsError::Crypto) => ChangePinOutcome::Crypto { msg_id },
         Err(_) => ChangePinOutcome::Failed { msg_id },
     }
+}
+
+fn zeroize_hstring<const N: usize>(value: &mut HString<N>) {
+    unsafe { value.as_mut_str().as_bytes_mut() }.zeroize();
+    value.clear();
 }
 
 fn compute_sign_draft_outcome(
@@ -515,7 +546,7 @@ fn tx_review_summary_from_draft(
     if review.external_total != 0 && review.refund_total == 0 {
         flags |= TX_REVIEW_FLAG_NO_REFUND;
     }
-    if review.external_output_count > 1 {
+    if review.outputs.iter().filter(|output| !output.is_refund).count() > 1 {
         flags |= TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS;
     }
     for output in review.outputs.iter().filter(|o| !o.is_refund) {
@@ -580,14 +611,16 @@ fn annotate_output_recipient(
     address_book: &[DeviceAddressBookEntry],
 ) -> HString<64> {
     use nockster_core::draft_sign::LockPrimitiveV1;
+    let mut out = HString::<64>::new();
+    if output.note_count > 1 {
+        let _ = core::write!(out, "{}x ", output.note_count);
+    }
     if let Some(evm) = &output.bridge_evm_addr {
-        let mut out = HString::<64>::new();
         let _ = out.push_str("eth ");
-        let take = evm.len().min(60);
+        let take = evm.len().min(64 - out.len());
         let _ = out.push_str(&evm[..take]);
         return out;
     }
-    let mut out = HString::<64>::new();
     if let Some(lock) = &output.lock {
         if !lock.verified {
             let _ = out.push_str("?! ");
@@ -617,26 +650,42 @@ fn annotate_output_recipient(
     out
 }
 
-/// Verbatim, human-readable lock facts for an output, shown in the
-/// tap-to-expand detail. No chain-height comparison — bounds are reported
-/// as-is. Empty for a plain single-sig payment.
-fn output_detail(output: &nockster_core::draft_sign::DraftOutputV1) -> HString<96> {
+/// Verbatim, human-readable lock facts for an output, shown on its review
+/// page. No chain-height comparison — bounds are reported as-is. Empty for a
+/// plain single-sig payment.
+fn output_detail(
+    output: &nockster_core::draft_sign::DraftOutputV1,
+) -> Result<HString<TX_REVIEW_DETAIL_MAX>, u16> {
     use nockster_core::draft_sign::LockPrimitiveV1;
-    let mut out = HString::<96>::new();
-    if let Some(evm) = &output.bridge_evm_addr {
-        let _ = core::write!(out, "Base bridge -> {}", evm);
-        return out;
+    let mut out = HString::<TX_REVIEW_DETAIL_MAX>::new();
+    if output.note_count > 1 {
+        core::write!(out, "{} notes", output.note_count).map_err(|_| ERR_OVERFLOW)?;
+    }
+    if output.bridge_evm_addr.is_some() {
+        if !out.is_empty() {
+            out.push_str("; ").map_err(|_| ERR_OVERFLOW)?;
+        }
+        out.push_str("Base bridge deposit")
+            .map_err(|_| ERR_OVERFLOW)?;
+        return Ok(out);
     }
     let Some(lock) = &output.lock else {
-        return out;
+        return Ok(out);
     };
     if !lock.verified {
-        let _ = out.push_str("LOCK UNVERIFIED ");
+        if !out.is_empty() {
+            out.push_str("; ").map_err(|_| ERR_OVERFLOW)?;
+        }
+        out.push_str("LOCK UNVERIFIED")
+            .map_err(|_| ERR_OVERFLOW)?;
     }
     for prim in &lock.primitives {
+        if !out.is_empty() {
+            out.push_str("; ").map_err(|_| ERR_OVERFLOW)?;
+        }
         match prim {
             LockPrimitiveV1::Pkh { m, n } => {
-                let _ = core::write!(out, "{}-of-{} sig ", m, n);
+                core::write!(out, "{}-of-{} sig", m, n).map_err(|_| ERR_OVERFLOW)?;
             }
             LockPrimitiveV1::Timelock {
                 rel_min,
@@ -644,30 +693,29 @@ fn output_detail(output: &nockster_core::draft_sign::DraftOutputV1) -> HString<9
                 abs_min,
                 abs_max,
             } => {
-                let _ = out.push_str("timelock");
+                out.push_str("timelock").map_err(|_| ERR_OVERFLOW)?;
                 if let Some(v) = abs_min {
-                    let _ = core::write!(out, " abs>={}", v);
+                    core::write!(out, " abs>={}", v).map_err(|_| ERR_OVERFLOW)?;
                 }
                 if let Some(v) = abs_max {
-                    let _ = core::write!(out, " abs<={}", v);
+                    core::write!(out, " abs<={}", v).map_err(|_| ERR_OVERFLOW)?;
                 }
                 if let Some(v) = rel_min {
-                    let _ = core::write!(out, " rel>={}", v);
+                    core::write!(out, " rel>={}", v).map_err(|_| ERR_OVERFLOW)?;
                 }
                 if let Some(v) = rel_max {
-                    let _ = core::write!(out, " rel<={}", v);
+                    core::write!(out, " rel<={}", v).map_err(|_| ERR_OVERFLOW)?;
                 }
-                let _ = out.push(' ');
             }
             LockPrimitiveV1::Hax { n } => {
-                let _ = core::write!(out, "hashlock x{} ", n);
+                core::write!(out, "hashlock x{}", n).map_err(|_| ERR_OVERFLOW)?;
             }
             LockPrimitiveV1::Burn => {
-                let _ = out.push_str("burn ");
+                out.push_str("burn").map_err(|_| ERR_OVERFLOW)?;
             }
         }
     }
-    out
+    Ok(out)
 }
 
 fn trusted_recipient_display(
@@ -680,6 +728,13 @@ fn trusted_recipient_display(
         .find(|entry| entry.pkh.as_str() == recipient_pkh_b58 && !entry.label.is_empty())
     {
         let _ = out.push_str(entry.label.as_str());
+        let _ = out.push(' ');
+        let head = recipient_pkh_b58.len().min(6);
+        let _ = out.push_str(&recipient_pkh_b58[..head]);
+        if recipient_pkh_b58.len() > 12 {
+            let _ = out.push_str("..");
+            let _ = out.push_str(&recipient_pkh_b58[recipient_pkh_b58.len() - 6..]);
+        }
         return out;
     }
 
@@ -699,15 +754,26 @@ fn begin_confirmation(
     };
 
     let mut spend_outputs: HVec<(u64, HString<64>), 24> = HVec::new();
-    let mut details = HString::<48>::new();
+    let mut details = HString::<96>::new();
     let mut tx_review_header = prompt;
     let is_blind_spend = matches!(
         &frame,
         Frame::One(Request::SignSpendHash { .. }) | Frame::One(Request::SignSpendHashFor { .. })
     );
     if is_blind_spend {
-        tx_review_header = "BLIND SIGN";
-        let _ = details.push_str("Raw hash only");
+        let msg5 = match &frame {
+            Frame::One(Request::SignSpendHash { msg5, .. })
+            | Frame::One(Request::SignSpendHashFor { msg5, .. }) => *msg5,
+            _ => unreachable!(),
+        };
+        let digest = draft_sign::tip5_digest_b58(msg5);
+        for (index, chunk) in digest.as_bytes().chunks(19).enumerate() {
+            if index != 0 {
+                let _ = details.push('\n');
+            }
+            let part = core::str::from_utf8(chunk).map_err(|_| ERR_CRYPTO)?;
+            let _ = details.push_str(part);
+        }
     }
 
     if let Frame::One(Request::SignSpendHashFor {
@@ -715,8 +781,6 @@ fn begin_confirmation(
     }) = &frame
     {
         signing::preflight_spend_pubkey(*slot, path, pubkey, is_device_locked())?;
-        details.clear();
-        let _ = details.push_str("Pubkey OK, raw hash");
     }
     if let Frame::One(Request::DeleteSeed { slot }) = &frame {
         if is_device_locked() {
@@ -770,6 +834,21 @@ fn begin_confirmation(
         }
         let _ = core::write!(&mut details, "watch-only, slot {}", slot);
     }
+    if let Frame::One(Request::SetTouchCalibration { calibration }) = &frame {
+        if !gui::touch_calibration_valid(calibration) {
+            return Err(ERR_BAD_COBS_OR_POSTCARD);
+        }
+        let _ = core::write!(
+            &mut details,
+            "x {}..{}\ny {}..{}\nmx={} my={}",
+            calibration.raw_x_min,
+            calibration.raw_x_max,
+            calibration.raw_y_min,
+            calibration.raw_y_max,
+            calibration.mirror_x,
+            calibration.mirror_y
+        );
+    }
     let mut show_review_outputs = false;
     if let Frame::One(Request::ShowAddress { slot, path }) = &frame {
         if is_device_locked() {
@@ -791,67 +870,36 @@ fn begin_confirmation(
         if is_device_locked() {
             return Err(ERR_DEVICE_LOCKED);
         }
-        // Show the message text so the user signs what they read. Render only
-        // printable ASCII; anything else collapses to '.' so a binary blob
-        // can't paint arbitrary glyphs.
-        details.clear();
-        for &b in message.iter() {
-            if details.len() >= 46 {
-                let _ = details.push('~');
-                break;
-            }
-            let ch = if (0x20..0x7f).contains(&b) { b as char } else { '.' };
-            let _ = details.push(ch);
+        // The confirmation overlay has no pagination. Reject anything it
+        // cannot render verbatim instead of signing hidden/truncated bytes.
+        if message.is_empty()
+            || message.len() > 16
+            || !message.iter().all(|b| (0x20..=0x7e).contains(b))
+        {
+            return Err(ERR_BAD_COBS_OR_POSTCARD);
         }
+        details.clear();
+        let text = core::str::from_utf8(message.as_slice()).map_err(|_| ERR_BAD_COBS_OR_POSTCARD)?;
+        let _ = core::write!(details, "\"{}\"\n{} bytes", text, message.len());
     }
     if let Frame::One(Request::SignHash { digest5, .. }) = &frame {
         if is_device_locked() {
             return Err(ERR_DEVICE_LOCKED);
         }
         let b58 = draft_sign::tip5_digest_b58(*digest5);
-        let take = b58.len().min(44);
-        let _ = details.push_str(&b58[..take]);
+        details.clear();
+        for (index, chunk) in b58.as_bytes().chunks(19).enumerate() {
+            if index != 0 {
+                let _ = details.push('\n');
+            }
+            let part = core::str::from_utf8(chunk).map_err(|_| ERR_CRYPTO)?;
+            let _ = details.push_str(part);
+        }
     }
 
-    let show_spend_outputs = match &frame {
-        Frame::One(Request::SignSpendHash {
-            meta: Some(meta), ..
-        })
-        | Frame::One(Request::SignSpendHashFor {
-            meta: Some(meta), ..
-        }) => {
-            let address_book = NvsStore::new()
-                .read_device_address_book()
-                .unwrap_or_default();
-            for out in meta.outputs.iter() {
-                if out.gift == 0 || out.is_refund {
-                    continue;
-                }
-                let recipient =
-                    trusted_recipient_display(out.recipient_pkh_b58.as_str(), &address_book);
-                let candidate = (out.gift, recipient);
-                if let Err(candidate) = spend_outputs.push(candidate) {
-                    // Keep only the largest outputs when more than the UI list can display.
-                    let mut min_idx = 0usize;
-                    let mut min_gift = spend_outputs[0].0;
-                    for (idx, (gift, _)) in spend_outputs.iter().enumerate().skip(1) {
-                        if *gift < min_gift {
-                            min_gift = *gift;
-                            min_idx = idx;
-                        }
-                    }
-                    if candidate.0 > min_gift {
-                        spend_outputs[min_idx] = candidate;
-                    }
-                }
-            }
-            spend_outputs
-                .as_mut_slice()
-                .sort_unstable_by(|a, b| b.0.cmp(&a.0));
-            true
-        }
-        _ => show_review_outputs,
-    };
+    // Blind-sign metadata is unauthenticated host commentary. Never present
+    // it as if it were cryptographically bound to msg5.
+    let show_spend_outputs = show_review_outputs;
 
     let stored = critical_section::with(|cs| {
         let mut pending = PENDING_CONFIRMATION.borrow_ref_mut(cs);
@@ -896,9 +944,11 @@ fn begin_confirmation(
 enum AddressBookFragmentResult {
     NotAddressBook,
     Immediate(Response),
+    Pending,
 }
 
 fn maybe_handle_address_book_fragment(
+    msg_id: u32,
     frame: &Frame,
     ui: Option<&mut Gui<'_>>,
 ) -> AddressBookFragmentResult {
@@ -947,13 +997,36 @@ fn maybe_handle_address_book_fragment(
         });
     }
 
-    if let Some(ui) = ui {
-        ui.show_idle_message_timed("Saving address", Duration::from_millis(1_500));
+    let count = match dispatch::address_book_entry_count(st.buf.as_slice()) {
+        Ok(count) => count,
+        Err(response) => return AddressBookFragmentResult::Immediate(response),
+    };
+    let Some(ui) = ui else {
+        return AddressBookFragmentResult::Immediate(Response::Err {
+            code: ERR_UNSUPPORTED_VERSION,
+        });
+    };
+    let stored = critical_section::with(|cs| {
+        let mut pending = PENDING_ADDRESS_BOOK.borrow_ref_mut(cs);
+        if pending.is_some() {
+            false
+        } else {
+            pending.replace(PendingAddressBook {
+                msg_id,
+                payload: st.buf,
+                expires_at: Instant::now() + CONFIRM_TIMEOUT,
+            });
+            true
+        }
+    });
+    if !stored {
+        return AddressBookFragmentResult::Immediate(Response::Err { code: ERR_BUSY });
     }
-    AddressBookFragmentResult::Immediate(dispatch::write_address_book_payload(
-        st.buf.as_slice(),
-        is_device_locked(),
-    ))
+    let mut details = HString::<48>::new();
+    let _ = core::write!(details, "replace with {} entries", count);
+    ui.request_confirmation_with_details("Replace address book?", Some(details.as_str()));
+    set_device_busy(true);
+    AddressBookFragmentResult::Pending
 }
 
 fn pin_attempt_err_code(err: &NvsError) -> u16 {
@@ -981,7 +1054,11 @@ fn pending_confirmation_expired(now: Instant) -> bool {
             .borrow_ref(cs)
             .as_ref()
             .is_some_and(|p| now >= p.expires_at);
-        confirm_expired || draft_expired
+        let address_book_expired = PENDING_ADDRESS_BOOK
+            .borrow_ref(cs)
+            .as_ref()
+            .is_some_and(|p| now >= p.expires_at);
+        confirm_expired || draft_expired || address_book_expired
     })
 }
 
@@ -1026,6 +1103,19 @@ fn cancel_pending_confirmation<B: usb_device::bus::UsbBus>(
         );
         cancelled = true;
     }
+    if let Some(mut pending) = take_pending_address_book() {
+        pending.payload.zeroize();
+        send_response(
+            hid,
+            pending.msg_id,
+            Response::Err {
+                code: ERR_REJECTED_BY_USER,
+            },
+            plain,
+            enc,
+        );
+        cancelled = true;
+    }
     if cancelled {
         set_device_busy(false);
     }
@@ -1037,6 +1127,10 @@ fn take_pending_sign_draft() -> Option<PendingSignDraft> {
         let mut slot = PENDING_SIGN_DRAFT.borrow_ref_mut(cs);
         slot.take()
     })
+}
+
+fn take_pending_address_book() -> Option<PendingAddressBook> {
+    critical_section::with(|cs| PENDING_ADDRESS_BOOK.borrow_ref_mut(cs).take())
 }
 
 /// cobs test
@@ -1125,10 +1219,11 @@ fn main() -> ! {
     let usb = Usb::new(p.USB0, p.GPIO20, p.GPIO19);
     let usb_bus = OtgUsbBus::new(usb, unsafe { USB_EP_MEMORY.as_mut() });
     let mut hid = HIDClass::new(&usb_bus, usb_hid::REPORT_DESCRIPTOR, 10);
+    let usb_serial = device_identity::usb_serial();
     let strings = [StringDescriptors::new(LangID::EN_US)
         .manufacturer("SWPSCo")
         .product("Nockster")
-        .serial_number("nock001")];
+        .serial_number(usb_serial.as_str())];
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x303a, 0x2001))
         .strings(&strings)
         .expect("usb strings")
@@ -1212,7 +1307,11 @@ fn main() -> ! {
                                 }
                             }
                         } else {
-                            let body = handle_frame_v1(pending.msg_id, &pending.frame, None);
+                            let body = handle_frame_v1(
+                                pending.msg_id,
+                                &pending.frame,
+                                Some(&mut *ui),
+                            );
                             return_response_msg(pending.msg_id, body)
                         }
                     } else {
@@ -1287,6 +1386,31 @@ fn main() -> ! {
                             send_err(&mut hid, ERR_ENCODE_TOO_BIG, &mut enc);
                         }
                     }
+                } else if let Some(mut pending) = take_pending_address_book() {
+                    let response = if decision {
+                        dispatch::write_address_book_payload(
+                            pending.payload.as_slice(),
+                            is_device_locked(),
+                        )
+                    } else {
+                        Response::Err {
+                            code: ERR_REJECTED_BY_USER,
+                        }
+                    };
+                    pending.payload.zeroize();
+                    if decision {
+                        ui.show_idle_message_timed("Address book saved", Duration::from_millis(3_000));
+                    } else {
+                        ui.show_idle_message_timed("Rejected", Duration::from_millis(3_000));
+                    }
+                    send_response(
+                        &mut hid,
+                        pending.msg_id,
+                        response,
+                        &mut plain,
+                        &mut enc,
+                    );
+                    set_device_busy(false);
                 }
             }
             if pending_confirmation_expired(Instant::now())
@@ -1462,7 +1586,7 @@ fn main() -> ! {
                                     set_device_busy(true);
                                 }
                                 Err(mut phrase) => {
-                                    phrase.clear();
+                                    gui::zeroize_seed_phrase(&mut phrase);
                                     adding_seed_while_unlocked = false;
                                     ui.show_seed_setup();
                                     usb_debug(&mut hid, b"seed derive busy\r\n");
@@ -2140,7 +2264,7 @@ fn main() -> ! {
                                                 let address_book_result = {
                                                     let ui_ref = ui.as_mut().map(|u| u as &mut Gui);
                                                     maybe_handle_address_book_fragment(
-                                                        &m.msg, ui_ref,
+                                                        m.id, &m.msg, ui_ref,
                                                     )
                                                 };
                                                 match address_book_result {
@@ -2151,6 +2275,7 @@ fn main() -> ! {
                                                             msg: body,
                                                         })
                                                     }
+                                                    AddressBookFragmentResult::Pending => None,
                                                     AddressBookFragmentResult::NotAddressBook => {
                                                         let ui_ref =
                                                             ui.as_mut().map(|u| u as &mut Gui);
@@ -2294,6 +2419,11 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
             total_len,
             kind,
         } => {
+            if *kind == FragKind::SetSeed && seed_store::is_production_build() {
+                return Response::Err {
+                    code: ERR_UNSUPPORTED_VERSION,
+                };
+            }
             if fragments::begin_inbound(*id, *kind, *total_len).is_err() {
                 return Response::Err { code: ERR_OVERFLOW };
             }
@@ -2336,6 +2466,12 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
 
             match st.kind {
                 FragKind::SetSeed => {
+                    if seed_store::is_production_build() {
+                        st.buf.zeroize();
+                        return Response::Err {
+                            code: ERR_UNSUPPORTED_VERSION,
+                        };
+                    }
                     if st.buf.len() != 64 {
                         return Response::Err {
                             code: ERR_BAD_COBS_OR_POSTCARD,
@@ -2344,6 +2480,8 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                     let mut arr = [0u8; 64];
                     arr.copy_from_slice(st.buf.as_slice());
                     set_seed(&arr);
+                    arr.zeroize();
+                    st.buf.zeroize();
                     Response::Ok
                 }
                 FragKind::SignDraft => {
@@ -2352,7 +2490,7 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                             code: ERR_DEVICE_LOCKED,
                         };
                     }
-                    let cfg = match signing::active_root_signer_config() {
+                    let mut cfg = match signing::active_root_signer_config() {
                         Ok(cfg) => cfg,
                         Err(code) => return Response::Err { code },
                     };
@@ -2363,16 +2501,48 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                         ) {
                             Ok(v) => v,
                             Err(nockster_core::draft_sign::SignDraftError::Unsupported) => {
+                                cfg.sk_be.zeroize();
                                 return Response::Err {
                                     code: ERR_UNSUPPORTED_VERSION,
                                 };
                             }
                             Err(_) => {
+                                cfg.sk_be.zeroize();
                                 return Response::Err {
                                     code: ERR_BAD_COBS_OR_POSTCARD,
                                 };
                             }
                         };
+
+                        let displayed_output_count =
+                            review.outputs.iter().filter(|output| !output.is_refund).count();
+                        if displayed_output_count > TX_REVIEW_MAX_OUTPUTS {
+                            cfg.sk_be.zeroize();
+                            return Response::Err { code: ERR_OVERFLOW };
+                        }
+
+                        let summary = tx_review_summary_from_draft(&review);
+                        let address_book = NvsStore::new()
+                            .read_device_address_book()
+                            .unwrap_or_default();
+                        let mut review_outputs: HVec<
+                            (u64, HString<64>, HString<TX_REVIEW_DETAIL_MAX>),
+                            TX_REVIEW_MAX_OUTPUTS,
+                        > = HVec::new();
+                        for output in review.outputs.iter().filter(|o| !o.is_refund) {
+                            let recipient = annotate_output_recipient(output, &address_book);
+                            let detail = match output_detail(output) {
+                                Ok(detail) => detail,
+                                Err(code) => {
+                                    cfg.sk_be.zeroize();
+                                    return Response::Err { code };
+                                }
+                            };
+                            if review_outputs.push((output.gift, recipient, detail)).is_err() {
+                                cfg.sk_be.zeroize();
+                                return Response::Err { code: ERR_OVERFLOW };
+                            }
+                        }
 
                         let draft = core::mem::take(&mut st.buf);
                         let stored = critical_section::with(|cs| {
@@ -2390,25 +2560,12 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                                 true
                             }
                         });
+                        cfg.sk_be.zeroize();
 
                         if !stored {
                             return Response::Err { code: ERR_BUSY };
                         }
 
-                        let summary = tx_review_summary_from_draft(&review);
-                        let address_book = NvsStore::new()
-                            .read_device_address_book()
-                            .unwrap_or_default();
-                        let mut review_outputs: HVec<(u64, HString<64>, HString<96>), 24> =
-                            HVec::new();
-                        for output in review.outputs.iter().filter(|o| !o.is_refund) {
-                            if review_outputs.is_full() {
-                                break;
-                            }
-                            let recipient = annotate_output_recipient(output, &address_book);
-                            let detail = output_detail(output);
-                            let _ = review_outputs.push((output.gift, recipient, detail));
-                        }
                         set_device_busy(true);
                         ui.request_tx_review_with_summary(
                             "Review Tx",
@@ -2421,21 +2578,22 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                         );
                         Response::Ok
                     } else {
-                        let out =
-                            match nockster_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg)
-                            {
-                                Ok(v) => v,
-                                Err(nockster_core::draft_sign::SignDraftError::Unsupported) => {
-                                    return Response::Err {
-                                        code: ERR_UNSUPPORTED_VERSION,
-                                    };
-                                }
-                                Err(_) => {
-                                    return Response::Err {
-                                        code: ERR_BAD_COBS_OR_POSTCARD,
-                                    };
-                                }
-                            };
+                        let sign_result =
+                            nockster_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg);
+                        cfg.sk_be.zeroize();
+                        let out = match sign_result {
+                            Ok(v) => v,
+                            Err(nockster_core::draft_sign::SignDraftError::Unsupported) => {
+                                return Response::Err {
+                                    code: ERR_UNSUPPORTED_VERSION,
+                                };
+                            }
+                            Err(_) => {
+                                return Response::Err {
+                                    code: ERR_BAD_COBS_OR_POSTCARD,
+                                };
+                            }
+                        };
 
                         let total = out.len() as u32;
                         fragments::set_outbound(req_id, st.id, out);
@@ -2447,7 +2605,10 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                     }
                 }
                 FragKind::AddressBook => {
-                    dispatch::write_address_book_payload(st.buf.as_slice(), is_device_locked())
+                    st.buf.zeroize();
+                    Response::Err {
+                        code: ERR_UNSUPPORTED_VERSION,
+                    }
                 }
             }
         }
@@ -2570,6 +2731,9 @@ fn is_device_locked() -> bool {
 }
 
 fn compute_unlock_outcome(state: &mut AppCoreState<'_>, pin: &str) -> UnlockOutcome {
+    if !device_identity::production_identity_ready() {
+        return UnlockOutcome::Failed;
+    }
     let mut nvs = NvsStore::new();
     match nvs.unlock_with_pepper_precharged(pin, &mut state.nvs_pepper) {
         Ok((seeds, master_key, clear_attempts)) => UnlockOutcome::Success {

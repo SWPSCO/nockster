@@ -56,6 +56,7 @@ pub fn frame_confirmation_prompt(frame: &Frame) -> Option<&'static str> {
         Frame::One(Request::ShowAddress { .. }) => Some("Verify receive?"),
         Frame::One(Request::SignMessage { .. }) => Some("Sign message?"),
         Frame::One(Request::SignHash { .. }) => Some("Sign hash?"),
+        Frame::One(Request::SetTouchCalibration { .. }) => Some("Apply calibration?"),
         _ => None,
     }
 }
@@ -410,6 +411,25 @@ pub fn write_address_book_payload(payload: &[u8], locked: bool) -> Response {
             code: ERR_BAD_COBS_OR_POSTCARD,
         },
     }
+}
+
+pub fn address_book_entry_count(payload: &[u8]) -> Result<usize, Response> {
+    let entries = postcard::from_bytes::<alloc::vec::Vec<DeviceAddressBookEntry>>(payload)
+        .map_err(|_| Response::Err {
+            code: ERR_BAD_COBS_OR_POSTCARD,
+        })?;
+    if entries.len() > MAX_DEVICE_ADDRESS_BOOK_ENTRIES
+        || entries.iter().any(|entry| {
+            entry.label.len() > MAX_ADDRESS_BOOK_LABEL_LEN
+                || entry.pkh.is_empty()
+                || entry.pkh.len() > MAX_ADDRESS_BOOK_PKH_LEN
+        })
+    {
+        return Err(Response::Err {
+            code: ERR_BAD_COBS_OR_POSTCARD,
+        });
+    }
+    Ok(entries.len())
 }
 
 pub fn handle_touch_request(

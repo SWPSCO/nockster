@@ -85,8 +85,9 @@ pub fn handle_request(req: &Request, locked: bool) -> Option<Response> {
         }),
         Request::GetCheetahPub { slot, path } => {
             Some(match derive_child_sk_for_slot(path, *slot as usize) {
-                Ok(sk) => {
+                Ok(mut sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
+                    sk.zeroize();
                     Response::OkCheetahPub { x: pk.0, y: pk.1 }
                 }
                 Err(_) => Response::Err { code: ERR_NO_SEED },
@@ -101,10 +102,11 @@ pub fn handle_request(req: &Request, locked: bool) -> Option<Response> {
                 });
             }
             Some(match derive_child_sk_for_slot(path, *slot as usize) {
-                Ok(sk) => {
+                Ok(mut sk) => {
                     let pk = cheetah::cheetah_pub_from_sk(sk);
                     let hash = cheetah::Hash { values: *msg5 };
                     let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
+                    sk.zeroize();
                     Response::OkCheetahSig {
                         chal: e.values,
                         sig: s.values,
@@ -126,15 +128,17 @@ pub fn handle_request(req: &Request, locked: bool) -> Option<Response> {
                 });
             }
             Some(match derive_child_sk_for_slot(path, *slot as usize) {
-                Ok(sk) => {
+                Ok(mut sk) => {
                     let pk_dev = cheetah::cheetah_pub_from_sk(sk);
                     if &pk_dev != pubkey {
+                        sk.zeroize();
                         Response::Err {
                             code: ERR_WRONG_PUBKEY,
                         }
                     } else {
                         let hash = cheetah::Hash { values: *msg5 };
                         let (e, s) = cheetah::schnorr_sign_tx(sk, *pubkey, hash.values);
+                        sk.zeroize();
                         Response::OkCheetahSig {
                             chal: e.values,
                             sig: s.values,
@@ -196,12 +200,13 @@ fn handle_health() -> Response {
     };
     let path = pathmod::Path::from_iter([0x8000_002c, 0x8000_0000, 0x8000_0000, 0, 0].into_iter());
     match derive_child_sk_for_slot(&path, slot) {
-        Ok(sk) => {
+        Ok(mut sk) => {
             let pk = cheetah::cheetah_pub_from_sk(sk);
             let hash = cheetah::Hash {
                 values: [0, 0, 0, 0, 0],
             };
             let (e, s) = cheetah::schnorr_sign_tx(sk, pk, hash.values);
+            sk.zeroize();
             Response::OkCheetahSig {
                 chal: e.values,
                 sig: s.values,

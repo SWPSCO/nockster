@@ -13,11 +13,13 @@ const HEADER_ICON_TOUCH_WIDTH: i32 = 56;
 const HEADER_BACK_TOUCH_WIDTH: i32 = 40;
 pub(crate) const TX_REVIEW_PADDING: i32 = 6;
 pub(crate) const TX_REVIEW_LINE_GAP: i32 = 2;
-pub(crate) const TX_REVIEW_ITEM_GAP: i32 = 8;
+const TX_REVIEW_NAV_HEIGHT: i32 = 38;
 
+// Kept for the legacy renderer while the paged renderer settles; the active
+// review path uses tx_review_content_rect instead.
 pub(crate) fn tx_review_output_item_height() -> i32 {
     let line_h = FONT_10X20.character_size.height as i32 + TX_REVIEW_LINE_GAP;
-    2 * line_h + TX_REVIEW_ITEM_GAP
+    2 * line_h + 8
 }
 
 pub(crate) fn tx_review_summary_height(has_summary: bool) -> i32 {
@@ -180,6 +182,41 @@ pub(crate) fn tx_review_list_rect() -> Rectangle {
     )
 }
 
+pub(crate) fn tx_review_navigation_buttons() -> [ButtonHit; 2] {
+    let list = tx_review_list_rect();
+    let margin = 4;
+    let button_w = 38;
+    let button_h = TX_REVIEW_NAV_HEIGHT - margin * 2;
+    let previous = ButtonHit {
+        button: Button::ReviewPrevious,
+        top_left: Point::new(list.top_left.x + margin, list.top_left.y + margin),
+        size: Size::new(button_w as u32, button_h as u32),
+    };
+    let next = ButtonHit {
+        button: Button::ReviewNext,
+        top_left: Point::new(
+            list.top_left.x + list.size.width as i32 - margin - button_w,
+            list.top_left.y + margin,
+        ),
+        size: Size::new(button_w as u32, button_h as u32),
+    };
+    [previous, next]
+}
+
+pub(crate) fn tx_review_content_rect() -> Rectangle {
+    let list = tx_review_list_rect();
+    let inset = TX_REVIEW_PADDING;
+    let top = list.top_left.y + TX_REVIEW_NAV_HEIGHT;
+    let bottom = list.top_left.y + list.size.height as i32 - inset;
+    Rectangle::new(
+        Point::new(list.top_left.x + inset, top),
+        Size::new(
+            list.size.width.saturating_sub((inset as u32) * 2),
+            bottom.saturating_sub(top) as u32,
+        ),
+    )
+}
+
 pub(crate) fn tx_review_detail_rect() -> Rectangle {
     let list = tx_review_list_rect();
     let inset: i32 = 10;
@@ -195,7 +232,11 @@ pub(crate) fn tx_review_detail_rect() -> Rectangle {
     )
 }
 
-pub(crate) fn button_from_point_tx_review(point: Point) -> Option<ButtonHit> {
+pub(crate) fn button_from_point_tx_review(
+    point: Point,
+    page: usize,
+    page_count: usize,
+) -> Option<ButtonHit> {
     let bottom_slack: i32 = 16;
     for hit in tx_review_buttons() {
         let within_x =
@@ -204,6 +245,16 @@ pub(crate) fn button_from_point_tx_review(point: Point) -> Option<ButtonHit> {
             (hit.top_left.y + hit.size.height as i32 + bottom_slack).min(SCREEN_HEIGHT as i32);
         let within_y = point.y >= hit.top_left.y && point.y < bottom;
         if within_x && within_y {
+            return Some(hit);
+        }
+    }
+    for hit in tx_review_navigation_buttons() {
+        let enabled = match hit.button {
+            Button::ReviewPrevious => page > 0,
+            Button::ReviewNext => page + 1 < page_count,
+            _ => false,
+        };
+        if enabled && Rectangle::new(hit.top_left, hit.size).contains(point) {
             return Some(hit);
         }
     }

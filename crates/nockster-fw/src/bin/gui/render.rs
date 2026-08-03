@@ -13,8 +13,9 @@ use nockster_core::TouchCalibration;
 use super::constants::*;
 use super::layout::{
     confirm_buttons, header_height, hold_progress_circle, keypad_button_hit, keypad_grid,
-    row_height, tx_review_buttons, tx_review_detail_rect, tx_review_list_rect,
-    tx_review_output_item_height, tx_review_summary_height, TX_REVIEW_LINE_GAP, TX_REVIEW_PADDING,
+    row_height, tx_review_buttons, tx_review_content_rect, tx_review_detail_rect,
+    tx_review_list_rect, tx_review_navigation_buttons, tx_review_output_item_height,
+    tx_review_summary_height, TX_REVIEW_LINE_GAP, TX_REVIEW_PADDING,
 };
 use super::palette;
 use super::state::{
@@ -882,22 +883,18 @@ pub fn render_confirm_overlay(
     .draw(display);
 
     if let Some(details) = subtitle.filter(|s| !s.is_empty()) {
-        let subtle = MonoTextStyle::new(&FONT_10X20, palette::text_subtle());
+        // Three 19-character rows are enough to render a full base58 Tip5
+        // digest without truncation on the 172px-wide display.
+        let details_style = MonoTextStyle::new(&FONT_8X13, palette::text_subtle());
         let line_gap: i32 = 2;
-        let line_h: i32 = FONT_10X20.character_size.height as i32 + line_gap;
+        let line_h: i32 = FONT_8X13.character_size.height as i32 + line_gap;
         let mut baseline = prompt_baseline + line_h + 6;
 
-        for (idx, line) in details
-            .lines()
-            .filter(|l| !l.is_empty())
-            .take(3)
-            .enumerate()
-        {
-            let line_style = if idx == 0 { style } else { subtle };
+        for line in details.lines().filter(|l| !l.is_empty()).take(3) {
             let _ = Text::with_alignment(
                 line,
                 Point::new(center_x, baseline),
-                line_style,
+                details_style,
                 Alignment::Center,
             )
             .draw(display);
@@ -945,12 +942,597 @@ pub fn render_confirm_overlay(
     }
 }
 
+const TX_REVIEW_PAGE_LINE_HEIGHT: i32 = 15;
+
+fn tx_review_output_index(summary: Option<TxReviewSummary>, page: usize) -> Option<usize> {
+    if summary.is_some() {
+        page.checked_sub(1)
+    } else {
+        Some(page)
+    }
+}
+
+fn tx_review_wrapped_lines(text: &str, max_chars: usize) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+    text.chars().count().div_ceil(max_chars.max(1))
+}
+
+fn tx_review_word_break(text: &str, max_chars: usize) -> (usize, usize) {
+    let Some((hard_end, _)) = text.char_indices().nth(max_chars.max(1)) else {
+        return (text.len(), text.len());
+    };
+    if let Some((break_at, whitespace)) = text[..hard_end]
+        .char_indices()
+        .rev()
+        .find(|(index, ch)| *index > 0 && ch.is_whitespace())
+    {
+        let mut next = break_at + whitespace.len_utf8();
+        while let Some(ch) = text[next..].chars().next() {
+            if !ch.is_whitespace() {
+                break;
+            }
+            next += ch.len_utf8();
+        }
+        (break_at, next)
+    } else {
+        (hard_end, hard_end)
+    }
+}
+
+fn tx_review_word_wrapped_lines(text: &str, max_chars: usize) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+    let mut remaining = text;
+    let mut lines = 0;
+    while !remaining.is_empty() {
+        lines += 1;
+        let (_, next) = tx_review_word_break(remaining, max_chars);
+        remaining = &remaining[next..];
+    }
+    lines
+}
+
+fn tx_review_max_chars(content: Rectangle) -> usize {
+    // Keep a narrow gutter on the right for the overflow scrollbar.
+    (content.size.width.saturating_sub(5) as usize / FONT_8X13.character_size.width as usize).max(1)
+}
+
+fn tx_review_summary_lines(summary: TxReviewSummary, max_chars: usize) -> usize {
+    let mut lines = 0usize;
+    let mut text = heapless::String::<32>::new();
+    let mut amount = heapless::String::<32>::new();
+
+    let _ = write!(text, "INPUTS {}", summary.input_count);
+    lines += tx_review_word_wrapped_lines(text.as_str(), max_chars);
+    text.clear();
+    let _ = write!(text, "OUTPUTS {}", summary.external_output_count);
+    lines += tx_review_word_wrapped_lines(text.as_str(), max_chars);
+
+    for (label, value) in [
+        ("SEND", summary.external_total),
+        ("FEE", summary.fee_total),
+        ("CHANGE", summary.refund_total),
+    ] {
+        tx_review_write_amount(&mut amount, value);
+        text.clear();
+        let _ = write!(text, "{} {}", label, amount.as_str());
+        lines += tx_review_word_wrapped_lines(text.as_str(), max_chars);
+    }
+    lines += tx_review_word_wrapped_lines("Review every page", max_chars);
+
+    if summary.multisig_m > 0 {
+        text.clear();
+        let _ = write!(
+            text,
+            "MULTISIG {}/{}{}",
+            summary.multisig_present,
+            summary.multisig_m,
+            if summary.multisig_we_must_sign {
+                " +YOU"
+            } else {
+                ""
+            }
+        );
+        lines += tx_review_word_wrapped_lines(text.as_str(), max_chars);
+    }
+    for (flag, message) in [
+        (TX_REVIEW_FLAG_LOCK_UNVERIFIED, "WARN unverified lock"),
+        (TX_REVIEW_FLAG_BRIDGE, "WARN bridge output"),
+        (TX_REVIEW_FLAG_TIMELOCK, "WARN timelocked"),
+        (TX_REVIEW_FLAG_HASHLOCK, "WARN hashlocked"),
+        (TX_REVIEW_FLAG_MULTISIG, "Multisig output"),
+        (TX_REVIEW_FLAG_HIGH_FEE, "WARN high fee"),
+        (TX_REVIEW_FLAG_NO_REFUND, "WARN no change"),
+        (TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, "Multiple recipients"),
+    ] {
+        if summary.flags & flag != 0 {
+            lines += tx_review_word_wrapped_lines(message, max_chars);
+        }
+    }
+    lines
+}
+
+pub fn tx_review_page_content_height(
+    outputs: &[TxReviewOutput],
+    summary: Option<TxReviewSummary>,
+    page: usize,
+) -> i32 {
+    let content = tx_review_content_rect();
+    let max_chars = tx_review_max_chars(content);
+    let lines = if page == 0 && summary.is_some() {
+        tx_review_summary_lines(summary.unwrap(), max_chars)
+    } else if let Some(output) = tx_review_output_index(summary, page).and_then(|i| outputs.get(i))
+    {
+        let recipient_lines = tx_review_wrapped_lines(output.recipient_b58.as_str(), max_chars);
+        if summary.is_none() && output.gift == 0 {
+            1 + recipient_lines
+                + if output.detail.is_empty() {
+                    0
+                } else {
+                    tx_review_word_wrapped_lines(output.detail.as_str(), max_chars)
+                }
+        } else {
+            let detail_lines = tx_review_word_wrapped_lines(output.detail.as_str(), max_chars);
+            5 + recipient_lines + detail_lines
+        }
+    } else {
+        1
+    };
+    lines as i32 * TX_REVIEW_PAGE_LINE_HEIGHT
+}
+
+fn tx_review_draw_line(
+    display: &mut GuiDisplay<'_>,
+    content: Rectangle,
+    scroll_y: i32,
+    line: usize,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) {
+    let baseline = content.top_left.y + (line as i32 + 1) * TX_REVIEW_PAGE_LINE_HEIGHT - scroll_y;
+    let first_baseline = content.top_left.y + FONT_8X13.character_size.height as i32;
+    let bottom = content.top_left.y + content.size.height as i32;
+    if baseline >= first_baseline && baseline <= bottom {
+        let _ = Text::new(text, Point::new(content.top_left.x, baseline), style).draw(display);
+    }
+}
+
+fn tx_review_draw_wrapped(
+    display: &mut GuiDisplay<'_>,
+    content: Rectangle,
+    scroll_y: i32,
+    mut line: usize,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> usize {
+    let max_chars = tx_review_max_chars(content);
+    if text.is_empty() {
+        tx_review_draw_line(display, content, scroll_y, line, "none", style);
+        return line + 1;
+    }
+
+    let mut start = 0usize;
+    let mut chars = 0usize;
+    for (index, _) in text.char_indices() {
+        if chars == max_chars {
+            tx_review_draw_line(display, content, scroll_y, line, &text[start..index], style);
+            line += 1;
+            start = index;
+            chars = 0;
+        }
+        chars += 1;
+    }
+    tx_review_draw_line(display, content, scroll_y, line, &text[start..], style);
+    line + 1
+}
+
+fn tx_review_draw_word_wrapped(
+    display: &mut GuiDisplay<'_>,
+    content: Rectangle,
+    scroll_y: i32,
+    mut line: usize,
+    text: &str,
+    style: MonoTextStyle<'_, Rgb565>,
+) -> usize {
+    if text.is_empty() {
+        tx_review_draw_line(display, content, scroll_y, line, "none", style);
+        return line + 1;
+    }
+
+    let max_chars = tx_review_max_chars(content);
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let (end, next) = tx_review_word_break(remaining, max_chars);
+        tx_review_draw_line(
+            display,
+            content,
+            scroll_y,
+            line,
+            &remaining[..end],
+            style,
+        );
+        line += 1;
+        remaining = &remaining[next..];
+    }
+    line
+}
+
+fn tx_review_write_amount(buf: &mut heapless::String<32>, gift_nicks: u64) {
+    const NICKS_PER_NOCK: u64 = 1 << 16;
+    buf.clear();
+    if gift_nicks >= NICKS_PER_NOCK {
+        let mut whole = gift_nicks / NICKS_PER_NOCK;
+        let rem = gift_nicks % NICKS_PER_NOCK;
+        let mut frac = (rem.saturating_mul(100) + NICKS_PER_NOCK / 2) / NICKS_PER_NOCK;
+        if frac >= 100 {
+            whole = whole.saturating_add(1);
+            frac = 0;
+        }
+        let _ = write!(buf, "{}.{:02} N", whole, frac);
+    } else {
+        let _ = write!(buf, "{} n", gift_nicks);
+    }
+}
+
+fn tx_review_draw_scrollbar(
+    display: &mut GuiDisplay<'_>,
+    content: Rectangle,
+    content_height: i32,
+    scroll_y: i32,
+) {
+    let viewport_height = content.size.height as i32;
+    let max_scroll = (content_height - viewport_height).max(0);
+    if max_scroll == 0 || viewport_height <= 0 {
+        return;
+    }
+
+    let track_x = content.top_left.x + content.size.width as i32 - 2;
+    let track = Rectangle::new(
+        Point::new(track_x, content.top_left.y),
+        Size::new(2, content.size.height),
+    );
+    let _ = track
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::divider())
+                .build(),
+        )
+        .draw(display);
+
+    let thumb_height =
+        ((viewport_height * viewport_height) / content_height).clamp(12, viewport_height);
+    let thumb_travel = viewport_height - thumb_height;
+    let thumb_offset = scroll_y.clamp(0, max_scroll) * thumb_travel / max_scroll;
+    let thumb = Rectangle::new(
+        Point::new(track_x, content.top_left.y + thumb_offset),
+        Size::new(2, thumb_height as u32),
+    );
+    let _ = thumb
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::text_subtle())
+                .build(),
+        )
+        .draw(display);
+}
+
 pub fn render_tx_review_overlay(
+    display: &mut GuiDisplay<'_>,
+    outputs: &[TxReviewOutput],
+    summary: Option<TxReviewSummary>,
+    page: usize,
+    page_count: usize,
+    scroll_y: i32,
+    review_complete: bool,
+    active_button: Option<Button>,
+) {
+    let header_h = header_height();
+    let body = Rectangle::new(
+        Point::new(0, header_h),
+        Size::new(
+            SCREEN_WIDTH.into(),
+            (SCREEN_HEIGHT as i32 - header_h) as u32,
+        ),
+    );
+    let _ = body
+        .into_styled(
+            PrimitiveStyleBuilder::new()
+                .fill_color(palette::background())
+                .build(),
+        )
+        .draw(display);
+
+    let panel = tx_review_list_rect();
+    draw_panel(display, panel.top_left, panel.size);
+
+    for hit in tx_review_navigation_buttons() {
+        let enabled = match hit.button {
+            Button::ReviewPrevious => page > 0,
+            Button::ReviewNext => page + 1 < page_count,
+            _ => false,
+        };
+        let active = enabled && active_button == Some(hit.button);
+        draw_button_skeuo(
+            display,
+            hit,
+            if enabled {
+                palette::keypad_idle()
+            } else {
+                palette::btn_disabled_base()
+            },
+            if enabled {
+                palette::keypad_active_light()
+            } else {
+                palette::btn_disabled_light()
+            },
+            if enabled {
+                palette::keypad_active_dark()
+            } else {
+                palette::btn_disabled_dark()
+            },
+            active,
+        );
+        let label = match hit.button {
+            Button::ReviewPrevious => "<",
+            Button::ReviewNext => ">",
+            _ => "",
+        };
+        if !label.is_empty() {
+            let nav_style = MonoTextStyle::new(
+                &FONT_10X20,
+                if enabled {
+                    palette::text()
+                } else {
+                    palette::text_subtle()
+                },
+            );
+            let center = Point::new(
+                hit.top_left.x + hit.size.width as i32 / 2,
+                hit.top_left.y + hit.size.height as i32 / 2 + 7,
+            );
+            let _ = Text::with_alignment(label, center, nav_style, Alignment::Center).draw(display);
+        }
+    }
+
+    let mut page_label = heapless::String::<16>::new();
+    let _ = write!(page_label, "{}/{}", page + 1, page_count.max(1));
+    let nav_center = Point::new(
+        panel.top_left.x + panel.size.width as i32 / 2,
+        panel.top_left.y + 27,
+    );
+    let _ = Text::with_alignment(
+        page_label.as_str(),
+        nav_center,
+        MonoTextStyle::new(&FONT_8X13, palette::text_subtle()),
+        Alignment::Center,
+    )
+    .draw(display);
+
+    let content = tx_review_content_rect();
+    let normal = MonoTextStyle::new(&FONT_8X13, palette::text());
+    let heading = MonoTextStyle::new(&FONT_8X13, palette::text_subtle());
+    let warning = MonoTextStyle::new(&FONT_8X13, palette::accent_warning());
+    let mut line = 0usize;
+
+    if page == 0 && summary.is_some() {
+        let summary = summary.unwrap();
+        let mut text = heapless::String::<32>::new();
+        let mut amount = heapless::String::<32>::new();
+        let _ = write!(text, "INPUTS {}", summary.input_count);
+        line = tx_review_draw_word_wrapped(
+            display,
+            content,
+            scroll_y,
+            line,
+            text.as_str(),
+            heading,
+        );
+        text.clear();
+        let _ = write!(text, "OUTPUTS {}", summary.external_output_count);
+        line = tx_review_draw_word_wrapped(
+            display,
+            content,
+            scroll_y,
+            line,
+            text.as_str(),
+            heading,
+        );
+        tx_review_write_amount(&mut amount, summary.external_total);
+        text.clear();
+        let _ = write!(text, "SEND {}", amount.as_str());
+        line = tx_review_draw_word_wrapped(
+            display,
+            content,
+            scroll_y,
+            line,
+            text.as_str(),
+            normal,
+        );
+        tx_review_write_amount(&mut amount, summary.fee_total);
+        text.clear();
+        let _ = write!(text, "FEE {}", amount.as_str());
+        line = tx_review_draw_word_wrapped(
+            display,
+            content,
+            scroll_y,
+            line,
+            text.as_str(),
+            normal,
+        );
+        tx_review_write_amount(&mut amount, summary.refund_total);
+        text.clear();
+        let _ = write!(text, "CHANGE {}", amount.as_str());
+        line = tx_review_draw_word_wrapped(
+            display,
+            content,
+            scroll_y,
+            line,
+            text.as_str(),
+            normal,
+        );
+        line = tx_review_draw_word_wrapped(
+            display,
+            content,
+            scroll_y,
+            line,
+            "Review every page",
+            heading,
+        );
+
+        if summary.multisig_m > 0 {
+            text.clear();
+            let _ = write!(
+                text,
+                "MULTISIG {}/{}{}",
+                summary.multisig_present,
+                summary.multisig_m,
+                if summary.multisig_we_must_sign {
+                    " +YOU"
+                } else {
+                    ""
+                }
+            );
+            line = tx_review_draw_word_wrapped(
+                display,
+                content,
+                scroll_y,
+                line,
+                text.as_str(),
+                if summary.multisig_we_must_sign {
+                    warning
+                } else {
+                    normal
+                },
+            );
+        }
+        for (flag, message) in [
+            (TX_REVIEW_FLAG_LOCK_UNVERIFIED, "WARN unverified lock"),
+            (TX_REVIEW_FLAG_BRIDGE, "WARN bridge output"),
+            (TX_REVIEW_FLAG_TIMELOCK, "WARN timelocked"),
+            (TX_REVIEW_FLAG_HASHLOCK, "WARN hashlocked"),
+            (TX_REVIEW_FLAG_MULTISIG, "Multisig output"),
+            (TX_REVIEW_FLAG_HIGH_FEE, "WARN high fee"),
+            (TX_REVIEW_FLAG_NO_REFUND, "WARN no change"),
+            (TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, "Multiple recipients"),
+        ] {
+            if summary.flags & flag != 0 {
+                line = tx_review_draw_word_wrapped(
+                    display, content, scroll_y, line, message, warning,
+                );
+            }
+        }
+    } else if let Some(output) = tx_review_output_index(summary, page).and_then(|i| outputs.get(i))
+    {
+        if summary.is_none() && output.gift == 0 {
+            tx_review_draw_line(display, content, scroll_y, line, "RECEIVE ADDRESS", heading);
+            line += 1;
+            line = tx_review_draw_wrapped(
+                display,
+                content,
+                scroll_y,
+                line,
+                output.recipient_b58.as_str(),
+                normal,
+            );
+            if !output.detail.is_empty() {
+                let _ = tx_review_draw_word_wrapped(
+                    display,
+                    content,
+                    scroll_y,
+                    line,
+                    output.detail.as_str(),
+                    heading,
+                );
+            }
+        } else {
+            tx_review_draw_line(display, content, scroll_y, line, "AMOUNT", heading);
+            line += 1;
+            let mut amount = heapless::String::<32>::new();
+            tx_review_write_amount(&mut amount, output.gift);
+            tx_review_draw_line(display, content, scroll_y, line, amount.as_str(), normal);
+            line += 1;
+            tx_review_draw_line(display, content, scroll_y, line, "RECIPIENT", heading);
+            line += 1;
+            line = tx_review_draw_wrapped(
+                display,
+                content,
+                scroll_y,
+                line,
+                output.recipient_b58.as_str(),
+                normal,
+            );
+            tx_review_draw_line(display, content, scroll_y, line, "DETAILS", heading);
+            line += 1;
+            let _ = tx_review_draw_word_wrapped(
+                display,
+                content,
+                scroll_y,
+                line,
+                output.detail.as_str(),
+                normal,
+            );
+        }
+    }
+
+    tx_review_draw_scrollbar(
+        display,
+        content,
+        tx_review_page_content_height(outputs, summary, page),
+        scroll_y,
+    );
+
+    for hit in tx_review_buttons() {
+        let (base, light, dark, label) = match hit.button {
+            Button::Ok if review_complete => (
+                palette::btn_primary_base(),
+                palette::btn_primary_light(),
+                palette::btn_primary_dark(),
+                "Approve",
+            ),
+            Button::Ok => (
+                palette::btn_disabled_base(),
+                palette::btn_disabled_light(),
+                palette::btn_disabled_dark(),
+                "Review all",
+            ),
+            Button::Clear => (
+                palette::btn_secondary_base(),
+                palette::btn_secondary_light(),
+                palette::btn_secondary_dark(),
+                "Deny",
+            ),
+            _ => (
+                palette::btn_disabled_base(),
+                palette::btn_disabled_light(),
+                palette::btn_disabled_dark(),
+                "",
+            ),
+        };
+        draw_button_skeuo(
+            display,
+            hit,
+            base,
+            light,
+            dark,
+            (hit.button != Button::Ok || review_complete) && active_button == Some(hit.button),
+        );
+        if !label.is_empty() {
+            draw_fitted_button_label(display, hit, label);
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn render_tx_review_overlay_legacy(
     display: &mut GuiDisplay<'_>,
     outputs: &[TxReviewOutput],
     summary: Option<TxReviewSummary>,
     scroll_y: i32,
     expanded_index: Option<usize>,
+    review_complete: bool,
     active_button: Option<Button>,
 ) {
     let header_h = header_height();
@@ -1088,7 +1670,12 @@ pub fn render_tx_review_overlay(
         let mut line = heapless::String::<32>::new();
 
         write_amount_short(&mut amount, summary.external_total);
-        let _ = write!(line, "OUT {}", amount.as_str());
+        let _ = write!(
+            line,
+            "OUT {}x {}",
+            summary.external_output_count,
+            amount.as_str()
+        );
         let _ = Text::new(
             line.as_str(),
             Point::new(inner_left, baseline),
@@ -1226,11 +1813,18 @@ pub fn render_tx_review_overlay(
             let top = detail_rect.top_left.y + padding;
             let bottom = detail_rect.top_left.y + detail_rect.size.height as i32 - padding;
 
-            let font_w: i32 = FONT_10X20.character_size.width as i32;
+            // Expanded inspection prioritizes completeness over size. At
+            // FONT_6X10 the panel fits the full 64-char recipient plus the
+            // maximum lock-detail buffer without silently dropping rows.
+            let detail_style = MonoTextStyle::new(&FONT_6X10, palette::text());
+            let detail_subtle = MonoTextStyle::new(&FONT_6X10, palette::text_subtle());
+            let detail_warning = MonoTextStyle::new(&FONT_6X10, palette::accent_warning());
+            let detail_line_h = FONT_6X10.character_size.height as i32 + TX_REVIEW_LINE_GAP;
+            let font_w: i32 = FONT_6X10.character_size.width as i32;
             let inner_w = (detail_rect.size.width as i32 - padding * 2).max(font_w);
             let max_chars = (inner_w / font_w).max(1) as usize;
 
-            let mut baseline = top + FONT_10X20.character_size.height as i32;
+            let mut baseline = top + FONT_6X10.character_size.height as i32;
 
             let mut amount = heapless::String::<32>::new();
             if summary.is_none() && out.gift == 0 {
@@ -1238,8 +1832,9 @@ pub fn render_tx_review_overlay(
             } else {
                 write_amount(&mut amount, out.gift);
             }
-            let _ = Text::new(amount.as_str(), Point::new(left, baseline), style).draw(display);
-            baseline += line_h;
+            let _ = Text::new(amount.as_str(), Point::new(left, baseline), detail_style)
+                .draw(display);
+            baseline += detail_line_h;
 
             let recipient = out.recipient_b58.as_str();
             let bytes = recipient.as_bytes();
@@ -1247,9 +1842,9 @@ pub fn render_tx_review_overlay(
             while pos < bytes.len() && baseline <= bottom {
                 let end = (pos + max_chars).min(bytes.len());
                 let part = core::str::from_utf8(&bytes[pos..end]).unwrap_or("");
-                let _ = Text::new(part, Point::new(left, baseline), subtle).draw(display);
+                let _ = Text::new(part, Point::new(left, baseline), detail_subtle).draw(display);
                 pos = end;
-                baseline += line_h;
+                baseline += detail_line_h;
             }
 
             // Verbatim lock facts (timelock bounds, m-of-n, hashlock, burn,
@@ -1262,9 +1857,10 @@ pub fn render_tx_review_overlay(
                 while dpos < dbytes.len() && baseline <= bottom {
                     let end = (dpos + max_chars).min(dbytes.len());
                     let part = core::str::from_utf8(&dbytes[dpos..end]).unwrap_or("");
-                    let _ = Text::new(part, Point::new(left, baseline), summary_style).draw(display);
+                    let _ = Text::new(part, Point::new(left, baseline), detail_warning)
+                        .draw(display);
                     dpos = end;
-                    baseline += line_h;
+                    baseline += detail_line_h;
                 }
             }
         }
@@ -1276,7 +1872,7 @@ pub fn render_tx_review_overlay(
                 palette::btn_primary_base(),
                 palette::btn_primary_light(),
                 palette::btn_primary_dark(),
-                "Approve",
+                if review_complete { "Approve" } else { "Scroll all" },
             ),
             Button::Clear => (
                 palette::btn_secondary_base(),
@@ -1576,6 +2172,8 @@ fn button_label(button: Button) -> &'static str {
         Button::Clear => "X",
         Button::Ok => "OK",
         Button::Back => "",
+        Button::ReviewPrevious => "<",
+        Button::ReviewNext => ">",
         Button::Seed(_) => "",
         Button::Menu(_) => "",
         Button::Theme(_) => "",
@@ -1593,6 +2191,8 @@ fn confirm_button_label(button: Button) -> &'static str {
         Button::Ok => "Approve",
         Button::Clear => "Deny",
         Button::Back => "",
+        Button::ReviewPrevious => "",
+        Button::ReviewNext => "",
         Button::Digit(_) => "",
         Button::Seed(_) => "",
         Button::Menu(_) => "",

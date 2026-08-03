@@ -198,6 +198,10 @@ pub struct PreparedSeedRewrite {
 
 pub trait NvsPepperSource {
     fn nvs_v2_pepper(&mut self, salt: &[u8; 32]) -> Result<Option<[u8; 32]>, NvsError>;
+
+    fn allow_legacy_v1(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1406,6 +1410,9 @@ impl NvsStore {
         header: &Header,
         pepper_source: &mut P,
     ) -> Result<[u8; 32], NvsError> {
+        if header.version == VERSION_V1 && !pepper_source.allow_legacy_v1() {
+            return Err(NvsError::Crypto);
+        }
         let mut maybe_pepper = if header.version == VERSION_V2 {
             Some(Self::nvs_v2_pepper_or_software(
                 &header.salt,

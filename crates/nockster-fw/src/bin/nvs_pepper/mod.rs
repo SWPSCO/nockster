@@ -51,7 +51,11 @@ impl<'d> AppNvsPepper<'d> {
 impl NvsPepperSource for AppNvsPepper<'_> {
     fn nvs_v2_pepper(&mut self, salt: &[u8; 32]) -> Result<Option<[u8; 32]>, NvsError> {
         let Some(key_id) = self.key_id else {
-            return Ok(None);
+            return if is_production_build() {
+                Err(NvsError::Crypto)
+            } else {
+                Ok(None)
+            };
         };
 
         let mut message = nvs_v2_pepper_message(salt, &self.mac);
@@ -59,13 +63,29 @@ impl NvsPepperSource for AppNvsPepper<'_> {
         message.zeroize();
         result
     }
+
+    fn allow_legacy_v1(&self) -> bool {
+        !is_production_build()
+    }
 }
 
 #[cfg(not(feature = "chip-security"))]
 impl NvsPepperSource for AppNvsPepper<'_> {
     fn nvs_v2_pepper(&mut self, _salt: &[u8; 32]) -> Result<Option<[u8; 32]>, NvsError> {
-        Ok(None)
+        if is_production_build() {
+            Err(NvsError::Crypto)
+        } else {
+            Ok(None)
+        }
     }
+
+    fn allow_legacy_v1(&self) -> bool {
+        !is_production_build()
+    }
+}
+
+fn is_production_build() -> bool {
+    option_env!("NOCKSTER_BUILD_PROFILE") == Some("production")
 }
 
 #[cfg(feature = "chip-security")]

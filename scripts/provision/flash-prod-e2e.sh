@@ -145,6 +145,40 @@ require_summary_regex() {
   fi
 }
 
+user_data_summary_line() {
+  awk '/BLOCK_USR_DATA \(BLOCK3\)/ { getline; print; exit }' "$1"
+}
+
+check_user_data_empty() {
+  local line
+  local compact
+  line="$(user_data_summary_line "$1")"
+  compact="$(printf '%s' "${line}" | tr -d '[:space:]')"
+  if [[ "${compact}" != "=$(printf '00%.0s' {1..32})R/W" ]]; then
+    fail "BLOCK_USR_DATA is not empty and writable; refusing to alter the device serial"
+  fi
+}
+
+check_device_serial_summary() {
+  local summary_file="$1"
+  local serial_file="$2"
+  local line
+  local actual_hex
+  local expected_hex
+  local status
+  line="$(user_data_summary_line "${summary_file}")"
+  actual_hex="$(printf '%s\n' "${line}" | awk '{ for (i = 2; i <= 33; i++) printf "%s", $i }')"
+  status="$(printf '%s\n' "${line}" | awk '{ print $34 }')"
+  expected_hex="$(od -An -tx1 -N8 "${serial_file}" | tr -d '[:space:]')"
+  if [[ "${actual_hex:0:16}" != "${expected_hex}" ]] \
+    || [[ "${actual_hex:16}" != "$(printf '00%.0s' {1..24})" ]]; then
+    fail "BLOCK_USR_DATA does not contain the expected device serial"
+  fi
+  if [[ "${status}" != "R/-" ]]; then
+    fail "BLOCK_USR_DATA is not write-protected"
+  fi
+}
+
 check_fresh_board_summary() {
   local summary_file="$1"
   local secure_idx
@@ -157,6 +191,8 @@ check_fresh_board_summary() {
   fi
 
   "${espefuse_cmd}" --chip esp32s3 --port "${port}" summary | tee "${summary_file}"
+
+  check_user_data_empty "${summary_file}"
 
   secure_idx="$(block_index "${secure_boot_digest_block}")"
   flash_idx="$(block_index "${flash_key_block}")"
@@ -273,6 +309,7 @@ flash_enc_bootloader_image="${FLASH_ENCRYPTION_BOOTLOADER_IMAGE:-${artifact_dir}
 flash_enc_partition_table_bin="${FLASH_ENCRYPTION_PARTITION_TABLE_BIN:-${artifact_dir}/encrypted/partition-table.enc.bin}"
 flash_enc_signed_image="${FLASH_ENCRYPTION_SIGNED_IMAGE:-${artifact_dir}/encrypted/nockster-fw.factory.signed.enc.bin}"
 flash_enc_otadata_bin="${FLASH_ENCRYPTION_OTADATA_BIN:-${artifact_dir}/encrypted/otadata.blank.enc.bin}"
+device_serial_bin="${DEVICE_SERIAL_BIN:-${artifact_dir}/device-serial.bin}"
 
 mkdir -p -- \
   "${artifact_dir}" \
@@ -283,10 +320,12 @@ mkdir -p -- \
   "$(dirname -- "${flash_enc_bootloader_image}")" \
   "$(dirname -- "${flash_enc_partition_table_bin}")" \
   "$(dirname -- "${flash_enc_signed_image}")" \
-  "$(dirname -- "${flash_enc_otadata_bin}")"
+  "$(dirname -- "${flash_enc_otadata_bin}")" \
+  "$(dirname -- "${device_serial_bin}")"
 
 require_command "${espflash_cmd}"
 require_command "${espefuse_cmd}"
+require_command python3
 
 echo "flash-prod-e2e production flow"
 echo "port: ${port}"
@@ -330,6 +369,10 @@ run_make release-encrypt-flash-v2-artifacts \
 
 check_fresh_board_summary "${artifact_dir}/efuse-summary.before-burn.txt"
 
+if [[ -e "${device_serial_bin}" || -e "${artifact_dir}/device-serial.txt" ]]; then
+  fail "device serial artifact already exists; choose a fresh PROD_E2E_ARTIFACT_DIR"
+fi
+
 if [[ "${hmac_already_burned}" == "1" ]]; then
   hmac_action="skip HMAC_UP burn; ${hmac_block} is already HMAC_UP"
 else
@@ -348,6 +391,7 @@ This single confirmation will:
   - burn SECURE_BOOT_EN
   - flash encrypted signed production artifacts without reset
   - burn SPI_BOOT_CRYPT_CNT=${flash_crypt_cnt}
+  - burn the flash-time Unix timestamp into BLOCK_USR_DATA and write-protect it
   - pause for manual normal reboot, then validate over ${validate_port}
 
 Do not interrupt the board after confirming.
@@ -362,6 +406,23 @@ else
     exit 1
   fi
 fi
+
+# Capture the instant the production flash begins. This value becomes the
+# device's immutable USB serial once BLOCK_USR_DATA is write-protected below.
+flash_unix_timestamp="${DEVICE_SERIAL_UNIX_TIMESTAMP:-$(date -u +%s)}"
+if [[ ! "${flash_unix_timestamp}" =~ ^[0-9]+$ ]] \
+  || (( flash_unix_timestamp < 1577836800 || flash_unix_timestamp > 4294967295 )); then
+  fail "DEVICE_SERIAL_UNIX_TIMESTAMP must be a Unix timestamp between 1577836800 and 4294967295"
+fi
+python3 - "${device_serial_bin}" "${flash_unix_timestamp}" <<'PY'
+import pathlib
+import struct
+import sys
+
+pathlib.Path(sys.argv[1]).write_bytes(struct.pack("<Q24x", int(sys.argv[2])))
+PY
+printf '%s\n' "${flash_unix_timestamp}" >"${artifact_dir}/device-serial.txt"
+echo "device serial (flash Unix timestamp): ${flash_unix_timestamp}"
 
 if [[ "${hmac_already_burned}" == "1" ]]; then
   echo "+ skip HMAC_UP burn; ${hmac_block} is already HMAC_UP"
@@ -396,11 +457,26 @@ run_make flash-encrypted-secure-boot-v2 \
 run_cmd "${espefuse_cmd}" --chip esp32s3 --port "${port}" --before no-reset --do-not-confirm \
   burn-efuse SPI_BOOT_CRYPT_CNT "${flash_crypt_cnt}"
 
+run_cmd "${espefuse_cmd}" --chip esp32s3 --port "${port}" --before no-reset --do-not-confirm \
+  burn-block-data BLOCK_USR_DATA "${device_serial_bin}"
+
+run_cmd "${espefuse_cmd}" --chip esp32s3 --port "${port}" --before no-reset --do-not-confirm \
+  write-protect-efuse BLOCK_USR_DATA
+
+if is_true "${dry_run}"; then
+  echo "+ ${espefuse_cmd} --chip esp32s3 --port ${port} --before no-reset summary > ${artifact_dir}/efuse-summary.serial.txt"
+else
+  "${espefuse_cmd}" --chip esp32s3 --port "${port}" --before no-reset summary \
+    | tee "${artifact_dir}/efuse-summary.serial.txt"
+  check_device_serial_summary "${artifact_dir}/efuse-summary.serial.txt" "${device_serial_bin}"
+fi
+
 wait_for_manual_normal_boot
 
 if cli="$(resolve_cli)"; then
   if is_true "${dry_run}"; then
     echo "+ ${cli} security --port ${validate_port} --expect-chip-security --expect-hmac-up --expect-hmac-up-read-protected --expect-secure-boot --expect-flash-encryption"
+    echo "+ ${cli} list-ports | verify HID serial ${flash_unix_timestamp}"
   else
     for attempt in $(seq 1 12); do
       if "${cli}" security \
@@ -410,8 +486,13 @@ if cli="$(resolve_cli)"; then
         --expect-hmac-up-read-protected \
         --expect-secure-boot \
         --expect-flash-encryption; then
-        echo "flash-prod-e2e complete"
-        exit 0
+        ports_output="$(NO_COLOR=1 "${cli}" list-ports)"
+        if printf '%s\n' "${ports_output}" \
+          | grep -Eq "hid:303a:2001.*${flash_unix_timestamp}([[:space:]]|$)"; then
+          echo "flash-prod-e2e complete; immutable serial ${flash_unix_timestamp} verified"
+          exit 0
+        fi
+        echo "security checks passed but HID serial ${flash_unix_timestamp} was not found" >&2
       fi
       echo "waiting for HID validation (${attempt}/12)..."
       sleep 2
@@ -419,7 +500,7 @@ if cli="$(resolve_cli)"; then
     fail "device did not pass post-provision validation over ${validate_port}"
   fi
 else
-  echo "warning: nockster-cli not found; skipping post-provision HID validation" >&2
+  fail "nockster-cli not found; refusing to skip post-provision HID and serial validation"
 fi
 
 echo "flash-prod-e2e dry-run complete"

@@ -5,7 +5,7 @@ use k256::ecdsa::SigningKey;
 use nockster_core::alloc_path as pathmod;
 use nockster_core::{
     cheetah, CheetahPub, Request, Response, Xpub, ERR_CRYPTO, ERR_FLASH, ERR_NO_SEED, ERR_OVERFLOW,
-    ERR_PIN_LOCKED_OUT, ERR_WRONG_PIN,
+    ERR_PIN_LOCKED_OUT, ERR_UNSUPPORTED_VERSION, ERR_WRONG_PIN,
 };
 use pbkdf2::pbkdf2;
 use ripemd::Ripemd160;
@@ -189,6 +189,11 @@ pub fn wipe_seed() {
 pub fn handle_session_request(req: &Request) -> Option<Response> {
     match req {
         Request::SetSeed { seed64 } => {
+            if is_production_build() {
+                return Some(Response::Err {
+                    code: ERR_UNSUPPORTED_VERSION,
+                });
+            }
             // Dev/diagnostic path: store the BIP39 seed as a coil too.
             let mut coil = coil_from_seed(seed64);
             set_seed(&coil);
@@ -205,6 +210,10 @@ pub fn handle_session_request(req: &Request) -> Option<Response> {
         }),
         _ => None,
     }
+}
+
+pub fn is_production_build() -> bool {
+    option_env!("NOCKSTER_BUILD_PROFILE") == Some("production")
 }
 
 pub fn compute_seed_op_outcome(mut request: SeedOpRequest) -> SeedOpOutcome {
@@ -421,7 +430,8 @@ pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
 
     // Slow path: derive once for this generation, then cache.
     let mut out = Vec::new();
-    for (idx, seed) in session::seed_slots_copy().into_iter().enumerate() {
+    let mut seeds = session::seed_slots_copy();
+    for (idx, seed) in seeds.iter_mut().enumerate() {
         let pub_xy = root_pub_from_coil(&seed);
         let path = pathmod::Path::new();
         out.push(CheetahPub {
@@ -430,6 +440,7 @@ pub fn collect_info_pubs_from_ram() -> Vec<CheetahPub> {
             x: pub_xy.0,
             y: pub_xy.1,
         });
+        seed.zeroize();
     }
 
     let cache_entry = out.clone();
@@ -533,9 +544,21 @@ pub fn derive_child_sk_for_slot(path: &pathmod::Path, slot: usize) -> Result<[u8
     sk.zeroize();
     cc.zeroize();
     for &i in path.iter() {
-        xk = cheetah::xprv_derive_child(&xk, i);
+        let next = cheetah::xprv_derive_child(&xk, i);
+        zeroize_xkey(&mut xk);
+        xk = next;
     }
-    xk.sk.ok_or(())
+    let result = xk.sk.take().ok_or(());
+    zeroize_xkey(&mut xk);
+    result
+}
+
+fn zeroize_xkey(xk: &mut cheetah::XKey) {
+    xk.chain_code.zeroize();
+    if let Some(sk) = xk.sk.as_mut() {
+        sk.zeroize();
+    }
+    xk.sk = None;
 }
 
 /// Root public key for a stored coil (`pub` of the master `sk`).

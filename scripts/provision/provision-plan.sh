@@ -137,6 +137,11 @@ flash_encryption_plan() {
   cmd "make provision-flash-encryption-key PROVISION_PORT=${port} FLASH_ENCRYPTION_KEY_FILE=${flash_key_file} FLASH_ENCRYPTION_KEY_BLOCK=${flash_key_block} CONFIRM_IRREVERSIBLE=burn-flash-encryption-key"
   cmd "make flash-encrypted-secure-boot-v2 FLASH_PORT=${port} FLASH_ENCRYPTION_BOOTLOADER_IMAGE=${flash_enc_bootloader_image} FLASH_ENCRYPTION_PARTITION_TABLE_BIN=${flash_enc_partition_table_bin} FLASH_ENCRYPTION_SIGNED_IMAGE=${flash_enc_signed_image} FLASH_ENCRYPTION_OTADATA_BIN=${flash_enc_otadata_bin}"
   cmd "make provision-flash-encryption-enable PROVISION_PORT=${port} FLASH_CRYPT_CNT_VALUE=${flash_crypt_cnt} CONFIRM_IRREVERSIBLE=enable-flash-encryption"
+  note "Record the production flash instant as the immutable USB serial, then write-protect BLOCK_USR_DATA. The data file must fill the 32-byte eFuse block."
+  cmd 'DEVICE_SERIAL_UNIX_TIMESTAMP=$(date -u +%s)'
+  cmd 'python3 -c '\''import pathlib,struct,sys; pathlib.Path("target/device-serial.bin").write_bytes(struct.pack("<Q24x", int(sys.argv[1])))'\'' "$DEVICE_SERIAL_UNIX_TIMESTAMP"'
+  cmd "espefuse --chip esp32s3 --port ${port} burn-block-data BLOCK_USR_DATA target/device-serial.bin"
+  cmd "espefuse --chip esp32s3 --port ${port} write-protect-efuse BLOCK_USR_DATA"
   cmd "espflash reset --port ${port}"
   cmd "nockster-cli security --port hid --expect-chip-security --expect-secure-boot --expect-flash-encryption"
 }

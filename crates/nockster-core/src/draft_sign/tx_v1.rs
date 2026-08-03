@@ -44,8 +44,10 @@ pub struct SignerConfig {
 pub struct DraftOutputV1 {
     /// Base58-encoded recipient PKH digest.
     pub recipient_b58: String,
-    /// Gift amount in nicks.
+    /// Summed gift amount in nicks for this review group.
     pub gift: u64,
+    /// Number of transaction notes represented by this review group.
+    pub note_count: u32,
     /// True if this output pays back to the signing key (refund/change).
     pub is_refund: bool,
     /// Decoded EVM address (`0x…`) when this output is a Base bridge deposit.
@@ -1639,12 +1641,30 @@ fn collect_multisig_inputs(
     Ok(())
 }
 
-/// One accumulated external output, merged by recipient.
+/// One safely aggregatable external-output review group. Notes are combined
+/// only when the committed lock root and all destination metadata match.
 struct OutAcc {
     recipient: [u64; 5],
+    lock_root: [u64; 5],
     gift: u64,
+    note_count: u32,
     bridge: Option<[u8; 20]>,
     lock: Option<LockSummaryV1>,
+}
+
+struct RefundAcc {
+    gift: u64,
+    note_count: u32,
+}
+
+fn is_plain_single_sig_to(lock: &Option<LockSummaryV1>) -> bool {
+    matches!(
+        lock.as_ref(),
+        Some(LockSummaryV1 {
+            verified: true,
+            primitives,
+        }) if primitives.as_slice() == [LockPrimitiveV1::Pkh { m: 1, n: 1 }]
+    )
 }
 
 fn collect_outputs_from_seeds(
@@ -1653,7 +1673,7 @@ fn collect_outputs_from_seeds(
     signer_pkh: [u64; 5],
     ctx: &TxIdCtx,
     acc: &mut Vec<OutAcc>,
-    refund: &mut Option<u64>,
+    refund: &mut Option<RefundAcc>,
 ) -> Result<(), SignDraftError> {
     if seeds_zset == arena.atom0() {
         return Ok(());
@@ -1671,31 +1691,60 @@ fn collect_outputs_from_seeds(
     if gift != 0 {
         let lock_root_digest =
             parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
-        let recipient = seed_recipient_pkh(note_data, arena)?.unwrap_or(lock_root_digest);
-        if recipient == signer_pkh {
-            let next = refund
-                .unwrap_or(0)
-                .checked_add(gift)
-                .ok_or(SignDraftError::Malformed)?;
-            *refund = Some(next);
+        let lock = parse_lock_summary(note_data, lock_root_digest, arena, ctx)?;
+        // A note-data "pkh" is display metadata unless the supplied lock
+        // primitives hash to the committed lock root. Fall back to the root
+        // itself for missing, unknown, malformed, or mismatched locks so a
+        // host cannot disguise a destination or mark it as change.
+        let lock_verified = lock.as_ref().is_some_and(|summary| summary.verified);
+        let recipient = if lock_verified {
+            seed_recipient_pkh(note_data, arena)?.unwrap_or(lock_root_digest)
         } else {
-            let bridge = parse_bridge_evm(note_data, arena);
-            let lock = parse_lock_summary(note_data, lock_root_digest, arena, ctx)?;
-            if let Some(existing) = acc.iter_mut().find(|o| o.recipient == recipient) {
-                existing.gift = existing
+            lock_root_digest
+        };
+        if recipient == signer_pkh && is_plain_single_sig_to(&lock) {
+            match refund {
+                Some(group) => {
+                    group.gift = group
+                        .gift
+                        .checked_add(gift)
+                        .ok_or(SignDraftError::Malformed)?;
+                    group.note_count = group
+                        .note_count
+                        .checked_add(1)
+                        .ok_or(SignDraftError::Malformed)?;
+                }
+                None => {
+                    *refund = Some(RefundAcc {
+                        gift,
+                        note_count: 1,
+                    });
+                }
+            }
+        } else {
+            let bridge = lock_verified
+                .then(|| parse_bridge_evm(note_data, arena))
+                .flatten();
+            if let Some(group) = acc.iter_mut().find(|group| {
+                group.recipient == recipient
+                    && group.lock_root == lock_root_digest
+                    && group.bridge == bridge
+                    && group.lock == lock
+            }) {
+                group.gift = group
                     .gift
                     .checked_add(gift)
                     .ok_or(SignDraftError::Malformed)?;
-                if existing.bridge.is_none() {
-                    existing.bridge = bridge;
-                }
-                if existing.lock.is_none() {
-                    existing.lock = lock;
-                }
+                group.note_count = group
+                    .note_count
+                    .checked_add(1)
+                    .ok_or(SignDraftError::Malformed)?;
             } else {
                 acc.push(OutAcc {
                     recipient,
+                    lock_root: lock_root_digest,
                     gift,
+                    note_count: 1,
                     bridge,
                     lock,
                 });
@@ -1715,7 +1764,7 @@ fn collect_outputs_from_spends(
     signer_pkh: [u64; 5],
     ctx: &TxIdCtx,
     acc: &mut Vec<OutAcc>,
-    refund: &mut Option<u64>,
+    refund: &mut Option<RefundAcc>,
     input_count: &mut u32,
     fee_total: &mut u64,
 ) -> Result<(), SignDraftError> {
@@ -1856,7 +1905,7 @@ pub fn draft_review_v1_for_pkh(
     let minimum_fee = calculate_minimum_fee_v1(&mut arena, spends)?;
 
     let mut acc: Vec<OutAcc> = Vec::new();
-    let mut refund: Option<u64> = None;
+    let mut refund: Option<RefundAcc> = None;
     let mut input_count = 0u32;
     let mut fee_total = 0u64;
     let ctx = tx_id_ctx(&mut arena)?;
@@ -1873,7 +1922,11 @@ pub fn draft_review_v1_for_pkh(
 
     let mut out: Vec<DraftOutputV1> = Vec::with_capacity(acc.len() + 1);
     let mut external_total = 0u64;
-    let external_output_count = acc.len() as u32;
+    let external_output_count = acc.iter().try_fold(0u32, |count, entry| {
+        count
+            .checked_add(entry.note_count)
+            .ok_or(SignDraftError::Malformed)
+    })?;
     for entry in acc {
         external_total = external_total
             .checked_add(entry.gift)
@@ -1881,16 +1934,18 @@ pub fn draft_review_v1_for_pkh(
         out.push(DraftOutputV1 {
             recipient_b58: digest_to_b58(entry.recipient),
             gift: entry.gift,
+            note_count: entry.note_count,
             is_refund: false,
             bridge_evm_addr: entry.bridge.as_ref().map(evm_addr_to_hex),
             lock: entry.lock,
         });
     }
-    let refund_total = refund.unwrap_or(0);
-    if refund_total != 0 {
+    let refund_total = refund.as_ref().map_or(0, |group| group.gift);
+    if let Some(refund) = refund {
         out.push(DraftOutputV1 {
             recipient_b58: digest_to_b58(signer_pkh),
-            gift: refund_total,
+            gift: refund.gift,
+            note_count: refund.note_count,
             is_refund: true,
             bridge_evm_addr: None,
             lock: None,

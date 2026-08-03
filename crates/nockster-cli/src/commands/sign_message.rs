@@ -19,17 +19,22 @@ pub fn run(args: SignMessageArgs) -> anyhow::Result<()> {
         (None, Some(path)) => std::fs::read(path)?,
         _ => anyhow::bail!("provide the message with --message or --file"),
     };
+    if message.is_empty()
+        || message.len() > 16
+        || !message.iter().all(|byte| (0x20..=0x7e).contains(byte))
+    {
+        anyhow::bail!(
+            "the device signs only 1–16 printable ASCII bytes so it can display every byte verbatim"
+        );
+    }
     let path = parse_path(&args.path).map_err(|err| anyhow!("invalid path: {err}"))?;
 
     let mut sp = open(&args.port, args.baud)?;
     ui::header("sign message");
     ui::kv("slot", ui::strong(&args.slot.to_string()));
     ui::kv("path", ui::strong(&format_path(&path)));
-    if let Ok(text) = core::str::from_utf8(&message) {
-        ui::kv("message", ui::accent(text));
-    } else {
-        ui::kv("message", ui::accent(&format!("{} bytes (binary)", message.len())));
-    }
+    let text = core::str::from_utf8(&message).expect("printable ASCII checked above");
+    ui::kv("message", ui::accent(text));
     ui::info("review the message on the device screen, then approve on-device");
 
     match send_call(

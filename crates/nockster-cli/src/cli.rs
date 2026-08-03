@@ -235,10 +235,10 @@ pub struct SignMessageArgs {
     /// derivation path
     #[arg(long, default_value = "m")]
     pub path: String,
-    /// message text to sign
+    /// message text to sign (1–16 printable ASCII bytes)
     #[arg(long, conflicts_with = "file")]
     pub message: Option<String>,
-    /// read the message bytes from a file instead of --message
+    /// read 1–16 printable ASCII bytes from a file instead of --message
     #[arg(long, conflicts_with = "message")]
     pub file: Option<PathBuf>,
 }

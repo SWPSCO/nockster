@@ -25,7 +25,10 @@ use gui::label::{LabelButton, LabelEntryContext};
 use gui::menu::{WalletRow, WalletRows};
 use gui::palette;
 use gui::seed::{SeedButton, SeedEntryState};
-use gui::state::{Button, ButtonHit, GuiMode, MenuItem};
+use gui::state::{
+    Button, ButtonHit, GuiMode, MenuItem, TxReviewOutput, TxReviewSummary,
+    TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS,
+};
 use gui::time::{Duration, Instant};
 
 const SPLASH_DURATION: Duration = Duration::from_millis(1_200);
@@ -156,6 +159,79 @@ impl SigerGui {
 
     pub fn show_boot(&mut self) {
         self.show_splash();
+    }
+
+    /// Render a representative transaction-review page for browser-based
+    /// visual regression checks. Page 0 is the summary; subsequent pages are
+    /// grouped destinations.
+    pub fn show_tx_review_demo(&mut self, page: usize, scroll_y: i32) {
+        let outputs = [
+            TxReviewOutput {
+                gift: 12 * (1 << 16),
+                recipient_b58: copied_string(
+                    "2VxK7h9PqM3cL8sW4nR6tY1uA5dF7gH9jK2mN4pQ6rS8tU1v",
+                ),
+                detail: copied_string("2 notes; plain 1-of-1 lock"),
+            },
+            TxReviewOutput {
+                gift: 3 * (1 << 16) + 32768,
+                recipient_b58: copied_string(
+                    "4BmN8qR2sT6vW1xY5zA9cD3fG7hJ2kL6mP8rS4uV1wX5yZ9a",
+                ),
+                detail: copied_string(
+                    "1 note; timelock after 2026-08-03; hashlock verified; bridge disabled; refund path verified",
+                ),
+            },
+        ];
+        let summary = TxReviewSummary {
+            input_count: 3,
+            external_output_count: 3,
+            external_total: 15 * (1 << 16) + 32768,
+            refund_total: 2 * (1 << 16),
+            fee_total: 2048,
+            flags: TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS,
+            multisig_m: 0,
+            multisig_present: 0,
+            multisig_we_must_sign: false,
+        };
+        let page_count = outputs.len() + 1;
+        let page = page.min(page_count - 1);
+        let content_height =
+            gui::render::tx_review_page_content_height(&outputs, Some(summary), page);
+        let viewport_height = gui::layout::tx_review_content_rect().size.height as i32;
+        let max_scroll = (content_height - viewport_height).max(0);
+        let scroll_y = scroll_y.clamp(0, max_scroll);
+        let review_complete = page + 1 == page_count && scroll_y == max_scroll;
+        gui::render::render_header(&mut self.display, "Review Tx", palette::surface_high());
+        gui::render::render_tx_review_overlay(
+            &mut self.display,
+            &outputs,
+            Some(summary),
+            page,
+            page_count,
+            scroll_y,
+            review_complete,
+            None,
+        );
+    }
+
+    /// Render dice-entry progress without requiring 100 browser clicks.
+    pub fn show_dice_seed_demo(&mut self, roll_count: usize) {
+        self.seed_entry_state.reset();
+        for index in 0..roll_count.min(100) {
+            let _ = self
+                .seed_entry_state
+                .push_dice_roll((index % 6 + 1) as u8);
+        }
+        self.show_seed_dice();
+    }
+
+    /// Render the generated-seed backup quiz for visual regression checks.
+    pub fn show_seed_verify_demo(&mut self) {
+        self.seed_entry_state.reset();
+        if self.seed_entry_state.load_generated() && self.seed_entry_state.begin_verification() {
+            self.show_seed_verify();
+        }
     }
 
     pub fn release_touch(&mut self) {
@@ -363,11 +439,25 @@ impl SigerGui {
         gui::seed::render_seed_entry(&mut self.display, &self.seed_entry_state);
     }
 
+    fn show_seed_dice(&mut self) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::SeedDice;
+        gui::seed::render_seed_dice(&mut self.display, &self.seed_entry_state);
+    }
+
     fn show_seed_confirm(&mut self) {
         self.stop_unlock_animation();
         self.clear_active_target();
         self.mode = GuiMode::SeedConfirm;
         gui::seed::render_seed_confirm(&mut self.display, &self.seed_entry_state);
+    }
+
+    fn show_seed_verify(&mut self) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.mode = GuiMode::SeedVerify;
+        gui::seed::render_seed_verify(&mut self.display, &self.seed_entry_state);
     }
 
     fn show_label_entry(&mut self, slot: u8, current: &str, context: LabelEntryContext) {
@@ -534,8 +624,22 @@ impl SigerGui {
                     hit,
                 })
             }
+            GuiMode::SeedDice => gui::seed::button_from_point_seed_dice(
+                point,
+                &self.seed_entry_state,
+            )
+            .map(|hit| ActiveTarget::Button {
+                mode: self.mode,
+                hit,
+            }),
             GuiMode::SeedConfirm => {
                 gui::seed::button_from_point_seed_confirm(point).map(|hit| ActiveTarget::Button {
+                    mode: self.mode,
+                    hit,
+                })
+            }
+            GuiMode::SeedVerify => {
+                gui::seed::button_from_point_seed_verify(point).map(|hit| ActiveTarget::Button {
                     mode: self.mode,
                     hit,
                 })
@@ -598,7 +702,11 @@ impl SigerGui {
                     &self.label_entry_state,
                     active,
                 ),
-                GuiMode::SeedFirstBoot | GuiMode::SeedEntry | GuiMode::SeedConfirm => {
+                GuiMode::SeedFirstBoot
+                | GuiMode::SeedEntry
+                | GuiMode::SeedDice
+                | GuiMode::SeedConfirm
+                | GuiMode::SeedVerify => {
                     gui::seed::draw_seed_button(
                         &mut self.display,
                         mode,
@@ -656,7 +764,9 @@ impl SigerGui {
                     GuiMode::LabelEntry => self.handle_label_entry(point),
                     GuiMode::SeedFirstBoot => self.handle_seed_setup(point),
                     GuiMode::SeedEntry => self.handle_seed_entry(point),
+                    GuiMode::SeedDice => self.handle_seed_dice(point),
                     GuiMode::SeedConfirm => self.handle_seed_confirm(point),
+                    GuiMode::SeedVerify => self.handle_seed_verify(point),
                     _ => {}
                 }
             }
@@ -902,11 +1012,53 @@ impl SigerGui {
                     self.show_add_seed();
                 }
             }
+            SeedButton::DiceSeed => {
+                self.seed_entry_state.reset();
+                self.show_seed_dice();
+            }
             SeedButton::EnterSeed => {
                 self.seed_entry_state.reset();
                 self.show_seed_entry();
             }
             SeedButton::Cancel => self.show_menu(),
+            _ => {}
+        }
+    }
+
+    fn handle_seed_dice(&mut self, point: Point) {
+        let Some(hit) =
+            gui::seed::button_from_point_seed_dice(point, &self.seed_entry_state)
+        else {
+            return;
+        };
+        let Button::Seed(button) = hit.button else {
+            return;
+        };
+        match button {
+            SeedButton::DiceFace(face) => {
+                if self.seed_entry_state.push_dice_roll(face) {
+                    self.show_seed_dice();
+                }
+            }
+            SeedButton::Backspace => {
+                if self.seed_entry_state.pop_dice_roll() {
+                    self.show_seed_dice();
+                }
+            }
+            SeedButton::Finish => {
+                if self.seed_entry_state.dice_rolls_complete()
+                    && self.seed_entry_state.load_dice_generated()
+                {
+                    self.show_seed_confirm();
+                }
+            }
+            SeedButton::Cancel => {
+                if self.seed_flow_is_add {
+                    self.show_add_seed();
+                } else {
+                    self.show_unlocked("Setup cancelled");
+                }
+            }
             _ => {}
         }
     }
@@ -935,7 +1087,7 @@ impl SigerGui {
             }
             SeedButton::CommitWord => {
                 if self.seed_entry_state.commit_current().is_some() {
-                    if self.seed_entry_state.finish().is_some() {
+                    if self.seed_entry_state.is_complete() {
                         self.show_seed_confirm();
                     } else {
                         self.show_seed_entry();
@@ -962,7 +1114,13 @@ impl SigerGui {
         };
         match button {
             SeedButton::Finish => {
-                if self.seed_entry_state.finish().is_some() {
+                if self.seed_entry_state.is_generated() {
+                    if self.seed_entry_state.begin_verification() {
+                        self.show_seed_verify();
+                    }
+                    return;
+                }
+                if self.seed_entry_state.is_complete() {
                     let slot = self.add_demo_wallet();
                     let context = if self.seed_flow_is_add {
                         LabelEntryContext::AddedSeed
@@ -984,6 +1142,39 @@ impl SigerGui {
                 } else {
                     self.show_seed_entry();
                 }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_seed_verify(&mut self, point: Point) {
+        let Some(hit) = gui::seed::button_from_point_seed_verify(point) else {
+            return;
+        };
+        let Button::Seed(button) = hit.button else {
+            return;
+        };
+        match button {
+            SeedButton::VerifyChoice(choice) => {
+                match self.seed_entry_state.verify_choice(choice as usize) {
+                    gui::seed::SeedVerificationResult::More => self.show_seed_verify(),
+                    gui::seed::SeedVerificationResult::Incorrect => self.show_seed_confirm(),
+                    gui::seed::SeedVerificationResult::Complete => {
+                        let slot = self.add_demo_wallet();
+                        let context = if self.seed_flow_is_add {
+                            LabelEntryContext::AddedSeed
+                        } else {
+                            LabelEntryContext::FirstSeed
+                        };
+                        self.seed_entry_state.reset();
+                        self.seed_flow_is_add = false;
+                        self.show_label_entry(slot, "", context);
+                    }
+                }
+            }
+            SeedButton::Cancel => {
+                self.seed_entry_state.cancel_verification();
+                self.show_seed_confirm();
             }
             _ => {}
         }

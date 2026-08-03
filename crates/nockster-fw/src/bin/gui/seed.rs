@@ -8,6 +8,7 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::{Line, PrimitiveStyleBuilder, Rectangle};
 use embedded_graphics::text::{Alignment, Text};
 use heapless::{String as HString, Vec as HVec};
+use nockster_core::diceware::{dice_entropy_256, DICE_ROLLS_FOR_256_BITS};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
@@ -25,9 +26,20 @@ const MAX_WORD_LEN: usize = 12;
 const MAX_DIGITS: usize = 8;
 const SUGGESTION_CAP: usize = 6;
 const KEYPAD_MARGIN: i32 = 3;
+const SEED_VERIFY_WORDS: usize = 3;
 
 pub type SeedWord = HString<MAX_WORD_LEN>;
 pub type SeedPhrase = HVec<SeedWord, MAX_SEED_WORDS>;
+
+pub fn zeroize_seed_phrase(phrase: &mut SeedPhrase) {
+    for word in phrase.iter_mut() {
+        // Zero is valid UTF-8, so overwriting the initialized string bytes
+        // preserves String's invariant before clear updates its length.
+        unsafe { word.as_mut_str().as_bytes_mut() }.zeroize();
+        word.clear();
+    }
+    phrase.clear();
+}
 
 #[derive(Clone, Debug)]
 pub enum SeedInteraction {
@@ -42,12 +54,61 @@ pub enum SeedInteraction {
 pub enum SeedButton {
     EnterSeed,
     GenerateSeed,
+    DiceSeed,
+    DiceFace(u8),
+    VerifyChoice(u8),
     Key(u8),
     Backspace,
     NextSuggestion,
     CommitWord,
     Finish,
     Cancel,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SeedOrigin {
+    Entered,
+    Hardware,
+    Dice,
+}
+
+#[derive(Clone)]
+struct SeedVerificationState {
+    targets: [u8; SEED_VERIFY_WORDS],
+    choices: [[u16; 3]; SEED_VERIFY_WORDS],
+    correct_choices: [u8; SEED_VERIFY_WORDS],
+    step: usize,
+    active: bool,
+    failed: bool,
+}
+
+impl SeedVerificationState {
+    const fn new() -> Self {
+        Self {
+            targets: [0; SEED_VERIFY_WORDS],
+            choices: [[0; 3]; SEED_VERIFY_WORDS],
+            correct_choices: [0; SEED_VERIFY_WORDS],
+            step: 0,
+            active: false,
+            failed: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.targets.zeroize();
+        self.choices.zeroize();
+        self.correct_choices.zeroize();
+        self.step = 0;
+        self.active = false;
+        self.failed = false;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeedVerificationResult {
+    More,
+    Complete,
+    Incorrect,
 }
 
 #[derive(Clone)]
@@ -57,9 +118,9 @@ pub struct SeedEntryState {
     suggestion_index: usize,
     total_matches: usize,
     words: SeedPhrase,
-    /// True when `words` was produced on-device (Generate) rather than typed in.
-    /// Drives the confirm-screen copy and the Cancel destination.
-    generated: bool,
+    dice_rolls: HVec<u8, DICE_ROLLS_FOR_256_BITS>,
+    origin: SeedOrigin,
+    verification: SeedVerificationState,
 }
 
 impl SeedEntryState {
@@ -70,7 +131,9 @@ impl SeedEntryState {
             suggestion_index: 0,
             total_matches: 0,
             words: HVec::new(),
-            generated: false,
+            dice_rolls: HVec::new(),
+            origin: SeedOrigin::Entered,
+            verification: SeedVerificationState::new(),
         }
     }
 
@@ -79,12 +142,22 @@ impl SeedEntryState {
         self.suggestions.clear();
         self.suggestion_index = 0;
         self.total_matches = 0;
-        self.words.clear();
-        self.generated = false;
+        zeroize_seed_phrase(&mut self.words);
+        self.clear_dice_rolls();
+        self.origin = SeedOrigin::Entered;
+        self.verification.reset();
     }
 
     pub fn is_generated(&self) -> bool {
-        self.generated
+        self.origin != SeedOrigin::Entered
+    }
+
+    pub fn is_dice_generated(&self) -> bool {
+        self.origin == SeedOrigin::Dice
+    }
+
+    pub fn verification_failed(&self) -> bool {
+        self.verification.failed
     }
 
     /// Generate a fresh 24-word BIP-39 mnemonic on-device from the hardware RNG
@@ -102,11 +175,154 @@ impl SeedEntryState {
             Some(words) => {
                 self.reset();
                 self.words = words;
-                self.generated = true;
+                self.origin = SeedOrigin::Hardware;
                 true
             }
             None => false,
         }
+    }
+
+    pub fn dice_roll_count(&self) -> usize {
+        self.dice_rolls.len()
+    }
+
+    pub fn dice_rolls(&self) -> &[u8] {
+        self.dice_rolls.as_slice()
+    }
+
+    pub fn push_dice_roll(&mut self, roll: u8) -> bool {
+        (1..=6).contains(&roll)
+            && self.dice_rolls.len() < DICE_ROLLS_FOR_256_BITS
+            && self.dice_rolls.push(roll).is_ok()
+    }
+
+    pub fn pop_dice_roll(&mut self) -> bool {
+        let Some(last) = self.dice_rolls.last_mut() else {
+            return false;
+        };
+        last.zeroize();
+        let _ = self.dice_rolls.pop();
+        true
+    }
+
+    pub fn dice_rolls_complete(&self) -> bool {
+        self.dice_rolls.len() == DICE_ROLLS_FOR_256_BITS
+    }
+
+    pub fn load_dice_generated(&mut self) -> bool {
+        let Ok(mut entropy) = dice_entropy_256(self.dice_rolls.as_slice()) else {
+            return false;
+        };
+        let phrase = mnemonic_from_entropy(&entropy);
+        entropy.zeroize();
+        match phrase {
+            Some(words) => {
+                self.reset();
+                self.words = words;
+                self.origin = SeedOrigin::Dice;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn begin_verification(&mut self) -> bool {
+        if !self.is_generated() || !self.is_complete() {
+            return false;
+        }
+        let mut random = [0u8; 32];
+        if getrandom::getrandom(&mut random).is_err() {
+            random.zeroize();
+            return false;
+        }
+
+        let mut targets = [0u8; SEED_VERIFY_WORDS];
+        for challenge in 0..SEED_VERIFY_WORDS {
+            let mut target = random[challenge] % MAX_SEED_WORDS as u8;
+            while targets[..challenge].contains(&target) {
+                target = (target + 1) % MAX_SEED_WORDS as u8;
+            }
+            targets[challenge] = target;
+
+            let Some(correct_word) = self.words.get(target as usize) else {
+                random.zeroize();
+                return false;
+            };
+            let Some(correct_index) = word_index(correct_word.as_str()) else {
+                random.zeroize();
+                return false;
+            };
+            let correct_slot = random[3 + challenge] % 3;
+            let mut choices = [0u16; 3];
+            choices[correct_slot as usize] = correct_index as u16;
+            let mut random_offset = 6 + challenge * 4;
+            for slot in 0..3 {
+                if slot == correct_slot as usize {
+                    continue;
+                }
+                let mut candidate =
+                    u16::from_be_bytes([random[random_offset], random[random_offset + 1]])
+                        & 0x07ff;
+                random_offset += 2;
+                while candidate == correct_index as u16 || choices[..slot].contains(&candidate) {
+                    candidate = (candidate + 1) & 0x07ff;
+                }
+                choices[slot] = candidate;
+            }
+            self.verification.choices[challenge] = choices;
+            self.verification.correct_choices[challenge] = correct_slot;
+        }
+        random.zeroize();
+        self.verification.targets = targets;
+        self.verification.step = 0;
+        self.verification.active = true;
+        self.verification.failed = false;
+        true
+    }
+
+    pub fn verification_prompt(&self) -> Option<(usize, usize)> {
+        self.verification.active.then(|| {
+            (
+                self.verification.step + 1,
+                self.verification.targets[self.verification.step] as usize + 1,
+            )
+        })
+    }
+
+    pub fn verification_choice(&self, choice: usize) -> Option<&'static str> {
+        if !self.verification.active || choice >= 3 {
+            return None;
+        }
+        word_at_index(self.verification.choices[self.verification.step][choice] as usize)
+    }
+
+    pub fn verify_choice(&mut self, choice: usize) -> SeedVerificationResult {
+        if !self.verification.active
+            || choice >= 3
+            || choice != self.verification.correct_choices[self.verification.step] as usize
+        {
+            self.verification.reset();
+            self.verification.failed = true;
+            return SeedVerificationResult::Incorrect;
+        }
+        self.verification.step += 1;
+        if self.verification.step == SEED_VERIFY_WORDS {
+            self.verification.reset();
+            SeedVerificationResult::Complete
+        } else {
+            SeedVerificationResult::More
+        }
+    }
+
+    pub fn cancel_verification(&mut self) {
+        self.verification.reset();
+    }
+
+    fn clear_dice_rolls(&mut self) {
+        for roll in self.dice_rolls.iter_mut() {
+            roll.zeroize();
+        }
+        self.dice_rolls.clear();
     }
 
     pub fn push_digit(&mut self, digit: u8) -> bool {
@@ -126,7 +342,10 @@ impl SeedEntryState {
             self.refresh_suggestions();
             None
         } else {
-            self.words.pop()
+            let mut word = self.words.pop()?;
+            unsafe { word.as_mut_str().as_bytes_mut() }.zeroize();
+            word.clear();
+            Some(word)
         }
     }
 
@@ -155,12 +374,13 @@ impl SeedEntryState {
         Some(committed)
     }
 
-    pub fn finish(&self) -> Option<SeedPhrase> {
-        if self.words.len() != MAX_SEED_WORDS || !self.digits.is_empty() {
-            None
-        } else {
-            Some(self.words.clone())
-        }
+    pub fn is_complete(&self) -> bool {
+        self.words.len() == MAX_SEED_WORDS && self.digits.is_empty()
+    }
+
+    pub fn take_finished(&mut self) -> Option<SeedPhrase> {
+        self.is_complete()
+            .then(|| core::mem::take(&mut self.words))
     }
 
     pub fn suggestion_position(&self) -> Option<(usize, usize)> {
@@ -202,6 +422,12 @@ impl SeedEntryState {
     }
 }
 
+impl Drop for SeedEntryState {
+    fn drop(&mut self) {
+        self.reset();
+    }
+}
+
 pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str, show_back: bool) {
     let _ = display.clear(palette::background());
     if show_back {
@@ -211,8 +437,9 @@ pub fn render_seed_setup(display: &mut GuiDisplay<'_>, title: &str, show_back: b
     }
 
     let mut body = HString::<96>::new();
-    let _ = body
-        .push_str("Generate a new seed on-device, or enter an existing one (here, web, or CLI).");
+    let _ = body.push_str(
+        "Generate with the hardware RNG, roll four labeled dice 25 times, or enter an existing seed.",
+    );
     let text_style = MonoTextStyle::new(&FONT_6X10, palette::text());
     let mut y = header_height() + 24;
     // Estimate character width for FONT_6X10 is 6 pixels
@@ -317,6 +544,16 @@ pub fn draw_seed_button(
         Button::Seed(_) if mode == GuiMode::SeedConfirm => {
             draw_confirm_button(display, hit, active)
         }
+        Button::Seed(_) if mode == GuiMode::SeedDice => {
+            if let Some(state) = state {
+                draw_dice_button(display, hit, state, active);
+            }
+        }
+        Button::Seed(_) if mode == GuiMode::SeedVerify => {
+            if let Some(state) = state {
+                draw_verify_button(display, hit, state, active);
+            }
+        }
         Button::Seed(sb) if mode == GuiMode::SeedFirstBoot => {
             draw_text_button(display, hit, setup_button_label(sb), active)
         }
@@ -325,14 +562,14 @@ pub fn draw_seed_button(
     }
 }
 
-/// The actions on the setup screen: generate on-device, enter an existing phrase,
-/// and (only when adding to an already-set-up device) a Back to the settings menu.
+/// The actions on the setup screen: hardware RNG, physical dice, and an
+/// existing phrase. Back is provided by the header when adding a seed.
 fn setup_buttons(_show_back: bool) -> HVec<ButtonHit, 3> {
     let width = (SCREEN_WIDTH as i32 - 2 * 20).max(80);
     let height = 42;
     let x = ((SCREEN_WIDTH as i32) - width) / 2;
-    let gap = 14;
-    let y0 = header_height() + 84;
+    let gap = 10;
+    let y0 = header_height() + 100;
     let mut out: HVec<ButtonHit, 3> = HVec::new();
     let _ = out.push(ButtonHit {
         button: Button::Seed(SeedButton::GenerateSeed),
@@ -340,8 +577,13 @@ fn setup_buttons(_show_back: bool) -> HVec<ButtonHit, 3> {
         size: Size::new(width as u32, height as u32),
     });
     let _ = out.push(ButtonHit {
-        button: Button::Seed(SeedButton::EnterSeed),
+        button: Button::Seed(SeedButton::DiceSeed),
         top_left: Point::new(x, y0 + height + gap),
+        size: Size::new(width as u32, height as u32),
+    });
+    let _ = out.push(ButtonHit {
+        button: Button::Seed(SeedButton::EnterSeed),
+        top_left: Point::new(x, y0 + (height + gap) * 2),
         size: Size::new(width as u32, height as u32),
     });
     out
@@ -349,10 +591,243 @@ fn setup_buttons(_show_back: bool) -> HVec<ButtonHit, 3> {
 
 fn setup_button_label(button: SeedButton) -> &'static str {
     match button {
-        SeedButton::GenerateSeed => "Generate New",
+        SeedButton::GenerateSeed => "Hardware RNG",
+        SeedButton::DiceSeed => "4 Dice x 25",
         SeedButton::Cancel => "Back to menu",
         _ => "Enter Seed",
     }
+}
+
+pub fn render_seed_dice(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
+    let _ = display.clear(palette::background());
+    let roll_count = state.dice_roll_count();
+    let phase = roll_count % 4;
+    let round = (roll_count / 4 + 1).min(25);
+    let mut title = HString::<24>::new();
+    let _ = write!(title, "Throw {}/25", round);
+    render_header(display, title.as_str(), palette::surface_high());
+
+    let complete = state.dice_rolls_complete();
+    let action = if complete {
+        "DICE COMPLETE"
+    } else if phase == 0 {
+        if roll_count == 0 {
+            "ROLL 4 DICE"
+        } else {
+            "ROLL AGAIN"
+        }
+    } else {
+        match phase {
+            1 => "ENTER DIE B",
+            2 => "ENTER DIE C",
+            _ => "ENTER DIE D",
+        }
+    };
+    let center_x = (SCREEN_WIDTH / 2) as i32;
+    let _ = Text::with_alignment(
+        action,
+        Point::new(center_x, header_height() + 25),
+        MonoTextStyle::new(&FONT_10X20, palette::text()),
+        Alignment::Center,
+    )
+    .draw(display);
+
+    let mut detail = HString::<24>::new();
+    let rolls = state.dice_rolls();
+    if complete {
+        let _ = detail.push_str("PRESS DONE");
+    } else if phase == 0 {
+        let _ = detail.push_str("THEN ENTER A B C D");
+    } else {
+        let start = roll_count - phase;
+        for index in 0..4 {
+            if index > 0 {
+                let _ = detail.push(' ');
+            }
+            let _ = detail.push(char::from(b'A' + index as u8));
+            let value = rolls.get(start + index).copied();
+            let _ = detail.push(value.map_or('-', |roll| char::from(b'0' + roll)));
+        }
+    }
+    let _ = Text::with_alignment(
+        detail.as_str(),
+        Point::new(center_x, header_height() + 50),
+        MonoTextStyle::new(&FONT_8X13, palette::text_subtle()),
+        Alignment::Center,
+    )
+    .draw(display);
+
+    for hit in dice_buttons() {
+        draw_dice_button(display, hit, state, false);
+    }
+    for hit in dice_control_buttons() {
+        draw_dice_button(display, hit, state, false);
+    }
+}
+
+pub fn button_from_point_seed_dice(point: Point, state: &SeedEntryState) -> Option<ButtonHit> {
+    dice_buttons()
+        .into_iter()
+        .chain(dice_control_buttons())
+        .find(|hit| {
+            let enabled = hit.button != Button::Seed(SeedButton::Finish)
+                || state.dice_rolls_complete();
+            enabled && within_hit(hit, point, 4)
+        })
+}
+
+fn dice_buttons() -> HVec<ButtonHit, 6> {
+    let mut out = HVec::new();
+    let margin = 4;
+    let gap = 4;
+    let width = (SCREEN_WIDTH as i32 - margin * 2 - gap * 2) / 3;
+    let height = 58;
+    let top = header_height() + 70;
+    for face in 1..=6u8 {
+        let index = face as i32 - 1;
+        let row = index / 3;
+        let col = index % 3;
+        let _ = out.push(ButtonHit {
+            button: Button::Seed(SeedButton::DiceFace(face)),
+            top_left: Point::new(
+                margin + col * (width + gap),
+                top + row * (height + gap),
+            ),
+            size: Size::new(width as u32, height as u32),
+        });
+    }
+    out
+}
+
+fn dice_control_buttons() -> [ButtonHit; 3] {
+    let bottom_y = SCREEN_HEIGHT as i32 - 50;
+    let control_gap = 4;
+    let control_width = (SCREEN_WIDTH as i32 - 8 - control_gap * 2) / 3;
+    let buttons = [
+        SeedButton::Cancel,
+        SeedButton::Backspace,
+        SeedButton::Finish,
+    ];
+    core::array::from_fn(|col| ButtonHit {
+        button: Button::Seed(buttons[col]),
+        top_left: Point::new(4 + col as i32 * (control_width + control_gap), bottom_y),
+        size: Size::new(control_width as u32, 46),
+    })
+}
+
+fn draw_dice_button(
+    display: &mut GuiDisplay<'_>,
+    hit: ButtonHit,
+    state: &SeedEntryState,
+    active: bool,
+) {
+    draw_button_frame(display, hit, active);
+    let (label, enabled) = match hit.button {
+        Button::Seed(SeedButton::DiceFace(1)) => ("1", true),
+        Button::Seed(SeedButton::DiceFace(2)) => ("2", true),
+        Button::Seed(SeedButton::DiceFace(3)) => ("3", true),
+        Button::Seed(SeedButton::DiceFace(4)) => ("4", true),
+        Button::Seed(SeedButton::DiceFace(5)) => ("5", true),
+        Button::Seed(SeedButton::DiceFace(6)) => ("6", true),
+        Button::Seed(SeedButton::Cancel) => ("BACK", true),
+        Button::Seed(SeedButton::Backspace) => ("DEL", true),
+        Button::Seed(SeedButton::Finish) => ("DONE", state.dice_rolls_complete()),
+        _ => ("", false),
+    };
+    if label.is_empty() {
+        return;
+    }
+    if enabled {
+        draw_fitted_button_label(display, hit, label);
+    } else {
+        let center = Point::new(
+            hit.top_left.x + hit.size.width as i32 / 2,
+            hit.top_left.y + hit.size.height as i32 / 2 + 4,
+        );
+        let _ = Text::with_alignment(
+            label,
+            center,
+            MonoTextStyle::new(&FONT_8X13, palette::text_subtle()),
+            Alignment::Center,
+        )
+        .draw(display);
+    }
+}
+
+pub fn render_seed_verify(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
+    let _ = display.clear(palette::background());
+    let Some((step, word_number)) = state.verification_prompt() else {
+        render_header(display, "Backup Check", palette::surface_high());
+        return;
+    };
+    let mut title = HString::<24>::new();
+    let _ = write!(title, "Check {}/{}", step, SEED_VERIFY_WORDS);
+    render_header(display, title.as_str(), palette::surface_high());
+
+    let mut prompt = HString::<24>::new();
+    let _ = write!(prompt, "Select word #{}", word_number);
+    let _ = Text::with_alignment(
+        prompt.as_str(),
+        Point::new((SCREEN_WIDTH / 2) as i32, header_height() + 29),
+        MonoTextStyle::new(&FONT_10X20, palette::text()),
+        Alignment::Center,
+    )
+    .draw(display);
+
+    for hit in verify_buttons() {
+        draw_verify_button(display, hit, state, false);
+    }
+}
+
+pub fn button_from_point_seed_verify(point: Point) -> Option<ButtonHit> {
+    verify_buttons()
+        .into_iter()
+        .find(|hit| within_hit(hit, point, 4))
+}
+
+fn verify_buttons() -> [ButtonHit; 4] {
+    let margin = 10;
+    let width = SCREEN_WIDTH as i32 - margin * 2;
+    let height = 40;
+    let top = header_height() + 46;
+    [
+        ButtonHit {
+            button: Button::Seed(SeedButton::VerifyChoice(0)),
+            top_left: Point::new(margin, top),
+            size: Size::new(width as u32, height as u32),
+        },
+        ButtonHit {
+            button: Button::Seed(SeedButton::VerifyChoice(1)),
+            top_left: Point::new(margin, top + 46),
+            size: Size::new(width as u32, height as u32),
+        },
+        ButtonHit {
+            button: Button::Seed(SeedButton::VerifyChoice(2)),
+            top_left: Point::new(margin, top + 92),
+            size: Size::new(width as u32, height as u32),
+        },
+        ButtonHit {
+            button: Button::Seed(SeedButton::Cancel),
+            top_left: Point::new(46, SCREEN_HEIGHT as i32 - 42),
+            size: Size::new((SCREEN_WIDTH - 92) as u32, 36),
+        },
+    ]
+}
+
+fn draw_verify_button(
+    display: &mut GuiDisplay<'_>,
+    hit: ButtonHit,
+    state: &SeedEntryState,
+    active: bool,
+) {
+    let label = match hit.button {
+        Button::Seed(SeedButton::VerifyChoice(choice)) => {
+            state.verification_choice(choice as usize).unwrap_or("")
+        }
+        Button::Seed(SeedButton::Cancel) => "BACK",
+        _ => "",
+    };
+    draw_text_button(display, hit, label, active);
 }
 
 pub(crate) fn draw_text_button(
@@ -431,7 +906,10 @@ fn draw_keypad_button(
         SeedButton::Finish => draw_label(display, center_x, center_y, "DONE"),
         SeedButton::Cancel => draw_label(display, center_x, center_y, "BACK"),
         SeedButton::EnterSeed => draw_label(display, center_x, center_y, "Start"),
-        SeedButton::GenerateSeed => {}
+        SeedButton::GenerateSeed
+        | SeedButton::DiceSeed
+        | SeedButton::DiceFace(_)
+        | SeedButton::VerifyChoice(_) => {}
     }
 }
 
@@ -807,11 +1285,19 @@ fn word_at_index(index: usize) -> Option<&'static str> {
     WORDLIST.lines().nth(index)
 }
 
+fn word_index(word: &str) -> Option<usize> {
+    WORDLIST.lines().position(|candidate| candidate == word)
+}
+
 pub fn render_seed_confirm(display: &mut GuiDisplay<'_>, state: &SeedEntryState) {
     let _ = display.clear(palette::background());
     // For a generated seed the user is seeing it for the first time and must
     // copy it down; for a typed-in seed this is a read-back confirmation.
-    let title = if state.generated {
+    let title = if state.verification_failed() {
+        "Check Backup"
+    } else if state.is_dice_generated() {
+        "Dice Seed"
+    } else if state.is_generated() {
         "Write It Down"
     } else {
         "Confirm Seed"

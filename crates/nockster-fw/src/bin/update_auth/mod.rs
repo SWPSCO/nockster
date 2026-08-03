@@ -334,7 +334,7 @@ pub fn mark_running_image_valid() {
 
 fn mark_running_image_valid_inner() -> Result<(), UpdateFlashError> {
     if Efuse::flash_encryption() {
-        return Ok(());
+        return mark_encrypted_running_image_valid();
     }
 
     let mut flash = UpdateFlashStorage::new();
@@ -365,6 +365,24 @@ fn mark_running_image_valid_inner() -> Result<(), UpdateFlashError> {
     if should_mark_ota_image_valid(current_state) {
         ota.set_current_ota_state(OtaImageState::Valid)
             .map_err(|_| UpdateFlashError::Storage)?;
+    }
+    Ok(())
+}
+
+fn mark_encrypted_running_image_valid() -> Result<(), UpdateFlashError> {
+    let mut flash = UpdateFlashStorage::new();
+    let slot0 = read_encrypted_ota_select_status(&mut flash, Slot::Slot0)?;
+    let slot1 = read_encrypted_ota_select_status(&mut flash, Slot::Slot1)?;
+    let selected = match (slot0, slot1) {
+        (Some(a), Some(b)) => Some(if a.seq >= b.seq { a } else { b }),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+    if let Some(selected) = selected {
+        if should_mark_ota_image_valid(selected.state) {
+            write_encrypted_ota_select(selected.slot, selected.seq, OtaImageState::Valid)?;
+        }
     }
     Ok(())
 }
@@ -743,11 +761,19 @@ fn encrypted_ota_slot_for_seq(seq: u32) -> Slot {
 }
 
 fn activate_encrypted_ota_slot(slot: Slot, seq: u32) -> Result<(), UpdateFlashError> {
-    let slot_offset = ota_select_slot_offset(slot)?;
     if encrypted_ota_slot_for_seq(seq) != slot {
         return Err(UpdateFlashError::MissingOtaSlot);
     }
-    let entry = ota_select_entry(seq, OtaImageState::New);
+    write_encrypted_ota_select(slot, seq, OtaImageState::New)
+}
+
+fn write_encrypted_ota_select(
+    slot: Slot,
+    seq: u32,
+    state: OtaImageState,
+) -> Result<(), UpdateFlashError> {
+    let slot_offset = ota_select_slot_offset(slot)?;
+    let entry = ota_select_entry(seq, state);
     let mut sector = [0xffu8; OTA_SECTOR_SIZE];
     sector[..OTA_SELECT_ENTRY_SIZE].copy_from_slice(&entry);
 

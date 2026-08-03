@@ -17,7 +17,9 @@ pub enum GuiMode {
     Error,
     SeedFirstBoot,
     SeedEntry,
+    SeedDice,
     SeedConfirm,
+    SeedVerify,
     Diagnostics,
     TouchCalibration,
     Menu,
@@ -45,6 +47,7 @@ pub enum MenuItem {
 }
 
 pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
+pub const TX_REVIEW_DETAIL_MAX: usize = 128;
 pub const TX_REVIEW_FLAG_HIGH_FEE: u8 = 1 << 0;
 pub const TX_REVIEW_FLAG_NO_REFUND: u8 = 1 << 1;
 pub const TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS: u8 = 1 << 2;
@@ -64,8 +67,8 @@ pub struct TxReviewOutput {
     pub gift: u64,
     pub recipient_b58: HString<64>,
     /// Verbatim lock facts for this output (timelock bounds, m-of-n, hashlock,
-    /// burn, bridge, verification status), shown in the tap-to-expand detail.
-    pub detail: HString<96>,
+    /// burn, bridge, verification status), shown on its review page.
+    pub detail: HString<TX_REVIEW_DETAIL_MAX>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +93,8 @@ use super::seed::SeedButton;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
     Back,
+    ReviewPrevious,
+    ReviewNext,
     Digit(u8),
     Clear,
     Ok,

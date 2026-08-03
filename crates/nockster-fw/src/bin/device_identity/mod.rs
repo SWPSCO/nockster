@@ -15,7 +15,13 @@ pub fn provisioned_serial_timestamp() -> Option<u64> {
         .then_some(timestamp)
 }
 
-pub fn production_identity_ready() -> bool {
+/// New production wallets must have the immutable provisioning identity.
+///
+/// This is deliberately an initialization-only policy. Production firmware
+/// predating the serial eFuse shipped without `BLOCK_USR_DATA`, and refusing
+/// to unlock those already-initialized wallets would both strand their keys
+/// and turn a provisioning error into consumed PIN attempts.
+pub fn production_identity_ready_for_initialization() -> bool {
     !is_production_build() || provisioned_serial_timestamp().is_some()
 }
 

@@ -364,7 +364,7 @@ fn compute_initpin_outcome(
         mut pin,
         mut seed64,
     } = request;
-    if !device_identity::production_identity_ready() {
+    if !device_identity::production_identity_ready_for_initialization() {
         zeroize_hstring(&mut pin);
         seed64.zeroize();
         return InitPinOutcome::Crypto;
@@ -2733,9 +2733,6 @@ fn is_device_locked() -> bool {
 }
 
 fn compute_unlock_outcome(state: &mut AppCoreState<'_>, pin: &str) -> UnlockOutcome {
-    if !device_identity::production_identity_ready() {
-        return UnlockOutcome::Failed;
-    }
     let mut nvs = NvsStore::new();
     match nvs.unlock_with_pepper_precharged(pin, &mut state.nvs_pepper) {
         Ok((seeds, master_key, clear_attempts)) => UnlockOutcome::Success {

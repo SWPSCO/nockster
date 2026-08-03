@@ -35,6 +35,9 @@ const PROD_OTADATA_SIZE: u32 = 0x2000;
 const PROD_OTA0_OFFSET: u32 = 0x320000;
 const PROD_OTA1_OFFSET: u32 = 0x620000;
 const PROD_OTA_SLOT_SIZE: u32 = 0x300000;
+// Release 11 mistakenly rejected legacy production wallets without the serial
+// eFuse before running the PIN KDF, after the attempt had already been charged.
+const IDENTITY_GATED_UNLOCK_RELEASE: u32 = 11;
 const ESP32S3_ROM_SPI_FLASH_CACHE2PHYS: usize = 0x40000bf4;
 const SPI_FLASH_CACHE2PHYS_FAIL: usize = usize::MAX;
 
@@ -390,8 +393,24 @@ fn mark_encrypted_running_image_valid() -> Result<(), UpdateFlashError> {
     }
 
     let mut nvs = NvsStore::new();
-    if nvs.confirmed_ota_release().ok().flatten() == Some(release) {
+    let confirmed_release = nvs
+        .confirmed_ota_release()
+        .map_err(|_| UpdateFlashError::Storage)?;
+    if confirmed_release == Some(release) {
         return Ok(());
+    }
+
+    // This runs before confirming the replacement image and before the app
+    // core starts. It is deliberately tied to a single transition out of the
+    // affected release, so rebooting can never become a PIN-attempt reset.
+    if should_recover_identity_gated_pin_attempts(
+        confirmed_release,
+        release,
+        crate::device_identity::production_identity_ready_for_initialization(),
+        nvs.is_initialized(),
+    ) {
+        nvs.clear_pin_attempts()
+            .map_err(|_| UpdateFlashError::Storage)?;
     }
 
     // The bootloader already selected this physical slot. Rebuild the one
@@ -400,6 +419,65 @@ fn mark_encrypted_running_image_valid() -> Result<(), UpdateFlashError> {
     write_encrypted_ota_select(running_slot, release, OtaImageState::Valid)?;
     nvs.confirm_ota_release(release)
         .map_err(|_| UpdateFlashError::Storage)
+}
+
+fn should_recover_identity_gated_pin_attempts(
+    confirmed_release: Option<u32>,
+    running_release: u32,
+    production_identity_ready: bool,
+    wallet_initialized: bool,
+) -> bool {
+    // The confirmation journal was introduced during release 11. An erased
+    // journal therefore also identifies a legacy/factory release-11 upgrade
+    // (or an upgrade directly from an older release).
+    matches!(confirmed_release, None | Some(IDENTITY_GATED_UNLOCK_RELEASE))
+        && running_release > IDENTITY_GATED_UNLOCK_RELEASE
+        && !production_identity_ready
+        && wallet_initialized
+}
+
+#[cfg(test)]
+mod pin_attempt_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn recovers_affected_release_11_upgrade_once() {
+        assert!(should_recover_identity_gated_pin_attempts(
+            Some(11),
+            12,
+            false,
+            true
+        ));
+        assert!(!should_recover_identity_gated_pin_attempts(
+            Some(12),
+            12,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn recovers_legacy_upgrade_without_confirmation_journal() {
+        assert!(should_recover_identity_gated_pin_attempts(
+            None, 12, false, true
+        ));
+    }
+
+    #[test]
+    fn never_resets_provisioned_or_uninitialized_devices() {
+        assert!(!should_recover_identity_gated_pin_attempts(
+            Some(11),
+            12,
+            true,
+            true
+        ));
+        assert!(!should_recover_identity_gated_pin_attempts(
+            Some(11),
+            12,
+            false,
+            false
+        ));
+    }
 }
 
 fn validate_chunk_bounds(

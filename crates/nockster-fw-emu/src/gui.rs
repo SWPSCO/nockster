@@ -10,6 +10,8 @@ pub mod label;
 pub mod layout;
 #[path = "../../nockster-fw/src/bin/gui/menu.rs"]
 pub mod menu;
+#[path = "../../nockster-fw/src/bin/gui/my_nockster.rs"]
+pub mod my_nockster;
 #[path = "../../nockster-fw/src/bin/gui/palette.rs"]
 pub mod palette;
 #[path = "../../nockster-fw/src/bin/gui/render.rs"]

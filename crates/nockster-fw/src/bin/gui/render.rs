@@ -2183,6 +2183,7 @@ fn button_label(button: Button) -> &'static str {
         Button::WalletDeleteCancel(_) => "",
         Button::WalletDeleteConfirm(_) => "",
         Button::Label(_) => "",
+        Button::Nockster(_) => "",
     }
 }
 
@@ -2203,6 +2204,7 @@ fn confirm_button_label(button: Button) -> &'static str {
         Button::WalletDeleteCancel(_) => "",
         Button::WalletDeleteConfirm(_) => "",
         Button::Label(_) => "",
+        Button::Nockster(_) => "",
     }
 }
 

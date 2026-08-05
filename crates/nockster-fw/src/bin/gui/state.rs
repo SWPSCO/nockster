@@ -24,6 +24,7 @@ pub enum GuiMode {
     TouchCalibration,
     Menu,
     About,
+    MyNockster,
     Themes,
     Wallets,
     WalletDetail,
@@ -44,6 +45,7 @@ pub enum MenuItem {
     About,
     Calibrate,
     Diagnostics,
+    Maintenance,
 }
 
 pub const TX_REVIEW_MAX_OUTPUTS: usize = 24;
@@ -88,6 +90,7 @@ pub struct TxReviewSummary {
 }
 
 use super::label::{LabelButton, LabelInteraction};
+use super::my_nockster::NocksterButton;
 use super::seed::SeedButton;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +110,7 @@ pub enum Button {
     WalletDeleteCancel(u8),
     WalletDeleteConfirm(u8),
     Label(LabelButton),
+    Nockster(NocksterButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

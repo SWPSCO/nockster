@@ -55,7 +55,7 @@ struct MenuDefinition {
     label: &'static str,
 }
 
-const SETTINGS_MENU: [MenuDefinition; 7] = [
+const SETTINGS_MENU: [MenuDefinition; 8] = [
     MenuDefinition {
         item: MenuItem::Wallets,
         label: "Wallets",
@@ -84,6 +84,10 @@ const SETTINGS_MENU: [MenuDefinition; 7] = [
         item: MenuItem::About,
         label: "About",
     },
+    MenuDefinition {
+        item: MenuItem::Maintenance,
+        label: "Maintenance",
+    },
 ];
 
 fn menu_label(item: MenuItem) -> &'static str {
@@ -104,7 +108,7 @@ fn menu_button(index: usize, definition: MenuDefinition) -> ButtonHit {
     }
 }
 
-fn menu_buttons() -> [ButtonHit; 7] {
+fn menu_buttons() -> [ButtonHit; 8] {
     [
         menu_button(0, SETTINGS_MENU[0]),
         menu_button(1, SETTINGS_MENU[1]),
@@ -113,6 +117,7 @@ fn menu_buttons() -> [ButtonHit; 7] {
         menu_button(4, SETTINGS_MENU[4]),
         menu_button(5, SETTINGS_MENU[5]),
         menu_button(6, SETTINGS_MENU[6]),
+        menu_button(7, SETTINGS_MENU[7]),
     ]
 }
 
@@ -346,7 +351,6 @@ fn draw_about_intro(display: &mut GuiDisplay<'_>, top: i32) -> i32 {
         let _ = Text::new(line, Point::new(x + 13, y), text_style).draw(display);
         y += 11;
     }
-
     top + height + 5
 }
 

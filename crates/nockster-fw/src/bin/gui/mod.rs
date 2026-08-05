@@ -5,6 +5,7 @@ pub mod demo;
 mod label;
 mod layout;
 mod menu;
+mod my_nockster;
 pub mod palette;
 mod render;
 mod scroll;
@@ -151,6 +152,7 @@ pub struct Gui<'d> {
     wallet_drag: scroll::DragState,
     selected_wallet_slot: Option<u8>,
     label_entry_state: label::LabelEntryState,
+    nockster_state: my_nockster::NocksterState,
 }
 
 impl<'d> Gui<'d> {
@@ -283,6 +285,7 @@ impl<'d> Gui<'d> {
             wallet_drag: scroll::DragState::new(),
             selected_wallet_slot: None,
             label_entry_state: label::LabelEntryState::new(),
+            nockster_state: my_nockster::NocksterState::new(Instant::now()),
         };
 
         blit_boot_logo(&mut gui.display);
@@ -352,6 +355,10 @@ impl<'d> Gui<'d> {
         }
 
         let now = Instant::now();
+
+        if self.mode == GuiMode::MyNockster && self.nockster_state.advance(now) {
+            my_nockster::render_room(&mut self.display, &self.nockster_state);
+        }
 
         if let Some(until) = self.idle_message_until {
             if now >= until {
@@ -658,6 +665,7 @@ impl<'d> Gui<'d> {
                 | GuiMode::VaultDetail
                 | GuiMode::VaultDeleteConfirm
                 | GuiMode::LabelEntry
+                | GuiMode::MyNockster
         )
     }
 
@@ -836,6 +844,15 @@ impl<'d> Gui<'d> {
         menu::render_about(&mut self.display, info);
     }
 
+    fn show_my_nockster(&mut self, now: Instant) {
+        self.disarm_active();
+        self.stop_unlock_demo();
+        self.nockster_state.resume(now);
+        self.mode = GuiMode::MyNockster;
+        my_nockster::render(&mut self.display, &self.nockster_state);
+        self.refresh_auto_lock(now);
+    }
+
     pub fn show_themes(&mut self) {
         self.disarm_active();
         self.stop_unlock_demo();
@@ -995,6 +1012,10 @@ impl<'d> Gui<'d> {
                 self.begin_touch_calibration();
                 None
             }
+            MenuItem::Maintenance => {
+                self.show_my_nockster(Instant::now());
+                None
+            }
             // These need host-side context (build string, master key, slot
             // list, vault entries), so the main loop handles them.
             MenuItem::Wallets
@@ -1017,6 +1038,7 @@ impl<'d> Gui<'d> {
                 | GuiMode::Vault
                 | GuiMode::VaultDetail
                 | GuiMode::VaultDeleteConfirm
+                | GuiMode::MyNockster
         ) || (self.mode == GuiMode::SeedFirstBoot && self.seed_flow_is_add)
     }
 
@@ -1027,6 +1049,10 @@ impl<'d> Gui<'d> {
                 None
             }
             GuiMode::About | GuiMode::Themes | GuiMode::Wallets | GuiMode::Vault => {
+                self.show_menu();
+                None
+            }
+            GuiMode::MyNockster => {
                 self.show_menu();
                 None
             }
@@ -1067,10 +1093,16 @@ impl<'d> Gui<'d> {
         }
     }
 
-    fn handle_about_button(&mut self, button: Button) -> Option<GuiInteraction> {
-        match button {
-            _ => None,
+    fn handle_about_button(&mut self, _button: Button) -> Option<GuiInteraction> {
+        None
+    }
+
+    fn handle_nockster_button(&mut self, button: Button, now: Instant) -> Option<GuiInteraction> {
+        if let Button::Nockster(action) = button {
+            self.nockster_state.act(action, now);
+            my_nockster::render(&mut self.display, &self.nockster_state);
         }
+        None
     }
 
     fn handle_theme_button(&mut self, button: Button) -> Option<GuiInteraction> {
@@ -1513,6 +1545,7 @@ impl<'d> Gui<'d> {
                 GuiMode::Locked => button_from_point_keypad(pt),
                 GuiMode::Menu => menu::button_from_point_menu(pt, &self.menu_scroll),
                 GuiMode::About => menu::button_from_point_about(pt),
+                GuiMode::MyNockster => my_nockster::button_from_point(pt),
                 GuiMode::Themes => menu::button_from_point_themes(pt),
                 GuiMode::Wallets => {
                     menu::button_from_point_wallets(pt, &self.wallet_rows, &self.wallets_scroll)
@@ -1685,6 +1718,7 @@ impl<'d> Gui<'d> {
                     }
                     GuiMode::Menu => self.handle_menu_button(hit.button),
                     GuiMode::About => self.handle_about_button(hit.button),
+                    GuiMode::MyNockster => self.handle_nockster_button(hit.button, now),
                     GuiMode::Themes => self.handle_theme_button(hit.button),
                     GuiMode::Wallets => self.handle_wallet_button(hit.button),
                     GuiMode::WalletDetail => self.handle_wallet_detail_button(hit.button),
@@ -1749,7 +1783,17 @@ impl<'d> Gui<'d> {
                 self.interaction.active_seen_at = Some(now);
                 self.interaction.press_started_at = Some(now);
             }
-            GuiMode::About => {}
+            GuiMode::About => {
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
+            GuiMode::MyNockster => {
+                my_nockster::draw_button(&mut self.display, hit, true);
+                self.interaction.active_button = Some(hit);
+                self.interaction.active_seen_at = Some(now);
+                self.interaction.press_started_at = Some(now);
+            }
             GuiMode::Themes => {
                 menu::draw_theme_button(&mut self.display, hit, true);
                 self.interaction.active_button = Some(hit);
@@ -1818,6 +1862,7 @@ impl<'d> Gui<'d> {
                 }
                 GuiMode::Menu => menu::draw_menu_button(&mut self.display, old, false),
                 GuiMode::About => {}
+                GuiMode::MyNockster => my_nockster::draw_button(&mut self.display, old, false),
                 GuiMode::Themes => menu::draw_theme_button(&mut self.display, old, false),
                 GuiMode::Wallets | GuiMode::Vault => menu::draw_wallet_row_press(
                     &mut self.display,
@@ -1901,7 +1946,8 @@ impl<'d> Gui<'d> {
             | Button::WalletDelete(_)
             | Button::WalletDeleteCancel(_)
             | Button::WalletDeleteConfirm(_)
-            | Button::Label(_) => None,
+            | Button::Label(_)
+            | Button::Nockster(_) => None,
         }
     }
 
@@ -2035,7 +2081,8 @@ impl<'d> Gui<'d> {
             | Button::WalletDelete(_)
             | Button::WalletDeleteCancel(_)
             | Button::WalletDeleteConfirm(_)
-            | Button::Label(_) => None,
+            | Button::Label(_)
+            | Button::Nockster(_) => None,
         }
     }
 

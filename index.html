@@ -64,6 +64,17 @@
       async function run() {
         await init();
         const gui = new SigerGui("display");
+        if (new URLSearchParams(window.location.search).get("screen") === "nockster") {
+          const params = new URLSearchParams(window.location.search);
+          const feeds = Number(params.get("feeds") || 0);
+          if (params.get("action") === "feed") {
+            gui.show_my_nockster_feeding_demo();
+          } else if (feeds > 0) {
+            gui.show_my_nockster_overfed_demo(feeds);
+          } else {
+            gui.show_my_nockster_demo();
+          }
+        }
         const canvas = document.getElementById("display");
         let activePointer = null;
 

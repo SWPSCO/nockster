@@ -1649,7 +1649,7 @@ fn main() -> ! {
                                 ui.show_vault(&build_vault_rows());
                             }
                         }
-                        MenuItem::Theme | MenuItem::Calibrate => {}
+                        MenuItem::Theme | MenuItem::Calibrate | MenuItem::Maintenance => {}
                     },
                     GuiInteraction::Label(interaction) => {
                         handle_label_interaction(interaction, ui, &mut hid);

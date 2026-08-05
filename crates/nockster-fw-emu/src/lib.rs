@@ -114,6 +114,7 @@ pub struct SigerGui {
     active_target: Option<ActiveTarget>,
     splash_started_at: Option<Instant>,
     calibration_step: usize,
+    nockster_state: gui::my_nockster::NocksterState,
 }
 
 #[wasm_bindgen]
@@ -141,6 +142,7 @@ impl SigerGui {
             active_target: None,
             splash_started_at: None,
             calibration_step: 0,
+            nockster_state: gui::my_nockster::NocksterState::new(Instant::now()),
         };
         gui.seed_demo_wallets();
         gui.seed_demo_vault();
@@ -151,6 +153,10 @@ impl SigerGui {
     pub fn tick(&mut self) {
         self.advance_splash();
         self.advance_unlock_animation();
+        let now = Instant::now();
+        if self.mode == GuiMode::MyNockster && self.nockster_state.advance(now) {
+            gui::my_nockster::render_room(&mut self.display, &self.nockster_state);
+        }
     }
 
     pub fn open_menu(&mut self) {
@@ -232,6 +238,32 @@ impl SigerGui {
         if self.seed_entry_state.load_generated() && self.seed_entry_state.begin_verification() {
             self.show_seed_verify();
         }
+    }
+
+    /// Open the hidden pet directly for browser visual regression checks.
+    pub fn show_my_nockster_demo(&mut self) {
+        self.show_my_nockster();
+    }
+
+    /// Render a requested overfeeding stage for browser visual regression.
+    pub fn show_my_nockster_overfed_demo(&mut self, feeds: usize) {
+        let now = Instant::now();
+        self.nockster_state = gui::my_nockster::NocksterState::new(now);
+        for _ in 0..feeds.min(16) {
+            self.nockster_state
+                .act(gui::my_nockster::NocksterButton::Feed, now);
+        }
+        self.show_my_nockster();
+    }
+
+    /// Freeze the brief feeding pose so its custom glyph can be inspected.
+    pub fn show_my_nockster_feeding_demo(&mut self) {
+        self.show_my_nockster();
+        self.nockster_state.act(
+            gui::my_nockster::NocksterButton::Feed,
+            Instant::now(),
+        );
+        gui::my_nockster::render(&mut self.display, &self.nockster_state);
     }
 
     pub fn release_touch(&mut self) {
@@ -338,6 +370,16 @@ impl SigerGui {
         self.clear_active_target();
         self.mode = GuiMode::About;
         gui::menu::render_about(&mut self.display, &demo_about_info());
+    }
+
+    fn show_my_nockster(&mut self) {
+        self.stop_unlock_animation();
+        self.clear_active_target();
+        self.splash_started_at = None;
+        let now = Instant::now();
+        self.nockster_state.resume(now);
+        self.mode = GuiMode::MyNockster;
+        gui::my_nockster::render(&mut self.display, &self.nockster_state);
     }
 
     fn show_themes(&mut self) {
@@ -482,6 +524,7 @@ impl SigerGui {
                 | GuiMode::VaultDeleteConfirm
                 | GuiMode::Diagnostics
                 | GuiMode::TouchCalibration
+                | GuiMode::MyNockster
         ) || (self.mode == GuiMode::SeedFirstBoot && self.seed_flow_is_add)
     }
 
@@ -494,6 +537,7 @@ impl SigerGui {
             | GuiMode::Vault
             | GuiMode::Diagnostics
             | GuiMode::TouchCalibration => self.show_menu(),
+            GuiMode::MyNockster => self.show_menu(),
             GuiMode::WalletDetail => self.show_wallets(),
             GuiMode::WalletDeleteConfirm => {
                 if let Some(slot) = self.selected_wallet_slot {
@@ -548,6 +592,12 @@ impl SigerGui {
             }
             GuiMode::About => {
                 gui::menu::button_from_point_about(point).map(|hit| ActiveTarget::Button {
+                    mode: self.mode,
+                    hit,
+                })
+            }
+            GuiMode::MyNockster => {
+                gui::my_nockster::button_from_point(point).map(|hit| ActiveTarget::Button {
                     mode: self.mode,
                     hit,
                 })
@@ -688,6 +738,9 @@ impl SigerGui {
                 }
                 GuiMode::Menu => gui::menu::draw_menu_button(&mut self.display, hit, active),
                 GuiMode::About => {}
+                GuiMode::MyNockster => {
+                    gui::my_nockster::draw_button(&mut self.display, hit, active)
+                }
                 GuiMode::Themes => gui::menu::draw_theme_button(&mut self.display, hit, active),
                 GuiMode::Wallets | GuiMode::Vault => self.draw_wallet_active_target(hit, active),
                 GuiMode::WalletDetail
@@ -754,6 +807,7 @@ impl SigerGui {
                     GuiMode::Locked => self.handle_locked(point),
                     GuiMode::Menu => self.handle_menu(point),
                     GuiMode::About => self.handle_about(point),
+                    GuiMode::MyNockster => self.handle_my_nockster(point),
                     GuiMode::Themes => self.handle_themes(point),
                     GuiMode::Wallets => self.handle_wallets(point),
                     GuiMode::WalletDetail => self.handle_wallet_detail(point),
@@ -823,11 +877,22 @@ impl SigerGui {
             Button::Menu(MenuItem::About) => self.show_about(),
             Button::Menu(MenuItem::Diagnostics) => self.show_diagnostics(),
             Button::Menu(MenuItem::Calibrate) => self.show_calibration_demo(),
+            Button::Menu(MenuItem::Maintenance) => self.show_my_nockster(),
             _ => {}
         }
     }
 
     fn handle_about(&mut self, _point: Point) {}
+
+    fn handle_my_nockster(&mut self, point: Point) {
+        let Some(hit) = gui::my_nockster::button_from_point(point) else {
+            return;
+        };
+        if let Button::Nockster(action) = hit.button {
+            self.nockster_state.act(action, Instant::now());
+            gui::my_nockster::render(&mut self.display, &self.nockster_state);
+        }
+    }
 
     fn handle_themes(&mut self, point: Point) {
         let Some(hit) = gui::menu::button_from_point_themes(point) else {

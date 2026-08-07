@@ -1,6 +1,6 @@
 # About Nockster
 
-![Nockster hardware wallet](../static/nockster.png)
+![Nockster hardware wallet](/manual/static/nockster.png)
 
 Nockster is a small touchscreen hardware wallet for Nockchain. It stores your wallet keys on the device, shows you what a signing request is asking for, and signs only after you approve on the device screen.
 

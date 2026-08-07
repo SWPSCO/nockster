@@ -50,9 +50,10 @@ The composer stores the Nockblocks API key in browser local storage from the
 Nockblocks panel.
 
 Local development sends Nockblocks RPC through Vite's same-origin
-`/__nockblocks/rpc` proxy to avoid browser CORS restrictions. A hosted composer
-needs the same kind of same-origin proxy unless the upstream RPC enables browser
-CORS for the site.
+`/__nockblocks/rpc` proxy. Hosted builds can call the CORS-enabled edge RPC
+directly by setting `VITE_NOCKBLOCKS_RPC_URL`, as the GitHub Pages workflow does.
+Production builds, including the Tauri desktop app, default to
+`https://nockblocks.com/rpc`.
 
 For local update testing through `make serve`, publish update artifacts into
 Vite's public directory first:

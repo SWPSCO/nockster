@@ -1,6 +1,7 @@
 import type { NoteV1 } from './types';
 
-const RPC_PROXY_PATH = '/__nockblocks/rpc';
+const RPC_URL = import.meta.env.VITE_NOCKBLOCKS_RPC_URL?.trim()
+  || (import.meta.env.DEV ? '/__nockblocks/rpc' : 'https://nockblocks.com/rpc');
 export const NOCKBLOCKS_API_KEY_STORAGE_KEY = 'nockster.composer.nockblocks.apiKey.v1';
 
 type JsonRpcEnvelope<T> = {
@@ -36,7 +37,7 @@ export async function fetchNockblocksNotes(args: {
   if (!address) throw new Error('address required');
   if (!apiKey) throw new Error('Nockblocks API key required');
 
-  const response = await fetch(RPC_PROXY_PATH, {
+  const response = await fetch(RPC_URL, {
     method: 'POST',
     headers: {
       accept: 'application/json',

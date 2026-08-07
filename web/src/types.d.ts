@@ -13,7 +13,9 @@ interface Navigator {
 }
 
 interface ImportMetaEnv {
+  readonly DEV: boolean;
   readonly VITE_NOCKSTER_RELEASE_INDEX_URL?: string;
+  readonly VITE_NOCKBLOCKS_RPC_URL?: string;
 }
 
 interface ImportMeta {

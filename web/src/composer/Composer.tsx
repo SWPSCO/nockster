@@ -2044,7 +2044,7 @@ export function Composer({
             )}
 
             {sidebarPanel === 'send' && (
-            <details className="composer-details" open>
+            <details className="composer-details">
               <summary className="composer-summary">
                 <span>Upload &amp; sign a transaction</span>
               </summary>

@@ -340,6 +340,7 @@ function App() {
   const [addressBookStatus, setAddressBookStatus] = useState('');
   const [syncingAddressBook, setSyncingAddressBook] = useState(false);
   const [walletPanelView, setWalletPanelView] = useState<'slots' | 'addresses' | 'vault'>('slots');
+  const [deviceMenu, setDeviceMenu] = useState<'wallet' | 'device' | 'signing' | 'firmware' | 'tools'>('wallet');
 
   // Signature verification tool + watch-only zpub export state
   const [verifyMode, setVerifyMode] = useState<'message' | 'hash'>('message');
@@ -2910,24 +2911,77 @@ function App() {
 
       {activeTab === 'device' && connected && (
         <div className="device-page device-page-connected">
-          <div className="device-topbar">
-            <div className="device-title">
-              <span className="device-eyebrow">Nockster</span>
-              <h2>Device console</h2>
-            </div>
-            <div className="device-metrics" aria-label="Device summary">
-              {loadingDevice && (
-                <span className="device-pill device-pill-loading" aria-live="polite">
-                  <span className="spinner" aria-hidden="true" />
-                  syncing
-                </span>
+          <div className="device-masthead">
+            <div className="device-topbar">
+              <div className="device-title">
+                <span className="device-eyebrow">Nockster</span>
+                <h2>Device console</h2>
+              </div>
+              {locked === true && (
+                <div className="device-unlock-inline">
+                  <input
+                    type="password"
+                    className="input"
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value)}
+                    placeholder="device PIN"
+                    autoComplete="off"
+                    disabled={deviceBusy}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && pin && !deviceBusy) {
+                        void unlock();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    onClick={unlock}
+                    disabled={deviceBusy || !pin}
+                  >
+                    unlock
+                  </button>
+                </div>
               )}
-              <span className={`device-pill ${locked === false && workStateLabel !== 'busy' ? 'device-pill-good' : topStatusLabel !== 'offline' ? 'device-pill-warn' : ''}`}>
-                {topStatusLabel}
-              </span>
-              <span className="device-pill">{firmwareSummaryLabel}</span>
+              <div className="device-metrics" aria-label="Device summary">
+                {loadingDevice && (
+                  <span className="device-pill device-pill-loading" aria-live="polite">
+                    <span className="spinner" aria-hidden="true" />
+                    syncing
+                  </span>
+                )}
+                <span className={`device-pill ${locked === false && workStateLabel !== 'busy' ? 'device-pill-good' : topStatusLabel !== 'offline' ? 'device-pill-warn' : ''}`}>
+                  {topStatusLabel}
+                </span>
+                <span className="device-pill">{firmwareSummaryLabel}</span>
+              </div>
             </div>
+            <nav className="device-menu" aria-label="Device sections">
+              {([
+                ['wallet', 'wallet'],
+                ['device', 'device'],
+                ['signing', 'signing'],
+                ['firmware', 'firmware'],
+                ['tools', 'tools'],
+              ] as const).map(([menu, label]) => (
+                <button
+                  key={menu}
+                  type="button"
+                  className={`device-menu-tab ${deviceMenu === menu ? 'active' : ''}`}
+                  onClick={() => setDeviceMenu(menu)}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
           </div>
+          {status && (
+            <div className="status-message device-status-message">
+              {status}
+            </div>
+          )}
+          {deviceMenu === 'wallet' && (
+          <>
           {(deviceKeys.length > 0 || info?.has_seed) && (
             <div className="section device-panel device-wallet-panel">
               <div className="device-panel-header">
@@ -3607,19 +3661,16 @@ function App() {
                 </div>
                 {!isInitialSeed && (
                   <div className="seed-hint">
-                    Device uses your existing PIN. Unlock it in the control section before adding a seed.
+                    Device uses your existing PIN. Unlock it from the header or the device menu before adding a seed.
                   </div>
                 )}
               </div>
             </div>
           )}
-
-          {status && (
-            <div className="status-message device-status-message">
-              {status}
-            </div>
+          </>
           )}
 
+          {deviceMenu === 'device' && (
           <div className="device-controls-row">
           <div className="section device-panel device-overview-panel">
             <h2>Status</h2>
@@ -3787,10 +3838,10 @@ function App() {
               </div>
             )}
           </div>
-          </div>{/* device-controls-row */}
+          </div>
+          )}
 
-          <NounInspector wasm={wasm} />
-
+          {deviceMenu === 'firmware' && (
           <div className="section device-panel device-update-panel">
             <div className="seed-header">
               <h2>Firmware update</h2>
@@ -3850,19 +3901,19 @@ function App() {
               </div>
             </div>
             <div className="update-grid">
-              <div className="status-item full-width">
+              <div className="status-item">
                 <span className="label">secure update:</span>
                 <span className="value">{secureUpdateAvailable ? 'available' : 'unavailable'}</span>
               </div>
               {releaseInfoAvailable && (
-                <div className="status-item full-width">
+                <div className="status-item">
                   <span className="label">device release:</span>
                   <span className="value">
                     {firmwareReleaseVersion === null ? '...' : firmwareReleaseVersion}
                   </span>
                 </div>
               )}
-              <div className="status-item full-width">
+              <div className="status-item">
                 <span className="label">latest available:</span>
                 <span className="value">
                   {checkingLatestRelease
@@ -3873,7 +3924,7 @@ function App() {
                 </span>
               </div>
               {buildInfoAvailable && (
-                <div className="status-item full-width">
+                <div className="status-item">
                   <span className="label">device build:</span>
                   <span className="value">
                     {firmwareBuildInfo
@@ -3883,7 +3934,7 @@ function App() {
                 </div>
               )}
               {updateBootStatusAvailable && (
-                <div className="status-item full-width">
+                <div className="status-item">
                   <span className="label">update system:</span>
                   <span className="value">
                     {!safeUpdateBootStatusAvailable
@@ -4083,10 +4134,13 @@ function App() {
             )}
           </div>
 
-          {wasmReady && info && (
-            <div className="section device-panel device-signing-panel">
-              <h2>Transaction signing</h2>
+          )}
 
+          {deviceMenu === 'signing' && wasmReady && info && (
+          <div className="device-stack">
+            <details className="section device-panel device-tool device-signing-panel" open>
+              <summary className="device-tool-summary">Transaction signing</summary>
+              <div className="device-tool-body">
               {!tx ? (
                 <div>
                   <p>Upload an unsigned transaction draft (.draft, .wallet, or .psnt) to sign</p>
@@ -4134,12 +4188,19 @@ function App() {
                   </div>
                 </div>
               )}
-            </div>
+              </div>
+            </details>
+          </div>
           )}
 
+          {deviceMenu === 'tools' && (
+          <div className="device-stack">
+          <NounInspector wasm={wasm} />
+
           {wasmReady && (
-            <div className="section device-panel device-verify-panel">
-              <h2>Verify signature</h2>
+            <details className="section device-panel device-tool device-verify-panel">
+              <summary className="device-tool-summary">Verify signature</summary>
+              <div className="device-tool-body">
               <p className="seed-subtitle">
                 Check a Schnorr signature from this device or from nockchain-wallet
                 (verify-message / verify-hash). Runs locally; no keys involved.
@@ -4227,12 +4288,14 @@ function App() {
               {verifyResult && (
                 <div className="status-message">{verifyResult}</div>
               )}
-            </div>
+              </div>
+            </details>
           )}
 
           {wasmReady && (
-            <div className="section device-panel device-shamir-panel">
-              <h2>Shamir backup</h2>
+            <details className="section device-panel device-tool device-shamir-panel">
+              <summary className="device-tool-summary">Shamir backup</summary>
+              <div className="device-tool-body">
               <p className="seed-subtitle">
                 Split a key into k-of-n shares so any k restore it and any fewer reveal
                 nothing. Splitting works on a zprv or raw coil you paste here; restoring
@@ -4339,7 +4402,10 @@ function App() {
                 </>
               )}
               {shamirStatus && <div className="status-message">{shamirStatus}</div>}
-            </div>
+              </div>
+            </details>
+          )}
+          </div>
           )}
         </div>
       )}

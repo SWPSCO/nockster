@@ -103,33 +103,35 @@ export function NounInspector({ wasm }: { wasm: InspectFn | null }) {
   };
 
   return (
-    <div className="section device-panel noun-inspector">
-      <div className="device-panel-header">
-        <h2>Noun inspector</h2>
-        <label className="btn btn-small btn-secondary">
-          <input
-            type="file"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void onFile(f);
-              e.target.value = '';
-            }}
-          />
-          open jam…
-        </label>
-      </div>
-      <p className="seed-subtitle">
-        Decode any jammed noun (.tx, .psnt, keys.export, .sig) into a typed tree.
-        Local and read-only.
-      </p>
-      {name && !error && <div className="device-inline-status">{name}</div>}
-      {error && <div className="device-inline-status">{error}</div>}
-      {view && (
-        <div className="noun-tree">
-          <NodeView node={view} depth={0} />
+    <details className="section device-panel device-tool noun-inspector">
+      <summary className="device-tool-summary">Noun inspector</summary>
+      <div className="device-tool-body">
+        <p className="seed-subtitle">
+          Decode any jammed noun (.tx, .psnt, keys.export, .sig) into a typed tree.
+          Local and read-only.
+        </p>
+        <div>
+          <label className="btn btn-small btn-secondary">
+            <input
+              type="file"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void onFile(f);
+                e.target.value = '';
+              }}
+            />
+            open jam…
+          </label>
         </div>
-      )}
-    </div>
+        {name && !error && <div className="device-inline-status">{name}</div>}
+        {error && <div className="device-inline-status">{error}</div>}
+        {view && (
+          <div className="noun-tree">
+            <NodeView node={view} depth={0} />
+          </div>
+        )}
+      </div>
+    </details>
   );
 }

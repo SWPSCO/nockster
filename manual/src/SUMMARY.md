@@ -12,5 +12,6 @@
 # Advanced
 - [Transaction composer](./advanced/composer.md)
 - [Wallet slots and keyfiles](./advanced/wallet-interop.md)
+- [Shamir backups](./advanced/shamir-backups.md)
 - [Preimage vault](./advanced/preimage-vault.md)
 - [CLI reference](./advanced/cli.md)

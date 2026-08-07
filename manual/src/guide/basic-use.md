@@ -46,5 +46,8 @@ The unlocked device has a settings menu with:
 - **Calibrate**
 - **Diagnostics**
 - **About**
+- **Maintenance**
 
 Use **Calibrate** if touches are landing in the wrong place. Use **About** to see firmware and release information.
+
+**Maintenance** opens the small **My Nockster** pet. Its state is temporary and has no connection to wallet storage, signing, or seed entropy.

@@ -9,11 +9,11 @@ Nockster firmware updates are signed. The host downloads and streams update data
 3. Click **firmware updates** before connecting, or connect and use **Firmware update** in the device console.
 4. Click **connect & install latest** or **update firmware**.
 5. Confirm the browser device prompt if needed.
-6. Wait while the app fetches and installs the update.
-7. Reboot when prompted.
+6. Keep the tab open, the computer awake, and the USB cable connected while the app installs and verifies the update.
+7. The latest-update flow normally reboots Nockster automatically. An advanced install may ask whether to reboot now.
 8. Reconnect after the device appears again.
 
-The app writes the update to an inactive OTA slot, verifies it, then reboots into the installed firmware.
+The app writes the update to an inactive OTA slot, verifies it, then reboots into the installed firmware. On the first boot, the device confirms the new OTA slot before normal operation continues.
 
 ## Status fields
 
@@ -26,6 +26,8 @@ The update panel can show:
 - trust anchor
 
 If the app says the device is up to date, no update is installed.
+
+If **update system** says **needs recovery install**, install the latest signed release through the normal update flow. The device can rebuild the inactive OTA path during that install; keep it connected until verification finishes.
 
 ## Advanced update tools
 

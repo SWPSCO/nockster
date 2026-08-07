@@ -568,6 +568,13 @@ impl NvsStore {
         )
     }
 
+    /// Whether storage contains an initialized wallet header, even if later
+    /// integrity checks fail. A missing hardware key must never be replaced
+    /// when existing records may have been bound to the original key.
+    pub fn has_initialized_header(&mut self) -> bool {
+        matches!(self.read_header(), Ok(Some(header)) if header.initialized())
+    }
+
     pub fn get_attempts_remaining(&mut self) -> u8 {
         match self.read_header() {
             Ok(Some(header)) if header.initialized() => {

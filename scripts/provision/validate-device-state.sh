@@ -27,7 +27,7 @@ Stages:
   flash-encryption  require flash encryption enabled
   lockdown          require production-lockdown fuses except power-glitch
   power-glitch      require power-glitch protection
-  production        run hmac-up, secure-boot, flash-encryption, lockdown, and OTA checks
+  production        require the complete production security state and OTA readiness
 
 Set VALIDATE_DRY_RUN=1 to print commands without touching the device.
 USAGE
@@ -147,6 +147,10 @@ validate_power_glitch() {
     --expect-power-glitch-protection
 }
 
+validate_production_security() {
+  run_cmd "${cli}" security --port "${port}" --baud "${baud}"
+}
+
 case "${stage}" in
   smoke)
     validate_smoke
@@ -173,10 +177,7 @@ case "${stage}" in
     validate_power_glitch
     ;;
   production)
-    validate_hmac_up
-    validate_secure_boot
-    validate_flash_encryption
-    validate_lockdown
+    validate_production_security
     validate_update_ready
     ;;
 esac

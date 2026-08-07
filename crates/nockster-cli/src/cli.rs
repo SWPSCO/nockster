@@ -22,7 +22,7 @@ pub enum Cmd {
     /// Device health (firmware's well-known test)
     Health(PortArgs),
 
-    /// report or assert ESP32-S3 secure boot, flash encryption, eFuse, and NVS status
+    /// report and validate the complete production security state
     Security(SecurityArgs),
 
     /// non-destructive hardware smoke check
@@ -263,40 +263,40 @@ pub struct SecurityArgs {
     #[arg(long, default_value_t = 115200)]
     pub baud: u32,
     /// Require firmware built with chip-security status enabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_chip_security: bool,
     /// Require at least one eFuse key slot with purpose HMAC_UP
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_hmac_up: bool,
     /// Require an HMAC_UP key slot to also be read-protected
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_hmac_up_read_protected: bool,
     /// Require initialized schema-v2 NVS storage
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_nvs_v2: bool,
     /// Require secure boot to be enabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_secure_boot: bool,
     /// Require flash encryption to be enabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_flash_encryption: bool,
     /// Require pad, USB, software JTAG, and USB serial/JTAG disable eFuses to be set
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_jtag_disabled: bool,
     /// Require download-mode entry paths to be disabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_download_disabled: bool,
     /// Require direct boot to be disabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_direct_boot_disabled: bool,
     /// Require USB ROM printing to be disabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_usb_rom_print_disabled: bool,
     /// Require power-glitch protection to be enabled
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_power_glitch_protection: bool,
     /// Require the current production lockdown checklist except power-glitch protection
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub expect_production_lockdown: bool,
 }
 

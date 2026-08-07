@@ -1167,6 +1167,8 @@ fn main() -> ! {
         let mut nvs = NvsStore::new();
         nvs.is_initialized()
     };
+    #[cfg(feature = "chip-security")]
+    let nvs_has_initialized_header = NvsStore::new().has_initialized_header();
     if pin_required {
         if let Some(ui) = ui.as_mut() {
             ui.begin_unlock(None);
@@ -1177,6 +1179,22 @@ fn main() -> ! {
             ui.show_seed_setup();
         }
     }
+    // A production image running from an OTA slot is the ship gate: enforce
+    // every lockdown fuse before confirming the new image. Factory/debug boots
+    // remain non-destructive. Keep this before the second core so neither the
+    // eFuse operation nor OTA metadata writes race flash-backed worker code.
+    #[cfg(feature = "chip-security")]
+    {
+        let running_from_ota = update_auth::running_from_ota_slot();
+        if running_from_ota && !device_identity::production_identity_ready_for_initialization() {
+            panic!("OTA production lockdown requires immutable device identity");
+        }
+        enforce_ota_production_lockdown(running_from_ota, nvs_has_initialized_header)
+            .expect("OTA production lockdown failed");
+    }
+
+    // Discover the HMAC_UP slot only after OTA lockdown has had an opportunity
+    // to provision it, so first-time NVS initialization works on this boot.
     #[cfg(feature = "chip-security")]
     let mut app_core_state = AppCoreState {
         nvs_pepper: nvs_pepper::AppNvsPepper::new(p.HMAC),
@@ -1185,13 +1203,6 @@ fn main() -> ! {
     let mut app_core_state = AppCoreState {
         nvs_pepper: nvs_pepper::AppNvsPepper::new(),
     };
-    // A production image running from an OTA slot is the ship gate: enforce
-    // every lockdown fuse before confirming the new image. Factory/debug boots
-    // remain non-destructive. Keep this before the second core so neither the
-    // eFuse operation nor OTA metadata writes race flash-backed worker code.
-    #[cfg(feature = "chip-security")]
-    enforce_ota_production_lockdown(update_auth::running_from_ota_slot())
-        .expect("OTA production lockdown failed");
 
     // Confirm a newly booted OTA image only after its required production
     // lockdown has passed readback verification.

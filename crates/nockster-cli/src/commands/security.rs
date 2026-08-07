@@ -147,13 +147,13 @@ fn purpose_name(purpose: u8) -> String {
 }
 
 fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow::Result<()> {
-    if !has_expectations(args) {
-        return Ok(());
-    }
-
     let mut failures = Vec::new();
+    // With no legacy factory-stage expectations, validate the complete set of
+    // protections expected on every production device.
+    let expect_all = !has_expectations(args);
     let expect_production = args.expect_production_lockdown;
-    let expect_chip_security = args.expect_chip_security
+    let expect_chip_security = expect_all
+        || args.expect_chip_security
         || args.expect_hmac_up
         || args.expect_hmac_up_read_protected
         || args.expect_secure_boot
@@ -172,7 +172,9 @@ fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow
         );
     }
 
-    if args.expect_nvs_v2 && (!status.nvs_initialized || status.nvs_schema_version != 2) {
+    if (expect_all || args.expect_nvs_v2)
+        && (!status.nvs_initialized || status.nvs_schema_version != 2)
+    {
         failures.push(format!(
             "NVS schema v2 expected, got initialized={} schema_v={}",
             on_off(status.nvs_initialized),
@@ -181,13 +183,16 @@ fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow
     }
 
     if status.chip_security_available {
-        if (args.expect_hmac_up || args.expect_hmac_up_read_protected || expect_production)
+        if (expect_all
+            || args.expect_hmac_up
+            || args.expect_hmac_up_read_protected
+            || expect_production)
             && status.hmac_user_key_slots == 0
         {
             failures.push("no HMAC_UP eFuse key slot is provisioned".to_string());
         }
 
-        if args.expect_hmac_up_read_protected || expect_production {
+        if expect_all || args.expect_hmac_up_read_protected || expect_production {
             let protected_hmac_up = status.hmac_user_key_slots & status.read_protected_key_slots;
             if protected_hmac_up == 0 {
                 failures.push(format!(
@@ -198,18 +203,20 @@ fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow
             }
         }
 
-        if (args.expect_secure_boot || expect_production) && !status.secure_boot {
+        if (expect_all || args.expect_secure_boot || expect_production) && !status.secure_boot {
             failures.push("secure boot is not enabled".to_string());
         }
 
-        if (args.expect_flash_encryption || expect_production) && !status.flash_encryption {
+        if (expect_all || args.expect_flash_encryption || expect_production)
+            && !status.flash_encryption
+        {
             failures.push(format!(
                 "flash encryption is not enabled; flash_crypt_cnt=0b{:03b}",
                 status.flash_crypt_cnt & 0x07
             ));
         }
 
-        if args.expect_jtag_disabled || expect_production {
+        if expect_all || args.expect_jtag_disabled || expect_production {
             if !status.pad_jtag_disabled {
                 failures.push("pad JTAG is not disabled".to_string());
             }
@@ -227,7 +234,7 @@ fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow
             }
         }
 
-        if args.expect_download_disabled || expect_production {
+        if expect_all || args.expect_download_disabled || expect_production {
             if !status.download_mode_disabled {
                 failures.push("download mode is not disabled".to_string());
             }
@@ -239,17 +246,19 @@ fn validate_expectations(status: &SecurityStatus, args: &SecurityArgs) -> anyhow
             }
         }
 
-        if (args.expect_direct_boot_disabled || expect_production) && !status.direct_boot_disabled {
+        if (expect_all || args.expect_direct_boot_disabled || expect_production)
+            && !status.direct_boot_disabled
+        {
             failures.push("direct boot is not disabled".to_string());
         }
 
-        if (args.expect_usb_rom_print_disabled || expect_production)
+        if (expect_all || args.expect_usb_rom_print_disabled || expect_production)
             && !status.usb_rom_print_disabled
         {
             failures.push("USB ROM printing is not disabled".to_string());
         }
 
-        if args.expect_power_glitch_protection && !status.power_glitch_enabled {
+        if (expect_all || args.expect_power_glitch_protection) && !status.power_glitch_enabled {
             failures.push("power-glitch protection is not enabled".to_string());
         }
     }
@@ -278,4 +287,90 @@ fn has_expectations(args: &SecurityArgs) -> bool {
         || args.expect_usb_rom_print_disabled
         || args.expect_power_glitch_protection
         || args.expect_production_lockdown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args() -> SecurityArgs {
+        SecurityArgs {
+            port: "hid".to_string(),
+            baud: 115_200,
+            expect_chip_security: false,
+            expect_hmac_up: false,
+            expect_hmac_up_read_protected: false,
+            expect_nvs_v2: false,
+            expect_secure_boot: false,
+            expect_flash_encryption: false,
+            expect_jtag_disabled: false,
+            expect_download_disabled: false,
+            expect_direct_boot_disabled: false,
+            expect_usb_rom_print_disabled: false,
+            expect_power_glitch_protection: false,
+            expect_production_lockdown: false,
+        }
+    }
+
+    fn production_status() -> SecurityStatus {
+        SecurityStatus {
+            chip_security_available: true,
+            mac: [0; 6],
+            flash_encryption: true,
+            flash_crypt_cnt: 1,
+            secure_boot: true,
+            secure_version: 0,
+            key_purposes: [0; 6],
+            hmac_key_slots: 1,
+            hmac_user_key_slots: 1,
+            read_protected_key_slots: 1,
+            pad_jtag_disabled: true,
+            usb_jtag_disabled: true,
+            soft_jtag_disabled: true,
+            soft_jtag_disable_bits: 7,
+            usb_serial_jtag_disabled: true,
+            download_mode_disabled: true,
+            usb_serial_jtag_download_disabled: true,
+            usb_otg_download_disabled: true,
+            secure_download_enabled: false,
+            direct_boot_disabled: true,
+            usb_rom_print_disabled: true,
+            power_glitch_enabled: true,
+            nvs_initialized: true,
+            nvs_schema_version: 2,
+            nvs_slot_count: 1,
+        }
+    }
+
+    #[test]
+    fn bare_security_command_requires_complete_production_state() {
+        assert!(validate_expectations(&production_status(), &args()).is_ok());
+    }
+
+    #[test]
+    fn bare_security_command_reports_every_missing_requirement() {
+        let mut status = production_status();
+        status.secure_boot = false;
+        status.pad_jtag_disabled = false;
+        status.usb_otg_download_disabled = false;
+        status.power_glitch_enabled = false;
+        status.nvs_schema_version = 1;
+
+        let error = validate_expectations(&status, &args())
+            .expect_err("incomplete production state must fail")
+            .to_string();
+
+        for missing in [
+            "NVS schema v2 expected",
+            "secure boot is not enabled",
+            "pad JTAG is not disabled",
+            "USB OTG download mode is not disabled",
+            "power-glitch protection is not enabled",
+        ] {
+            assert!(
+                error.contains(missing),
+                "missing failure: {missing}\n{error}"
+            );
+        }
+    }
 }

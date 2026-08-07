@@ -43,6 +43,13 @@ read-protected, purpose-bound hardware key slot: firmware can ask the peripheral
 to calculate an HMAC, but neither firmware nor a connected host can read the
 underlying key.
 
+If a production device doesn't have a hardware secret generated at provisioning, 
+the device generates it locally from the hardware random-number
+generator, assigns it exclusively to HMAC use, and immediately makes the key
+unreadable and immutable. This recovery is allowed only before wallet storage
+has been initialized; an existing wallet is never silently rebound to a new
+hardware key.
+
 Conceptually, the storage key is derived as:
 
 ```text
@@ -158,28 +165,15 @@ itself. Secure storage cannot make a user-approved malicious transaction safe.
 
 ## Checking a device
 
-The security report is read-only:
+The security check is read-only:
 
 ```sh
 nockster-cli security --port hid
 ```
 
 It reports the storage schema, hardware-bound HMAC key, Secure Boot, flash
-encryption, debug/download lockdown, and glitch-protection state.
-
-For a strict production assertion:
-
-```sh
-nockster-cli security --port hid \
-  --expect-chip-security \
-  --expect-hmac-up \
-  --expect-hmac-up-read-protected \
-  --expect-nvs-v2 \
-  --expect-secure-boot \
-  --expect-flash-encryption \
-  --expect-production-lockdown \
-  --expect-power-glitch-protection
-```
+encryption, debug/download lockdown, and glitch-protection state. It exits with
+an error and lists every missing requirement if the device is not fully secured.
 
 The repository also provides a combined read-only acceptance check:
 

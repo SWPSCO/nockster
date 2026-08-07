@@ -148,7 +148,11 @@ pub fn handle_request(req: &Request, locked: bool) -> Option<Response> {
                 Err(_) => Response::Err { code: ERR_NO_SEED },
             })
         }
-        Request::SignMessage { slot, path, message } => {
+        Request::SignMessage {
+            slot,
+            path,
+            message,
+        } => {
             if locked {
                 return Some(Response::Err {
                     code: ERR_DEVICE_LOCKED,

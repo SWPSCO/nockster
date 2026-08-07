@@ -577,13 +577,11 @@ const HOLD_RING_DOT_RADIUS: i32 = 3;
 
 /// sin(deg) * 1024 for deg in 0..=90.
 const SIN1024: [i16; 91] = [
-    0, 18, 36, 54, 71, 89, 107, 125, 143, 160, 178, 195, 213,
-    230, 248, 265, 282, 299, 316, 333, 350, 367, 384, 400, 416, 433,
-    449, 465, 481, 496, 512, 527, 543, 558, 573, 587, 602, 616, 630,
-    644, 658, 672, 685, 698, 711, 724, 737, 749, 761, 773, 784, 796,
-    807, 818, 828, 839, 849, 859, 868, 878, 887, 896, 904, 912, 920,
-    928, 935, 943, 949, 956, 962, 968, 974, 979, 984, 989, 994, 998,
-    1002, 1005, 1008, 1011, 1014, 1016, 1018, 1020, 1022, 1023, 1023, 1024, 1024,
+    0, 18, 36, 54, 71, 89, 107, 125, 143, 160, 178, 195, 213, 230, 248, 265, 282, 299, 316, 333,
+    350, 367, 384, 400, 416, 433, 449, 465, 481, 496, 512, 527, 543, 558, 573, 587, 602, 616, 630,
+    644, 658, 672, 685, 698, 711, 724, 737, 749, 761, 773, 784, 796, 807, 818, 828, 839, 849, 859,
+    868, 878, 887, 896, 904, 912, 920, 928, 935, 943, 949, 956, 962, 968, 974, 979, 984, 989, 994,
+    998, 1002, 1005, 1008, 1011, 1014, 1016, 1018, 1020, 1022, 1023, 1023, 1024, 1024,
 ];
 
 fn sin1024(deg: i32) -> i32 {
@@ -601,9 +599,8 @@ fn cos1024(deg: i32) -> i32 {
 }
 
 fn blend565(from: Rgb565, to: Rgb565, num: u16, den: u16) -> Rgb565 {
-    let mix = |a: u8, b: u8| -> u8 {
-        (a as i32 + (b as i32 - a as i32) * num as i32 / den as i32) as u8
-    };
+    let mix =
+        |a: u8, b: u8| -> u8 { (a as i32 + (b as i32 - a as i32) * num as i32 / den as i32) as u8 };
     Rgb565::new(
         mix(from.r(), to.r()),
         mix(from.g(), to.g()),
@@ -907,7 +904,10 @@ pub fn render_confirm_overlay(
         let subtle = MonoTextStyle::new(&FONT_8X13, palette::text_subtle());
         let _ = Text::with_alignment(
             "hold to approve",
-            Point::new(center_x, hint_center.y + FONT_8X13.character_size.height as i32 / 3),
+            Point::new(
+                center_x,
+                hint_center.y + FONT_8X13.character_size.height as i32 / 3,
+            ),
             subtle,
             Alignment::Center,
         )
@@ -1146,14 +1146,7 @@ fn tx_review_draw_word_wrapped(
     let mut remaining = text;
     while !remaining.is_empty() {
         let (end, next) = tx_review_word_break(remaining, max_chars);
-        tx_review_draw_line(
-            display,
-            content,
-            scroll_y,
-            line,
-            &remaining[..end],
-            style,
-        );
+        tx_review_draw_line(display, content, scroll_y, line, &remaining[..end], style);
         line += 1;
         remaining = &remaining[next..];
     }
@@ -1322,57 +1315,24 @@ pub fn render_tx_review_overlay(
         let mut text = heapless::String::<32>::new();
         let mut amount = heapless::String::<32>::new();
         let _ = write!(text, "INPUTS {}", summary.input_count);
-        line = tx_review_draw_word_wrapped(
-            display,
-            content,
-            scroll_y,
-            line,
-            text.as_str(),
-            heading,
-        );
+        line =
+            tx_review_draw_word_wrapped(display, content, scroll_y, line, text.as_str(), heading);
         text.clear();
         let _ = write!(text, "OUTPUTS {}", summary.external_output_count);
-        line = tx_review_draw_word_wrapped(
-            display,
-            content,
-            scroll_y,
-            line,
-            text.as_str(),
-            heading,
-        );
+        line =
+            tx_review_draw_word_wrapped(display, content, scroll_y, line, text.as_str(), heading);
         tx_review_write_amount(&mut amount, summary.external_total);
         text.clear();
         let _ = write!(text, "SEND {}", amount.as_str());
-        line = tx_review_draw_word_wrapped(
-            display,
-            content,
-            scroll_y,
-            line,
-            text.as_str(),
-            normal,
-        );
+        line = tx_review_draw_word_wrapped(display, content, scroll_y, line, text.as_str(), normal);
         tx_review_write_amount(&mut amount, summary.fee_total);
         text.clear();
         let _ = write!(text, "FEE {}", amount.as_str());
-        line = tx_review_draw_word_wrapped(
-            display,
-            content,
-            scroll_y,
-            line,
-            text.as_str(),
-            normal,
-        );
+        line = tx_review_draw_word_wrapped(display, content, scroll_y, line, text.as_str(), normal);
         tx_review_write_amount(&mut amount, summary.refund_total);
         text.clear();
         let _ = write!(text, "CHANGE {}", amount.as_str());
-        line = tx_review_draw_word_wrapped(
-            display,
-            content,
-            scroll_y,
-            line,
-            text.as_str(),
-            normal,
-        );
+        line = tx_review_draw_word_wrapped(display, content, scroll_y, line, text.as_str(), normal);
         line = tx_review_draw_word_wrapped(
             display,
             content,
@@ -1419,9 +1379,8 @@ pub fn render_tx_review_overlay(
             (TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, "Multiple recipients"),
         ] {
             if summary.flags & flag != 0 {
-                line = tx_review_draw_word_wrapped(
-                    display, content, scroll_y, line, message, warning,
-                );
+                line =
+                    tx_review_draw_word_wrapped(display, content, scroll_y, line, message, warning);
             }
         }
     } else if let Some(output) = tx_review_output_index(summary, page).and_then(|i| outputs.get(i))
@@ -1832,8 +1791,8 @@ fn render_tx_review_overlay_legacy(
             } else {
                 write_amount(&mut amount, out.gift);
             }
-            let _ = Text::new(amount.as_str(), Point::new(left, baseline), detail_style)
-                .draw(display);
+            let _ =
+                Text::new(amount.as_str(), Point::new(left, baseline), detail_style).draw(display);
             baseline += detail_line_h;
 
             let recipient = out.recipient_b58.as_str();
@@ -1857,8 +1816,8 @@ fn render_tx_review_overlay_legacy(
                 while dpos < dbytes.len() && baseline <= bottom {
                     let end = (dpos + max_chars).min(dbytes.len());
                     let part = core::str::from_utf8(&dbytes[dpos..end]).unwrap_or("");
-                    let _ = Text::new(part, Point::new(left, baseline), detail_warning)
-                        .draw(display);
+                    let _ =
+                        Text::new(part, Point::new(left, baseline), detail_warning).draw(display);
                     dpos = end;
                     baseline += detail_line_h;
                 }
@@ -1872,7 +1831,11 @@ fn render_tx_review_overlay_legacy(
                 palette::btn_primary_base(),
                 palette::btn_primary_light(),
                 palette::btn_primary_dark(),
-                if review_complete { "Approve" } else { "Scroll all" },
+                if review_complete {
+                    "Approve"
+                } else {
+                    "Scroll all"
+                },
             ),
             Button::Clear => (
                 palette::btn_secondary_base(),

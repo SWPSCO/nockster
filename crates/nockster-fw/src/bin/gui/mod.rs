@@ -19,10 +19,9 @@ pub use menu::{AboutInfo, WalletRow, WalletRows};
 pub use seed::{zeroize_seed_phrase, SeedInteraction, SeedPhrase};
 pub use state::{
     GuiInteraction, GuiMode, MenuItem, TxReviewSummary, VaultInteraction, WalletInteraction,
-    TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
+    TX_REVIEW_DETAIL_MAX, TX_REVIEW_FLAG_BRIDGE, TX_REVIEW_FLAG_HASHLOCK, TX_REVIEW_FLAG_HIGH_FEE,
     TX_REVIEW_FLAG_LOCK_UNVERIFIED, TX_REVIEW_FLAG_MULTIPLE_RECIPIENTS, TX_REVIEW_FLAG_MULTISIG,
-    TX_REVIEW_DETAIL_MAX, TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK,
-    TX_REVIEW_MAX_OUTPUTS,
+    TX_REVIEW_FLAG_NO_REFUND, TX_REVIEW_FLAG_TIMELOCK, TX_REVIEW_MAX_OUTPUTS,
 };
 pub use touch::{default_touch_calibration, touch_calibration_valid, ScreenPoint};
 
@@ -44,7 +43,6 @@ use esp_hal::{
     Blocking,
 };
 use heapless::{String as HString, Vec as HVec};
-use zeroize::Zeroize;
 use layout::{
     button_from_point_confirm, button_from_point_keypad, button_from_point_tx_review,
     header_back_button, header_height, lock_button_rect, point_in_header_back,
@@ -69,6 +67,7 @@ use render::{
 use state::{Button, ButtonHit, InteractionState, TouchDiagnostics, TxReviewOutput};
 use time::{Duration, Instant};
 use touch::{default_touch_calibration as default_calibration, transform_raw_touch, TouchSample};
+use zeroize::Zeroize;
 
 const UNLOCK_DEMO_MAX_FRAMES: Option<u32> = None; // you can limit demo frames here eg Some(180)
 const TOUCH_DIAGNOSTICS_RENDER_INTERVAL: Duration = Duration::from_millis(100);
@@ -1136,7 +1135,11 @@ impl<'d> Gui<'d> {
                     .find(|row| row.index == slot)
                     .map(|row| row.label.clone())
                     .unwrap_or_default();
-                self.show_label_entry(slot, current.as_str(), label::LabelEntryContext::VaultDetail);
+                self.show_label_entry(
+                    slot,
+                    current.as_str(),
+                    label::LabelEntryContext::VaultDetail,
+                );
                 None
             }
             Button::WalletDelete(slot) => {
@@ -1580,9 +1583,7 @@ impl<'d> Gui<'d> {
                     seed::button_from_point_seed_setup(pt, self.seed_flow_is_add)
                 }
                 GuiMode::SeedEntry => seed::button_from_point_seed_entry(pt),
-                GuiMode::SeedDice => {
-                    seed::button_from_point_seed_dice(pt, &self.seed_entry_state)
-                }
+                GuiMode::SeedDice => seed::button_from_point_seed_dice(pt, &self.seed_entry_state),
                 GuiMode::SeedConfirm => seed::button_from_point_seed_confirm(pt),
                 GuiMode::SeedVerify => seed::button_from_point_seed_verify(pt),
                 _ => None,
@@ -1713,9 +1714,7 @@ impl<'d> Gui<'d> {
                     | GuiMode::SeedEntry
                     | GuiMode::SeedDice
                     | GuiMode::SeedConfirm
-                    | GuiMode::SeedVerify => {
-                        self.handle_seed_button(hit.button)
-                    }
+                    | GuiMode::SeedVerify => self.handle_seed_button(hit.button),
                     GuiMode::Menu => self.handle_menu_button(hit.button),
                     GuiMode::About => self.handle_about_button(hit.button),
                     GuiMode::MyNockster => self.handle_nockster_button(hit.button, now),
@@ -1740,9 +1739,7 @@ impl<'d> Gui<'d> {
             return;
         }
         self.deactivate_button();
-        if self.mode == GuiMode::TxReview
-            && hit.button == Button::Ok
-            && !self.tx_review_seen_bottom
+        if self.mode == GuiMode::TxReview && hit.button == Button::Ok && !self.tx_review_seen_bottom
         {
             return;
         }
@@ -1989,9 +1986,8 @@ impl<'d> Gui<'d> {
         let now = Instant::now();
         let elapsed_ms = (now - started).as_micros() / 1_000;
         let total_ms = HOLD_CONFIRM_DURATION.as_micros() / 1_000;
-        let step =
-            ((elapsed_ms * HOLD_PROGRESS_STEPS as u64) / total_ms).min(HOLD_PROGRESS_STEPS as u64)
-                as u16;
+        let step = ((elapsed_ms * HOLD_PROGRESS_STEPS as u64) / total_ms)
+            .min(HOLD_PROGRESS_STEPS as u64) as u16;
 
         let base = if on_background {
             palette::background()

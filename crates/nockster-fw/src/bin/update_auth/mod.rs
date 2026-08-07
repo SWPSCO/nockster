@@ -776,6 +776,11 @@ fn encrypted_running_ota_slot() -> Option<Slot> {
     }
 }
 
+#[cfg(feature = "chip-security")]
+pub fn running_from_ota_slot() -> bool {
+    encrypted_running_ota_slot().is_some()
+}
+
 fn encrypted_ota_target(manifest: &UpdateManifest) -> Result<OtaTarget, UpdateFlashError> {
     if manifest.image_size > PROD_OTA_SLOT_SIZE {
         return Err(UpdateFlashError::ImageTooLarge);

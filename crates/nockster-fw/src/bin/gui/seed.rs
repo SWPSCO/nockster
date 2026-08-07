@@ -261,8 +261,7 @@ impl SeedEntryState {
                     continue;
                 }
                 let mut candidate =
-                    u16::from_be_bytes([random[random_offset], random[random_offset + 1]])
-                        & 0x07ff;
+                    u16::from_be_bytes([random[random_offset], random[random_offset + 1]]) & 0x07ff;
                 random_offset += 2;
                 while candidate == correct_index as u16 || choices[..slot].contains(&candidate) {
                     candidate = (candidate + 1) & 0x07ff;
@@ -379,8 +378,7 @@ impl SeedEntryState {
     }
 
     pub fn take_finished(&mut self) -> Option<SeedPhrase> {
-        self.is_complete()
-            .then(|| core::mem::take(&mut self.words))
+        self.is_complete().then(|| core::mem::take(&mut self.words))
     }
 
     pub fn suggestion_position(&self) -> Option<(usize, usize)> {
@@ -670,8 +668,8 @@ pub fn button_from_point_seed_dice(point: Point, state: &SeedEntryState) -> Opti
         .into_iter()
         .chain(dice_control_buttons())
         .find(|hit| {
-            let enabled = hit.button != Button::Seed(SeedButton::Finish)
-                || state.dice_rolls_complete();
+            let enabled =
+                hit.button != Button::Seed(SeedButton::Finish) || state.dice_rolls_complete();
             enabled && within_hit(hit, point, 4)
         })
 }
@@ -689,10 +687,7 @@ fn dice_buttons() -> HVec<ButtonHit, 6> {
         let col = index % 3;
         let _ = out.push(ButtonHit {
             button: Button::Seed(SeedButton::DiceFace(face)),
-            top_left: Point::new(
-                margin + col * (width + gap),
-                top + row * (height + gap),
-            ),
+            top_left: Point::new(margin + col * (width + gap), top + row * (height + gap)),
             size: Size::new(width as u32, height as u32),
         });
     }

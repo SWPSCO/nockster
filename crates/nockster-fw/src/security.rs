@@ -4,8 +4,10 @@ use esp_hal::efuse::{
     DIS_USB_OTG_DOWNLOAD_MODE, DIS_USB_SERIAL_JTAG, DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE,
     DIS_USB_SERIAL_JTAG_ROM_PRINT, ENABLE_SECURITY_DOWNLOAD, KEY_PURPOSE_0, KEY_PURPOSE_1,
     KEY_PURPOSE_2, KEY_PURPOSE_3, KEY_PURPOSE_4, KEY_PURPOSE_5, POWERGLITCH_EN, RD_DIS,
-    SECURE_BOOT_EN, SECURE_VERSION, SOFT_DIS_JTAG, SPI_BOOT_CRYPT_CNT,
+    SECURE_BOOT_EN, SECURE_VERSION, SOFT_DIS_JTAG, SPI_BOOT_CRYPT_CNT, WR_DIS,
 };
+#[cfg(feature = "chip-security")]
+use esp_hal::peripherals::EFUSE;
 #[cfg(not(feature = "chip-security"))]
 use nockster_core::SecurityStatus;
 #[cfg(feature = "chip-security")]
@@ -15,6 +17,196 @@ use nockster_core::{
 };
 
 use crate::nvs_store::NvsStore;
+
+#[cfg(feature = "chip-security")]
+const WR_DIS_JTAG_HARD: u32 = 1 << 2;
+#[cfg(feature = "chip-security")]
+const WR_DIS_POWER_GLITCH: u32 = 1 << 17;
+#[cfg(feature = "chip-security")]
+const WR_DIS_DOWNLOAD: u32 = 1 << 18;
+#[cfg(feature = "chip-security")]
+const WR_DIS_USB_OTG_DOWNLOAD: u32 = 1 << 19;
+#[cfg(feature = "chip-security")]
+const WR_DIS_JTAG_SOFT: u32 = 1 << 31;
+
+// BLOCK0 programming-register masks. BLOCK0 bit N is programmed through
+// PGM_DATA[N / 32] bit N % 32. Keep these in one place so the irreversible
+// write below can be reviewed directly against the ESP32-S3 eFuse table.
+#[cfg(feature = "chip-security")]
+const LOCKDOWN_DATA1_ALL: u32 = (0x7 << 16) | (1 << 19);
+#[cfg(feature = "chip-security")]
+const LOCKDOWN_DATA3_ALL: u32 = (1 << 22) | (1 << 23);
+#[cfg(feature = "chip-security")]
+const LOCKDOWN_DATA4_ALL: u32 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 4) | (1 << 30) | (1 << 31);
+
+#[cfg(feature = "chip-security")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtaLockdownError {
+    MissingSecureBoot,
+    MissingFlashEncryption,
+    WriteProtected,
+    ProgramFailed,
+    ReadFailed,
+    VerifyFailed,
+}
+
+#[cfg(feature = "chip-security")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtaLockdownOutcome {
+    NotProductionBuild,
+    NotRunningFromOta,
+    AlreadyLocked,
+    Locked,
+}
+
+#[cfg(feature = "chip-security")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LockdownProgramWords {
+    data1: u32,
+    data3: u32,
+    data4: u32,
+}
+
+#[cfg(feature = "chip-security")]
+impl LockdownProgramWords {
+    fn is_empty(self) -> bool {
+        self.data1 == 0 && self.data3 == 0 && self.data4 == 0
+    }
+}
+
+/// Enforce the irreversible production lockdown when a production image is
+/// running from an OTA app partition.
+///
+/// Factory/debug images never write lockdown eFuses. OTA production images
+/// validate secure boot and flash encryption, preflight every relevant
+/// write-protection group, burn only missing bits, and verify them by readback.
+#[cfg(feature = "chip-security")]
+pub fn enforce_ota_production_lockdown(
+    running_from_ota: bool,
+) -> Result<OtaLockdownOutcome, OtaLockdownError> {
+    if option_env!("NOCKSTER_BUILD_PROFILE") != Some("production") {
+        return Ok(OtaLockdownOutcome::NotProductionBuild);
+    }
+    if !running_from_ota {
+        return Ok(OtaLockdownOutcome::NotRunningFromOta);
+    }
+    if !Efuse::read_bit(SECURE_BOOT_EN) {
+        return Err(OtaLockdownError::MissingSecureBoot);
+    }
+    if !Efuse::flash_encryption() {
+        return Err(OtaLockdownError::MissingFlashEncryption);
+    }
+
+    let words = missing_lockdown_words();
+    if words.is_empty() {
+        return Ok(OtaLockdownOutcome::AlreadyLocked);
+    }
+    ensure_missing_fields_are_writable(words)?;
+
+    // The TRM directs callers to retry BLOCK0 programming when readback does
+    // not contain all requested bits. Reprogramming an already-set eFuse bit
+    // is safe, and each attempt recomputes the remaining mask.
+    for _ in 0..3 {
+        let remaining = missing_lockdown_words();
+        if remaining.is_empty() {
+            return Ok(OtaLockdownOutcome::Locked);
+        }
+        program_block0(remaining)?;
+    }
+
+    if missing_lockdown_words().is_empty() {
+        Ok(OtaLockdownOutcome::Locked)
+    } else {
+        Err(OtaLockdownError::VerifyFailed)
+    }
+}
+
+#[cfg(feature = "chip-security")]
+fn missing_lockdown_words() -> LockdownProgramWords {
+    let soft_jtag = Efuse::read_field_le::<u8>(SOFT_DIS_JTAG) as u32;
+    let mut data1 = (0x7 ^ soft_jtag) << 16;
+    if !Efuse::read_bit(DIS_PAD_JTAG) {
+        data1 |= 1 << 19;
+    }
+
+    let mut data3 = 0;
+    if !Efuse::read_bit(DIS_USB_JTAG) {
+        data3 |= 1 << 22;
+    }
+    if !Efuse::read_bit(DIS_USB_SERIAL_JTAG) {
+        data3 |= 1 << 23;
+    }
+
+    let mut data4 = 0;
+    for (field_missing, bit) in [
+        (!Efuse::read_bit(DIS_DOWNLOAD_MODE), 0),
+        (!Efuse::read_bit(DIS_DIRECT_BOOT), 1),
+        (!Efuse::read_bit(DIS_USB_SERIAL_JTAG_ROM_PRINT), 2),
+        (!Efuse::read_bit(DIS_USB_SERIAL_JTAG_DOWNLOAD_MODE), 4),
+        (!Efuse::read_bit(POWERGLITCH_EN), 30),
+        (!Efuse::read_bit(DIS_USB_OTG_DOWNLOAD_MODE), 31),
+    ] {
+        if field_missing {
+            data4 |= 1 << bit;
+        }
+    }
+
+    LockdownProgramWords {
+        data1: data1 & LOCKDOWN_DATA1_ALL,
+        data3: data3 & LOCKDOWN_DATA3_ALL,
+        data4: data4 & LOCKDOWN_DATA4_ALL,
+    }
+}
+
+#[cfg(feature = "chip-security")]
+fn ensure_missing_fields_are_writable(words: LockdownProgramWords) -> Result<(), OtaLockdownError> {
+    let wr_dis = Efuse::read_field_le::<u32>(WR_DIS);
+    let hard_jtag_missing = words.data1 & (1 << 19) != 0 || words.data3 != 0;
+    let soft_jtag_missing = words.data1 & (0x7 << 16) != 0;
+    let download_missing = words.data4 & 0x1f != 0;
+    let power_glitch_missing = words.data4 & (1 << 30) != 0;
+    let usb_otg_download_missing = words.data4 & (1 << 31) != 0;
+
+    if (hard_jtag_missing && wr_dis & WR_DIS_JTAG_HARD != 0)
+        || (soft_jtag_missing && wr_dis & WR_DIS_JTAG_SOFT != 0)
+        || (download_missing && wr_dis & WR_DIS_DOWNLOAD != 0)
+        || (power_glitch_missing && wr_dis & WR_DIS_POWER_GLITCH != 0)
+        || (usb_otg_download_missing && wr_dis & WR_DIS_USB_OTG_DOWNLOAD != 0)
+    {
+        Err(OtaLockdownError::WriteProtected)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "chip-security")]
+fn program_block0(words: LockdownProgramWords) -> Result<(), OtaLockdownError> {
+    unsafe extern "C" {
+        fn ets_efuse_clear_program_registers();
+        fn ets_efuse_program(block: u32) -> i32;
+        fn ets_efuse_read() -> i32;
+    }
+
+    critical_section::with(|_| {
+        let efuse = EFUSE::regs();
+        unsafe {
+            ets_efuse_clear_program_registers();
+            efuse.pgm_data1().write(|w| w.bits(words.data1));
+            efuse.pgm_data3().write(|w| w.bits(words.data3));
+            efuse.pgm_data4().write(|w| w.bits(words.data4));
+        }
+
+        let program_result = unsafe { ets_efuse_program(0) };
+        unsafe { ets_efuse_clear_program_registers() };
+        if program_result != 0 {
+            return Err(OtaLockdownError::ProgramFailed);
+        }
+        if unsafe { ets_efuse_read() } != 0 {
+            return Err(OtaLockdownError::ReadFailed);
+        }
+        Ok(())
+    })
+}
 
 pub fn read_security_status(nvs: &mut NvsStore) -> SecurityStatus {
     let nvs_status = nvs.storage_status();

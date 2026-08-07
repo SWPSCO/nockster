@@ -16,6 +16,8 @@ mod static_slot;
 mod update_auth;
 mod usb_hid;
 use nockster_fw::nvs_store::{NvsError, NvsInitStage, NvsStore};
+#[cfg(feature = "chip-security")]
+use nockster_fw::security::enforce_ota_production_lockdown;
 use panic_halt as _;
 extern crate alloc;
 use alloc::vec::Vec;
@@ -1183,9 +1185,16 @@ fn main() -> ! {
     let mut app_core_state = AppCoreState {
         nvs_pepper: nvs_pepper::AppNvsPepper::new(),
     };
-    // Confirm a newly booted OTA image before starting the second core. Flash
-    // metadata updates disable the cache and must not race flash-backed worker
-    // code during early boot.
+    // A production image running from an OTA slot is the ship gate: enforce
+    // every lockdown fuse before confirming the new image. Factory/debug boots
+    // remain non-destructive. Keep this before the second core so neither the
+    // eFuse operation nor OTA metadata writes race flash-backed worker code.
+    #[cfg(feature = "chip-security")]
+    enforce_ota_production_lockdown(update_auth::running_from_ota_slot())
+        .expect("OTA production lockdown failed");
+
+    // Confirm a newly booted OTA image only after its required production
+    // lockdown has passed readback verification.
     update_auth::mark_running_image_valid();
     let mut cpu_control = CpuControl::new(p.CPU_CTRL);
     let _app_core_guard = cpu_control

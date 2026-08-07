@@ -46,8 +46,10 @@ power-cycle the board or press EN/RESET, do not hold BOOT/download, wait for
 HID to re-enumerate, then press Enter. It refuses to start the burn phase if
 the selected key slots, `BLOCK_USR_DATA`, `SECURE_BOOT_EN`, or
 `SPI_BOOT_CRYPT_CNT` are already set. Use `PROD_E2E_DRY_RUN=1` to print the
-command order. Final lockdown and
-power-glitch fuses remain separate targets.
+command order. Because this image boots from the factory partition, final
+lockdown is not performed yet. The first production image that subsequently
+boots from an OTA slot automatically burns and verifies the JTAG, download,
+direct-boot, ROM-print, and power-glitch fuses before confirming that OTA image.
 
 Non-destructive device validation:
 
@@ -323,7 +325,17 @@ nockster-cli security --port hid \
   --expect-chip-security --expect-secure-boot --expect-flash-encryption
 ```
 
-Production lockdown guards:
+Production OTA lockdown:
+
+A `FW_PROFILE=production` image running from `ota_0` or `ota_1` checks secure
+boot and flash encryption, preflights all relevant eFuse write-protection
+groups, then burns and verifies the complete production-lockdown set including
+power-glitch protection. Factory/debug boots never perform this write. The OTA
+image is not marked valid until lockdown readback succeeds.
+
+The following serial provisioning guards remain available for factory work,
+sacrificial-board testing, and boards that must be locked before their first
+OTA:
 
 ```sh
 make provision-lockdown-jtag \
@@ -344,12 +356,10 @@ make provision-lockdown-rom-print \
 ```
 
 These targets print the current eFuse summary and require a second interactive
-confirmation before invoking `espefuse burn-efuse`. They are intentionally
-separate; there is no one-shot lockdown target. Run them only after secure
+confirmation before invoking `espefuse burn-efuse`. Run them only after secure
 boot, flash encryption, OTA recovery, and sacrificial-board tests pass.
 
-Power-glitch protection is also separate until this exact board has been tested
-for false positives:
+The equivalent standalone factory command for power-glitch protection is:
 
 ```sh
 make provision-power-glitch-protection \

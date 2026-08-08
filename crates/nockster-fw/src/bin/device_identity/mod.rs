@@ -15,14 +15,10 @@ pub fn provisioned_serial_timestamp() -> Option<u64> {
         .then_some(timestamp)
 }
 
-/// New production wallets must have the immutable provisioning identity.
-///
-/// This is deliberately an initialization-only policy. Production firmware
-/// predating the serial eFuse shipped without `BLOCK_USR_DATA`, and refusing
-/// to unlock those already-initialized wallets would both strand their keys
-/// and turn a provisioning error into consumed PIN attempts.
+/// Every ESP32-S3 has an immutable factory MAC, so wallet initialization never
+/// depends on the optional operator-provisioned serial timestamp.
 pub fn production_identity_ready_for_initialization() -> bool {
-    !is_production_build() || provisioned_serial_timestamp().is_some()
+    true
 }
 
 pub fn usb_serial() -> HString<20> {
@@ -32,12 +28,13 @@ pub fn usb_serial() -> HString<20> {
             let _ = write!(out, "{timestamp}");
         }
         None => {
-            let _ = out.push_str("UNPROVISIONED");
+            let mac = Efuse::read_base_mac_address();
+            let _ = write!(
+                out,
+                "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            );
         }
     }
     out
-}
-
-fn is_production_build() -> bool {
-    option_env!("NOCKSTER_BUILD_PROFILE") == Some("production")
 }

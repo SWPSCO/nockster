@@ -499,6 +499,8 @@ pub enum UpdateCmd {
     DeviceVerify(UpdateDeviceVerifyArgs),
     /// read the current on-device update stream status
     Status(UpdateStatusArgs),
+    /// cancel an incomplete on-device update stream
+    Cancel(UpdateTrustArgs),
     /// stream a bundle image to the device for on-device digest verification without flashing
     DeviceStreamVerify(UpdateDeviceStreamVerifyArgs),
     /// install a signed firmware bundle into the inactive OTA slot and activate it for next boot
@@ -646,7 +648,7 @@ pub struct UpdateDeviceStreamVerifyArgs {
     #[arg(long)]
     pub firmware: PathBuf,
     /// Bytes per update chunk sent to the device
-    #[arg(long, default_value_t = nockster_core::update::MAX_UPDATE_CHUNK_LEN)]
+    #[arg(long, default_value_t = 256)]
     pub chunk_size: usize,
 }
 
@@ -664,7 +666,7 @@ pub struct UpdateDeviceInstallArgs {
     #[arg(long)]
     pub firmware: PathBuf,
     /// Bytes per update chunk sent to the device
-    #[arg(long, default_value_t = nockster_core::update::MAX_UPDATE_CHUNK_LEN)]
+    #[arg(long, default_value_t = 256)]
     pub chunk_size: usize,
     /// Reboot after post-install OTA activation validation succeeds
     #[arg(long)]

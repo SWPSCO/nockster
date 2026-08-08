@@ -407,6 +407,7 @@ flash-prod-e2e:
 	NOCKSTER_SECRET_DIR="$(NOCKSTER_SECRET_DIR)" \
 	NOCKSTER_RELEASE_VERSION="$(NOCKSTER_RELEASE_VERSION)" \
 	NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="$(NOCKSTER_UPDATE_PUBKEY_SHA256_HEX)" \
+	UPDATE_SIGNING_KEY_FILE="$(UPDATE_SIGNING_KEY_FILE)" \
 	NOCKSTER_APP_SLOT_SIZE_BYTES="$(NOCKSTER_APP_SLOT_SIZE_BYTES)" \
 	PARTITION_TABLE="$(PARTITION_TABLE)" \
 	ESP_CHIP="$(ESP_CHIP)" \
@@ -969,7 +970,7 @@ help:
 	@echo "    make provision-plan - Print a non-destructive provisioning checklist"
 	@echo "    make validate-device-state - Run scriptable device security/update checks"
 	@echo "    make release-preflight - Non-destructive release/provisioning checks"
-	@echo "    make flash-prod-e2e - One-confirmation fresh-board HMAC+secure-boot+flash-encryption flow"
+	@echo "    make flash-prod-e2e - Complete fresh-board production provisioning, OTA transition, and lockdown"
 	@echo "    make generate-update-signing-key - Generate a local update release signing key"
 	@echo "    make update-pubkey - Print update release public key and trust hash"
 	@echo "    make update-index - Generate latest.json for browser firmware updates"

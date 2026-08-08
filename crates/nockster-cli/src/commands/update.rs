@@ -78,9 +78,22 @@ pub fn run(args: &UpdateArgs) -> Result<()> {
         UpdateCmd::Trust(args) => trust(args),
         UpdateCmd::DeviceVerify(args) => device_verify(args),
         UpdateCmd::Status(args) => update_status(args),
+        UpdateCmd::Cancel(args) => cancel_update(args),
         UpdateCmd::DeviceStreamVerify(args) => device_stream_verify(args),
         UpdateCmd::DeviceInstall(args) => device_install(args),
         UpdateCmd::Pubkey(args) => pubkey(args),
+    }
+}
+
+fn cancel_update(args: &UpdateTrustArgs) -> Result<()> {
+    let mut sp = open(&args.port, args.baud)?;
+    match send_call(&mut *sp, 0x550e, Request::CancelUpdate)? {
+        Response::Ok => {
+            ui::ok("incomplete update stream cancelled");
+            Ok(())
+        }
+        Response::Err { code } => Err(anyhow!("cancel update: device returned error code {code}")),
+        other => Err(anyhow!("cancel update: unexpected response: {other:?}")),
     }
 }
 

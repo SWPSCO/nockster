@@ -5,9 +5,6 @@ uses several independent protections so that losing the device, copying its
 flash, or connecting it to hostile USB hardware does not immediately expose a
 wallet seed or authorize a signature.
 
-This document describes the protections enabled on a production device and why
-they exist. It is not a manufacturing or development guide.
-
 ## Security model
 
 The seed remains on the device. Hosts can request public information and submit
@@ -80,7 +77,7 @@ chip.
 
 ## Secure Boot and firmware integrity
 
-Secure Boot V2 allows the ESP32-S3 to execute only firmware signed by the
+Secure Boot allows the ESP32-S3 to execute only firmware signed by the
 authorized release key. This prevents an attacker from replacing Nockster with
 firmware designed to reveal the seed, bypass confirmations, or record the PIN.
 
@@ -125,10 +122,12 @@ the device protocol.
 
 ## Immutable device identity
 
-Each production device has an immutable serial identity stored in protected
-on-chip data. The USB identity survives firmware updates and cannot be replaced
-by rewriting external flash. It gives host software and operators a stable way
-to identify the physical signer they are communicating with.
+Each device has an immutable factory MAC stored on-chip. Provisioned devices
+also use their protected production serial; devices without that optional
+serial use the factory MAC as their USB identity. Either identity survives
+firmware updates and cannot be replaced by rewriting external flash. It gives
+host software and operators a stable way to identify the physical signer they
+are communicating with.
 
 The device identity participates in domain separation for storage derivation;
 it is not itself a secret.
@@ -150,8 +149,8 @@ pre-application information channel. Glitch protection resets the chip when it
 detects abnormal conditions associated with fault-injection attempts.
 
 These settings are permanent. They do not disable normal Nockster USB HID
-operation or signed OTA updates; they remove the lower-level development and
-recovery routes that a production signer should not expose.
+operation or signed OTA updates; they remove the lower-level routes that are
+used for development.
 
 ## On-device transaction approval
 

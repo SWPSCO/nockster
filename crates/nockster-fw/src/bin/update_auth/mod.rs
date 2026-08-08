@@ -406,7 +406,7 @@ fn mark_encrypted_running_image_valid() -> Result<(), UpdateFlashError> {
     if should_recover_identity_gated_pin_attempts(
         confirmed_release,
         release,
-        crate::device_identity::production_identity_ready_for_initialization(),
+        crate::device_identity::provisioned_serial_timestamp().is_some(),
         nvs.is_initialized(),
     ) {
         nvs.clear_pin_attempts()

@@ -1184,14 +1184,12 @@ fn main() -> ! {
     // remain non-destructive. Keep this before the second core so neither the
     // eFuse operation nor OTA metadata writes race flash-backed worker code.
     #[cfg(feature = "chip-security")]
-    {
+    let ota_lockdown_ok = {
         let running_from_ota = update_auth::running_from_ota_slot();
-        if running_from_ota && !device_identity::production_identity_ready_for_initialization() {
-            panic!("OTA production lockdown requires immutable device identity");
-        }
-        enforce_ota_production_lockdown(running_from_ota, nvs_has_initialized_header)
-            .expect("OTA production lockdown failed");
-    }
+        enforce_ota_production_lockdown(running_from_ota, nvs_has_initialized_header).is_ok()
+    };
+    #[cfg(not(feature = "chip-security"))]
+    let ota_lockdown_ok = true;
 
     // Discover the HMAC_UP slot only after OTA lockdown has had an opportunity
     // to provision it, so first-time NVS initialization works on this boot.
@@ -1205,8 +1203,12 @@ fn main() -> ! {
     };
 
     // Confirm a newly booted OTA image only after its required production
-    // lockdown has passed readback verification.
-    update_auth::mark_running_image_valid();
+    // lockdown has passed readback verification. On a dev-flashed or otherwise
+    // incomplete board, keep running USB HID so the failure can be diagnosed
+    // and repaired instead of panicking into a pre-USB watchdog loop.
+    if ota_lockdown_ok {
+        update_auth::mark_running_image_valid();
+    }
     let mut cpu_control = CpuControl::new(p.CPU_CTRL);
     let _app_core_guard = cpu_control
         .start_app_core(unsafe { APP_CORE_STACK.as_mut() }, move || {
@@ -1253,7 +1255,10 @@ fn main() -> ! {
         .expect("usb strings")
         .build();
     // Bigger working buffers to accommodate TX_CHUNK
-    let mut rx: HVec<u8, 512> = HVec::new();
+    // Leave room for the postcard/COBS envelope around a maximum-size 512-byte
+    // update chunk. A 512-byte accumulator silently overflowed before the
+    // UpdateChunk request reached the dispatcher.
+    let mut rx: HVec<u8, 1024> = HVec::new();
     let mut plain = [0u8; usb_hid::PLAIN_BUF_LEN];
     let mut enc = [0u8; usb_hid::ENC_BUF_LEN];
     let mut outbound_chunk_buf = Vec::with_capacity(fragments::TX_CHUNK);

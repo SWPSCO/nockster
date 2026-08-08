@@ -26,9 +26,9 @@ Fresh-board one-shot provisioning:
 make flash-prod-e2e
 ```
 
-`flash-prod-e2e` is the single-confirmation shortcut for a fresh sacrificial
-board. It defaults to `/dev/ttyACM0`, `../nockster-secrets/`, release version
-`1` when `NOCKSTER_RELEASE_VERSION=0`, secure-boot digest slot `BLOCK_KEY0`,
+`flash-prod-e2e` is the single-confirmation complete production flow for a
+fresh board. It defaults to `/dev/ttyACM0`, `../nockster-secrets/`, release
+version `1` when `NOCKSTER_RELEASE_VERSION=0`, secure-boot digest slot `BLOCK_KEY0`,
 and flash-encryption key slot `BLOCK_KEY4`. It generates missing key files
 outside the repo, builds/signs/encrypts a fresh production image set under
 `target/prod-e2e/<time>/`, prints the current eFuse summary, then asks once for
@@ -43,13 +43,14 @@ timestamp is the device's USB serial and survives every firmware update. A
 production build refuses wallet initialization when this serial or the HMAC_UP
 pepper is missing. At the reboot pause,
 power-cycle the board or press EN/RESET, do not hold BOOT/download, wait for
-HID to re-enumerate, then press Enter. It refuses to start the burn phase if
-the selected key slots, `BLOCK_USR_DATA`, `SECURE_BOOT_EN`, or
+HID to re-enumerate, then press Enter. It next installs the following release
+as a signed Secure Boot OTA and reboots automatically. That OTA boot burns and
+verifies the JTAG, download, direct-boot, ROM-print, and power-glitch lockdown
+eFuses. The command succeeds only after the CLI's complete production security
+report passes and the immutable HID serial is present. It refuses to start the
+burn phase if the selected key slots, `BLOCK_USR_DATA`, `SECURE_BOOT_EN`, or
 `SPI_BOOT_CRYPT_CNT` are already set. Use `PROD_E2E_DRY_RUN=1` to print the
-command order. Because this image boots from the factory partition, final
-lockdown is not performed yet. The first production image that subsequently
-boots from an OTA slot automatically burns and verifies the JTAG, download,
-direct-boot, ROM-print, and power-glitch fuses before confirming that OTA image.
+command order.
 
 Non-destructive device validation:
 

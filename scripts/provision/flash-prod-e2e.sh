@@ -269,6 +269,10 @@ fi
 if [[ ! "${release_version}" =~ ^[0-9]+$ || "${release_version}" == "0" ]]; then
   fail "NOCKSTER_RELEASE_VERSION must be a nonzero integer"
 fi
+if (( release_version >= 4294967295 )); then
+  fail "NOCKSTER_RELEASE_VERSION must be below 4294967295 so the lockdown OTA can use the next version"
+fi
+ota_release_version=$((release_version + 1))
 
 trust_hash="${NOCKSTER_UPDATE_PUBKEY_SHA256_HEX:-}"
 check_hex64 "${trust_hash}" "NOCKSTER_UPDATE_PUBKEY_SHA256_HEX"
@@ -276,6 +280,7 @@ check_hex64 "${trust_hash}" "NOCKSTER_UPDATE_PUBKEY_SHA256_HEX"
 hmac_key_file="${HMAC_KEY_FILE:-${secret_dir}/hmac-up.bin}"
 secure_boot_key_file="${SECURE_BOOT_KEY_FILE:-${secret_dir}/secure-boot-v2-rsa.pem}"
 flash_key_file="${FLASH_ENCRYPTION_KEY_FILE:-${secret_dir}/flash-encryption-key.bin}"
+update_signing_key_file="${UPDATE_SIGNING_KEY_FILE:-.secrets/update-signing.key}"
 
 secure_boot_digest_block="${SECURE_BOOT_DIGEST_BLOCK:-BLOCK_KEY0}"
 secure_boot_digest_purpose="${SECURE_BOOT_DIGEST_PURPOSE:-}"
@@ -310,6 +315,9 @@ flash_enc_partition_table_bin="${FLASH_ENCRYPTION_PARTITION_TABLE_BIN:-${artifac
 flash_enc_signed_image="${FLASH_ENCRYPTION_SIGNED_IMAGE:-${artifact_dir}/encrypted/nockster-fw.factory.signed.enc.bin}"
 flash_enc_otadata_bin="${FLASH_ENCRYPTION_OTADATA_BIN:-${artifact_dir}/encrypted/otadata.blank.enc.bin}"
 device_serial_bin="${DEVICE_SERIAL_BIN:-${artifact_dir}/device-serial.bin}"
+ota_unsigned_image="${artifact_dir}/ota/nockster-fw.unsigned.bin"
+ota_signed_image="${artifact_dir}/ota/nockster-fw.bin"
+ota_bundle="${artifact_dir}/ota/nockster-fw.update.json"
 
 mkdir -p -- \
   "${artifact_dir}" \
@@ -321,7 +329,8 @@ mkdir -p -- \
   "$(dirname -- "${flash_enc_partition_table_bin}")" \
   "$(dirname -- "${flash_enc_signed_image}")" \
   "$(dirname -- "${flash_enc_otadata_bin}")" \
-  "$(dirname -- "${device_serial_bin}")"
+  "$(dirname -- "${device_serial_bin}")" \
+  "$(dirname -- "${ota_unsigned_image}")"
 
 require_command "${espflash_cmd}"
 require_command "${espefuse_cmd}"
@@ -330,7 +339,8 @@ require_command python3
 echo "flash-prod-e2e production flow"
 echo "port: ${port}"
 echo "artifacts: ${artifact_dir}"
-echo "release version: ${release_version}"
+echo "factory release: ${release_version}"
+echo "lockdown OTA release: ${ota_release_version}"
 
 check_fresh_board_summary "${artifact_dir}/efuse-summary.initial.txt"
 
@@ -367,6 +377,20 @@ run_make release-encrypt-flash-v2-artifacts \
   FLASH_ENCRYPTION_SIGNED_IMAGE="${flash_enc_signed_image}" \
   FLASH_ENCRYPTION_OTADATA_BIN="${flash_enc_otadata_bin}"
 
+# Build the exact OTA that will complete production lockdown before asking for
+# permission to burn anything. check-update-trust verifies that its signing key
+# matches the trust hash compiled into both production images.
+run_make signed-update-secure-boot-v2 \
+  FW_PROFILE=production \
+  ALLOW_UNSIGNED_PRODUCTION=1 \
+  NOCKSTER_RELEASE_VERSION="${ota_release_version}" \
+  NOCKSTER_UPDATE_PUBKEY_SHA256_HEX="${trust_hash}" \
+  UPDATE_SIGNING_KEY_FILE="${update_signing_key_file}" \
+  SECURE_BOOT_KEY_FILE="${secure_boot_key_file}" \
+  UPDATE_UNSIGNED_FIRMWARE="${ota_unsigned_image}" \
+  UPDATE_FIRMWARE="${ota_signed_image}" \
+  UPDATE_BUNDLE="${ota_bundle}"
+
 check_fresh_board_summary "${artifact_dir}/efuse-summary.before-burn.txt"
 
 if [[ -e "${device_serial_bin}" || -e "${artifact_dir}/device-serial.txt" ]]; then
@@ -392,7 +416,10 @@ This single confirmation will:
   - flash encrypted signed production artifacts without reset
   - burn SPI_BOOT_CRYPT_CNT=${flash_crypt_cnt}
   - burn the flash-time Unix timestamp into BLOCK_USR_DATA and write-protect it
-  - pause for manual normal reboot, then validate over ${validate_port}
+  - pause for one manual normal boot and validate the factory image over ${validate_port}
+  - install signed production OTA release ${ota_release_version} and reboot automatically
+  - burn and verify JTAG, download-mode, direct-boot, ROM-print, and glitch-protection lockdown
+  - require the complete production security report before declaring success
 
 Do not interrupt the board after confirming.
 EOF
@@ -477,7 +504,11 @@ if cli="$(resolve_cli)"; then
   if is_true "${dry_run}"; then
     echo "+ ${cli} security --port ${validate_port} --expect-chip-security --expect-hmac-up --expect-hmac-up-read-protected --expect-secure-boot --expect-flash-encryption"
     echo "+ ${cli} list-ports | verify HID serial ${flash_unix_timestamp}"
+    echo "+ ${cli} update device-install --port ${validate_port} --bundle ${ota_bundle} --firmware ${ota_signed_image} --chunk-size 256 --reboot"
+    echo "+ ${cli} security --port ${validate_port}"
+    echo "+ ${cli} list-ports | verify HID serial ${flash_unix_timestamp}"
   else
+    factory_validated=0
     for attempt in $(seq 1 12); do
       if "${cli}" security \
         --port "${validate_port}" \
@@ -489,18 +520,50 @@ if cli="$(resolve_cli)"; then
         ports_output="$(NO_COLOR=1 "${cli}" list-ports)"
         if printf '%s\n' "${ports_output}" \
           | grep -Eq "hid:303a:2001.*${flash_unix_timestamp}([[:space:]]|$)"; then
-          echo "flash-prod-e2e complete; immutable serial ${flash_unix_timestamp} verified"
-          exit 0
+          factory_validated=1
+          break
         fi
         echo "security checks passed but HID serial ${flash_unix_timestamp} was not found" >&2
       fi
       echo "waiting for HID validation (${attempt}/12)..."
       sleep 2
     done
-    fail "device did not pass post-provision validation over ${validate_port}"
+    if [[ "${factory_validated}" != "1" ]]; then
+      fail "factory image did not pass pre-lockdown validation over ${validate_port}"
+    fi
+
+    echo "factory image verified; installing signed lockdown OTA release ${ota_release_version}"
+    "${cli}" update device-install \
+      --port "${validate_port}" \
+      --bundle "${ota_bundle}" \
+      --firmware "${ota_signed_image}" \
+      --chunk-size 256 \
+      --reboot
+
+    echo "waiting for the locked HID device to return; if it does not, power-cycle it normally without holding BOOT"
+    lockdown_validated=0
+    for attempt in $(seq 1 30); do
+      if "${cli}" security --port "${validate_port}"; then
+        ports_output="$(NO_COLOR=1 "${cli}" list-ports)"
+        if printf '%s\n' "${ports_output}" \
+          | grep -Eq "hid:303a:2001.*${flash_unix_timestamp}([[:space:]]|$)"; then
+          lockdown_validated=1
+          break
+        fi
+        echo "lockdown checks passed but HID serial ${flash_unix_timestamp} was not found" >&2
+      fi
+      echo "waiting for locked production OTA (${attempt}/30)..."
+      sleep 2
+    done
+    if [[ "${lockdown_validated}" != "1" ]]; then
+      fail "OTA image did not pass complete production lockdown validation over ${validate_port}"
+    fi
+
+    echo "flash-prod-e2e complete; OTA release ${ota_release_version}, full lockdown, and immutable serial ${flash_unix_timestamp} verified"
+    exit 0
   fi
 else
   fail "nockster-cli not found; refusing to skip post-provision HID and serial validation"
 fi
 
-echo "flash-prod-e2e dry-run complete"
+echo "flash-prod-e2e dry-run complete; no device or eFuses were changed"

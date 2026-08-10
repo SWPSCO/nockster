@@ -1153,6 +1153,12 @@ fn main() -> ! {
     let mut wdt = timg0.wdt;
     wdt.set_timeout(MwdtStage::Stage0, WATCHDOG_TIMEOUT);
     wdt.enable();
+    // https://documentation.espressif.com/esp32-s3_technical_reference_manual_en.pdf#63e
+    // Trng::new:
+    // - Sets RTC_CNTL_DIG_CLK8M_EN, enabling RC_FAST_CLK
+    // - Powers and configures the SAR ADC as an additional entropy source
+    // - Enables the SAR ADC entropy-related registers and timer
+    // - Keeps those sources enabled because _trng lives for the firmware's entire lifetime
     let _trng = Trng::new(p.RNG, p.ADC1);
     let mut delay = Delay::new();
     let mut ui = Gui::new(

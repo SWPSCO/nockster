@@ -135,11 +135,11 @@ html {
 /* segmented control, squared to match the panels */
 .tab-bar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
   margin: 0 auto 22px;
-  width: min(420px, 100%);
+  width: min(560px, 100%);
   border: 2px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-panel);

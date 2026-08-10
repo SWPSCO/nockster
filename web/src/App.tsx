@@ -1,5 +1,7 @@
 import { Suspense, lazy, useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import type { MouseEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open as openExternal } from '@tauri-apps/plugin-shell';
 import {
   NocksterDevice,
   Response,
@@ -100,6 +102,16 @@ type DeviceStatusSnapshot = {
 const DEFAULT_RELEASE_INDEX_PATH = 'https://bin.aeroe.io/nockster/updates/latest.json';
 const RELEASE_INDEX_STORAGE_KEY = 'nockster.update.releaseIndexUrl.v1';
 const ENCRYPTED_BOOT_STATUS_SAFE_RELEASE = 11;
+const MANUAL_URL = 'https://my.nockster.com/manual/';
+const DESKTOP_TOOLS_URL = 'https://github.com/SWPSCO/nockster/releases?q=desktop&expanded=true';
+
+function handleExternalLink(event: MouseEvent<HTMLAnchorElement>) {
+  if (!isTauri) return;
+  event.preventDefault();
+  void openExternal(event.currentTarget.href).catch((error) => {
+    console.error('Unable to open link in the system browser', error);
+  });
+}
 
 function canSafelyReadUpdateBootStatus(
   info: InfoResponse | null,
@@ -2873,8 +2885,23 @@ function App() {
         >
           composer
         </button>
-        <a className="tab-btn tab-link" href="/manual/">
+        <a
+          className="tab-btn tab-link"
+          href={MANUAL_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleExternalLink}
+        >
           manual
+        </a>
+        <a
+          className="tab-btn tab-link"
+          href={DESKTOP_TOOLS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleExternalLink}
+        >
+          downloads
         </a>
       </div>
 

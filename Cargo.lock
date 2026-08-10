@@ -3652,7 +3652,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-cli"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "anstream",
  "anstyle",
@@ -3695,7 +3695,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-core"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "bip32",
  "bip39",
@@ -3720,7 +3720,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-fw"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "bip32",
@@ -3760,7 +3760,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-fw-emu"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "console_error_panic_hook",
  "embedded-graphics",
@@ -3778,7 +3778,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-pc"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3793,7 +3793,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-wasm"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "bs58",
  "bytes",

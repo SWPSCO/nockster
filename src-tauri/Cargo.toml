@@ -1,6 +1,6 @@
 [package]
 name = "nockster-pc"
-version = "0.1.0"
+version = "0.2.1"
 description = "Management app for Nockster hardware wallet"
 authors = ["Southwestern Pool Supply Co"]
 edition = "2021"

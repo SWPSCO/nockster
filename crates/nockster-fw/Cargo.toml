@@ -3,7 +3,7 @@ name         = "nockster-fw"
 authors      = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
 edition      = "2021"
 rust-version = "1.86"
-version      = "0.1.0"
+version      = "0.2.1"
 build        = "build.rs"
 
 [[bin]]

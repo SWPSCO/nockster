@@ -168,6 +168,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
         with:
+          workspaces: nockster-esp -> target
           key: desktop-linux-${{ env.LINUX_TARGET }}
 
       - name: Authenticate cargo to private git deps
@@ -318,6 +319,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
         with:
+          workspaces: nockster-esp -> target
           key: desktop-linux-${{ env.LINUX_ARM64_TARGET }}
 
       - name: Authenticate cargo to private git deps
@@ -429,6 +431,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: swatinem/rust-cache@v2
         with:
+          workspaces: nockster-esp -> target
           key: desktop-macos-${{ env.MACOS_TARGET }}
 
       - name: Authenticate cargo to private git deps

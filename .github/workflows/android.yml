@@ -1,0 +1,125 @@
+name: Signed Android app
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      build_number:
+        required: true
+        type: string
+      google_play:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      NOCKSTER_VERSION: ${{ inputs.version }}
+      NOCKSTER_BUILD_NUMBER: ${{ inputs.build_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wallet-engine
+          path: packages/wallet/src/pkg
+      - name: Bundle wallet engine for Android
+        run: |
+          npm run build:mobile:web
+          npm exec --workspace @nockster/mobile -- cap sync android
+      - name: Build and verify signed APK and app bundle
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/ci/android-release.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-android
+          path: release/android/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rclone
+      - name: Copy signed Android artifacts to R2
+        env:
+          RCLONE_B64: ${{ secrets.RCLONE_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RCLONE_B64:?Set the RCLONE_B64 Actions secret}"
+          umask 077
+          rclone_config=$(mktemp "$RUNNER_TEMP/nockster-rclone.XXXXXX")
+          trap 'rm -f "$rclone_config"' EXIT
+          printf '%s' "$RCLONE_B64" | base64 --decode > "$rclone_config"
+          unset RCLONE_B64
+          rclone --config "$rclone_config" copy release/android/ r2:swpsco/fletch/
+
+  google-play:
+    name: Google Play Internal testing
+    needs: build
+    if: inputs.google_play && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: nockster-google-play-io.swps.nockster
+      cancel-in-progress: false
+    steps:
+      - name: Check Google Play identity configuration
+        env:
+          GOOGLE_PLAY_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GOOGLE_PLAY_WORKLOAD_IDENTITY_PROVIDER }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+        run: |
+          : "${GOOGLE_PLAY_WORKLOAD_IDENTITY_PROVIDER:?Set the GOOGLE_PLAY_WORKLOAD_IDENTITY_PROVIDER Actions variable. See docs/google-play.md.}"
+          : "${GOOGLE_PLAY_SERVICE_ACCOUNT:?Set the GOOGLE_PLAY_SERVICE_ACCOUNT Actions variable to the service account email. See docs/google-play.md.}"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-android
+          path: release/android
+      - name: Authenticate to Google Play
+        id: google-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GOOGLE_PLAY_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GOOGLE_PLAY_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+          create_credentials_file: false
+      - name: Release signed app bundle to Internal testing
+        env:
+          GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_BUILD: ${{ inputs.build_number }}
+        run: |
+          python3 scripts/ci/android-upload-play.py \
+            "release/android/nockster-android-$RELEASE_VERSION-$RELEASE_BUILD.aab" \
+            "$RELEASE_VERSION" "$RELEASE_BUILD"

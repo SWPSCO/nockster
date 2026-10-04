@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+ext/dist/
+ext/pkg/
+core/target/
+*.min.js
+*.min.css
+package-lock.json
+nockster-codebase-superai.txt
+.git/
+coverage/

@@ -43,6 +43,10 @@ on:
 permissions:
   contents: write
 
+defaults:
+  run:
+    working-directory: nockster-esp
+
 jobs:
   build-sign-release:
     runs-on: ubuntu-latest

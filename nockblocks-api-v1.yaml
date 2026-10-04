@@ -1,0 +1,1656 @@
+openapi: 3.1.0
+info:
+  title: Nockchain JSON-RPC v1
+  version: v1.0.0
+  description: |
+    Streamlined RPC API for Nockchain v1. Focuses on core blockchain data types.
+    The service implements JSON-RPC 2.0 over HTTP POST at `/rpc/v1`.
+    All requests and responses are `application/json` with a UTF-8 body.
+
+servers:
+  - url: https://nockblocks.com
+    description: Mainnet RPC
+  - url: http://127.0.0.1:3000
+    description: Local development node
+
+paths:
+  /rpc/v1:
+    post:
+      summary: Nockchain JSON-RPC v1 endpoint
+      operationId: rpcV1
+      tags: [rpc-v1]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequestEnvelope"
+            examples:
+              getBlocksByHeight:
+                summary: Get blocks by heights
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlocksByHeight
+                  params: [{"heights": [12345, 12346], "includeTransactions": false}]
+                  id: 1
+              getBlocksById:
+                summary: Get blocks by IDs
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlocksById
+                  params: [{"blockIds": ["2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"], "includeTransactions": true}]
+                  id: 2
+              getBlockIdsByHeight:
+                summary: Get block IDs by heights
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlockIdsByHeight
+                  params: [{"heights": [100, 101, 102]}]
+                  id: 3
+              getBlocksByTimestampRange:
+                summary: Get blocks within timestamp range
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlocksByTimestampRange
+                  params: [{"minTimestamp": 1672531200, "maxTimestamp": 1672617600, "includeTransactions": false}]
+                  id: 4
+              getTip:
+                summary: Get current chain tip
+                value:
+                  jsonrpc: "2.0"
+                  method: getTip
+                  params: [{"includeTransactions": true}]
+                  id: 5
+              getNotesByAddress:
+                summary: Get notes by address
+                value:
+                  jsonrpc: "2.0"
+                  method: getNotesByAddress
+                  params: [{"address": "32KVTmv3ofSyACq9nC1Hgnk4Jt8rs2hj1cvDZWC1EQuiYFMDg8MaLtF3ntafJbEUH5XPV1pK3K4xkxfjRPAWprBb7LYCVv4HF7817Bwh9M9xAdmgrPt77j4xejihNFd9h5Eo", "showSpent": false}]
+                  id: 6
+              getTransactionByTxid:
+                summary: Get transaction by transaction ID
+                value:
+                  jsonrpc: "2.0"
+                  method: getTransactionByTxid
+                  params: [{"transactionId": "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"}]
+                  id: 7
+              getL2Transactions:
+                summary: Get L2 NOCK transfers with pagination
+                value:
+                  jsonrpc: "2.0"
+                  method: getL2Transactions
+                  params: [{"limit": 100, "offset": 0}]
+                  id: 8
+              getL2TransactionsByAddress:
+                summary: Get L2 NOCK transfers for an address
+                value:
+                  jsonrpc: "2.0"
+                  method: getL2TransactionsByAddress
+                  params: [{"address": "0x9b5e262cf9bb04869ab40b19af91d2dc85761722", "limit": 50, "offset": 0}]
+                  id: 9
+              submitTransaction:
+                summary: Submit a signed transaction
+                value:
+                  jsonrpc: "2.0"
+                  method: submitTransaction
+                  params: [{"rawTransaction": "amFtLWVuY29kZWQtdHJhbnNhY3Rpb24="}]
+                  id: 10
+      responses:
+        "200":
+          description: JSON-RPC success or error response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponseEnvelope"
+        "400":
+          description: Transport-level error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransportError"
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransportError"
+
+    options:
+      summary: Handle CORS preflight requests
+      operationId: rpcV1Options
+      tags: [rpc-v1]
+      responses:
+        "200":
+          description: CORS preflight response
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+              example: "GET, POST, OPTIONS"
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+              example: "Content-Type, Accept, Authorization"
+
+components:
+  schemas:
+    JsonRpcRequestEnvelope:
+      oneOf:
+        - $ref: "#/components/schemas/GetBlocksByHeightRequest"
+        - $ref: "#/components/schemas/GetBlocksByIdRequest"
+        - $ref: "#/components/schemas/GetBlockIdsByHeightRequest"
+        - $ref: "#/components/schemas/GetBlocksByTimestampRangeRequest"
+        - $ref: "#/components/schemas/GetTipRequest"
+        - $ref: "#/components/schemas/GetNotesByAddressRequest"
+        - $ref: "#/components/schemas/GetNotesByFirstNameRequest"
+        - $ref: "#/components/schemas/GetNotesFromBlocksRequest"
+        - $ref: "#/components/schemas/GetNotesInAssetRangeRequest"
+        - $ref: "#/components/schemas/GetTransactionsByAddressRequest"
+        - $ref: "#/components/schemas/GetTransactionsByBlockIdRequest"
+        - $ref: "#/components/schemas/GetTransactionsByBlockHeightRequest"
+        - $ref: "#/components/schemas/GetL2TransactionsRequest"
+        - $ref: "#/components/schemas/GetL2TransactionsByAddressRequest"
+        - $ref: "#/components/schemas/GetMempoolRequest"
+        - $ref: "#/components/schemas/GetMempoolTransactionByTxidRequest"
+        - $ref: "#/components/schemas/GetTransactionByTxidRequest"
+        - $ref: "#/components/schemas/IdentifyAddressTypeRequest"
+        - $ref: "#/components/schemas/SubmitTransactionRequest"
+      discriminator:
+        propertyName: method
+        mapping:
+          getBlocksByHeight: "#/components/schemas/GetBlocksByHeightRequest"
+          getBlocksById: "#/components/schemas/GetBlocksByIdRequest"
+          getBlockIdsByHeight: "#/components/schemas/GetBlockIdsByHeightRequest"
+          getBlocksByTimestampRange: "#/components/schemas/GetBlocksByTimestampRangeRequest"
+          getTip: "#/components/schemas/GetTipRequest"
+          getNotesByAddress: "#/components/schemas/GetNotesByAddressRequest"
+          getNotesByFirstName: "#/components/schemas/GetNotesByFirstNameRequest"
+          getNotesFromBlocks: "#/components/schemas/GetNotesFromBlocksRequest"
+          getNotesInAssetRange: "#/components/schemas/GetNotesInAssetRangeRequest"
+          getTransactionsByAddress: "#/components/schemas/GetTransactionsByAddressRequest"
+          getTransactionsByBlockId: "#/components/schemas/GetTransactionsByBlockIdRequest"
+          getTransactionsByBlockHeight: "#/components/schemas/GetTransactionsByBlockHeightRequest"
+          getL2Transactions: "#/components/schemas/GetL2TransactionsRequest"
+          getL2TransactionsByAddress: "#/components/schemas/GetL2TransactionsByAddressRequest"
+          getMempool: "#/components/schemas/GetMempoolRequest"
+          getMempoolTransactionByTxid: "#/components/schemas/GetMempoolTransactionByTxidRequest"
+          getTransactionByTxid: "#/components/schemas/GetTransactionByTxidRequest"
+          identifyAddressType: "#/components/schemas/IdentifyAddressTypeRequest"
+          submitTransaction: "#/components/schemas/SubmitTransactionRequest"
+
+    # Request Schemas
+    GetBlocksByHeightRequest:
+      description: Retrieve indexed blocks for a list of block heights. Set includeTransactions to include decoded transaction data in each block.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlocksByHeight" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetBlocksByHeightParams"
+
+    GetBlocksByIdRequest:
+      description: Retrieve indexed blocks for a list of base58 block IDs. Set includeTransactions to include decoded transaction data in each block.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlocksById" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetBlocksByIdParams"
+
+    GetBlockIdsByHeightRequest:
+      description: Get the base58 block IDs at the requested block heights without returning full block contents.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlockIdsByHeight" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetBlockIdsByHeightParams"
+
+    GetBlocksByTimestampRangeRequest:
+      description: Retrieve indexed blocks between minTimestamp and maxTimestamp in Unix seconds. Set includeTransactions to include decoded transactions; use a narrow time range to limit response size.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlocksByTimestampRange" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetBlocksByTimestampRangeParams"
+
+    GetTipRequest:
+      description: Get the latest indexed chain tip block, including height, mining puzzle, timestamp, and coinbase notes. Set includeTransactions to include decoded transactions.
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTip" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetTipParams"
+
+    GetNotesByAddressRequest:
+      description: Returns owned notes and notes in related locks. Participation does not confer sole ownership.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getNotesByAddress" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetNotesByAddressParams"
+
+    GetNotesByFirstNameRequest:
+      description: Find notes by the first-name component of their note name. Returns unspent notes by default; set showSpent to include spent notes.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getNotesByFirstName" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetNotesByFirstNameParams"
+
+    GetNotesFromBlocksRequest:
+      description: Retrieve notes created by the specified base58 block IDs. Returns unspent notes by default; set showSpent to include spent notes.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getNotesFromBlocks" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetNotesFromBlocksParams"
+
+    GetNotesInAssetRangeRequest:
+      description: Find notes with asset values between minAsset and maxAsset in nicks. Returns unspent notes by default; set showSpent to include spent notes and use a narrow value range to limit response size.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getNotesInAssetRange" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetNotesInAssetRangeParams"
+
+    GetTransactionsByAddressRequest:
+      description: Look up an address balance and transaction history. Returns currentBalance, totalReceived, totalSent, and a separate relatedBalance for shared locks in nicks. Set limit to 1 for a balance lookup with minimal transaction output.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionsByAddress" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetTransactionsByAddressParams"
+
+    GetTransactionsByBlockIdRequest:
+      description: Retrieve decoded confirmed transactions in the block identified by its base58 block ID, including inputs, outputs, and fees.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionsByBlockId" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetTransactionsByBlockIdParams"
+
+    GetTransactionsByBlockHeightRequest:
+      description: Retrieve decoded confirmed transactions in the block at the specified height, including inputs, outputs, and fees.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionsByBlockHeight" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetTransactionsByBlockHeightParams"
+
+    GetL2TransactionsRequest:
+      description: List indexed Base L2 NOCK token transfers with limit and offset pagination. Returns sender, recipient, amount, and block information.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getL2Transactions" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetL2TransactionsParams"
+
+    GetL2TransactionsByAddressRequest:
+      description: Look up Base L2 NOCK transfers and the token balance summary for an EVM address. Supports limit and offset pagination; amounts use the returned token decimals.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getL2TransactionsByAddress" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetL2TransactionsByAddressParams"
+
+    GetMempoolRequest:
+      description: List unconfirmed transactions observed in the indexed mempool, with limit and offset pagination. These transactions are not yet confirmed in a block.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getMempool" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetMempoolParams"
+
+    GetMempoolTransactionByTxidRequest:
+      description: Look up an observed unconfirmed mempool transaction by its base58 transaction ID, including decoded contents and the time it was heard.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getMempoolTransactionByTxid" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetMempoolTransactionByTxidParams"
+
+    GetTransactionByTxidRequest:
+      description: Look up a confirmed Nockchain transaction by its base58 transaction ID. Returns decoded inputs, outputs, witness spending conditions, and fees.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionByTxid" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/GetTransactionByTxidParams"
+
+    IdentifyAddressTypeRequest:
+      description: Classify a base58 address value using indexed chain data. Returns the queried value and its detected address type.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "identifyAddressType" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/IdentifyAddressTypeParams"
+
+    SubmitTransactionRequest:
+      description: Broadcast a signed transaction supplied as base64-encoded rawTransaction. Requires an API key and returns the submission status and transaction ID when available. Only submit when the caller authorizes a broadcast.
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "submitTransaction" }
+        id: { oneOf: [{ type: string }, { type: integer }, { type: "null" }] }
+        params:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items:
+            $ref: "#/components/schemas/SubmitTransactionParams"
+
+    # Parameter Schemas
+    GetBlocksByHeightParams:
+      type: object
+      required: [heights]
+      properties:
+        heights:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: Array of block heights to query
+        includeTransactions:
+          type: boolean
+          nullable: true
+          description: Whether to include full transaction data
+
+    GetBlocksByIdParams:
+      type: object
+      required: [blockIds]
+      properties:
+        blockIds:
+          type: array
+          items:
+            type: string
+          description: Array of block IDs (base58) to query
+        includeTransactions:
+          type: boolean
+          nullable: true
+          description: Whether to include full transaction data
+
+    GetBlockIdsByHeightParams:
+      type: object
+      required: [heights]
+      properties:
+        heights:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: Array of block heights
+
+    GetBlocksByTimestampRangeParams:
+      type: object
+      required: [minTimestamp, maxTimestamp]
+      properties:
+        minTimestamp:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Minimum timestamp (Unix seconds)
+        maxTimestamp:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Maximum timestamp (Unix seconds)
+        includeTransactions:
+          type: boolean
+          nullable: true
+          description: Whether to include full transaction data
+
+    GetTipParams:
+      type: object
+      properties:
+        includeTransactions:
+          type: boolean
+          nullable: true
+          description: Whether to include full transaction data
+
+    GetNotesByAddressParams:
+      type: object
+      required: [address]
+      properties:
+        address:
+          type: string
+          description: Address to query (base58)
+        showSpent:
+          type: boolean
+          nullable: true
+          description: Whether to include spent notes
+
+    GetNotesByFirstNameParams:
+      type: object
+      required: [firstName]
+      properties:
+        firstName:
+          type: string
+          description: First name of notes to query (base58)
+        showSpent:
+          type: boolean
+          nullable: true
+          description: Whether to include spent notes
+
+    GetNotesFromBlocksParams:
+      type: object
+      required: [blockIds]
+      properties:
+        blockIds:
+          type: array
+          items:
+            type: string
+          description: Array of block IDs (base58)
+        showSpent:
+          type: boolean
+          nullable: true
+          description: Whether to include spent notes
+
+    GetNotesInAssetRangeParams:
+      type: object
+      required: [minAsset, maxAsset]
+      properties:
+        minAsset:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Minimum asset amount
+        maxAsset:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Maximum asset amount
+        showSpent:
+          type: boolean
+          nullable: true
+          description: Whether to include spent notes
+
+    GetTransactionsByAddressParams:
+      type: object
+      required: [address]
+      properties:
+        address:
+          type: string
+          description: Address to query (base58)
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          nullable: true
+          description: Maximum number of transactions to return (default 50)
+        offset:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Number of transactions to skip (default 0)
+
+    GetTransactionsByBlockIdParams:
+      type: object
+      required: [blockId]
+      properties:
+        blockId:
+          type: string
+          description: Block ID (base58)
+
+    GetTransactionsByBlockHeightParams:
+      type: object
+      required: [height]
+      properties:
+        height:
+          type: integer
+          minimum: 0
+          description: Block height
+
+    GetL2TransactionsParams:
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          nullable: true
+          description: Maximum number of L2 transfers to return (default 100)
+        offset:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Number of transfers to skip (default 0)
+
+    GetL2TransactionsByAddressParams:
+      type: object
+      required: [address]
+      properties:
+        address:
+          $ref: "#/components/schemas/EvmAddress"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          nullable: true
+          description: Maximum number of L2 transfers to return (default 50)
+        offset:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Number of transfers to skip (default 0)
+
+    GetMempoolParams:
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          nullable: true
+          description: Maximum number of mempool transactions to return (default 50)
+        offset:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Number of transactions to skip (default 0)
+
+    GetMempoolTransactionByTxidParams:
+      type: object
+      required: [transactionId]
+      properties:
+        transactionId:
+          type: string
+          description: Mempool transaction ID (base58)
+
+    GetTransactionByTxidParams:
+      type: object
+      required: [transactionId]
+      properties:
+        transactionId:
+          type: string
+          description: Transaction ID (base58)
+
+    IdentifyAddressTypeParams:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: string
+          description: Address or lock root to identify (base58)
+
+    SubmitTransactionParams:
+      type: object
+      required: [rawTransaction]
+      properties:
+        rawTransaction:
+          $ref: "#/components/schemas/RawTransactionBase64"
+
+    IdentifyAddressTypeResponseV1:
+      type: object
+      required: [value, type]
+      properties:
+        value:
+          type: string
+          description: The queried value
+        type:
+          type: string
+          enum: [address, lockRoot, unknown]
+          description: The identified type of the value
+
+    AddressLookupInfoV1:
+      type: object
+      required: [value, type, relation, balanceKind]
+      properties:
+        value:
+          type: string
+          description: The queried address or lock root
+        type:
+          type: string
+          enum: [address, lockRoot, unknown]
+          description: Identifier type for the queried value
+        relation:
+          type: string
+          enum: [owned, bridge, multisig, lockRoot, unknown]
+          description: How returned transactions relate to the queried value
+        balanceKind:
+          type: string
+          enum: [owned, lockControlled, unknown]
+          description: Whether balances are wallet-owned or controlled by a lock
+        firstNames:
+          type: array
+          items:
+            type: string
+          description: Non-owned first names matched through a lock relationship
+        lockRoots:
+          type: array
+          items:
+            type: string
+          description: Lock roots matched through the relationship
+
+    SubmitTransactionResponseV1:
+      type: object
+      required: [status, txId]
+      properties:
+        status:
+          type: string
+          enum: [accepted, rejected]
+          description: Transaction admission result from the curator/node submission flow
+        txId:
+          type: string
+          description: Canonical base58 transaction id for the submitted raw transaction
+
+    JsonRpcResponseEnvelope:
+      description: |
+        Standard JSON-RPC 2.0 response.
+        Exactly **one** of `result` or `error` MUST appear.
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc:
+          type: string
+          const: "2.0"
+        result:
+          description: Successful result payload (method-specific)
+          oneOf:
+            - type: array
+              items:
+                $ref: "#/components/schemas/BlockObjectV1"
+            - type: array
+              items:
+                type: string
+            - type: array
+              items:
+                $ref: "#/components/schemas/NoteObjectV1"
+            - type: array
+              items:
+                $ref: "#/components/schemas/TransactionObjectV1"
+            - $ref: "#/components/schemas/TransactionsByAddressResponseV1"
+            - $ref: "#/components/schemas/L2TransactionsResponse"
+            - $ref: "#/components/schemas/MempoolResponseV1"
+            - $ref: "#/components/schemas/MempoolTransactionObjectV1"
+            - $ref: "#/components/schemas/BlockObjectV1"
+            - $ref: "#/components/schemas/TransactionObjectV1"
+            - $ref: "#/components/schemas/IdentifyAddressTypeResponseV1"
+            - $ref: "#/components/schemas/SubmitTransactionResponseV1"
+        error:
+          $ref: "#/components/schemas/JsonRpcError"
+        id:
+          description: Mirrors the `id` sent in the request
+          oneOf:
+            - type: string
+            - type: integer
+            - type: "null"
+
+    JsonRpcError:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: Short description
+        data:
+          description: Optional extra diagnostic information
+          nullable: true
+
+    TransportError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          pattern: "^[0-9]{3}$"
+          example: "400"
+        message:
+          type: string
+        details:
+          type: string
+          nullable: true
+
+    # Core Data Types
+    EvmAddress:
+      type: string
+      description: 0x-prefixed EVM address
+      pattern: "^0x[a-fA-F0-9]{40}$"
+      example: "0x9b5e262cf9bb04869ab40b19af91d2dc85761722"
+
+    EvmTxHash:
+      type: string
+      description: 0x-prefixed EVM transaction hash
+      pattern: "^0x[a-fA-F0-9]{64}$"
+      example: "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+    EvmBlockHash:
+      type: string
+      description: 0x-prefixed EVM block hash
+      pattern: "^0x[a-fA-F0-9]{64}$"
+      example: "0x0000000000000000000000000000000000000000000000000000000000000000"
+
+    RawTransactionBase64:
+      type: string
+      description: Base64-encoded jammed signed transaction payload. Supported wallet wrapper formats are unwrapped server-side before submission.
+      example: "amFtLWVuY29kZWQtdHJhbnNhY3Rpb24="
+
+    BlockObjectV1:
+      type: object
+      required: [version, digest, proofUrl, parent, txids, coinbaseNotes, timestamp, epochCounter, accumulatedWork, target, height, msg]
+      properties:
+        version:
+          type: integer
+          description: Block version number
+        digest:
+          type: string
+          description: Block hash/digest as base58 string
+        proofUrl:
+          type: string
+          format: uri
+          description: URL to the proof for this block
+        parent:
+          type: string
+          description: Parent block hash as base58 string
+        txids:
+          type: array
+          items:
+            type: string
+          description: Array of transaction IDs (base58)
+        coinbaseNotes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteObjectV1"
+          description: Array of coinbase note objects
+        timestamp:
+          type: integer
+          format: int64
+          description: Block timestamp in Unix seconds
+        epochCounter:
+          type: integer
+          format: int64
+          description: Counter within the current epoch
+        accumulatedWork:
+          type: string
+          description: Total accumulated work as string
+        target:
+          type: string
+          description: Mining target as string
+        height:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Block height in the chain
+        msg:
+          type: string
+          description: Optional message included in the block
+        transactionsData:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionObjectV1"
+          nullable: true
+          description: Optional array of full transaction objects (only if includeTransactions was true)
+        targetBlockTimeSeconds:
+          type: number
+          format: double
+          nullable: true
+          description: Protocol target inter-block interval for this height, in seconds
+        protocolRegime:
+          type: string
+          nullable: true
+          description: Coarse protocol regime for this height
+          example: "aletheia"
+        proofVersion:
+          type: integer
+          format: int32
+          nullable: true
+          description: Proof version decoded from this block's persisted PoW artifact
+        powType:
+          type: string
+          nullable: true
+          enum: [zk-pow, ai-pow]
+          description: Proof-of-work puzzle that produced this block
+        puzzleTargetBlockTimeSeconds:
+          type: number
+          format: double
+          nullable: true
+          description: Target interval for this block's puzzle branch
+        workRateUnit:
+          type: string
+          nullable: true
+          enum: [proofs/s, hashes/s, mac/s]
+          description: Unit used for this puzzle's work-rate measurements
+
+    NoteObjectV1:
+      oneOf:
+        - $ref: "#/components/schemas/NoteV0Object"
+        - $ref: "#/components/schemas/NoteV1Object"
+      discriminator:
+        propertyName: version
+        mapping:
+          "0": "#/components/schemas/NoteV0Object"
+          "1": "#/components/schemas/NoteV1Object"
+
+    NoteV0Object:
+      type: object
+      required: [version, originPage, blockId, firstName, lastName, lock, sourceHash, isCoinbase, assets]
+      properties:
+        version:
+          type: integer
+          enum: [0]
+          description: Note version
+        originPage:
+          type: integer
+          format: int64
+          description: Block height where note originated
+        blockId:
+          type: string
+          description: Block ID as base58 string
+        timelock:
+          $ref: "#/components/schemas/TimelockV0"
+          nullable: true
+          description: Timelock constraints
+        firstName:
+          type: string
+          description: First component of note name (base58)
+        lastName:
+          type: string
+          description: Second component of note name (base58)
+        lock:
+          $ref: "#/components/schemas/LockObject"
+          description: Lock controlling the note
+        sourceHash:
+          type: string
+          description: Source hash (base58)
+        owner:
+          type: string
+          nullable: true
+          description: Optional owner address for coinbase notes
+        isCoinbase:
+          type: boolean
+          description: Whether this is a coinbase note
+        assets:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount of assets in this note
+        spentOn:
+          type: string
+          nullable: true
+          description: Transaction ID where this note was spent (null if unspent)
+
+    NoteV1Object:
+      type: object
+      required: [version, originPage, firstName, lastName, noteData, assets, isCoinbase]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+          description: Note version
+        originPage:
+          type: integer
+          format: int64
+          description: Block height where note originated
+        firstName:
+          type: string
+          description: First component of note name (base58)
+        lastName:
+          type: string
+          description: Second component of note name (base58)
+        noteData:
+          type: object
+          additionalProperties: true
+          description: |
+            Map of keys to values. Special keys are processed:
+            - "lock": Object with {version: u64, data: [LockPrimitiveObject]}
+            - "bridge": Base L2 (EVM) address as a 0x-prefixed 40-hex-character string
+            - "flock": Object with {version: 0, intent: "fund", projectId: UUID string, fundingIntentId: UUID string}, {version: 0, intent: "back"|"pay", projectId: UUID string, settlementId: UUID string}, or {version: 0, intent: "fee", projectId: UUID string, settlementId: UUID string, feeBps: integer}
+            - Other keys: Base64-encoded bytes (string)
+        assets:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount of assets in this note
+        isCoinbase:
+          type: boolean
+          description: Whether this is a coinbase note
+        owner:
+          type: string
+          nullable: true
+          description: Optional owner address for coinbase notes
+        spentOn:
+          type: string
+          nullable: true
+          description: Transaction ID where this note was spent (null if unspent)
+
+    TimelockV0:
+      type: object
+      required: [absolute, relative]
+      properties:
+        absolute:
+          $ref: "#/components/schemas/TimelockRange"
+        relative:
+          $ref: "#/components/schemas/TimelockRange"
+
+    TimelockRange:
+      type: object
+      properties:
+        min:
+          type: integer
+          format: int64
+          nullable: true
+        max:
+          type: integer
+          format: int64
+          nullable: true
+
+    LockObject:
+      type: object
+      required: [m, pubkeys]
+      properties:
+        m:
+          type: integer
+          minimum: 1
+          description: Number of signatures required
+        pubkeys:
+          type: array
+          items:
+            type: string
+          description: Array of public keys (base58)
+
+    TransactionsByAddressResponseV1:
+      type: object
+      required: [transactions]
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionObjectV1"
+          description: Transactions that involve the queried address
+        totalTransactions:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total number of transactions detected for this address
+        totalReceived:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Net amount received by this address
+        totalSent:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Net amount sent from this address
+        currentBalance:
+          type: integer
+          format: int64
+          description: Sum of currently unspent notes for this address
+        relatedBalance:
+          type: integer
+          format: int64
+          description: Unspent value in locks where this address participates; excluded from currentBalance.
+        relatedNoteCount:
+          type: integer
+          format: int64
+          description: Number of unspent notes involving this participant.
+        relatedLocksPartial:
+          type: boolean
+          description: Some related scripts are disclosed only by a spending path.
+        ownedFirstNames:
+          type: array
+          items:
+            type: string
+          description: List of note first names currently associated with the address
+        lookup:
+          $ref: "#/components/schemas/AddressLookupInfoV1"
+
+    L2TransactionsResponse:
+      type: object
+      required: [transactions, totalCount]
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/L2TransactionWithBlockInfo"
+          description: Array of L2 token transfers with block information
+        totalCount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total number of L2 transfers available
+        pagination:
+          $ref: "#/components/schemas/PaginationInfo"
+          nullable: true
+          description: Pagination information (present when using limit/offset)
+        summary:
+          $ref: "#/components/schemas/L2AddressSummary"
+          nullable: true
+          description: Aggregate totals for the requested address
+
+    L2AddressSummary:
+      type: object
+      required: [totalReceivedRaw, totalSentRaw, balanceRaw, tokenDecimals, tokenSymbol]
+      properties:
+        totalReceivedRaw:
+          type: string
+          description: Total received amount in base units (raw string)
+        totalSentRaw:
+          type: string
+          description: Total sent amount in base units (raw string)
+        balanceRaw:
+          type: string
+          description: Current balance in base units (raw string)
+        tokenDecimals:
+          type: integer
+          minimum: 0
+          description: Token decimals for raw amounts
+        tokenSymbol:
+          type: string
+          description: Token symbol (e.g., NOCK)
+
+    L2Transaction:
+      type: object
+      required: [from, to, value, tokenSymbol, tokenDecimals, contractAddress]
+      properties:
+        from:
+          $ref: "#/components/schemas/EvmAddress"
+          description: Sender address
+        to:
+          $ref: "#/components/schemas/EvmAddress"
+          description: Recipient address
+        value:
+          type: string
+          description: Raw token amount (base units) as a decimal string
+        tokenSymbol:
+          type: string
+          description: Token symbol (e.g., NOCK)
+        tokenDecimals:
+          type: integer
+          minimum: 0
+          description: Token decimals
+        tokenName:
+          type: string
+          nullable: true
+          description: Token name
+        contractAddress:
+          $ref: "#/components/schemas/EvmAddress"
+          description: Token contract address
+
+    L2TransactionWithBlockInfo:
+      type: object
+      required: [layer, txHash, logIndex, blockNumber, timestamp, transaction, chainId]
+      properties:
+        layer:
+          type: string
+          const: "l2"
+        txHash:
+          $ref: "#/components/schemas/EvmTxHash"
+          description: EVM transaction hash
+        logIndex:
+          type: integer
+          minimum: 0
+          description: Log index within the transaction
+        blockNumber:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Block number containing this transfer
+        blockHash:
+          $ref: "#/components/schemas/EvmBlockHash"
+          nullable: true
+          description: Block hash containing this transfer
+        timestamp:
+          type: integer
+          format: int64
+          description: Timestamp of the block containing this transfer
+        chainId:
+          type: integer
+          minimum: 0
+          description: EVM chain ID
+        transaction:
+          $ref: "#/components/schemas/L2Transaction"
+          description: L2 token transfer details
+
+    PaginationInfo:
+      type: object
+      required: [limit, offset, hasMore]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+        hasMore:
+          type: boolean
+          description: Whether there are more items available
+
+    MempoolResponseV1:
+      type: object
+      required: [transactions, totalTransactions]
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MempoolTransactionObjectV1"
+          description: Transactions currently in the mempool snapshot
+        totalTransactions:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total number of transactions in the mempool snapshot
+        snapshotHeight:
+          type: integer
+          format: int64
+          nullable: true
+          description: Latest block height when the mempool snapshot was generated
+
+    MempoolTransactionObjectV1:
+      type: object
+      required: [transaction, heardAtHeight]
+      properties:
+        transaction:
+          $ref: "#/components/schemas/TransactionObjectV1"
+        heardAtHeight:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Block height when the transaction was first heard
+        heardAtBlockId:
+          type: string
+          nullable: true
+          description: Block ID at heardAtHeight (best effort)
+        heardAtTimestamp:
+          type: integer
+          format: int64
+          nullable: true
+          description: Block timestamp at heardAtHeight in Unix seconds
+
+    TransactionObjectV1:
+      oneOf:
+        - $ref: "#/components/schemas/TransactionV0Object"
+        - $ref: "#/components/schemas/TransactionV1Object"
+      discriminator:
+        propertyName: version
+        mapping:
+          "0": "#/components/schemas/TransactionV0Object"
+          "1": "#/components/schemas/TransactionV1Object"
+
+    TransactionV0Object:
+      type: object
+      required: [version, id, totalSize, totalFees, timelockRange, outputs, inputs, blockId]
+      properties:
+        version:
+          type: integer
+          enum: [0]
+          description: Transaction version
+        id:
+          type: string
+          description: Transaction ID (base58)
+        totalSize:
+          type: integer
+          format: int64
+          description: Total size of transaction
+        totalFees:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total fees paid
+        timelockRange:
+          type: object
+          properties:
+            min:
+              type: integer
+              format: int64
+              nullable: true
+            max:
+              type: integer
+              format: int64
+              nullable: true
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionOutputV0Object"
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionInputV0Object"
+        blockId:
+          type: string
+          description: Block ID containing this transaction (base58)
+        timestamp:
+          type: integer
+          format: int64
+          description: Block timestamp in Unix seconds
+
+    TransactionInputV0Object:
+      type: object
+      required: [firstName, lastName, spend]
+      properties:
+        firstName:
+          type: string
+          description: First name of input note (base58)
+        lastName:
+          type: string
+          description: Last name of input note (base58)
+        spend:
+          $ref: "#/components/schemas/SpendV0Object"
+
+    SpendV0Object:
+      type: object
+      required: [signature, seeds, fee]
+      properties:
+        signature:
+          type: array
+          items:
+            $ref: "#/components/schemas/SignatureV0Object"
+        seeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeedV0Object"
+        fee:
+          type: integer
+          format: int64
+          minimum: 0
+
+    SignatureV0Object:
+      type: object
+      required: [pubkey, chal, sig]
+      properties:
+        pubkey:
+          type: string
+          description: Public key (base58)
+        chal:
+          type: array
+          items:
+            type: string
+          description: Challenge values (8 u64 as strings)
+        sig:
+          type: array
+          items:
+            type: string
+          description: Signature values (8 u64 as strings)
+
+    TransactionOutputV0Object:
+      type: object
+      required: [firstName, lastName, seeds]
+      properties:
+        firstName:
+          type: string
+          description: First name of output note (base58)
+        lastName:
+          type: string
+          description: Last name of output note (base58)
+        seeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeedV0Object"
+
+    SeedV0Object:
+      type: object
+      required: [recipientLock, gift, parentHash]
+      properties:
+        outputSourceHash:
+          type: string
+          nullable: true
+          description: Output source hash (base58), null if no source
+        recipientLock:
+          $ref: "#/components/schemas/LockObject"
+        timelockIntent:
+          $ref: "#/components/schemas/TimelockV0"
+          nullable: true
+        gift:
+          type: integer
+          format: int64
+          minimum: 0
+        parentHash:
+          type: string
+          description: Parent hash (base58)
+
+    TransactionV1Object:
+      type: object
+      required: [version, id, totalSize, outputs, spends, blockId]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+          description: Transaction version
+        id:
+          type: string
+          description: Transaction ID (base58)
+        totalSize:
+          type: integer
+          format: int64
+          description: Total size of transaction
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionOutputV1Object"
+        spends:
+          type: array
+          items:
+            $ref: "#/components/schemas/SpendV1Object"
+        blockId:
+          type: string
+          description: Block ID containing this transaction (base58)
+        timestamp:
+          type: integer
+          format: int64
+          description: Block timestamp in Unix seconds
+
+    TransactionOutputV1Object:
+      type: object
+      required: [firstName, lastName, seeds]
+      properties:
+        firstName:
+          type: string
+          description: First name of output note (base58)
+        lastName:
+          type: string
+          description: Last name of output note (base58)
+        seeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeedV1Object"
+
+    SpendV1Object:
+      type: object
+      required: [firstName, lastName, version, seeds, fee]
+      properties:
+        firstName:
+          type: string
+          description: First name of spent note (base58)
+        lastName:
+          type: string
+          description: Last name of spent note (base58)
+        version:
+          type: string
+          enum: [v1, v0_to_v1]
+          description: Spend version - v1 uses witness, v0_to_v1 uses signaturesV0
+        lockRoot:
+          type: string
+          nullable: true
+          description: Lock root of the note being spent (for V1 spends)
+        owner:
+          type: string
+          description: Owner identifier of the input note, when known. Signatures alone do not establish ownership.
+        witness:
+          $ref: "#/components/schemas/WitnessObject"
+          nullable: true
+          description: V1 witness data (only present for version=v1)
+        signaturesV0:
+          type: array
+          items:
+            $ref: "#/components/schemas/SignatureV0Object"
+          nullable: true
+          description: V0 signatures (only present for version=v0_to_v1)
+        seeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeedV1Object"
+        fee:
+          type: integer
+          format: int64
+          minimum: 0
+
+    WitnessObject:
+      type: object
+      required: [lockMerkleProof, pkhSignature, hax, tim]
+      properties:
+        lockMerkleProof:
+          $ref: "#/components/schemas/LockMerkleProofObject"
+        pkhSignature:
+          type: array
+          items:
+            $ref: "#/components/schemas/PkhSignatureObject"
+          description: Array of PKH signatures
+        hax:
+          type: object
+          additionalProperties:
+            type: string
+            format: byte
+          description: Map of keys to base64-encoded bytes
+        tim:
+          type: integer
+          format: int64
+
+    PkhSignatureObject:
+      type: object
+      required: [pubkey, chal, sig]
+      properties:
+        pk:
+          type: string
+          description: Schnorr public key (base58)
+
+        pubkey:
+          type: string
+          description: Public key hash (base58)
+        chal:
+          type: array
+          items:
+            type: string
+          description: Challenge values (8 u64 as strings)
+        sig:
+          type: array
+          items:
+            type: string
+          description: Signature values (8 u64 as strings)
+
+    LockMerkleProofObject:
+      type: object
+      required: [spendCondition, axis, merkleProofRoot, merkleProofPath, format]
+      properties:
+        spendCondition:
+          type: array
+          items:
+            $ref: "#/components/schemas/LockPrimitiveObject"
+        axis:
+          type: integer
+          format: int64
+        merkleProofRoot:
+          type: string
+          description: Merkle root (base58)
+        merkleProofPath:
+          type: array
+          items:
+            type: string
+          description: Merkle path (array of base58 strings)
+        format:
+          type: string
+          enum: [stub, full, unknown]
+          description: Lock merkle proof encoding format. `unknown` is only used for legacy rows backfilled without raw witness version data.
+
+    LockPrimitiveObject:
+      type: object
+      description: Lock primitive - exactly one property should be present
+      properties:
+        pkh:
+          type: object
+          properties:
+            m:
+              type: integer
+              minimum: 1
+            h:
+              type: array
+              items:
+                type: string
+        tim:
+          type: object
+          properties:
+            relative:
+              type: object
+              properties:
+                min:
+                  type: integer
+                  format: int64
+                  nullable: true
+                max:
+                  type: integer
+                  format: int64
+                  nullable: true
+            absolute:
+              type: object
+              properties:
+                min:
+                  type: integer
+                  format: int64
+                  nullable: true
+                max:
+                  type: integer
+                  format: int64
+                  nullable: true
+        hax:
+          type: array
+          items:
+            type: string
+        brn:
+          type: "null"
+
+    SeedV1Object:
+      type: object
+      required: [isCoinbase, lockRoot, noteData, gift, parentHash]
+      properties:
+        outputHash:
+          type: string
+          nullable: true
+          description: Output hash (base58), null if no source
+        isCoinbase:
+          type: boolean
+        lockRoot:
+          type: string
+          description: Lock merkle root (base58)
+        noteData:
+          type: object
+          additionalProperties: true
+          description: |
+            Map of keys to values. Special keys are processed:
+            - "lock": Object with {version: u64, data: [LockPrimitiveObject]}
+            - "bridge": Base L2 (EVM) address as a 0x-prefixed 40-hex-character string
+            - "flock": Object with {version: 0, intent: "fund", projectId: UUID string, fundingIntentId: UUID string}, {version: 0, intent: "back"|"pay", projectId: UUID string, settlementId: UUID string}, or {version: 0, intent: "fee", projectId: UUID string, settlementId: UUID string, feeBps: integer}
+            - Other keys: Base64-encoded bytes (string)
+        gift:
+          type: integer
+          format: int64
+          minimum: 0
+        parentHash:
+          type: string
+          description: Parent hash (base58)

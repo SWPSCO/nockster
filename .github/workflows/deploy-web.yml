@@ -22,11 +22,11 @@ on:
   push:
     branches: [master]
     paths:
-      - 'web/**'
-      - 'manual/**'
-      - 'nockster-js/**'
-      - 'crates/nockster-wasm/**'
-      - 'crates/nockster-core/**'
+      - 'nockster-esp/web/**'
+      - 'nockster-esp/manual/**'
+      - 'nockster-esp/nockster-js/**'
+      - 'nockster-esp/crates/nockster-wasm/**'
+      - 'nockster-esp/crates/nockster-core/**'
       - '.github/workflows/deploy-web.yml'
   workflow_dispatch:
 
@@ -38,6 +38,10 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: nockster-esp
 
 jobs:
   build-deploy:
@@ -62,8 +66,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+            nockster-esp/target
+          key: wasm-${{ runner.os }}-${{ hashFiles('nockster-esp/Cargo.lock') }}
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked || cargo install wasm-pack
 
@@ -83,13 +87,13 @@ jobs:
         run: wasm-pack build crates/nockster-wasm --target web --out-dir pkg
 
       - name: Build nockster-js
-        working-directory: nockster-js
+        working-directory: nockster-esp/nockster-js
         run: |
           npm ci
           npm run build
 
       - name: Build web app
-        working-directory: web
+        working-directory: nockster-esp/web
         env:
           # OTA index lives on R2 (published by the firmware-release workflow).
           # Overridable in-app (localStorage / advanced panel).
@@ -104,13 +108,13 @@ jobs:
         run: cargo install mdbook --version 0.5.3 --locked
 
       - name: Build user manual
-        working-directory: manual
+        working-directory: nockster-esp/manual
         run: mdbook build --dest-dir ../web/dist/manual
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web/dist
+          path: nockster-esp/web/dist
 
       - name: Deploy to GitHub Pages
         id: deploy

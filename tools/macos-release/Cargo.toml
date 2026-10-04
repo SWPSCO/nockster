@@ -1,0 +1,13 @@
+[package]
+name = "nockster-macos-release"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+apple-codesign = "=0.29.0"
+app-store-connect = "=0.7.0"
+base64 = "0.22"
+env_logger = "0.11"
+tempfile = "3"
+zeroize = "1"

@@ -1,0 +1,2131 @@
+openapi: 3.1.0
+info:
+  title: Nockchain JSON-RPC
+  version: v0.1.0
+  description: |
+    RPC surface for Nockchain. Pokes and peeks over HTTP.
+    The service implements JSON-RPC 2.0 over HTTP POST at `/rpc`.
+    All requests and responses are `application/json` with a UTF-8 body.
+
+servers:
+  - url: https://nockblocks.com
+    description: Mainnet RPC
+  - url: http://127.0.0.1:3000
+    description: Local development node
+
+paths:
+  /rpc:
+    post:
+      summary: Nockchain JSON-RPC endpoint
+      operationId: rpc
+      tags: [rpc]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JsonRpcRequestEnvelope"
+            examples:
+              getBlockByHeight:
+                summary: Get block by height 1,2345
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlockByHeight
+                  params: [12345]
+                  id: 1
+              getBlockByHeightWithPrevious:
+                summary: Get block by height with 5 previous blocks
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlockByHeight
+                  params: [12345, 5]
+                  id: 1
+              getBlocksByRange:
+                summary: Get blocks from height 100 to 150
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlocksByRange
+                  params: [100, 150]
+                  id: 2
+              getBlocksByTimestampRange:
+                summary: Get blocks between timestamps
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlocksByTimestampRange
+                  params: [1672531200, 1672617600]
+                  id: 3
+              getTip:
+                summary: Get current chain tip
+                value:
+                  jsonrpc: "2.0"
+                  method: getTip
+                  params: []
+                  id: "tip-42"
+              getTransactionById:    
+                summary: Get transaction by ID
+                value:
+                  jsonrpc: "2.0"
+                  method: getTransactionById
+                  params: [{"id": "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"}]
+                  id: 3
+              getTransactionsByAddress:
+                summary: Get transactions for an address
+                value:
+                  jsonrpc: "2.0"
+                  method: getTransactionsByAddress
+                  params: [{"address": "32KVTmv3ofSyACq9nC1Hgnk4Jt8rs2hj1cvDZWC1EQuiYFMDg8MaLtF3ntafJbEUH5XPV1pK3K4xkxfjRPAWprBb7LYCVv4HF7817Bwh9M9xAdmgrPt77j4xejihNFd9h5Eo", "limit": 50, "offset": 0}]
+                  id: 5
+              getMiningPubkeys:
+                summary: Get mining public keys
+                value:
+                  jsonrpc: "2.0"
+                  method: getMiningPubkeys
+                  params: []
+                  id: 6
+              isMainnet:
+                summary: Check if running on mainnet
+                value:
+                  jsonrpc: "2.0"
+                  method: isMainnet
+                  params: []
+                  id: 7
+              submitTransaction:
+                summary: Broadcast a raw transaction
+                value:
+                  jsonrpc: "2.0"
+                  method: submitTransaction
+                  params: ["base58encodedtransaction..."]
+                  id: 99
+              getBlockchainMetrics:
+                summary: Get blockchain metrics for current tip
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlockchainMetrics
+                  params: []
+                  id: 8
+              getBlockchainMetricsAtHeight:
+                summary: Get blockchain metrics at specific height
+                value:
+                  jsonrpc: "2.0"
+                  method: getBlockchainMetrics
+                  params: [{"blockHeight": 5000}]
+                  id: 9
+              getTransactionsByBlockId:
+                summary: Get transactions in a block by ID with pagination
+                value:
+                  jsonrpc: "2.0"
+                  method: getTransactionsByBlockId
+                  params: [{"id": "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT", "limit": 50, "offset": 0}]
+                  id: 10
+              getTransactionsByBlockHeight:
+                summary: Get transactions in a block by height with pagination
+                value:
+                  jsonrpc: "2.0"
+                  method: getTransactionsByBlockHeight
+                  params: [{"height": 12345, "limit": 50, "offset": 0}]
+                  id: 11
+              getAllTransactios:
+                summary: Get all transactions with pagination
+                value:
+                  jsonrpc: "2.0"
+                  method: getAllTransactions
+                  params: [{"limit": 100, "offset": 200}]
+                  id: 12
+              getDecentralizationMetrics:
+                summary: Get decentralization metrics over time
+                value:
+                  jsonrpc: "2.0"
+                  method: getDecentralizationMetrics
+                  params: [{"startHeight": 0, "endHeight": 50000, "windowSize": 1000, "dataPoints": 50}]
+                  id: 13
+              getNetworkHealthSummary:
+                summary: Get current network health summary
+                value:
+                  jsonrpc: "2.0"
+                  method: getNetworkHealthSummary
+                  params: []
+                  id: 14
+              getMiningDecentralization:
+                summary: Get mining decentralization time series
+                value:
+                  jsonrpc: "2.0"
+                  method: getMiningDecentralization
+                  params: [{"startHeight": 40000, "windowSize": 500, "dataPoints": 100}]
+                  id: 15
+              getWalletGrowthMetrics:
+                summary: Get wallet growth metrics over time
+                value:
+                  jsonrpc: "2.0"
+                  method: getWalletGrowthMetrics
+                  params: [{"windowSize": 1000, "dataPoints": 50}]
+                  id: 16
+              getProofRateHistory:
+                summary: Get history of proofrate per block including block time and adjustment ratio
+                value:
+                  jsonrpc: "2.0"
+                  method: getProofRateHistory
+                  params: [{"startHeight": 0, "endHeight": 16735, "smoothingType": "raw", "maxSamples": 1000}]
+                  id: 17
+              getNotes:
+                summary: Get notes for an address
+                value:
+                  jsonrpc: "2.0"
+                  method: getNotes
+                  params: [{"address": "32KVTmv3ofSyACq9nC1Hgnk4Jt8rs2hj1cvDZWC1EQuiYFMDg8MaLtF3ntafJbEUH5XPV1pK3K4xkxfjRPAWprBb7LYCVv4HF7817Bwh9M9xAdmgrPt77j4xejihNFd9h5Eo"}]
+                  id: 18
+              getAddressesWithBalance:
+                summary: Get a paginated list of all active addresses with their balance
+                value:
+                  jsonrpc: "2.0"
+                  method: getAddressesWithBalance
+                  params: [{"limit": 100, "offset": 200, "minBalance": 0}]
+                  id: 19
+      responses:
+        "200":
+          description: JSON-RPC success or error response
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+              example: "GET, POST, OPTIONS"
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+              example: "Content-Type, Accept, Authorization"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JsonRpcResponseEnvelope"
+        "400":
+          description: Transport-level error (malformed JSON, wrong content-type, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransportError"
+        "500":
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransportError"
+        "default":
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransportError"
+
+    options:
+      summary: Handle CORS preflight requests
+      operationId: rpcOptions
+      tags: [rpc]
+      responses:
+        "200":
+          description: CORS preflight response
+          headers:
+            Access-Control-Allow-Origin:
+              schema:
+                type: string
+              example: "*"
+            Access-Control-Allow-Methods:
+              schema:
+                type: string
+              example: "GET, POST, OPTIONS"
+            Access-Control-Allow-Headers:
+              schema:
+                type: string
+              example: "Content-Type, Accept, Authorization"
+            Access-Control-Max-Age:
+              schema:
+                type: integer
+              example: 86400
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ""
+
+components:
+  schemas:
+    JsonRpcRequestEnvelope:
+      oneOf:
+        - $ref: "#/components/schemas/GetBlockByHeightRequest"
+        - $ref: "#/components/schemas/GetBlockByHashRequest"
+        - $ref: "#/components/schemas/GetBlocksByRangeRequest"
+        - $ref: "#/components/schemas/GetBlocksByTimestampRangeRequest"
+        - $ref: "#/components/schemas/GetTipRequest"
+        - $ref: "#/components/schemas/GetHeightRequest"
+        - $ref: "#/components/schemas/GetTransactionByIdRequest"
+        - $ref: "#/components/schemas/GetAllTransactionsRequest"
+        - $ref: "#/components/schemas/GetTransactionsByAddressRequest"
+        - $ref: "#/components/schemas/GetRawTransactionByIdRequest"
+        - $ref: "#/components/schemas/GetBalanceByAddressRequest"
+        - $ref: "#/components/schemas/GetMiningPubkeysRequest"
+        - $ref: "#/components/schemas/GetHeavySummaryRequest"
+        - $ref: "#/components/schemas/IsMainnetRequest"
+        - $ref: "#/components/schemas/SubmitTransactionRequest"
+        - $ref: "#/components/schemas/GetBlockchainMetricsRequest"
+        - $ref: "#/components/schemas/GetTransactionsByBlockIdRequest"
+        - $ref: "#/components/schemas/GetTransactionsByBlockHeightRequest"
+        - $ref: "#/components/schemas/GetDecentralizationMetricsRequest"
+        - $ref: "#/components/schemas/GetNetworkHealthSummaryRequest"
+        - $ref: "#/components/schemas/GetMiningDecentralizationRequest"
+        - $ref: "#/components/schemas/GetWalletGrowthMetricsRequest"
+        - $ref: "#/components/schemas/GetNotesRequest"
+        - $ref: "#/components/schemas/GetProofRateHistoryRequest"
+        - $ref: "#/components/schemas/GetAddressesWithBalanceRequest"
+      discriminator:
+        propertyName: method
+        mapping:
+          getBlockByHeight: "#/components/schemas/GetBlockByHeightRequest"
+          getBlockByHash: "#/components/schemas/GetBlockByHashRequest"
+          getBlocksByRange: "#/components/schemas/GetBlocksByRangeRequest"
+          getBlocksByTimestampRange: "#/components/schemas/GetBlocksByTimestampRangeRequest"
+          getTip: "#/components/schemas/GetTipRequest"
+          getHeight: "#/components/schemas/GetHeightRequest"
+          getTransactionById: "#/components/schemas/GetTransactionByIdRequest"
+          getAllTransactions: "#/components/schemas/GetAllTransactionsRequest"
+          getTransactionsByAddress: "#/components/schemas/GetTransactionsByAddressRequest"
+          getRawTransactionById: "#/components/schemas/GetRawTransactionByIdRequest"
+          getBalanceByAddress: "#/components/schemas/GetBalanceByAddressRequest"
+          getMiningPubkeys: "#/components/schemas/GetMiningPubkeysRequest"
+          getHeavySummary: "#/components/schemas/GetHeavySummaryRequest"
+          isMainnet: "#/components/schemas/IsMainnetRequest"
+          submitTransaction: "#/components/schemas/SubmitTransactionRequest"
+          getBlockchainMetrics: "#/components/schemas/GetBlockchainMetricsRequest"
+          getTransactionsByBlockId: "#/components/schemas/GetTransactionsByBlockIdRequest"
+          getTransactionsByBlockHeight: "#/components/schemas/GetTransactionsByBlockHeightRequest"
+          getDecentralizationMetrics: "#/components/schemas/GetDecentralizationMetricsRequest"
+          getNetworkHealthSummary: "#/components/schemas/GetNetworkHealthSummaryRequest"
+          getMiningDecentralization: "#/components/schemas/GetMiningDecentralizationRequest"
+          getWalletGrowthMetrics: "#/components/schemas/GetWalletGrowthMetricsRequest"
+          getProofRateHistory: "#/components/schemas/GetProofRateHistoryRequest"
+          getNotes: "#/components/schemas/GetNotesRequest"
+          getAddressesWithBalance: "#/components/schemas/GetAddressesWithBalanceRequest"
+
+    # Method-Specific Request Schemas
+    GetBlockByHeightRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlockByHeight" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetBlockByHeightParams" }
+
+    GetBlockByHashRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlockByHash" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetBlockByHashParams" }
+
+    GetBlocksByRangeRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlocksByRange" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetBlocksByRangeParams" }
+
+    GetBlocksByTimestampRangeRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlocksByTimestampRange" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetBlocksByTimestampRangeParams" }
+
+    GetTipRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTip" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/EmptyParams" }
+
+    GetHeightRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getHeight" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/EmptyParams" }
+
+    GetTransactionByIdRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionById" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetTransactionByIdParams" }
+
+    GetAllTransactionsRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getAllTransactions" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetAllTransactionsParams" }
+
+    GetTransactionsByAddressRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionsByAddress" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetTransactionsByAddressParams" }
+
+    GetRawTransactionByIdRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getRawTransactionById" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetTransactionByIdParams" } # Reuses existing params
+
+    GetBalanceByAddressRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBalanceByAddress" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetTransactionByIdParams" } # Reuses IdParam via this schema
+
+    GetMiningPubkeysRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getMiningPubkeys" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/EmptyParams" }
+
+    GetHeavySummaryRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getHeavySummary" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/EmptyParams" }
+
+    IsMainnetRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "isMainnet" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/EmptyParams" }
+
+    SubmitTransactionRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "submitTransaction" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/SubmitTransactionParams" }
+
+    GetBlockchainMetricsRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getBlockchainMetrics" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetBlockchainMetricsParams" }
+
+    GetTransactionsByBlockIdRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionsByBlockId" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetTransactionsByBlockIdParams" }
+
+    GetTransactionsByBlockHeightRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getTransactionsByBlockHeight" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetTransactionsByBlockHeightParams" }
+
+    GetDecentralizationMetricsRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getDecentralizationMetrics" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetDecentralizationMetricsParams" }
+
+    GetNetworkHealthSummaryRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getNetworkHealthSummary" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetNetworkHealthSummaryParams" }
+
+    GetMiningDecentralizationRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getMiningDecentralization" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetMiningDecentralizationParams" }
+
+    GetWalletGrowthMetricsRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getWalletGrowthMetrics" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetWalletGrowthMetricsParams" }
+
+    GetProofRateHistoryRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getProofRateHistory" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetProofRateHistoryParams" }
+
+    GetAddressesWithBalanceRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getAddressesWithBalance" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetAddressesWithBalanceParams" }
+        
+    JsonRpcResponseEnvelope:
+      description: |
+        Standard JSON-RPC 2.0 response.
+        Exactly **one** of `result` or `error` MUST appear.
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc:
+          type: string
+          const: "2.0"
+        tip:
+          type: integer
+          minimum: 0
+          description: Current tip block height for this node
+        result:
+          description: Successful result payload (method-specific).
+          oneOf:
+            - $ref: "#/components/schemas/BlockObject"
+            - $ref: "#/components/schemas/TipObject"
+            - $ref: "#/components/schemas/HeightObject"
+            - $ref: "#/components/schemas/TransactionObject"
+            - $ref: "#/components/schemas/TransactionsResponse"
+            - $ref: "#/components/schemas/RawTransactionObject"
+            - $ref: "#/components/schemas/AddressTransactionsResponse"
+            - $ref: "#/components/schemas/BlocksRangeResponse"
+            - $ref: "#/components/schemas/BalanceObject"
+            - $ref: "#/components/schemas/MiningPubkeysArray"
+            - $ref: "#/components/schemas/HeavySummaryObject"
+            - $ref: "#/components/schemas/BooleanResult"
+            - $ref: "#/components/schemas/TransactionId"
+            - $ref: "#/components/schemas/TransactionWithBlockInfo"
+            - $ref: "#/components/schemas/DecentralizationMetricsResponse"
+            - $ref: "#/components/schemas/NetworkHealthSummaryResponse"
+            - $ref: "#/components/schemas/MiningDecentralizationResponse"
+            - $ref: "#/components/schemas/WalletGrowthMetricsResponse"
+            - $ref: "#/components/schemas/ProofRateHistoryResponse"
+            - $ref: "#/components/schemas/NotesResponse"
+            - $ref: "#/components/schemas/AddressesWithBalanceResponse"
+        error:
+          $ref: "#/components/schemas/JsonRpcError"
+        id:
+          description: Mirrors the `id` sent in the request
+          oneOf:
+            - type: string
+            - type: integer
+            - type: "null"
+
+    JsonRpcError:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: Short description.
+        data:
+          description: Optional extra diagnostic information.
+          nullable: true
+
+    TransportError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          pattern: "^[0-9]{3}$"
+          example: "400"
+        message:
+          type: string
+        details:
+          type: string
+          nullable: true
+
+    # Parameter wrapper types
+    HeightParam:
+      type: object
+      required: [height]
+      properties:
+        height:
+          type: integer
+          minimum: 0
+
+    HeightWithPreviousParam:
+      type: object
+      required: [height, previousCount]
+      properties:
+        height:
+          type: integer
+          minimum: 0
+        previousCount:
+          type: integer
+          minimum: 0
+          maximum: 100
+
+    RangeParam:
+      type: object
+      required: [startHeight, endHeight]
+      properties:
+        startHeight:
+          type: integer
+          minimum: 0
+        endHeight:
+          type: integer
+          minimum: 0
+
+    TimestampRangeParam:
+      type: object
+      required: [startTimestamp, endTimestamp]
+      properties:
+        startTimestamp:
+          type: integer
+          minimum: 0
+        endTimestamp:
+          type: integer
+          minimum: 0
+
+    HashParam:
+      type: object
+      required: [hash]
+      properties:
+        hash:
+          $ref: "#/components/schemas/BlockHash"
+
+    AddressParam:
+      type: object
+      required: [address]
+      properties:
+        address:
+          $ref: "#/components/schemas/Base58Address"
+
+    IdParam:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+
+    TransactionParam:
+      type: object
+      required: [rawTransaction]
+      properties:
+        rawTransaction:
+          $ref: "#/components/schemas/RawTransactionBase58"
+
+    AddressTransactionsParam:
+      type: object
+      required: [address]
+      properties:
+        address:
+          $ref: "#/components/schemas/Base58Address"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Maximum number of transactions to return
+        offset:
+          type: integer
+          minimum: 0
+          description: Number of transactions to skip (for pagination)
+        minHeight:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Only include transactions from this block height onwards
+        maxHeight:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Only include transactions up to this block height
+
+    # Parameter sets using wrappers
+    GetBlockByHeightParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/HeightParam"
+
+    GetBlockByHeightWithPreviousParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/HeightWithPreviousParam"
+
+    GetBlocksByRangeParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/RangeParam"
+
+    GetBlocksByTimestampRangeParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/TimestampRangeParam"
+
+    GetBlockByHashParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/HashParam"
+
+    GetTransactionsByAddressParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/AddressTransactionsParam"
+
+    GetTransactionByIdParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/IdParam"
+
+    GetTransactionsByBlockIdParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        type: object
+        required: [id]
+        properties:
+          id:
+            type: string
+            description: Block ID to query transactions for
+          limit:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            description: Maximum number of transactions to return
+          offset:
+            type: integer
+            minimum: 0
+            description: Number of transactions to skip
+
+    GetTransactionsByBlockHeightParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        type: object
+        required: [height]
+        properties:
+          height:
+            type: integer
+            minimum: 0
+            description: Block height to query transactions for
+          limit:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            description: Maximum number of transactions to return
+          offset:
+            type: integer
+            minimum: 0
+            description: Number of transactions to skip
+
+    GetAllTransactionsParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/PaginationParam"
+
+    GetMiningDecentralizationParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        type: object
+        properties:
+          startHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Starting block height for analysis (defaults to current_height - 50000)
+          endHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Ending block height for analysis (defaults to current height)
+          windowSize:
+            type: integer
+            minimum: 100
+            maximum: 10000
+            nullable: true
+            description: Size of each analysis window in blocks
+          dataPoints:
+            type: integer
+            minimum: 10
+            maximum: 200
+            nullable: true
+            description: Maximum number of data points to return (for time series)
+          topMinersCount:
+            type: integer
+            minimum: 1
+            maximum: 100
+            nullable: true
+            description: Number of top miners to include in each window's detailed stats
+
+    SubmitTransactionParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/TransactionParam"
+
+    GetBlockchainMetricsParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        type: object
+        properties:
+          blockHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: End block height to analyze (defaults to current tip)
+          startHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Start block height for range analysis (defaults to 0)
+          endHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: End block height for range analysis (defaults to current tip)
+          chunkSize:
+            type: integer
+            minimum: 1
+            nullable: true
+            description: Size of chunks for proof rate history aggregation (auto-calculated if not provided)
+
+    GetDecentralizationMetricsParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        type: object
+        properties:
+          startHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Starting block height for analysis (defaults to 0)
+          endHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Ending block height for analysis (defaults to current tip)
+          windowSize:
+            type: integer
+            minimum: 100
+            maximum: 10000
+            description: Size of each analysis window in blocks
+          dataPoints:
+            type: integer
+            minimum: 10
+            maximum: 200
+            description: Maximum number of data points to return (for time series)
+
+    GetNetworkHealthSummaryParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        type: object
+        properties:
+          height:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Block height to analyze (defaults to current tip)
+
+    GetWalletGrowthMetricsParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        type: object
+        properties:
+          startHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Starting block height for analysis
+          endHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Ending block height for analysis
+          windowSize:
+            type: integer
+            minimum: 100
+            maximum: 10000
+            description: Size of each analysis window in blocks
+          dataPoints:
+            type: integer
+            minimum: 10
+            maximum: 200
+            description: Maximum number of data points to return
+
+    GetProofRateHistoryParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        type: object
+        properties:
+          startHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Starting block height for the history
+          endHeight:
+            type: integer
+            minimum: 0
+            nullable: true
+            description: Ending block height for the history
+          maxSamples:
+            type: integer
+            minimum: 10
+            maximum: 1000
+            nullable: true
+            description: Maximum number of data points to return
+          smoothingType:
+            type: string
+            enum: [raw, smoothed_100, smoothed_50]
+            default: raw
+            nullable: true
+            description: The type of proofrate to return
+
+    GetAddressesWithBalanceParamsInner:
+      type: object
+      properties:
+        limit:  { type: integer, minimum: 1, maximum: 1000 }
+        offset: { type: integer, minimum: 0 }
+        minBalance:
+          type: integer
+          format: int64
+          description: "Filter addresses with at least this balance (default: 1)"
+        prefix:
+          type: string
+          description: Optional address prefix filter
+
+    GetAddressesWithBalanceParams:
+      type: array
+      minItems: 0
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/GetAddressesWithBalanceParamsInner"
+
+    GetNotesRequest:
+      type: object
+      required: [jsonrpc, method, id, params]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        method: { type: string, const: "getNotes" }
+        id: { oneOf: [type: string, type: integer, type: "null"] }
+        params: { $ref: "#/components/schemas/GetNotesParams" }
+
+    GetNotesParams:
+      type: array
+      minItems: 1
+      maxItems: 1
+      items:
+        $ref: "#/components/schemas/AddressParam"
+    NotesResponse:
+      type: object
+      required: [nicks]
+      properties:
+        nicks:
+          type: i64
+          minimum: 0
+        notes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteObject"
+        multisig:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteObject"
+
+    PaginationParam:
+      type: object
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Maximum number of transactions to return
+        offset:
+          type: integer
+          minimum: 0
+          description: Number of transactions to skip (for pagination)
+
+    EmptyParams:
+      type: array
+      maxItems: 0
+
+    # Primitive & composite objects
+    BlockHash:
+      type: string
+      description: Base58-encoded block hash
+      example: "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"
+
+    BlockHeight:
+      type: integer
+      minimum: 0
+      description: Natural number representing block height
+      example: 12345
+
+    Timestamp:
+      type: i64
+      minimum: 0
+      description: Natural number representing Unix epoch time
+      example: 1753285981
+
+    TransactionId:
+      type: string
+      description: Base58-encoded transaction ID
+      example: "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"
+
+    RawTransactionBase58:
+      type: string
+      description: Whole signed transaction serialized and Base58-encoded
+
+    Base58Id:
+      type: string
+      description: Base58-encoded identifier used in Nockchain
+      example: "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"
+
+    Base58Address:
+      type: string
+      description: Base58-encoded Schnorr public key address (132 characters)
+      pattern: "^[1-9A-HJ-NP-Za-km-z]{132}$"
+      example: "32KVTmv3ofSyACq9nC1Hgnk4Jt8rs2hj1cvDZWC1EQuiYFMDg8MaLtF3ntafJbEUH5XPV1pK3K4xkxfjRPAWprBb7LYCVv4HF7817Bwh9M9xAdmgrPt77j4xejihNFd9h5Eo"
+
+    CoinbaseRecipient:
+      type: object
+      required: [address, nicks]
+      properties:
+        address:
+          $ref: "#/components/schemas/Base58Address"
+        nicks:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount of nicks (cryptocurrency units) awarded to this address
+
+    NockchainHash:
+      type: string
+      description: Base58-encoded hash (5-tuple format)
+      example: "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"
+
+    NoteName:
+      type: object
+      required: [firstName, lastName]
+      properties:
+        firstName:
+          $ref: "#/components/schemas/NockchainHash"
+          description: First hash component of the note name (note_commit)
+        lastName:
+          $ref: "#/components/schemas/NockchainHash"
+          description: Second hash component of the note name (note_source)
+
+    Lock:
+      type: object
+      required: [m, pubkeys]
+      properties:
+        m:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 255
+          description: Number of signatures required (m-of-n multisig)
+        pubkeys:
+          type: array
+          items:
+            type: string
+          description: Array of base58-encoded Schnorr public keys
+
+    Seed:
+      type: object
+      required: [recipient, gift, parentHash, timelockIntent, outputSource]
+      properties:
+        recipient:
+          $ref: "#/components/schemas/Lock"
+          description: Lock that controls the recipient note
+        gift:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount of assets (coins) transferred
+        parentHash:
+          $ref: "#/components/schemas/NockchainHash"
+          description: Hash of the parent note
+        timelockIntent:
+          $ref: "#/components/schemas/Timelocks"
+          description: Optional timelock constraints
+        outputSource:
+          $ref: "#/components/schemas/OutputSource"
+          description: Hash of source note or block plus coinbase bool
+
+    Signature:
+      type: object
+      required: [pubkey, chal, sig]
+      properties:
+        pubkey:
+          $ref: "#/components/schemas/Base58Id"
+          description: Base58 pubkey used to sign the challenge
+        chal:
+          type: array
+          items:
+            type: string
+          description: 8 u64 values as strings
+        sig:
+          type: array
+          items:
+            type: string
+          description: 8 u64 values as strings
+
+    Note:
+      type: object
+      required: [version, originPage, name, lock, sourceHash, isCoinbase, assets]
+      properties:
+        version:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Note version number
+        originPage:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Block height where note was created
+        timelock:
+          $ref: "#/components/schemas/Timelocks"
+          description: Optional timelock constraints
+        name:
+          $ref: "#/components/schemas/NoteName"
+          description: Unique note identifier
+        lock:
+          $ref: "#/components/schemas/Lock"
+          description: Lock controlling spending of this note
+        sourceHash:
+          $ref: "#/components/schemas/NockchainHash"
+          description: Hash of the source (previous notes or block for coinbase)
+        isCoinbase:
+          type: boolean
+          description: Whether this is a coinbase note
+        assets:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount of assets in this note
+
+    Spend:
+      type: object
+      required: [hasSignature, seeds, signatures, fee]
+      properties:
+        hasSignature:
+          type: boolean
+          description: Whether this spend has a signature
+        signatures:
+          type: array
+          items:
+            $ref: "#/components/schemas/Signature"
+        seeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/Seed"
+          description: Seeds defining where assets go
+        fee:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Transaction fee paid
+
+    BlockObject:
+      type: object
+      required: [hash, height, timestamp, transactions, difficulty, difficultyExp, proofsPerSecond, parent, target, coinbase]
+      properties:
+        hash:
+          type: string
+          description: Block hash as base58 string
+          example: "2c8Ltbg44dPkEGcNPupcVAtDgD87753M9pG2fg8yC2mTEqg5qAFvvbT"
+        height:
+          type: integer
+          minimum: 0
+          description: Block height in the chain
+        timestamp:
+          type: integer
+          format: unix-time
+          description: Block timestamp as seconds since Unix epoch UTC
+        transactions:
+          type: array
+          items:
+            type: string
+            description: Transaction ID as base58 string
+          description: List of transaction IDs included in this block
+        difficulty:
+          type: string
+          description: Human-readable difficulty expression
+          example: "2^123.4"
+        difficultyExp:
+          type: number
+          format: double
+          description: Difficulty as a floating-point exponent
+          example: 123.456789
+        proofsPerSecond:
+          type: number
+          format: double
+          description: Effective proof rate observed for this block
+        parent:
+          type: string
+          description: Parent block hash as base58
+        target:
+          type: string
+          description: Bigint mining target for this block as a string
+        coinbase:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoinbaseRecipient"
+          description: List of coinbase recipients and their awarded amounts
+        epochCounter:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Counter within the current mining epoch
+        accumulatedWork:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Total accumulated proof-of-work up to this block
+        msg:
+          type: string
+          nullable: true
+          description: Optional message included in the block
+        transactionCount:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Number of transactions in this block
+        blockSize:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Total size of the block in bytes
+        totalFees:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Total transaction fees in this block
+
+    TransactionObject:
+      type: object
+      required: [id, inputs, outputs, totalFees, totalSize]
+      properties:
+        id:
+          $ref: "#/components/schemas/Base58Id"
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionInput"
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionOutput"
+        totalFees:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total fees in smallest unit (atoms)
+        totalSize:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Transaction size in bytes
+        timelocks:
+          $ref: "#/components/schemas/Timelocks"
+          description: Combined timelock range from all inputs
+
+    TransactionsResponse:
+      type: object
+      required: [transactions, totalCount]
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionWithBlockInfo"
+          description: Array of transactions with block information
+        totalCount:
+          type: integer
+          minimum: 0
+          description: Total number of transactions available
+        pagination:
+          $ref: "#/components/schemas/PaginationInfo"
+          nullable: true
+          description: Pagination information (present when using limit/offset)
+
+    TransactionWithBlockInfo:
+      type: object
+      required: [txId, blockId, transaction]
+      properties:
+        txId:
+          $ref: "#/components/schemas/Base58Id"
+          description: Transaction ID
+        blockId:
+          $ref: "#/components/schemas/Base58Id"
+          description: Block ID containing this transaction
+        blockHeight:
+          $ref: "#/components/schemas/BlockHeight"
+          description: Block ID containing this transaction
+        timestamp:
+          $ref: "#/components/schemas/Timestamp"
+          description: Timestamp of block containing this transaction
+        transaction:
+          $ref: "#/components/schemas/TransactionObject"
+          description: The transaction details
+
+    TransactionInput:
+      type: object
+      required: [note, spend]
+      properties:
+        note:
+          $ref: "#/components/schemas/Note"
+          description: The note being spent
+        spend:
+          $ref: "#/components/schemas/Spend"
+          description: The spend authorization
+
+    TransactionOutput:
+      type: object
+      required: [note, seeds]
+      properties:
+        note:
+          $ref: "#/components/schemas/Note"
+          description: The output note being created
+        seeds:
+          type: array
+          items:
+            $ref: "#/components/schemas/Seed"
+          description: Seeds that created this output
+
+    AddressBalanceItem:
+      type: object
+      required: [address, balance]
+      properties:
+        address:
+          $ref: "#/components/schemas/Base58Address"
+        balance:
+          type: integer
+          format: int64
+        notes:
+          type: integer
+          format: int64
+          description: Number of notes contributing to this balance
+
+    BlocksRangeResponse:
+      type: object
+      required: [totalBlocks, startHeight, endHeight, blocks]
+      properties:
+        totalBlocks:
+          type: integer
+          minimum: 0
+          description: Total number of blocks returned
+        startHeight:
+          type: integer
+          minimum: 0
+          description: Starting block height (inclusive)
+        endHeight:
+          type: integer
+          minimum: 0
+          description: Ending block height (inclusive)
+        minTimestamp:
+          type: integer
+          format: unix-time
+          nullable: true
+          description: Earliest timestamp in the range
+        maxTimestamp:
+          type: integer
+          format: unix-time
+          nullable: true
+          description: Latest timestamp in the range
+        blocks:
+          type: array
+          items:
+            $ref: "#/components/schemas/BlockObject"
+          description: Array of blocks in the requested range
+        metadata:
+          type: object
+          nullable: true
+          properties:
+            cached:
+              type: boolean
+              description: Whether results were served from cache
+            queryTimeMs:
+              type: number
+              description: Query execution time in milliseconds
+          description: Optional metadata about the query
+        avgBlockTime:
+          type: number
+          format: double
+          description: Average block time in seconds (last 144 blocks)
+        proofRateOverTime:
+          type: array
+          items:
+            type: object
+            properties:
+              height:
+                type: integer
+              proofRate:
+                type: number
+                format: double
+              timestamp:
+                type: integer
+          description: Proof rate history over recent blocks
+        timeSinceLastBlock:
+          type: number
+          format: double
+          description: Seconds since last block
+        epochInfo:
+          type: object
+          required: [currentEpoch, blocksInEpoch, avgBlockTimeThisEpoch]
+          properties:
+            currentEpoch:
+              type: integer
+              description: Current difficulty epoch (height / 2016)
+            blocksInEpoch:
+              type: integer
+              description: Blocks processed in current epoch
+            avgBlockTimeThisEpoch:
+              type: number
+              format: double
+              description: Average block time for current 2016 block epoch
+        difficultyAdjustment:
+          type: object
+          required: [blocksToAdjustment, estimatedTimeToAdjustment, estimatedNextDifficulty]
+          properties:
+            blocksToAdjustment:
+              type: integer
+              description: Blocks remaining until next difficulty adjustment
+            estimatedTimeToAdjustment:
+              type: number
+              format: double
+              description: Estimated seconds until difficulty adjustment
+            estimatedNextDifficulty:
+              type: number
+              format: double
+              description: Estimated next difficulty multiplier
+        halvingInfo:
+          type: object
+          required: [blocksToHalving, estimatedTimeToHalving, currentBlockReward]
+          properties:
+            blocksToHalving:
+              type: integer
+              description: Blocks remaining until next reward halving
+            estimatedTimeToHalving:
+              type: number
+              format: double
+              description: Estimated seconds until halving
+            currentBlockReward:
+              type: integer
+              format: int64
+              description: Current block reward in smallest units
+
+    AddressTransactionsResponse:
+      type: object
+      required: [address, totalTransactions, transactions]
+      properties:
+        address:
+          $ref: "#/components/schemas/Base58Address"
+          description: The queried address
+        totalTransactions:
+          type: integer
+          minimum: 0
+          description: Total number of transactions for this address
+        totalReceived:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total amount received by this address (in nicks)
+        totalSent:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total amount sent from this address (in nicks)
+        currentBalance:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Current balance (totalReceived - totalSent)
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AddressTransaction"
+          description: Array of transactions involving this address
+        pagination:
+          $ref: "#/components/schemas/PaginationInfo"
+        networkProofrate:
+          type: object
+          required: [current, avg24h, avg7d]
+          properties:
+            current:
+              type: number
+              format: double
+              description: Current network proof rate (proofs/second)
+            avg24h:
+              type: number
+              format: double
+              description: 24h average proof rate
+            avg7d:
+              type: number
+              format: double
+              description: 7 day average proof rate
+        mempool:
+          type: object
+          required: [count, totalFees, avgFeeRate]
+          properties:
+            count:
+              type: integer
+              description: Number of unconfirmed transactions
+            totalFees:
+              type: integer
+              format: int64
+              description: Total fees in mempool
+            avgFeeRate:
+              type: number
+              format: double
+              description: Average fee rate (fees per byte)
+        feeMetrics:
+          type: object
+          required: [lastBlock, recommended]
+          properties:
+            lastBlock:
+              type: object
+              properties:
+                totalFees:
+                  type: integer
+                  format: int64
+                avgFeeRate:
+                  type: number
+                  format: double
+                txCount:
+                  type: integer
+            recommended:
+              type: object
+              properties:
+                slow:
+                  type: number
+                  format: double
+                  description: Fee rate for confirmation in ~1 hour
+                medium:
+                  type: number
+                  format: double
+                  description: Fee rate for confirmation in ~30 min
+                fast:
+                  type: number
+                  format: double
+                  description: Fee rate for confirmation in ~10 min
+
+    ProofRateHistoryResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProofRateDataPoint"
+
+    ProofRateDataPoint:
+      type: object
+      required: [height, proofrate, timestamp]
+      properties:
+        height:
+          type: integer
+        proofrate:
+          type: number
+          format: double
+        timestamp:
+          type: integer
+          format: int64
+        timeDelta:
+          type: integer
+          nullable: true
+        difficultyAdjustment:
+          type: number
+          format: double
+          nullable: true
+
+    AddressTransaction:
+      type: object
+      required: [txId, blockHeight, blockHash, timestamp, type, amount, fee]
+      properties:
+        txId:
+          $ref: "#/components/schemas/Base58Id"
+          description: Transaction ID
+        blockHeight:
+          $ref: "#/components/schemas/BlockHeight"
+        blockHash:
+          $ref: "#/components/schemas/Base58Id"
+          description: Block hash containing this transaction
+        timestamp:
+          type: integer
+          format: unix-time
+          description: Transaction timestamp
+        type:
+          type: string
+          enum: [received, sent, self]
+          description: Transaction type from address perspective
+        amount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount transferred (in nicks)
+        fee:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Transaction fee (in nicks)
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionInput"
+          description: Transaction inputs
+        outputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionOutput"
+          description: Transaction outputs
+        note:
+          type: string
+          nullable: true
+          description: Optional transaction note/memo
+        counterparties:
+          type: array
+          items:
+            $ref: "#/components/schemas/Base58Address"
+          nullable: true
+          description: All counterparty addresses in this transaction
+
+    PaginationInfo:
+      type: object
+      required: [limit, offset, hasMore]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+        offset:
+          type: integer
+          minimum: 0
+        hasMore:
+          type: boolean
+          description: Whether there are more items available
+
+    TipObject:
+      type: object
+      required: [hash, height]
+      properties:
+        hash:
+          type: string
+          description: Tip block hash as base58
+        height:
+          type: integer
+          minimum: 0
+          description: Tip block height
+
+    HeightObject:
+      type: integer
+      minimum: 0
+
+    RawTransactionObject:
+      type: object
+      required: [id, inputs, timelockRange, totalFees]
+      properties:
+        id:
+          $ref: "#/components/schemas/Base58Id"
+        inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Base58Id"
+        timelocks:
+          $ref: "#/components/schemas/Timelocks"
+        totalFees:
+          type: integer
+          minimum: 0
+          description: Total fees in smallest unit (atoms)
+
+    Timelocks:
+      type: object
+      required: [absolute, relative]
+      properties:
+        absolute:
+          $ref: "#/components/schemas/TimelockRange"
+        relative:
+          $ref: "#/components/schemas/TimelockRange"
+
+    TimelockRange:
+      type: object
+      properties:
+        min:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Minimum block height for spending
+        max:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: Maximum block height for spending
+
+    BalanceObject:
+      type: object
+      required: [notes]
+      properties:
+        nicks:
+          type: integer
+          format: int64
+        notes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NoteObject"
+
+    NoteObject:
+      type: object
+      required: [version, originPage, name, lock, sourceHash, isCoinbase, assets]
+      properties:
+        version:
+          type: integer
+          format: int32
+          description: Note version number.
+        originPage:
+          type: integer
+          format: int32
+          description: Block height where the note was created.
+        timelock:
+          $ref: "#/components/schemas/Timelocks"
+        name:
+          $ref: "#/components/schemas/NoteName"
+        lock:
+          $ref: "#/components/schemas/Lock"
+        sourceHash:
+          $ref: "#/components/schemas/NockchainHash"
+          description: Hash of the source (previous notes or block).
+        isCoinbase:
+          type: boolean
+          description: True if the note is from a coinbase transaction.
+        assets:
+          type: integer
+          format: int64
+          description: Amount of assets in this note.
+
+    OutputSource:
+      type: object
+      required: [sourceHash, isCoinbase]
+      properties:
+        sourceHash:
+          $ref: "#/components/schemas/NockchainHash"
+          description: Hash of the source (previous notes or block).
+        isCoinbase:
+          type: boolean
+          description: True if the note is from a coinbase transaction.
+
+    MiningKey:
+      type: object
+      required: [m, pubkeys]
+      properties:
+        m:
+          type: integer
+          minimum: 1
+          maximum: 255
+          description: Number of signatures required (m-of-n)
+        pubkeys:
+          type: array
+          items:
+            $ref: "#/components/schemas/Base58Id"
+          description: List of public keys in the multisig
+
+    MiningPubkeysArray:
+      type: array
+      items:
+        $ref: "#/components/schemas/MiningKey"
+
+    PageSummary:
+      type: object
+      required: [digest, timestamp, epochCounter, target, accumulatedWork, height, parent]
+      properties:
+        digest:
+          $ref: "#/components/schemas/Base58Id"
+        timestamp:
+          type: integer
+          minimum: 0
+          description: Block timestamp
+        epochCounter:
+          type: integer
+          minimum: 0
+          description: Counter within current epoch
+        target:
+          $ref: "#/components/schemas/Base58Id"
+          description: Mining target for this block
+        accumulatedWork:
+          $ref: "#/components/schemas/Base58Id"
+          description: Total accumulated work up to this block
+        height:
+          type: integer
+          minimum: 0
+          description: Block height
+        parent:
+          $ref: "#/components/schemas/Base58Id"
+          description: Parent block hash
+
+    HeavySummaryObject:
+      type: object
+      required: [pubkeys]
+      properties:
+        pubkeys:
+          type: array
+          items:
+            $ref: "#/components/schemas/Base58Id"
+          description: List of mining public keys
+        pageSummary:
+          $ref: "#/components/schemas/PageSummary"
+          nullable: true
+          description: Summary of the heaviest block
+
+    DecentralizationMetricsResponse:
+      type: object
+      required: [startHeight, endHeight, windowSize, miningDecentralization, walletGrowth, metadata]
+      properties:
+        startHeight:
+          type: integer
+          minimum: 0
+          description: Starting block height of analysis
+        endHeight:
+          type: integer
+          minimum: 0
+          description: Ending block height of analysis
+        windowSize:
+          type: integer
+          minimum: 1
+          description: Size of each analysis window
+        miningDecentralization:
+          type: array
+          items:
+            $ref: "#/components/schemas/MiningDecentralizationWindow"
+          description: Mining decentralization metrics over time
+        walletGrowth:
+          type: array
+          items:
+            $ref: "#/components/schemas/WalletGrowthWindow"
+          description: Wallet growth metrics over time
+        metadata:
+          type: object
+          properties:
+            totalWindows:
+              type: integer
+              description: Total number of analysis windows
+            queryTimeMs:
+              type: number
+              description: Query execution time in milliseconds
+            cached:
+              type: boolean
+              description: Whether results were served from cache
+
+    NetworkHealthSummaryResponse:
+      type: object
+      required: [currentHeight, decentralizationScore, mining, wallets]
+      properties:
+        currentHeight:
+          type: integer
+          minimum: 0
+          description: Current blockchain height
+        decentralizationScore:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Overall decentralization health score (0-100)
+        mining:
+          type: object
+          required: [last100Blocks, last1000Blocks]
+          properties:
+            last100Blocks:
+              $ref: "#/components/schemas/MiningDecentralizationWindow"
+            last1000Blocks:
+              $ref: "#/components/schemas/MiningDecentralizationWindow"
+        wallets:
+          type: object
+          required: [last100Blocks, last1000Blocks]
+          properties:
+            last100Blocks:
+              $ref: "#/components/schemas/WalletGrowthWindow"
+            last1000Blocks:
+              $ref: "#/components/schemas/WalletGrowthWindow"
+
+    MiningDecentralizationResponse:
+      type: object
+      required: [startHeight, endHeight, windowSize, windows]
+      properties:
+        startHeight:
+          type: integer
+          minimum: 0
+        endHeight:
+          type: integer
+          minimum: 0
+        windowSize:
+          type: integer
+          minimum: 1
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/MiningDecentralizationWindow"
+          description: Time series of mining decentralization metrics
+
+    WalletGrowthMetricsResponse:
+      type: object
+      required: [startHeight, endHeight, windowSize, windows]
+      properties:
+        startHeight:
+          type: integer
+          minimum: 0
+        endHeight:
+          type: integer
+          minimum: 0
+        windowSize:
+          type: integer
+          minimum: 1
+        windows:
+          type: array
+          items:
+            $ref: "#/components/schemas/WalletGrowthWindow"
+          description: Time series of wallet growth metrics
+
+    MiningDecentralizationWindow:
+      type: object
+      required: [startHeight, endHeight, totalBlocks, uniqueMiners, herfindahlIndex, topMinerShare, timestamp]
+      properties:
+        startHeight:
+          type: integer
+          minimum: 0
+          description: Starting block height of this window
+        endHeight:
+          type: integer
+          minimum: 0
+          description: Ending block height of this window
+        timestamp:
+          type: integer
+          format: unix-time
+          description: Representative timestamp for this window
+        totalBlocks:
+          type: integer
+          minimum: 0
+          description: Total blocks in this window
+        uniqueMiners:
+          type: integer
+          minimum: 0
+          description: Number of unique miners in this window
+        totalUniqueMiners:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: Total unique miners up to this window
+        herfindahlIndex:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Herfindahl-Hirschman Index (0=perfect competition, 1=monopoly)
+        topMinerShare:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Share of blocks mined by top miner (0-1)
+        top3Share:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Combined share of blocks mined by top 3 miners (0-1)
+        top10Share:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+          description: Combined share of blocks mined by top 10 miners (0-1)
+        miners:
+          type: array
+          items:
+            $ref: "#/components/schemas/MinerStats"
+          description: Top miners in this window
+        avgDifficulty:
+          type: number
+          format: double
+          nullable: true
+          description: Average difficulty during this window
+
+    WalletGrowthWindow:
+      type: object
+      required: [startHeight, endHeight, totalUniqueAddresses, newAddressesInWindow, activeWalletsWithBalance, timestamp]
+      properties:
+        startHeight:
+          type: integer
+          minimum: 0
+          description: Starting block height of this window
+        endHeight:
+          type: integer
+          minimum: 0
+          description: Ending block height of this window
+        timestamp:
+          type: integer
+          format: unix-time
+          description: Representative timestamp for this window
+        totalUniqueAddresses:
+          type: integer
+          minimum: 0
+          description: Total unique addresses that have ever been active up to this point
+        newAddressesInWindow:
+          type: integer
+          minimum: 0
+          description: New addresses that first appeared in this window
+        activeWalletsWithBalance:
+          type: integer
+          minimum: 0
+          description: Number of addresses with positive balance at end of window
+        growthRate:
+          type: number
+          format: double
+          minimum: 0
+          description: New addresses per block in this window
+        cumulativeGrowthRate:
+          type: number
+          format: double
+          minimum: 0
+          description: Total addresses per block since genesis
+
+    MinerStats:
+      type: object
+      required: [address, blocksMined, totalRewards, sharePercentage, firstBlock, lastBlock]
+      properties:
+        address:
+          $ref: "#/components/schemas/Base58Address"
+          description: Miner's address
+        blocksMined:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Number of blocks mined by this miner
+        totalRewards:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Total rewards earned in nicks
+        sharePercentage:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Percentage of total blocks mined (0-100)
+        firstBlock:
+          type: integer
+          format: int32
+          minimum: 0
+          description: First block height mined by this miner
+        lastBlock:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Last block height mined by this miner
+        avgDifficulty:
+          type: number
+          format: double
+          nullable: true
+          description: Average difficulty of blocks mined by this miner
+
+    AddressesWithBalanceResponse:
+      type: object
+      required: [items, totalCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AddressBalanceItem" }
+        totalCount:
+          type: integer
+          minimum: 0
+        pagination:
+          $ref: "#/components/schemas/PaginationInfo"
+
+
+    BooleanResult:
+      type: boolean
+      description: Simple boolean result

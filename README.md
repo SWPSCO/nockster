@@ -1,143 +1,87 @@
-# nockster
+# Nockster
 
-Nockster is hardware-wallet firmware, host tooling, and a browser interface for
-signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waveshare.com/esp32-s3-touch-lcd-1.47.htm) touchscreen board.
+Nockster wallets and hardware live in one repository. The wallet apps share a
+Rust signing engine and TypeScript wallet logic; each platform owns its shell,
+build configuration, and native integrations.
 
-https://github.com/user-attachments/assets/374c7e70-3651-4e75-a942-28b4d5cc9d79
-
-## Features
-
-- On-device seed storage, transaction review, approval, and signing.
-- USB HID transport by default, with serial/COBS still available for firmware
-  development and diagnostics.
-- Browser UI over WebHID for seed management, transaction signing, device
-  status, touch calibration, and firmware updates.
-- CLI for scripting the same workflows from a terminal.
-- AES-256-GCM encrypted seed slots in flash, keyed by PIN-derived schema-v2 NVS
-  storage.
-- Optional ESP32-S3 chip-security path for eFuse/HMAC-backed NVS hardening,
-  secure boot, flash encryption, and release validation.
-- Signed firmware update bundles with on-device manifest and image validation.
-- WASM transaction composer/parser shared by the browser app.
-- Tauri desktop wrapper for packaging the web UI as a local app.
-- Encrypted preimage vault for `%hax` lock secrets (HTLCs, commit-reveal),
-  with device-computed Tip5 commitments and on-screen reveal confirmation.
-  See [docs/preimage-vault.md](docs/preimage-vault.md).
-- `keys.export` / `master-pubkey.export` interop with the official
-  nockchain-wallet CLI: import its keyfiles, export watch-only keyfiles it
-  can import. See [docs/wallet-keyfile-interop.md](docs/wallet-keyfile-interop.md).
-
-## User Workflows
-
-- Initialize a device with a mnemonic and PIN.
-- Add, list, select, label, and delete seed slots.
-- Unlock or lock the device from the screen, CLI, or browser.
-- Compose or load a transaction draft, review it on the device, and export the
-  signed transaction.
-- Store, reveal, and delete `%hax` preimages in the on-device vault.
-- Export a slot's master pubkey as a watch-only keyfile for nockchain-wallet,
-  or import a nockchain-wallet `keys.export` seed phrase.
-- Calibrate the touchscreen and run hardware smoke checks.
-- Install signed firmware updates from a hosted update page or from local
-  release artifacts.
-
-## Repository Layout
-
-- `crates/nockster-core`: shared protocol types, request/response codec, and
-  crypto wrappers.
-- `crates/nockster-fw`: ESP32-S3 firmware, touchscreen UI, USB HID/serial
-  transports, NVS storage, and update verifier.
-- `crates/nockster-cli`: desktop CLI for device operations and release/admin
-  checks.
-- `crates/nockster-wasm`: WASM bindings for browser transaction tooling.
-- `nockster-js`: TypeScript device client used by the web app.
-- `web`: Vite/React browser UI.
-- `src-tauri`: desktop app wrapper. See [TAURI_SETUP.md](TAURI_SETUP.md).
-- `docs`: hardware smoke checks, security/provisioning notes, update flow,
-  preimage vault and wallet-keyfile interop guides, and the roadmap of
-  potential paths forward ([docs/roadmap-ideas.md](docs/roadmap-ideas.md)).
-
-## Quick Commands
-
-- Build firmware: `make fw`
-- Flash firmware without erasing seed storage: `make flash`
-- Build signed OTA artifacts: `make signed-update`
-- Flash and erase persistent device data: `make wipe`
-- Build the CLI: `make cli`
-- Seed a wiped device over HID: `nockster-cli seed --seedphrase "..." --pin 1234`
-  (or `--keyfile keys.export` to use a nockchain-wallet export)
-- Manage the preimage vault: `nockster-cli vault list|store|reveal|delete`
-- Export a watch-only keyfile: `nockster-cli export-master-pubkey --slot 0`
-- Check device info: `nockster-cli info`
-- Run a hardware smoke check:
-  `target/x86_64-unknown-linux-gnu/release/nockster-cli smoke`
-- Serve the browser UI locally: `make serve`
-- Build the web/WASM bundle: `make wasm`
-- Start the desktop app in development: `make tauri-dev`
-
-The CLI defaults to HID. Use `--device hid` or `--port hid` explicitly when you
-want to be clear, and use `--port /dev/ttyACM0` for the serial path.
-
-## Firmware Layout
-
-| Address | Size | Purpose |
+| Component | Location | Purpose |
 | --- | --- | --- |
-| `0x0` | 32 KB | Bootloader |
-| `0x8000` | varies | Partition table |
-| `0x9000` | 28 KB | Encrypted NVS seed storage |
-| `0x10000` | 3 MB | Factory firmware image |
-| `0x310000` | 8 KB | OTA boot metadata |
-| `0x320000` | 3 MB | OTA slot 0 |
-| `0x620000` | 3 MB | OTA slot 1 |
+| Mobile wallet | [`apps/mobile`](apps/mobile) | Native SwiftUI and Android Compose apps with a Capacitor wallet bridge |
+| Browser extension | [`apps/extension`](apps/extension) | Chromium extension, popup, website approvals, and background worker |
+| Desktop wallet | [`apps/desktop`](apps/desktop) | Tauri wallet for Linux, macOS, and Windows |
+| Shared wallet | [`packages/wallet`](packages/wallet) | Svelte screens, wallet state, storage adapters, signing bridge, and shared assets |
+| Wallet engine | [`packages/wallet-engine`](packages/wallet-engine) | Rust vault, transaction signing, WASM bindings, and API models |
+| Hardware wallet | [`nockster-esp`](nockster-esp) | ESP32 firmware, protocol library, CLI, hardware companion GUI, web tools, enclosure, and manual |
+| Release tooling | [`scripts/ci`](scripts/ci), [`tools/macos-release`](tools/macos-release) | Version planning, signing, installer collection, and store publication |
+| Design reference | [`examples/design-reference`](examples/design-reference) | Standalone interface reference |
 
-## Security Notes
+## Wallet development
 
-Seed slots are encrypted in flash with AES-256-GCM. The active storage schema
-uses a PIN-derived key, per-device salt, and v2 pepper input. Dev/test builds
-use a software pepper so boards can be wiped and reseeded without eFuse
-provisioning. Production hardening is documented in [docs/security.md](docs/security.md).
+Use Node and npm versions matching `package.json`. Install dependencies from
+this directory; npm workspaces share the root lockfile. The Rust engine pins
+its toolchain in `packages/wallet-engine/rust-toolchain.toml`; the desktop
+shell pins its own toolchain in `apps/desktop/src-tauri/rust-toolchain.toml`.
 
-## Development
-
-### Dependencies
-
-```bash
-# Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-rustup toolchain install nightly
-rustup +nightly target add wasm32-unknown-unknown
-cargo install tauri-cli --version "^2.8.4"
-# esp-idf
-## linux/debian deriv
-sudo apt-get install git wget flex bison gperf python3 python3-pip python3-venv cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0 libwebkit2gtk-4.1-dev build-essential wget file libayatana-appindicator3-dev librsvg2-dev libudev-dev libusb-1.0-0-dev patchelf
-
-## macos
-brew install cmake ninja dfu-util
-
-pip install -r pyserial-miniterm # optional for serial connections
-mkdir -p ~/esp
-cd ~/esp
-git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
-cd ~/esp/esp-idf
-./install.sh esp32s3
-. $HOME/esp/esp-idf/export.sh
-echo "alias get_idf='. $HOME/esp/esp-idf/export.sh'" >> ~/.bashrc # or .zshrc
-
-# espup
-cargo install espup --locked
-espup install
-cargo install espflash
+```sh
+npm ci
+npm run build:wasm
+npm run dev:ext          # Extension UI on localhost:5173
+npm run dev:mobile       # Headless mobile bridge on localhost:5174
+npm run dev:desktop      # Native desktop wallet; requires Tauri system dependencies
 ```
 
-### Building
+Run one development server per port. Load `apps/extension/ext` as an unpacked
+extension after `npm run dev:setup`. For native mobile projects, run
+`npm run mobile:sync`, then `npm run mobile:ios` or `npm run mobile:android`.
+Capacitor sync generates native dependency paths from the mobile workspace.
 
-The `Makefile` has scripts for building everything -- run `make help` to see all options.
+```sh
+npm run build            # WASM and production extension
+npm run build:mobile    # WASM, mobile web bundle, and native project sync
+npm run build:desktop -- --debug --no-bundle -- --locked
+npm run typecheck
+npm test
+npm run test:desktop
+npm run test:mobile
+npm run test:extension
+python3 -m unittest discover -s tests/ci -p '*_test.py'
+```
 
-You probably just want to run one of these:
+See [local testing](docs/local-testing.md), [desktop development](docs/desktop.md),
+[wallet services](docs/wallet-services.md), and [extension releases](docs/extension-release.md).
 
-- `make flash` to re-flash the esp
-  - `make wipe` to re-flash and erase persistent data (keys)
-- `make serve` to build and serve the browser UI (includes wasm build)
-- `make cli` to build the CLI tool `nockster-cli`
-- `target/x86_64-unknown-linux-gnu/release/nockster-cli smoke` to run a non-destructive hardware smoke check
-- `make tauri` to build the desktop app
+## Hardware development
+
+Work inside `nockster-esp/` for hardware commands. It has its own Cargo workspace,
+Rust toolchain, JavaScript dependencies, Makefile, and documentation.
+
+```sh
+cd nockster-esp
+make help
+```
+
+The [hardware README](nockster-esp/README.md) describes firmware builds, device
+provisioning, host tools, and the hardware web app. Production provisioning helpers use external secrets and default to `../../nockster-secrets/` when
+run from `nockster-esp/`.
+
+## CI and releases
+
+The root `.github/workflows/` directory contains both wallet and hardware jobs.
+
+- **Build and release Nockster** routes wallet changes to iOS, Android, extension,
+  and desktop jobs. Shared engine changes build all wallet platforms; app changes
+  build their consumers. Hardware-only changes do not select wallet releases.
+- **Test mobile wallet bridge** exercises the mobile bridge on pushes and pull requests.
+- **ESP protocol tests**, **ESP desktop host tools**, **firmware-release**, and
+  **Deploy web** build hardware components independently. Firmware uses `fw-v*`
+  tags; hardware desktop tools use `desktop-v*` tags.
+
+`release-version.json` contains the wallet version and persistent build sequence
+offset. Store publication is selected explicitly in the wallet release workflow.
+Wallet downloads use `https://bin.aeroe.io/fletch/`; firmware updates use
+`https://bin.aeroe.io/nockster/updates/`. The hardware web app deploys to
+`https://my.nockster.com`.
+
+See [releases](docs/releases.md), [Google Play setup](docs/google-play.md), and
+[repository CI cutover](docs/ci-repository-move.md) for signing, repository
+permissions, runner access, and the Google identity configuration.

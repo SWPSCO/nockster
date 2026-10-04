@@ -1,0 +1,1288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fletch Wallet - Complete User Flow Mockup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Nokora:wght@700;800;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);
+            padding: 40px 20px;
+            color: #1a1a1a;
+        }
+        
+        .presentation-container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #000;
+        }
+        
+        .subtitle {
+            text-align: center;
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 60px;
+        }
+        
+        .section-header {
+            font-size: 24px;
+            font-weight: 600;
+            color: #000;
+            margin: 60px 0 30px;
+            padding-left: 20px;
+            border-left: 4px solid #000;
+        }
+        
+        .screens-row {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .screen-wrapper {
+            text-align: center;
+        }
+        
+        .screen-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .screen-description {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 15px;
+            max-width: 360px;
+        }
+        
+        .screen {
+            width: 360px;
+            height: 600px;
+            background: #ffffff;
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            position: relative;
+        }
+        
+        /* Common Components */
+        .header {
+            height: 60px;
+            background: #ffffff;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            justify-content: space-between;
+        }
+        
+        .logo {
+            font-size: 20px;
+            font-weight: 700;
+            color: #000;
+        }
+        
+        .logo-svg {
+            height: 28px;
+            width: auto;
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .logo-text {
+            font-family: 'Nokora', serif;
+            font-size: 18px;
+            font-weight: 800;
+            color: #000;
+        }
+        
+        .logo-svg-large {
+            height: 60px;
+            width: auto;
+        }
+        
+        .content {
+            padding: 20px;
+            height: calc(100% - 60px);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .content.no-scroll {
+            overflow-y: hidden;
+        }
+        
+        .btn-primary {
+            background: #000;
+            color: #ffffff;
+            border: none;
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .btn-secondary {
+            background: #ffffff;
+            color: #000;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+        
+        .btn-ghost {
+            background: transparent;
+            color: #666;
+            border: none;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 8px;
+            text-decoration: underline;
+        }
+        
+        .input-field {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #f3f4f6;
+            font-size: 14px;
+            margin-bottom: 14px;
+        }
+        
+        .input-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 8px;
+            display: block;
+        }
+        
+        .card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 14px;
+            margin-bottom: 10px;
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #e5e7eb;
+            margin-bottom: 24px;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 12px;
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        
+        .tab.active {
+            color: #000;
+            border-bottom-color: #000;
+            font-weight: 600;
+        }
+        
+        /* Specific Screen Styles */
+        .welcome-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            text-align: center;
+        }
+        
+        .welcome-logo {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            color: #000;
+        }
+        
+        .welcome-text {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 48px;
+        }
+        
+        .seed-phrase-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            margin: 12px 0;
+        }
+        
+        .seed-word {
+            background: #f3f4f6;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .seed-word-number {
+            font-size: 10px;
+            color: #999;
+            font-weight: 600;
+        }
+        
+        .seed-word-text {
+            color: #000;
+            font-weight: 500;
+            font-size: 12px;
+        }
+        
+        .balance-display {
+            text-align: center;
+            padding: 32px 0;
+        }
+        
+        .balance-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .balance-amount {
+            font-size: 36px;
+            font-weight: 700;
+            color: #000;
+            margin-bottom: 4px;
+        }
+        
+        .balance-notes {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .quick-actions {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        
+        .quick-action-btn {
+            flex: 1;
+            padding: 12px;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: center;
+            cursor: pointer;
+        }
+        
+        .transaction-list {
+            margin-top: 24px;
+        }
+        
+        .transaction-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .transaction-type {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .transaction-amount {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .transaction-amount.sent {
+            color: #dc2626;
+        }
+        
+        .transaction-amount.received {
+            color: #16a34a;
+        }
+        
+        .transaction-date {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .network-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            background: #f3f4f6;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #16a34a;
+        }
+        
+        .wallet-selector {
+            background: #f3f4f6;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .wallet-list-item {
+            padding: 14px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+        
+        .wallet-name {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 3px;
+        }
+        
+        .wallet-info {
+            font-size: 11px;
+            color: #666;
+        }
+        
+        .recipient-input-group {
+            background: #f3f4f6;
+            padding: 14px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .add-recipient-btn {
+            color: #666;
+            font-size: 14px;
+            text-decoration: underline;
+            cursor: pointer;
+            text-align: center;
+            display: block;
+            margin: 16px 0;
+        }
+        
+        .fee-selector {
+            display: flex;
+            gap: 8px;
+            margin: 16px 0;
+        }
+        
+        .fee-option {
+            flex: 1;
+            padding: 12px;
+            background: #ffffff;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+        }
+        
+        .fee-option.selected {
+            border-color: #000;
+            background: #f3f4f6;
+        }
+        
+        .fee-option-label {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        
+        .fee-option-amount {
+            font-size: 10px;
+            color: #666;
+        }
+        
+        .qr-container {
+            display: flex;
+            justify-content: center;
+            margin: 24px 0;
+        }
+        
+        .qr-placeholder {
+            width: 200px;
+            height: 200px;
+            background: #f3f4f6;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .address-display {
+            background: #f3f4f6;
+            padding: 16px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+            margin: 16px 0;
+        }
+        
+        .settings-group {
+            margin-bottom: 24px;
+        }
+        
+        .settings-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        
+        .setting-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .setting-label {
+            font-size: 14px;
+        }
+        
+        .setting-value {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .toggle {
+            width: 44px;
+            height: 24px;
+            background: #e5e7eb;
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+        }
+        
+        .toggle.on {
+            background: #000;
+        }
+        
+        .toggle-dot {
+            width: 20px;
+            height: 20px;
+            background: #ffffff;
+            border-radius: 50%;
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.2s;
+        }
+        
+        .toggle.on .toggle-dot {
+            transform: translateX(20px);
+        }
+        
+        .locked-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+        }
+        
+        .lock-icon {
+            font-size: 48px;
+            margin-bottom: 24px;
+        }
+        
+        .error-message {
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 12px;
+            color: #dc2626;
+            font-size: 14px;
+            margin: 16px 0;
+        }
+        
+        .warning-box {
+            background: #fef3c7;
+            border: 1px solid #fde047;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 16px 0;
+            font-size: 12px;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 16px 0;
+        }
+        
+        .checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e5e7eb;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="presentation-container">
+        <h1>Fletch Wallet - Chrome Extension Design</h1>
+        <p class="subtitle">Complete User Flow Mockup - 360x600px Extension Popup</p>
+        
+        <!-- Initial Setup Flow -->
+        <div class="section-header">Initial Setup Flow</div>
+        <div class="screens-row">
+            <!-- Welcome Screen -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Welcome Screen</div>
+                <div class="screen-description">Entry point for new and existing users</div>
+                <div class="screen">
+                    <div class="welcome-content">
+                        <svg class="logo-svg-large" viewBox="0 0 7291 7726" xmlns="http://www.w3.org/2000/svg" style="fill: #000;">
+                            <g transform="matrix(1,0,0,1,-2921,-8764)">
+                                <path d="M7359.78,16393.3C7347.8,16382.3 7347.22,16368.8 7347.11,16366.4C7346.9,16361.5 7347.64,16356.5 7349.36,16351.9C7351.14,16347.2 7354.56,16343.3 7357.41,16339.1C7364.19,16329.3 7507.32,16152.3 7719.75,15834.3C7744.37,15797.4 7833.61,15664.4 7979.69,15427.9C8176.28,15109.7 8313.35,14858.4 8350.34,14792.9C8505.12,14518.8 8610.51,14312.7 8615.47,14303.7C8617.68,14299.7 8671.9,14207.8 8750.19,14068.1C8755.69,14058.3 8941.63,13736.6 9117.38,13384.1C9207.72,13202.9 9274.07,13040.6 9323.92,12901C9324.36,12899.7 9360.23,12796.3 9397.54,12656.8C9487.68,12319.7 9529.39,11993.2 9543.28,11640.9C9552.14,11416.2 9542.74,11292.9 9542.49,11274.3C9539.55,11056.8 9513.53,10909.6 9484.23,10800.9C9483.48,10798.1 9468.66,10745 9454.2,10708.1C9376.09,10508.9 9194.76,10385.5 9184.31,10377.3C9148.04,10348.9 8914.55,10156.5 8552.42,10162C8433.02,10163.8 8206.86,10187.5 7825.77,10427.5C7547.22,10602.9 7263.7,10844.6 7008.19,11081.3C6996.06,11092.5 6996.01,11092.5 6981.96,11101.2C6973.56,11106.4 6925.58,11136.2 6860.48,11124.1C6828.78,11118.2 6807.13,11104 6802.99,11101.3C6802.93,11101.3 6778.35,11081.4 6778.33,11081.4C6771.68,11073.2 6764.17,11065.6 6758.4,11056.8C6723.36,11003.3 6733.76,10946.8 6735.52,10937.2C6741.44,10905 6755.58,10882.2 6758.26,10877.9C6769.41,10859.9 6770.1,10860.3 6784.48,10844.8C7378.81,10202.4 7925.44,9757.57 8478.49,9688.66C8862.63,9640.8 9223.06,9747.67 9500.88,9934.4C9501.09,9934.54 9541.58,9962.66 9591.16,10004.2C9883.89,10249.5 9968.85,10513.6 9989.69,10576.1C10047.9,10750.6 10070,10901.5 10078.1,10960.6C10093.7,11074.5 10100,11179.2 10102.8,11260.7C10102.8,11261.8 10103.8,11355.9 10095.4,11496.5C10091.6,11560.1 10074,11830.8 10020.6,12137.3C9957.62,12498.9 9866.44,12795.9 9764.75,13054.7C9751.27,13089 9672.82,13309 9521.71,13599C9370.62,13889 9229.37,14132.7 9142.29,14279.7C9106.13,14340.8 8992.52,14523.6 8988.22,14529.7C8812.02,14782.5 8652.59,14993.1 8645.01,15003.2C8644.97,15003.2 8531.27,15152.7 8378.72,15340.4C8358.79,15365 8244.06,15506.2 8125.45,15643.6C7988.83,15802 7863.48,15936.8 7840.2,15961.8C7768.42,16039 7600.41,16217.6 7413.99,16390.9C7408.35,16396.2 7408.55,16396.6 7401.53,16399.8C7399.42,16400.7 7387.25,16406.2 7372.65,16401C7365.3,16398.4 7360.66,16394.1 7359.78,16393.3L7359.78,16393.3Z"/>
+                                <path d="M7514.61,16259.8C7506.33,16270.9 7499.12,16283 7489.78,16293.2C7480.7,16303.2 7470.5,16312.3 7459.62,16320.3C7454.52,16324 7427.39,16343.9 7387.98,16353.9C7348.57,16363.9 7315.22,16359.3 7308.95,16358.4C7295.58,16356.6 7282.3,16353.4 7269.57,16349C7244.76,16340.3 7245.16,16339.3 7222.55,16325.9C6934.06,16154.8 6373.06,15884.4 5793.21,15538.5C5525.52,15378.9 5352.41,15262.4 5249.1,15193.2C4958.02,14998.1 4736.49,14829.1 4595.5,14719.5C4283.32,14477 4092.65,14300 4070.97,14281.3C3908.98,14141.2 3628.63,13888.2 3405.39,13604.7C3405.19,13604.4 3377.32,13568.8 3344.37,13522.8C3294.75,13453.5 3259,13396.2 3248.75,13378.4C3167.94,13237.9 3126.05,13128.4 3094.74,13019.1C3044.91,12845.2 3004.22,12590 3044.8,12371.6C3075.66,12205.4 3141.64,12032.8 3242.18,11868.7C3275.32,11814.6 3313.97,11762.9 3320.62,11754C3377.53,11677.8 3431.62,11619.1 3471.88,11578.4C3472.19,11578 3517.44,11534.3 3582.28,11481.3C3703.99,11381.9 3802.1,11325.1 3805.01,11323.3C3995.53,11208.9 4153.44,11156.8 4236.33,11133.3C4337.18,11104.7 4423.62,11094.5 4440.13,11092.6C4562.57,11078.2 4854.96,11061.8 5073.47,11263.9C5085.62,11275.1 5086.26,11274.5 5096.62,11287.4C5102.78,11295.1 5137.93,11338.8 5131.46,11405.2C5128.31,11437.5 5115.75,11461 5113.38,11465.5C5113.35,11465.5 5095.16,11492.7 5095.13,11492.7C5087.36,11500.4 5080.3,11508.9 5071.8,11515.7C5064.15,11521.9 5020.51,11557.1 4954.07,11550.6C4921.72,11547.4 4898.2,11534.8 4893.75,11532.5C4891.12,11531.1 4891.91,11529.8 4862.63,11511.8C4832.31,11493 4722.25,11427.8 4502.17,11493.6C4344.48,11540.8 4210.71,11632.7 4190.21,11646.6C4123.76,11691.5 4077.22,11731 4043.53,11759.6C3932.99,11853.3 3867.36,11935.6 3854.91,11949.3C3775.13,12036.8 3727.59,12115.9 3698.98,12166.5C3591.27,12357.3 3583.75,12505.5 3583.15,12513.6C3572.82,12654.4 3612.03,12857.4 3675.29,12996.6C3701.93,13055.2 3729.14,13100.3 3735.01,13111.2C3773.59,13183 3813.81,13244.6 3856.53,13307.6C4026.72,13558.4 4249.96,13795.1 4391.09,13937.9C4391.35,13938.1 4456.33,14001.3 4549.35,14085.8C4798.77,14312.6 5011.76,14478.4 5032.03,14494.4C5070.73,14524.8 5280.83,14690.3 5526.72,14861C5576.5,14895.6 5650.54,14944.6 5661.37,14951.8C6242.04,15336.1 6810.96,15625.2 7195.29,15836.2C7271.59,15878 7355.29,15924.7 7443.02,15977C7516.11,16020.6 7534.04,16091.4 7537.14,16103.6C7547.12,16143 7542.5,16176.4 7541.63,16182.7C7538.77,16203.3 7533.28,16219 7532.2,16222.1C7532.19,16222.1 7514.62,16259.8 7514.61,16259.8L7514.61,16259.8Z"/>
+                                <path d="M5047.81,9362.06C5031.94,9407.39 5007.15,9505.04 4989.79,9686.71C4972.01,9872.75 4975.86,10009 4976.25,10029.3C4976.28,10031.1 4975.98,10048.8 4980.65,10116.8C4990.99,10267.7 5028.99,10730.7 5253.24,11574.6C5255.73,11583.9 5255.44,11584 5310.62,11785.4C5371.7,12008.2 5419.35,12161.2 5422.41,12171.9C5535.73,12567.8 5654.47,12869.3 5710.07,13011.9C5793.97,13227.1 5943.13,13588.8 6185.2,14058.8C6510.39,14690.3 6823.96,15159.6 6964.28,15364C6995.36,15409.2 7046.09,15479.9 7053.28,15490C7278.1,15803.1 7420.69,15963.8 7426.06,15970.7C7430.33,15976.2 7434.97,15981.4 7438.56,15987.3C7441.8,15992.7 7460.28,16023.2 7450.46,16064.6C7445.67,16084.7 7435.69,16098.5 7433.81,16101.1C7430.06,16106.3 7408.34,16136.2 7365.53,16142.7C7323.53,16149 7294.57,16128.1 7289.49,16124.4C7287.6,16123.1 7282.18,16119.2 7267.99,16104.6C7025.78,15856.3 6778.27,15542.3 6749.05,15505.9C6122.82,14726.7 5725.59,14021.9 5643.75,13877C5484.34,13594.9 5363.13,13352.7 5274.29,13164.4C5272.89,13161.5 5221.79,13052.6 5160.23,12909.6C5052.97,12660.3 4979,12459.5 4932.85,12328.2C4930.11,12320.4 4872.11,12145.4 4795.1,11879.6C4795.09,11879.6 4771.56,11796.6 4743.56,11691.6C4514.4,10832.7 4465.92,10328.7 4452.97,10082.3C4451.59,10056.2 4436.82,9892.8 4447.99,9656.28C4465.73,9280.83 4534.98,9128.83 4559.72,9078.39C4601.95,8992.31 4648.12,8951.27 4660.08,8940.56C4664.39,8936.7 4696.4,8906.62 4756.53,8875.93C4976.31,8763.77 5198.44,8838.6 5281.7,8870.49C5391.92,8912.72 5676.46,9040.76 6092.05,9506.82C6230.73,9662.34 6326.35,9791.47 6339.14,9807.22C6393.62,9874.33 6587.34,10114.1 6771.83,10425.7C6911.4,10661.5 6976.24,10823.6 7004.34,10898.3C7011.3,10916.8 7011.41,10916.8 7014.66,10936.3C7015.65,10942.3 7020.91,10973.8 7012.11,11011.7C6994.03,11089.6 6937.41,11125.6 6927.49,11132C6927.43,11132 6892.44,11149.6 6892.41,11149.7C6879.79,11153.1 6867.45,11157.8 6854.57,11159.9C6848.61,11160.9 6817.12,11166.2 6779.21,11157.4C6701.34,11139.3 6665.27,11082.7 6658.95,11072.7C6648.25,11055.9 6640.12,11034.8 6641.25,11037.7C6644.43,11046 6624.98,10995.3 6597.33,10935.9C6518.02,10765.5 6418.79,10609.8 6368.29,10533.1C6266.77,10378.8 6156.71,10239.6 6137.19,10214.9C6086.81,10151.1 6044.87,10101.4 6020.2,10072.4C6016.19,10067.7 5947.09,9991.55 5857.69,9903.18C5507.31,9556.86 5217.35,9384.74 5065.93,9363.76C5059.27,9362.84 5053.22,9362.31 5047.81,9362.07L5047.81,9362.06Z"/>
+                                <path d="M6843.07,10800.9C6857.82,10800.9 6872.64,10799.4 6887.32,10800.8C6901.6,10802.2 6915.78,10805.1 6929.5,10809.3C6943.01,10813.4 6956.15,10818.9 6968.61,10825.6C6980.98,10832.2 6992.77,10840 7003.66,10848.9C7014.55,10857.7 7024.66,10867.6 7033.67,10878.3C7042.74,10889.1 7050.85,10900.8 7057.66,10913.2C7064.57,10925.7 7070.35,10939 7074.63,10952.6C7079.04,10966.6 7081.21,10981.3 7083.6,10995.8C7084.79,11003 7084.78,11010.4 7085.36,11017.7L7350.26,14363.3C7390.02,14887.9 7447.81,15798.9 7455.73,15923.7C7457.87,15957.5 7439.61,15980 7436.42,15983.9C7434.08,15986.8 7420.78,16003.1 7398.3,16010.3C7382.86,16015.3 7369.26,16013.9 7366.74,16013.6C7343.26,16011.2 7326.89,15997.9 7324.01,15995.5C7321.06,15993.1 7304.76,15979.9 7296.72,15956.7C7294.91,15951.5 7293.82,15946.1 7292.79,15940.6C7292.71,15940.3 7201.75,15302.7 7199.54,15287.1C7189.41,15215.5 7121.8,14737.4 7076.36,14391.6L6821.64,12410.1C6818.93,12388.8 6647.57,11041.1 6647.57,11041C6646.94,11026.3 6646.06,11011.5 6647.49,10996.8C6648.89,10982.6 6651.83,10968.4 6656.03,10954.7C6660.16,10941.3 6665.7,10928.1 6672.37,10915.7C6678.99,10903.4 6686.86,10891.6 6695.71,10880.7C6704.57,10869.9 6714.49,10859.8 6725.25,10850.8C6736.09,10841.7 6747.82,10833.6 6760.19,10826.8C6772.76,10819.9 6786.05,10814.2 6799.73,10809.9C6799.77,10809.9 6843.05,10800.9 6843.07,10800.9L6843.07,10800.9Z"/>
+                                <path d="M6289.48,15803.6C6290.26,15802.3 6294.72,15795.1 6304.48,15792.8C6307.49,15792 6310.7,15791.9 6313.77,15792.4C6319.72,15793.3 6319.62,15793.7 6324.77,15796.8C6414.42,15851 7080.56,16208.6 7384.47,16352.8C7385.84,16353.5 7393.7,16357.2 7397.17,16366.9C7398.24,16369.9 7398.76,16373.2 7398.61,16376.3C7398.53,16377.9 7398.11,16386.8 7390.35,16393.7C7389.24,16394.7 7382.84,16400.5 7372.74,16400C7369.49,16399.9 7366.32,16398.7 7363.24,16397.7C7361.03,16396.9 7315.41,16374.7 7311.26,16372.6C6998.59,16220 6386.17,15891 6297.49,15836.9C6296.23,15836.2 6288.95,15831.7 6286.6,15821.9C6284.26,15812.1 6288.71,15804.9 6289.49,15803.6L6289.48,15803.6Z"/>
+                                <path d="M8899.64,13965.2C8903.97,13968.2 8908.61,13970.7 8912.63,13974.1C8930.35,13989 8936.02,14008.1 8937.04,14011.6C8938.05,14015 8943.72,14034.2 8936.94,14056.3C8933.82,14066.5 8933.32,14066.3 8928.21,14075.7C8608.73,14661.5 8039.28,15344.7 7820.7,15601.1C7819.09,15603 7761.2,15669.6 7738.01,15695.6C7727.9,15706.9 7626.36,15821.4 7509.9,15945.2C7508.49,15946.7 7492.39,15963.8 7492.1,15964C7485.01,15969.2 7478.77,15975.8 7470.81,15979.4C7463.1,15983 7454.5,15985 7446,15985.4C7437.51,15985.8 7428.78,15984.5 7420.78,15981.6C7420.72,15981.6 7398.22,15968.1 7398.2,15968.1C7393.04,15961 7386.43,15954.8 7382.73,15946.8C7379.15,15939.1 7377.16,15930.5 7376.78,15922C7376.41,15913.5 7377.63,15904.8 7380.53,15896.8C7385.74,15882.4 7386.66,15882.7 7396.73,15871.2C7452.83,15806.8 7519.81,15728.2 7670.37,15547.2L7766.38,15432.1C8199.14,14912.5 8436.26,14565.5 8494.68,14479.9C8658.72,14239.7 8748.78,14079.7 8794.01,13996.4C8809.33,13968.2 8835.81,13960.4 8840.39,13959C8843.82,13958 8862.99,13952.3 8885.13,13959.1C8885.17,13959.1 8899.62,13965.2 8899.64,13965.2L8899.64,13965.2Z"/>
+                                <path d="M8882.74,14103.5C8887.07,14106.5 8891.72,14109 8895.73,14112.4C8913.47,14127.2 8919.16,14146.4 8920.17,14149.8C8921.19,14153.3 8926.87,14172.5 8920.11,14194.6C8916.98,14204.8 8916.48,14204.6 8911.35,14214C8589.78,14803.3 8016.43,15427.7 7811.75,15645.9C7800.41,15658 7747.77,15712.7 7717.8,15743C7698.44,15762.6 7578.52,15883.8 7471.54,15983.3C7461.75,15992.4 7461.71,15992.6 7449.26,15997.5C7441.34,16000.6 7432.64,16002.1 7424.14,16001.9C7415.64,16001.8 7406.99,16000 7399.19,15996.6C7399.12,15996.6 7377.5,15981.7 7377.48,15981.7C7372.77,15974.3 7366.55,15967.7 7363.35,15959.5C7360.25,15951.6 7358.79,15942.9 7358.94,15934.4C7359.09,15925.9 7360.85,15917.3 7364.22,15909.5C7370.24,15895.5 7371.1,15896 7381.73,15885.1C7398.78,15867.8 7468.77,15796.5 7590.86,15664.3L7745.02,15496.8C8163.05,15041.4 8397.46,14717.8 8458,14634C8633.6,14391 8728.96,14223.5 8777.15,14134.8C8792.46,14106.6 8818.93,14098.7 8823.5,14097.4C8826.93,14096.4 8846.1,14090.7 8868.24,14097.4C8868.27,14097.4 8882.72,14103.5 8882.74,14103.5L8882.74,14103.5Z"/>
+                                <path d="M8935.12,14198.2C8939.45,14201.2 8944.09,14203.7 8948.11,14207.1C8965.85,14221.9 8971.53,14241.1 8972.55,14244.5C8973.57,14248 8979.25,14267.1 8972.49,14289.3C8969.36,14299.5 8968.86,14299.3 8963.73,14308.7C8639.31,14903.4 8058.5,15553.9 7865.01,15767.3C7815.26,15822.1 7676.4,15969.2 7536.48,16106.1C7535.55,16107.1 7525.07,16117.3 7524.87,16117.4C7517.58,16122.3 7511.07,16128.7 7502.98,16132C7495.13,16135.3 7486.45,16136.9 7477.95,16136.9C7469.45,16137 7460.77,16135.4 7452.9,16132.2C7452.84,16132.2 7430.9,16117.8 7430.88,16117.7C7426.01,16110.4 7419.66,16103.9 7416.29,16095.9C7413.02,16088 7411.38,16079.3 7411.35,16070.8C7411.32,16062.3 7412.9,16053.6 7416.11,16045.8C7421.86,16031.7 7422.74,16032.1 7433.18,16021C7507.29,15942.4 7593.86,15846.4 7706.92,15719.2L7809.22,15604.2C8234.21,15124.5 8468.43,14792.8 8530.75,14704.2C8694.27,14471.8 8784.16,14313 8829.53,14229.5C8844.84,14201.3 8871.31,14193.4 8875.88,14192.1C8879.31,14191.1 8898.48,14185.4 8920.62,14192.1C8920.65,14192.2 8935.1,14198.2 8935.12,14198.2L8935.12,14198.2Z"/>
+                                <path d="M9410.71,10219.8C9420.01,10209.5 9428.34,10198.3 9438.61,10189C9447.84,10180.6 9500.52,10133 9585.07,10136.4C9598.33,10136.9 9611.6,10138.7 9624.5,10141.8C9637.6,10144.9 9650.48,10149.3 9662.69,10155C9686.09,10165.8 9685.96,10166.2 9706.28,10182.1C10135,10517 10079.1,11466.1 10068.9,11630.2C10035.5,12168.1 9896.61,12750.2 9659.34,13156.9C9650.14,13172.6 9650.72,13173.1 9638.77,13186.9C9632.8,13193.7 9598.73,13233 9537.02,13238C9506.98,13240.5 9483.45,13232.9 9479,13231.4C9478.93,13231.4 9451.15,13219.2 9451.12,13219.2C9442.85,13213.4 9433.96,13208.3 9426.31,13201.7C9419.43,13195.7 9380.14,13161.7 9375.14,13100C9372.71,13069.9 9380.32,13046.4 9381.76,13041.9C9388,13022.6 9389.19,13023.1 9398.67,13005.2C9708.97,12418.2 9790,11411.1 9631.95,10838.5C9583.35,10662.4 9518.05,10551.5 9455.88,10508.6C9422.53,10485.6 9403.05,10452.8 9399.64,10447.1C9396.42,10441.7 9379.26,10412.8 9373.18,10372.7C9367.1,10332.6 9374.92,10299.9 9376.39,10293.8C9381.23,10273.6 9388.21,10258.5 9389.57,10255.6C9389.59,10255.6 9410.7,10219.8 9410.71,10219.8Z"/>
+                            </g>
+                        </svg>
+                        <h1 style="font-family: 'Nokora', serif; font-size: 32px; font-weight: 800; margin: 12px 0 8px;">Fletch</h1>
+                        <p class="welcome-text">Your secure gateway to Nockchain</p>
+                        <div style="width: 80%;">
+                            <button class="btn-primary">Create New Wallet</button>
+                            <button class="btn-secondary">Import Wallet</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Create New Wallet - Seed Phrase -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Create New Wallet</div>
+                <div class="screen-description">Generated 12-word seed phrase display</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <div class="logo-container">
+                            <img src="fletch logo clear bg.svg" class="logo-svg" alt="Fletch" />
+                            <span class="logo-text">Fletch</span>
+                        </div>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <h2 style="font-size: 17px; font-weight: 600; margin-bottom: 4px;">Your Secret Recovery Phrase</h2>
+                        <p style="font-size: 12px; color: #666; margin-bottom: 10px; line-height: 1.4;">Write down these 12 words in order. This is the only way to recover your wallet.</p>
+                        
+                        <div class="seed-phrase-grid">
+                            <div class="seed-word">
+                                <span class="seed-word-number">1.</span>
+                                <span class="seed-word-text">apple</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">2.</span>
+                                <span class="seed-word-text">bridge</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">3.</span>
+                                <span class="seed-word-text">cancel</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">4.</span>
+                                <span class="seed-word-text">danger</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">5.</span>
+                                <span class="seed-word-text">energy</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">6.</span>
+                                <span class="seed-word-text">forest</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">7.</span>
+                                <span class="seed-word-text">garden</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">8.</span>
+                                <span class="seed-word-text">harvest</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">9.</span>
+                                <span class="seed-word-text">island</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">10.</span>
+                                <span class="seed-word-text">jungle</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">11.</span>
+                                <span class="seed-word-text">kitchen</span>
+                            </div>
+                            <div class="seed-word">
+                                <span class="seed-word-number">12.</span>
+                                <span class="seed-word-text">laptop</span>
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                            <button class="btn-secondary" style="flex: 1; padding: 10px; margin: 0;">Copy</button>
+                            <button class="btn-secondary" style="flex: 1; padding: 10px; margin: 0;">Download</button>
+                        </div>
+                        
+                        <div class="warning-box" style="padding: 10px; margin: 10px 0; font-size: 11px;">
+                            ⚠️ Never share this phrase. Anyone with these words can steal your funds.
+                        </div>
+                        
+                        <button class="btn-primary" style="margin-top: auto; margin-bottom: 0;">I've Written It Down</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Confirm Key Phrase -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Confirm Seed Phrase</div>
+                <div class="screen-description">Verification of seed phrase backup</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <div class="logo-container">
+                            <img src="fletch logo clear bg.svg" class="logo-svg" alt="Fletch" />
+                            <span class="logo-text">Fletch</span>
+                        </div>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <h2 style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Confirm Your Phrase</h2>
+                        <p style="font-size: 13px; color: #666; margin-bottom: 20px;">Please enter the requested words from your seed phrase to confirm you've saved it.</p>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <label class="input-label">Word #3</label>
+                            <input type="text" class="input-field" placeholder="Enter word #3">
+                        </div>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <label class="input-label">Word #7</label>
+                            <input type="text" class="input-field" placeholder="Enter word #7">
+                        </div>
+                        
+                        <button class="btn-primary" style="margin-top: auto;">Confirm</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Password Creation -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Set Password</div>
+                <div class="screen-description">Secure the wallet with password</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <div class="logo-container">
+                            <img src="fletch logo clear bg.svg" class="logo-svg" alt="Fletch" />
+                            <span class="logo-text">Fletch</span>
+                        </div>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <h2 style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Set Your Password</h2>
+                        <p style="font-size: 13px; color: #666; margin-bottom: 20px;">This password will unlock your wallet on this device.</p>
+                        
+                        <div style="margin-bottom: 16px;">
+                            <label class="input-label">Password</label>
+                            <input type="password" class="input-field" placeholder="Enter password">
+                        </div>
+                        
+                        <div style="margin-bottom: 16px;">
+                            <label class="input-label">Confirm Password</label>
+                            <input type="password" class="input-field" placeholder="Confirm password">
+                        </div>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <div style="height: 4px; background: #e5e7eb; border-radius: 2px; margin-bottom: 8px;">
+                                <div style="height: 100%; width: 75%; background: #16a34a; border-radius: 2px;"></div>
+                            </div>
+                            <p style="font-size: 12px; color: #16a34a;">Strong password</p>
+                        </div>
+                        
+                        <div class="checkbox-group" style="margin-bottom: 20px;">
+                            <div class="checkbox" style="background: #000;"></div>
+                            <label style="font-size: 12px;">
+                                I agree to the <span style="text-decoration: underline;">Terms of Service</span> and <span style="text-decoration: underline;">Privacy Policy</span>
+                            </label>
+                        </div>
+                        
+                        <button class="btn-primary" style="margin-top: auto;">Create Wallet</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main Wallet Interface -->
+        <div class="section-header">Main Wallet Interface</div>
+        <div class="screens-row">
+            <!-- Dashboard -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Dashboard</div>
+                <div class="screen-description">Main wallet view with balance and quick actions</div>
+                <div class="screen">
+                    <div class="header">
+                        <div class="logo-container" style="margin-right: auto;">
+                            <img src="fletch logo clear bg.svg" class="logo-svg" alt="Fletch" />
+                            <span class="logo-text">Fletch</span>
+                        </div>
+                        <div class="wallet-selector">Main Wallet ▼</div>
+                        <div class="network-status">
+                            <span class="status-dot"></span>
+                            <span>Connected</span>
+                        </div>
+                    </div>
+                    <div class="content" style="padding-top: 0;">
+                        <div class="balance-display">
+                            <div class="balance-label">Total Balance</div>
+                            <div class="balance-amount">1,234.56</div>
+                            <div class="balance-notes">12 notes</div>
+                        </div>
+                        
+                        <div class="quick-actions">
+                            <div class="quick-action-btn">Send</div>
+                            <div class="quick-action-btn">Receive</div>
+                            <div class="quick-action-btn">Consolidate</div>
+                        </div>
+                        
+                        <div class="tabs">
+                            <div class="tab active">Activity</div>
+                            <div class="tab">Address Book</div>
+                            <div class="tab">Settings</div>
+                        </div>
+                        
+                        <div class="transaction-list">
+                            <div class="transaction-item">
+                                <div>
+                                    <div class="transaction-type">Sent</div>
+                                    <div class="transaction-date">2 hours ago</div>
+                                </div>
+                                <div class="transaction-amount sent">-50.00</div>
+                            </div>
+                            <div class="transaction-item">
+                                <div>
+                                    <div class="transaction-type">Received</div>
+                                    <div class="transaction-date">1 day ago</div>
+                                </div>
+                                <div class="transaction-amount received">+125.50</div>
+                            </div>
+                            <div class="transaction-item">
+                                <div>
+                                    <div class="transaction-type">Sent</div>
+                                    <div class="transaction-date">2 days ago</div>
+                                </div>
+                                <div class="transaction-amount sent">-10.25</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Send Transaction -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Send Transaction</div>
+                <div class="screen-description">Single and multi-recipient transfers</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Send</span>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <div class="recipient-input-group">
+                            <label class="input-label">Recipient 1</label>
+                            <input type="text" class="input-field" placeholder="Address or contact" style="margin-bottom: 8px;">
+                            <input type="number" class="input-field" placeholder="Amount" style="margin-bottom: 0;">
+                        </div>
+                        
+                        <span class="add-recipient-btn" style="margin: 12px 0;">+ Add Another Recipient</span>
+                        
+                        <div style="margin: 16px 0;">
+                            <label class="input-label">Transaction Fee</label>
+                            <div class="fee-selector">
+                                <div class="fee-option">
+                                    <div class="fee-option-label">Economy</div>
+                                    <div class="fee-option-amount">0.01</div>
+                                </div>
+                                <div class="fee-option selected">
+                                    <div class="fee-option-label">Standard</div>
+                                    <div class="fee-option-amount">0.02</div>
+                                </div>
+                                <div class="fee-option">
+                                    <div class="fee-option-label">Fast</div>
+                                    <div class="fee-option-amount">0.05</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; color: #666;">Amount</span>
+                                <span style="font-size: 14px;">50.00</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; color: #666;">Fee (2 notes)</span>
+                                <span style="font-size: 14px;">0.04</span>
+                            </div>
+                            <div style="border-top: 1px solid #e5e7eb; padding-top: 8px; display: flex; justify-content: space-between;">
+                                <span style="font-size: 16px; font-weight: 600;">Total</span>
+                                <span style="font-size: 16px; font-weight: 600;">50.04</span>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-primary" style="margin-top: auto;">Review Transaction</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Receive -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Receive</div>
+                <div class="screen-description">Address generation and QR codes</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Receive</span>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <h2 style="font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 20px;">Your Receiving Address</h2>
+                        
+                        <div class="qr-container">
+                            <div class="qr-placeholder">QR Code</div>
+                        </div>
+                        
+                        <div class="address-display">
+                            nock1qvk8x9y7...ht4k3n2p5m
+                        </div>
+                        
+                        <button class="btn-secondary">Copy Address</button>
+                        <button class="btn-primary">Generate New Address</button>
+                        
+                        <div style="margin-top: 24px; padding-top: 24px; border-top: 1px solid #e5e7eb;">
+                            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 12px;">Previous Addresses</h3>
+                            <div style="font-size: 12px; color: #666; line-height: 1.6;">
+                                <div style="margin-bottom: 8px;">nock1abc...xyz - Used 2 times</div>
+                                <div style="margin-bottom: 8px;">nock1def...uvw - Used 1 time</div>
+                                <div>nock1ghi...rst - Never used</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Transaction History -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Transaction History</div>
+                <div class="screen-description">Detailed transaction records</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">History</span>
+                        <span style="cursor: pointer;">⚙</span>
+                    </div>
+                    <div class="content">
+                        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                            <input type="text" class="input-field" placeholder="Search transactions..." style="margin: 0;">
+                            <button style="padding: 0 16px; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 8px; cursor: pointer;">Filter</button>
+                        </div>
+                        
+                        <div style="font-size: 12px; color: #666; margin-bottom: 16px;">Showing 25 transactions</div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; font-weight: 600;">Sent</span>
+                                <span style="font-size: 14px; font-weight: 600; color: #dc2626;">-50.00</span>
+                            </div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 4px;">To: nock1qvk...3n2p5m</div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Fee: 0.02</div>
+                            <div style="font-size: 12px; color: #666;">2 hours ago • 12 confirmations</div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; font-weight: 600;">Received</span>
+                                <span style="font-size: 14px; font-weight: 600; color: #16a34a;">+125.50</span>
+                            </div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 4px;">From: nock1abc...xyz</div>
+                            <div style="font-size: 12px; color: #666;">1 day ago • 144 confirmations</div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; font-weight: 600;">Consolidation</span>
+                                <span style="font-size: 14px; font-weight: 600;">0.00</span>
+                            </div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Combined 8 notes → 1 note</div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Fee: 0.08</div>
+                            <div style="font-size: 12px; color: #666;">2 days ago • 288 confirmations</div>
+                        </div>
+                        
+                        <button class="btn-secondary" style="margin-top: 16px;">Export History</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Wallet Management -->
+        <div class="section-header">Wallet Management</div>
+        <div class="screens-row">
+            <!-- Wallet Vault -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Wallet Vault</div>
+                <div class="screen-description">Multi-wallet management interface</div>
+                <div class="screen">
+                    <div class="header">
+                        <span></span>
+                        <span style="font-size: 18px; font-weight: 600;">My Wallets</span>
+                        <span style="cursor: pointer;">⚙</span>
+                    </div>
+                    <div class="content">
+                        <div class="wallet-list-item">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div class="wallet-name">Main Wallet</div>
+                                    <div class="wallet-info">1,234.56 • Last used: 2 hours ago</div>
+                                </div>
+                                <div style="width: 8px; height: 8px; background: #16a34a; border-radius: 50%;"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="wallet-list-item">
+                            <div>
+                                <div class="wallet-name">Business Wallet</div>
+                                <div class="wallet-info">5,678.90 • Last used: 1 day ago</div>
+                            </div>
+                        </div>
+                        
+                        <div class="wallet-list-item">
+                            <div>
+                                <div class="wallet-name">Savings</div>
+                                <div class="wallet-info">10,000.00 • Last used: 1 week ago</div>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-primary">Add New Wallet</button>
+                        <button class="btn-secondary">Import Wallet</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Import Wallet -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Import Wallet</div>
+                <div class="screen-description">Restore wallet from seed phrase</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Import Wallet</span>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <h2 style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Enter Recovery Phrase</h2>
+                        <p style="font-size: 13px; color: #666; margin-bottom: 20px;">Enter your 12-word recovery phrase to restore your wallet.</p>
+                        
+                        <textarea class="input-field" rows="4" placeholder="Enter your 12-word recovery phrase separated by spaces" style="resize: none; font-family: monospace;"></textarea>
+                        
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px;">
+                            <div style="width: 20px; height: 20px; border-radius: 50%; background: #16a34a; color: white; font-size: 12px; display: flex; align-items: center; justify-content: center;">✓</div>
+                            <span style="font-size: 12px; color: #16a34a;">Valid seed phrase format</span>
+                        </div>
+                        
+                        <div style="margin-bottom: 16px;">
+                            <label class="input-label">Wallet Name (Optional)</label>
+                            <input type="text" class="input-field" placeholder="e.g., Imported Wallet">
+                        </div>
+                        
+                        <button class="btn-primary" style="margin-top: auto;">Import Wallet</button>
+                        
+                        <div class="warning-box" style="margin-top: 12px; font-size: 12px;">
+                            ⚠️ Make sure you're on the official Fletch extension. Phishing sites may try to steal your seed phrase.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Address Book -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Address Book</div>
+                <div class="screen-description">Saved contacts management</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Address Book</span>
+                        <span style="cursor: pointer;">+</span>
+                    </div>
+                    <div class="content">
+                        <input type="text" class="input-field" placeholder="Search contacts...">
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="font-size: 14px; font-weight: 600;">Alice</div>
+                                    <div style="font-size: 12px; color: #666;">nock1abc...xyz</div>
+                                </div>
+                                <span style="cursor: pointer;">⋮</span>
+                            </div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="font-size: 14px; font-weight: 600;">Bob's Shop</div>
+                                    <div style="font-size: 12px; color: #666;">nock1def...uvw</div>
+                                </div>
+                                <span style="cursor: pointer;">⋮</span>
+                            </div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <div style="font-size: 14px; font-weight: 600;">Exchange Wallet</div>
+                                    <div style="font-size: 12px; color: #666;">nock1ghi...rst</div>
+                                </div>
+                                <span style="cursor: pointer;">⋮</span>
+                            </div>
+                        </div>
+                        
+                        <div style="margin-top: auto; padding-top: 24px;">
+                            <button class="btn-secondary">Import Contacts</button>
+                            <button class="btn-secondary">Export Contacts</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Settings & Security -->
+        <div class="section-header">Settings & Security States</div>
+        <div class="screens-row">
+            <!-- Settings -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Settings</div>
+                <div class="screen-description">Application preferences and configuration</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Settings</span>
+                        <span></span>
+                    </div>
+                    <div class="content">
+                        <div class="settings-group">
+                            <div class="settings-title">Security</div>
+                            <div class="setting-item">
+                                <span class="setting-label">Auto-lock</span>
+                                <span class="setting-value">5 minutes</span>
+                            </div>
+                            <div class="setting-item">
+                                <span class="setting-label">Password</span>
+                                <span class="setting-value" style="text-decoration: underline; cursor: pointer;">Change</span>
+                            </div>
+                            <div class="setting-item">
+                                <span class="setting-label">Lock wallet</span>
+                                <span class="setting-value" style="text-decoration: underline; cursor: pointer;">Lock now</span>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-group">
+                            <div class="settings-title">Network</div>
+                            <div class="setting-item">
+                                <span class="setting-label">Connection</span>
+                                <span class="setting-value">Auto</span>
+                            </div>
+                            <div class="setting-item">
+                                <span class="setting-label">Default fee</span>
+                                <span class="setting-value">Standard</span>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-group">
+                            <div class="settings-title">Notifications</div>
+                            <div class="setting-item">
+                                <span class="setting-label">Transaction alerts</span>
+                                <div class="toggle on">
+                                    <div class="toggle-dot"></div>
+                                </div>
+                            </div>
+                            <div class="setting-item">
+                                <span class="setting-label">Price updates</span>
+                                <div class="toggle">
+                                    <div class="toggle-dot"></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-secondary" style="color: #dc2626; border-color: #dc2626;">Clear All Data</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Locked Screen -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Locked Wallet</div>
+                <div class="screen-description">Security lock screen</div>
+                <div class="screen">
+                    <div class="locked-screen">
+                        <div class="lock-icon">🔒</div>
+                        <h2 style="font-size: 24px; font-weight: 600; margin-bottom: 8px;">Wallet Locked</h2>
+                        <p style="font-size: 14px; color: #666; margin-bottom: 32px;">Enter your password to unlock</p>
+                        
+                        <div style="width: 80%;">
+                            <input type="password" class="input-field" placeholder="Enter password">
+                            <button class="btn-primary">Unlock</button>
+                            <button class="btn-ghost">Forgot password?</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Transaction Confirmation -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Confirm Transaction</div>
+                <div class="screen-description">Final review before sending</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Confirm Transaction</span>
+                        <span></span>
+                    </div>
+                    <div class="content no-scroll">
+                        <h2 style="font-size: 18px; font-weight: 600; text-align: center; margin-bottom: 20px;">Review Transaction</h2>
+                        
+                        <div class="card" style="background: #f3f4f6;">
+                            <div style="font-size: 12px; color: #666; margin-bottom: 8px;">SENDING TO</div>
+                            <div style="font-size: 14px; font-weight: 600; margin-bottom: 4px;">Alice</div>
+                            <div style="font-size: 12px; color: #666;">nock1qvk8x9y7...ht4k3n2p5m</div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="text-align: center; padding: 16px 0;">
+                                <div style="font-size: 32px; font-weight: 700;">50.00</div>
+                                <div style="font-size: 14px; color: #666;">Amount</div>
+                            </div>
+                        </div>
+                        
+                        <div class="card">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; color: #666;">Network Fee</span>
+                                <span style="font-size: 14px;">0.02</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                                <span style="font-size: 14px; color: #666;">Fee Type</span>
+                                <span style="font-size: 14px;">Standard</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between;">
+                                <span style="font-size: 14px; color: #666;">Total with fees</span>
+                                <span style="font-size: 14px; font-weight: 600;">50.02</span>
+                            </div>
+                        </div>
+                        
+                        <button class="btn-primary">Confirm & Send</button>
+                        <button class="btn-secondary">Cancel</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Error State -->
+            <div class="screen-wrapper">
+                <div class="screen-title">Error State</div>
+                <div class="screen-description">Network and transaction errors</div>
+                <div class="screen">
+                    <div class="header">
+                        <span style="cursor: pointer;">←</span>
+                        <span style="font-size: 18px; font-weight: 600;">Transaction Failed</span>
+                        <span></span>
+                    </div>
+                    <div class="content">
+                        <div style="text-align: center; padding: 32px 0;">
+                            <div style="font-size: 48px; margin-bottom: 16px;">❌</div>
+                            <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 8px;">Transaction Failed</h2>
+                            <p style="font-size: 14px; color: #666;">Unable to complete your transaction</p>
+                        </div>
+                        
+                        <div class="error-message">
+                            <strong>Error:</strong> Insufficient balance. You need 50.02 but only have 45.00 available.
+                        </div>
+                        
+                        <div class="card">
+                            <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Suggested Actions:</h3>
+                            <ul style="font-size: 14px; color: #666; padding-left: 20px;">
+                                <li>Reduce the transaction amount</li>
+                                <li>Consolidate notes to reduce fees</li>
+                                <li>Wait for pending transactions to confirm</li>
+                            </ul>
+                        </div>
+                        
+                        <button class="btn-primary">Try Again</button>
+                        <button class="btn-secondary">Go to Dashboard</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

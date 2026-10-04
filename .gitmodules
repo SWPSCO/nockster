@@ -1,3 +1,3 @@
 [submodule "tx-types"]
-	path = tx-types
+	path = nockster-esp/tx-types
 	url = https://github.com/SWPSCO/tx-types

@@ -1,0 +1,17 @@
+{
+  "name": "@nockster/desktop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:web": "vite --mode desktop",
+    "build:web": "vite build --mode desktop",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {
+    "@nockster/wallet": "*",
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-http": "2.6.1",
+    "@tauri-apps/plugin-opener": "2.5.5"
+  }
+}

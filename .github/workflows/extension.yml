@@ -1,0 +1,50 @@
+name: Signed browser extension
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NOCKSTER_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wallet-engine
+          path: packages/wallet/src/pkg
+      - name: Build and test extension
+        run: |
+          node scripts/generate-manifest.cjs production
+          npm run build:svelte
+          npx playwright install --with-deps chromium
+          npm run test:extension
+      - name: Sign and verify packages
+        env:
+          FLETCH_EXT_KEY_B64: ${{ secrets.FLETCH_EXT_KEY_B64 }}
+          CHROME_BIN: /usr/bin/google-chrome
+        run: |
+          set -euo pipefail
+          : "${FLETCH_EXT_KEY_B64:?Set FLETCH_EXT_KEY_B64 to the base64 extension signing PEM}"
+          npm run package:extension
+          mv release/extension/SHA256SUMS release/extension/extension-SHA256SUMS
+          mv release/extension/release.json release/extension/extension-release.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-extension
+          path: release/extension/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

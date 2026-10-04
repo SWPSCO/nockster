@@ -1,0 +1,137 @@
+name: Desktop apps
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+            bundles: deb,appimage
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            platform: macos-arm64
+            bundles: app
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            platform: windows-x64
+            bundles: nsis
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      NOCKSTER_VERSION: ${{ inputs.version }}
+      RUSTUP_TOOLCHAIN: 1.99.0
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wallet-engine
+          path: packages/wallet/src/pkg
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
+      - name: Install desktop Rust toolchain
+        run: rustup toolchain install 1.99.0 --profile minimal --target '${{ matrix.target }}'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+            tools/macos-release/target
+          key: desktop-${{ matrix.target }}-1.99.0-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock', 'tools/macos-release/Cargo.lock') }}
+      - name: Set bundle version
+        run: node scripts/ci/configure-desktop.mjs
+      - name: Build desktop bundle
+        run: npm run build:desktop -- --ci --no-sign --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}' --config src-tauri/tauri.ci.conf.json -- --locked
+      - name: Test native wallet storage
+        run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Build Rust macOS release tool
+        if: runner.os == 'macOS'
+        run: |
+          cargo test --locked --manifest-path tools/macos-release/Cargo.toml
+          cargo build --release --locked --manifest-path tools/macos-release/Cargo.toml
+      - name: Sign, notarize, staple, and verify macOS download
+        if: runner.os == 'macOS'
+        env:
+          APPLE_P12: ${{ secrets.APPLE_P12 }}
+          APPLE_P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH }}
+        run: >-
+          tools/macos-release/target/release/nockster-macos-release
+          apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Nockster.app
+          "release/desktop/Nockster_${NOCKSTER_VERSION}_macos-arm64.dmg"
+      - name: Collect installers and checksums
+        run: node scripts/ci/collect-desktop.mjs '${{ matrix.target }}' '${{ matrix.platform }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-desktop-${{ matrix.platform }}
+          path: release/desktop/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  upload-r2:
+    name: Publish desktop downloads to R2
+    needs: package
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: desktop-r2-latest
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-desktop-*
+          path: release/desktop
+          merge-multiple: true
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends rclone
+      - name: Upload latest installers and checksums
+        env:
+          RCLONE_B64: ${{ secrets.RCLONE_B64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${RCLONE_B64:?Set the RCLONE_B64 Actions secret}"
+          for file in nockster-linux-x64-latest.deb nockster-linux-x64-latest.AppImage nockster-macos-arm64-latest.dmg nockster-windows-x64-latest.exe; do
+            test -s "release/desktop/$file"
+            (cd release/desktop && sha256sum --check "$file.sha256")
+          done
+          umask 077
+          rclone_config=$(mktemp "$RUNNER_TEMP/nockster-rclone.XXXXXX")
+          trap 'rm -f "$rclone_config"' EXIT
+          printf '%s' "$RCLONE_B64" | base64 --decode > "$rclone_config"
+          unset RCLONE_B64
+          rclone --config "$rclone_config" copy release/desktop/ r2:swpsco/fletch/ \
+            --include 'nockster-*-latest.*' \
+            --s3-no-check-bucket \
+            --header-upload 'Cache-Control: no-cache, no-transform' \
+            --header-upload 'Content-Disposition: attachment'
+          printf 'Desktop downloads: https://bin.aeroe.io/fletch/nockster-<platform>-latest.<ext>\n' >> "$GITHUB_STEP_SUMMARY"

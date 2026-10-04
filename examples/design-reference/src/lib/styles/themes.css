@@ -1,0 +1,209 @@
+/* Light Theme - Clean modern design without visible borders */
+[data-theme="light"] {
+  --color-primary: #000000;
+  --color-secondary: #666666;
+  --color-tertiary: #999999;
+  --color-background: #ffffff;
+  --color-surface: #f3f4f6;
+  --color-border: #e5e7eb;
+  --color-text: #1a1a1a;
+  --color-text-secondary: #666666;
+  --color-text-tertiary: #999999;
+  --color-success: #16a34a;
+  --color-error: #dc2626;
+  --color-warning: #fde047;
+
+  /* Component specific */
+  --color-input-bg: #f3f4f6;
+  --color-button-hover: #333333;
+  --color-card-bg: #ffffff;
+  --color-header-bg: transparent;
+  --color-tab-active: #000000;
+}
+
+/* Special styles for light theme - Borderless header design */
+[data-theme="light"] .header,
+[data-theme="light"] header {
+  background: transparent !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+  position: relative !important;
+}
+
+/* Make header blend seamlessly with content */
+[data-theme="light"] .header {
+  padding: 12px 16px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+}
+
+/* Style ALL back buttons consistently (excluding wallet-selector) */
+[data-theme="light"] .header button:not(.wallet-selector),
+[data-theme="light"] .header .button--ghost:not(.wallet-selector),
+[data-theme="light"] .back-btn:not(.wallet-selector),
+[data-theme="light"] .settings-btn:not(.wallet-selector),
+[data-theme="light"] button.back-btn:not(.wallet-selector),
+[data-theme="light"] .header-left button:not(.wallet-selector) {
+  background: transparent !important;
+  border: none !important;
+  color: #666666 !important;
+  padding: 8px !important;
+  width: 36px !important;
+  height: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+}
+
+[data-theme="light"] .header button:not(.wallet-selector):hover,
+[data-theme="light"] .header .button--ghost:not(.wallet-selector):hover,
+[data-theme="light"] .back-btn:not(.wallet-selector):hover,
+[data-theme="light"] .settings-btn:not(.wallet-selector):hover,
+[data-theme="light"] button.back-btn:not(.wallet-selector):hover,
+[data-theme="light"] .header-left button:not(.wallet-selector):hover {
+  background: #f3f4f6 !important;
+  color: #333333 !important;
+  transform: none !important;
+}
+
+/* Ensure consistent icon size for back arrows */
+[data-theme="light"] .back-btn {
+  font-size: 18px !important;
+  line-height: 1 !important;
+}
+
+/* Make title visible but subtle */
+[data-theme="light"] .header-title {
+  font-size: 16px !important;
+  font-weight: 500 !important;
+  color: #666666 !important;
+  opacity: 1 !important;
+}
+
+/* Make the overall container borderless */
+[data-theme="light"] .wallet-dashboard,
+[data-theme="light"] .settings,
+[data-theme="light"] .address-book,
+[data-theme="light"] .transaction-history {
+  background: #ffffff !important;
+}
+
+/* Remove dividers and borders throughout */
+[data-theme="light"] .divider,
+[data-theme="light"] .separator {
+  display: none !important;
+}
+
+/* Dark Theme - Jony Ive inspired minimal elegance */
+[data-theme="dark"] {
+  /* Premium dark palette with perfect contrast */
+  --color-primary: rgba(255, 255, 255, 0.95);
+  --color-secondary: rgba(255, 255, 255, 0.7);
+  --color-tertiary: rgba(255, 255, 255, 0.4);
+
+  /* Sophisticated backgrounds */
+  --color-background: #141414;
+  --color-surface: #1C1C1C;
+  --color-border: rgba(255, 255, 255, 0.08);
+
+  /* Text hierarchy with optical clarity */
+  --color-text: rgba(255, 255, 255, 0.9);
+  --color-text-secondary: rgba(255, 255, 255, 0.7);
+  --color-text-tertiary: rgba(255, 255, 255, 0.4);
+
+  /* Refined semantic colors */
+  --color-success: #34C759;
+  --color-error: #FF3B30;
+  --color-warning: #FFC800;
+
+  /* Component specific */
+  --color-input-bg: rgba(255, 255, 255, 0.03);
+  --color-button-hover: rgba(255, 255, 255, 0.1);
+  --color-card-bg: rgba(255, 255, 255, 0.02);
+  --color-header-bg: transparent;
+  --color-tab-active: rgba(255, 255, 255, 0.95);
+
+  /* Enhanced interactions */
+  --color-elevated: rgba(255, 255, 255, 0.05);
+  --color-pressed: rgba(255, 255, 255, 0.02);
+}
+
+/* Special styles for dark theme - Borderless header design (same as light) */
+[data-theme="dark"] .header,
+[data-theme="dark"] header {
+  background: transparent !important;
+  border-bottom: none !important;
+  box-shadow: none !important;
+  position: relative !important;
+}
+
+/* Make header blend seamlessly with content */
+[data-theme="dark"] .header {
+  padding: 12px 16px !important;
+  height: 48px !important;
+  min-height: 48px !important;
+}
+
+/* Style ALL back buttons consistently (excluding wallet-selector) */
+[data-theme="dark"] .header button:not(.wallet-selector),
+[data-theme="dark"] .header .button--ghost:not(.wallet-selector),
+[data-theme="dark"] .back-btn:not(.wallet-selector),
+[data-theme="dark"] .settings-btn:not(.wallet-selector),
+[data-theme="dark"] button.back-btn:not(.wallet-selector),
+[data-theme="dark"] .header-left button:not(.wallet-selector) {
+  background: transparent !important;
+  border: none !important;
+  color: #a0a0a0 !important;
+  padding: 8px !important;
+  width: 36px !important;
+  height: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border-radius: 8px !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+}
+
+[data-theme="dark"] .header button:not(.wallet-selector):hover,
+[data-theme="dark"] .header .button--ghost:not(.wallet-selector):hover,
+[data-theme="dark"] .back-btn:not(.wallet-selector):hover,
+[data-theme="dark"] .settings-btn:not(.wallet-selector):hover,
+[data-theme="dark"] button.back-btn:not(.wallet-selector):hover,
+[data-theme="dark"] .header-left button:not(.wallet-selector):hover {
+  background: #1a1a1a !important;
+  color: #ffffff !important;
+  transform: none !important;
+}
+
+/* Ensure consistent icon size for back arrows */
+[data-theme="dark"] .back-btn {
+  font-size: 18px !important;
+  line-height: 1 !important;
+}
+
+/* Make title visible but subtle */
+[data-theme="dark"] .header-title {
+  font-size: 16px !important;
+  font-weight: 500 !important;
+  color: #a0a0a0 !important;
+  opacity: 1 !important;
+}
+
+/* Make the overall container borderless */
+[data-theme="dark"] .wallet-dashboard,
+[data-theme="dark"] .settings,
+[data-theme="dark"] .address-book,
+[data-theme="dark"] .transaction-history {
+  background: #0a0a0a !important;
+}
+
+/* Remove dividers and borders throughout */
+[data-theme="dark"] .divider,
+[data-theme="dark"] .separator {
+  display: none !important;
+}
+

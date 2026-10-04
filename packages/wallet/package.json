@@ -1,0 +1,15 @@
+{
+  "name": "@nockster/wallet",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@capacitor/core": "8.5.2",
+    "@capacitor/preferences": "8.0.1",
+    "@noble/hashes": "2.4.0",
+    "@swps/nockster-js": "1.0.1",
+    "@tauri-apps/api": "2.11.1",
+    "bs58": "6.0.0",
+    "iris-v1": "npm:@nockbox/iris-sdk@0.2.0",
+    "qrcode": "1.5.4"
+  }
+}

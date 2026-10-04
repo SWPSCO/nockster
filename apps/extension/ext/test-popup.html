@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Nockster Popup</title>
+    <style>
+      html, body {
+        width: 357px;
+        height: 600px;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #f0f0f0;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+        background: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      }
+      .loading {
+        text-align: center;
+      }
+      .error {
+        color: red;
+        padding: 20px;
+      }
+    </style>
+</head>
+<body>
+    <div id="app">
+      <div class="loading">
+        <h2>Testing Extension Load...</h2>
+        <p>If you see this, HTML is loading correctly.</p>
+        <p id="status">Loading JavaScript...</p>
+      </div>
+    </div>
+    <script>
+      document.getElementById('status').textContent = 'JavaScript is working!';
+
+      // Try to load the actual popup script
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = './dist/popup.js';
+      script.onload = () => {
+        document.getElementById('status').textContent = 'popup.js loaded successfully!';
+      };
+      script.onerror = (e) => {
+        document.getElementById('status').textContent = 'Error loading popup.js: ' + e;
+      };
+      document.head.appendChild(script);
+    </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{{!
+  Determines a stable enum variant name for composed `oneOf` schemas.
+  Inline arrays default to the bare word "Array", which produces duplicate variants.
+  To keep things unique (and descriptive), we append the item type for arrays.
+}}
+{{#isArray}}ArrayOf{{#items}}{{#complexType}}{{complexType}}{{/complexType}}{{^complexType}}{{#classname}}{{classname}}{{/classname}}{{^classname}}{{#dataType}}{{dataType}}{{/dataType}}{{^dataType}}Value{{/dataType}}{{/classname}}{{/complexType}}{{/items}}{{^items}}Value{{/items}}{{/isArray}}{{^isArray}}{{{name}}}{{/isArray}}

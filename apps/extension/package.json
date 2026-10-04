@@ -1,0 +1,13 @@
+{
+  "name": "@nockster/extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node ../../scripts/generate-manifest.cjs development && vite --mode development",
+    "build:web": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@nockster/wallet": "*"
+  }
+}

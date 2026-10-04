@@ -1,0 +1,127 @@
+name: Signed iOS app
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      build_number:
+        required: true
+        type: string
+      testflight:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# The signing keychain search list belongs to the runner's user account.
+concurrency:
+  group: nockster-ios-signing
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    env:
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: credential.helper
+      GIT_CONFIG_VALUE_0: ''
+      GIT_TERMINAL_PROMPT: '0'
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      NOCKSTER_VERSION: ${{ inputs.version }}
+      NOCKSTER_BUILD_NUMBER: ${{ inputs.build_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set this run's build directory
+        run: echo "IOS_BUILD_ROOT=$RUNNER_TEMP/nockster-ios-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - name: Check Apple build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          XCODE_VERSION=$(xcodebuild -version | awk '/^Xcode / {print $2}')
+          if [ "${XCODE_VERSION%%.*}" -lt 26 ]; then
+            echo "::error::Xcode 26 or newer is required; runner has $XCODE_VERSION."
+            exit 1
+          fi
+          SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+          test "${SDK_VERSION%%.*}" -ge 26
+      - uses: ./.github/actions/setup-js
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: wallet-engine
+          path: packages/wallet/src/pkg
+      - name: Bundle wallet engine for iOS
+        run: |
+          npm run build:mobile:web
+          npm exec --workspace @nockster/mobile -- cap sync ios
+          node scripts/configure-mobile.mjs
+      - name: Build simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$IOS_BUILD_ROOT" release/ios
+          xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$IOS_BUILD_ROOT/simulator" \
+            -resultBundlePath "$IOS_BUILD_ROOT/simulator.xcresult" \
+            MARKETING_VERSION="$NOCKSTER_VERSION" CURRENT_PROJECT_VERSION="$NOCKSTER_BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO build
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$IOS_BUILD_ROOT/simulator/Build/Products/Debug-iphonesimulator/App.app" \
+            "release/ios/nockster-ios-simulator-$NOCKSTER_VERSION-$NOCKSTER_BUILD_NUMBER.zip"
+      - name: Install distribution signing identity
+        env:
+          IOS_DISTRIBUTION_P12_B64: ${{ secrets.IOS_DISTRIBUTION_P12_B64 }}
+          IOS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_P12_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_B64 }}
+        run: python3 scripts/ci/ios-signing.py install
+      - name: Archive, sign, and export IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -project apps/mobile/ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath "$IOS_BUILD_ROOT/device" \
+            -archivePath "$IOS_BUILD_ROOT/Nockster.xcarchive" \
+            -resultBundlePath "$IOS_BUILD_ROOT/archive.xcresult" \
+            MARKETING_VERSION="$NOCKSTER_VERSION" CURRENT_PROJECT_VERSION="$NOCKSTER_BUILD_NUMBER" \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$IOS_TEAM_ID" \
+            CODE_SIGN_IDENTITY="$IOS_SIGNING_SHA1" PROVISIONING_PROFILE_SPECIFIER="$IOS_PROFILE_UUID" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $IOS_BUILD_ROOT/signing.keychain-db" archive
+          xcodebuild -exportArchive -archivePath "$IOS_BUILD_ROOT/Nockster.xcarchive" \
+            -exportPath "$IOS_BUILD_ROOT/export" -exportOptionsPlist "$IOS_BUILD_ROOT/ExportOptions.plist"
+          codesign --verify --deep --strict "$IOS_BUILD_ROOT/Nockster.xcarchive/Products/Applications/App.app"
+          cp "$IOS_BUILD_ROOT/export/App.ipa" "release/ios/nockster-ios-$NOCKSTER_VERSION-$NOCKSTER_BUILD_NUMBER.ipa"
+          ditto -c -k --keepParent "$IOS_BUILD_ROOT/Nockster.xcarchive/dSYMs" \
+            "release/ios/nockster-ios-symbols-$NOCKSTER_VERSION-$NOCKSTER_BUILD_NUMBER.zip"
+          (cd release/ios && shasum -a 256 ./*.ipa ./*.zip > ios-SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-ios
+          path: release/ios/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - name: Upload to App Store Connect
+        if: inputs.testflight
+        env:
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_KEY_PATH: ${{ secrets.AC_API_KEY_PATH }}
+        run: python3 scripts/ci/ios-signing.py upload
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-build-results
+          path: ${{ env.IOS_BUILD_ROOT }}/*.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove signing identity, profile, and build products
+        if: always()
+        run: python3 scripts/ci/ios-signing.py cleanup

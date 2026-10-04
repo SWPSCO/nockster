@@ -1,0 +1,295 @@
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  min-width: 800px;
+  min-height: 640px;
+}
+body {
+  overflow: hidden;
+}
+.desktop-shell {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  height: 100%;
+  background: var(--color-background);
+}
+.desktop-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 28px 16px 16px;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.desktop-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 32px;
+  font-size: 25px;
+  letter-spacing: -0.025em;
+}
+.desktop-brand img {
+  width: 28px;
+  height: 28px;
+}
+.desktop-sidebar button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 11px 12px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 14px;
+}
+.desktop-sidebar nav {
+  display: grid;
+  gap: 4px;
+}
+.desktop-sidebar svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.desktop-sidebar button:not(:disabled):hover,
+.desktop-sidebar button[aria-current='page'],
+.desktop-sidebar button.chosen {
+  background: var(--color-background);
+  color: var(--color-text);
+}
+.desktop-sidebar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.desktop-wallets {
+  margin-top: 36px;
+  overflow-y: auto;
+}
+.wallets-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-left: 12px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.wallets-heading button {
+  width: auto;
+  padding: 4px 12px;
+  font-size: 22px;
+}
+.wallet-monogram {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  background: var(--color-border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+.wallet-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wallet-label small {
+  display: block;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  margin-top: 2px;
+}
+.desktop-sidebar-bottom {
+  margin-top: auto;
+  padding-top: 24px;
+}
+.desktop-sidebar kbd {
+  margin-left: auto;
+  font: inherit;
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+.desktop-network {
+  display: flex;
+  justify-content: space-between;
+  padding: 20px 12px 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--color-border);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.desktop-workspace {
+  min-width: 0;
+  min-height: 0;
+  padding: 24px 40px;
+  display: flex;
+  justify-content: center;
+}
+.desktop-shell .desktop-workspace .nockster-wallet {
+  width: 100%;
+  max-width: 620px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.desktop-workspace.wide .nockster-wallet {
+  max-width: 1080px;
+}
+.desktop-workspace .wallet-dashboard > .header {
+  padding: 0 0 24px;
+}
+.desktop-workspace .wallet-dashboard > .content {
+  padding: 0;
+  overflow-y: auto;
+}
+.desktop-workspace .wallet-dashboard .balance-display {
+  text-align: left;
+  padding: 44px 0 24px;
+}
+.desktop-workspace .wallet-dashboard .balance-amount {
+  font-size: clamp(32px, 4.2vw, 54px);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+.desktop-workspace .wallet-dashboard .balance-usd {
+  margin-top: 12px;
+}
+.desktop-workspace .wallet-dashboard .quick-actions {
+  max-width: 320px;
+  margin-bottom: 36px;
+}
+.desktop-workspace .wallet-dashboard .transaction-list {
+  flex: 1;
+  min-height: 160px;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding-right: 16px;
+}
+.desktop-workspace .wallet-dashboard .transaction-list-inner {
+  margin-right: 0;
+}
+.desktop-workspace .wallet-dashboard .transaction-item {
+  padding: 20px 12px 20px 4px;
+}
+.desktop-workspace .wallet-dashboard .empty-state {
+  padding: 44px 0;
+  text-align: left;
+}
+.desktop-workspace .wallet-dashboard .pending-indicator {
+  justify-content: flex-start;
+}
+.desktop-shell .desktop-workspace .wallet-dashboard .menu-btn {
+  display: none !important;
+}
+.desktop-workspace .button-footer {
+  padding: 20px 16px;
+}
+.desktop-workspace .route-content > .fixed-screen {
+  min-height: 0;
+}
+.desktop-workspace .welcome-screen,
+.desktop-workspace .lock-screen {
+  max-width: 440px;
+  margin: auto;
+}
+.desktop-workspace .welcome-screen .button-footer {
+  bottom: 50px;
+}
+.desktop-workspace .welcome-content {
+  padding-bottom: 160px;
+}
+.desktop-workspace .welcome-center {
+  margin-top: 0;
+}
+.desktop-error {
+  position: fixed;
+  bottom: 24px;
+  left: 248px;
+  right: 24px;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 10px;
+}
+.desktop-error button {
+  background: transparent;
+  border: 0;
+  color: var(--color-text);
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--color-text);
+  outline-offset: 3px;
+}
+::selection {
+  color: var(--color-background);
+  background: var(--color-text);
+}
+@media (max-width: 960px) {
+  .desktop-shell {
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  .desktop-workspace {
+    padding: 24px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.desktop-shell .desktop-workspace .wallet-dashboard > .header {
+  padding: 12px 0 24px !important;
+  height: auto !important;
+  min-height: 72px !important;
+}
+.desktop-shell .wallet-dashboard .transaction-list {
+  background: transparent;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+}
+.desktop-shell .wallet-dashboard .transaction-list::before {
+  display: none;
+}
+.desktop-activity-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 8px 0 16px;
+}
+.desktop-activity-heading h2 {
+  font-size: 18px;
+  font-weight: 500;
+}
+.desktop-activity-heading button {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  padding: 8px 0 8px 16px;
+}
+.desktop-shell .seed-phrase-display .content {
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 16px;
+}
+.desktop-shell .seed-phrase-display .button-footer {
+  position: static;
+  flex-shrink: 0;
+  padding: 16px;
+}
+.desktop-shell .seed-grid.large-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}

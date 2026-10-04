@@ -1,0 +1,181 @@
+name: Build and release Nockster
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to build (ignores changed-path filtering)
+        type: choice
+        options: [all, ios, android, extension, desktop]
+        default: all
+      version:
+        description: Version override, e.g. 1.2.3 (empty uses release-version.json)
+        type: string
+      publish:
+        description: Create GitHub Release and upload selected mobile apps to stores (master only)
+        type: boolean
+        default: false
+      testflight:
+        description: Upload iOS to App Store Connect / TestFlight (master only)
+        type: boolean
+        default: false
+      google_play:
+        description: Release Android to Google Play Internal testing (master only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Release runs finish even when another commit arrives.
+concurrency:
+  group: nockster-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      ios: ${{ steps.plan.outputs.ios }}
+      android: ${{ steps.plan.outputs.android }}
+      extension: ${{ steps.plan.outputs.extension }}
+      desktop: ${{ steps.plan.outputs.desktop }}
+      any: ${{ steps.plan.outputs.any }}
+      version: ${{ steps.plan.outputs.version }}
+      build_number: ${{ steps.plan.outputs.build_number }}
+      ios_build_number: ${{ steps.plan.outputs.ios_build_number }}
+      tag: ${{ steps.plan.outputs.tag }}
+      publish: ${{ steps.plan.outputs.publish }}
+      testflight: ${{ steps.plan.outputs.testflight }}
+      google_play: ${{ steps.plan.outputs.google_play }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - id: plan
+        run: node scripts/ci/plan.mjs
+
+  engine:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - name: Audit JavaScript dependencies
+        run: |
+          npm run audit:deps
+          npm audit signatures
+      - name: Install pinned Rust and WASM tools
+        run: |
+          rustup toolchain install nightly-2025-02-14 --profile minimal --target wasm32-unknown-unknown
+          cargo +stable install wasm-pack --version 0.15.0 --locked
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/wallet-engine/target
+          key: rust-${{ runner.os }}-nightly-2025-02-14-${{ hashFiles('packages/wallet-engine/**/Cargo.lock', 'packages/wallet-engine/**/Cargo.toml', 'packages/wallet-engine/**/*.rs') }}
+          restore-keys: rust-${{ runner.os }}-nightly-2025-02-14-
+      - name: Test Rust and build the WASM engine
+        run: |
+          npm run test:core
+          npm run build:wasm
+      - name: Check shared wallet code
+        run: |
+          npm run typecheck
+          npm test
+          python3 -m unittest discover -s tests/ci -p '*_test.py'
+      - name: Test desktop wallet flows
+        if: needs.plan.outputs.desktop == 'true'
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:desktop
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wallet-engine
+          path: packages/wallet/src/pkg/
+          if-no-files-found: error
+          retention-days: 7
+
+  ios:
+    needs: [plan, engine]
+    if: needs.plan.outputs.ios == 'true'
+    uses: ./.github/workflows/ios.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      build_number: ${{ needs.plan.outputs.ios_build_number }}
+      testflight: ${{ needs.plan.outputs.testflight == 'true' }}
+    secrets: inherit
+
+  android:
+    needs: [plan, engine]
+    if: needs.plan.outputs.android == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/android.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+      build_number: ${{ needs.plan.outputs.build_number }}
+      google_play: ${{ needs.plan.outputs.google_play == 'true' }}
+    secrets: inherit
+
+  extension:
+    needs: [plan, engine]
+    if: needs.plan.outputs.extension == 'true'
+    uses: ./.github/workflows/extension.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+    secrets: inherit
+
+  desktop:
+    needs: [plan, engine]
+    if: needs.plan.outputs.desktop == 'true'
+    uses: ./.github/workflows/desktop.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
+    secrets: inherit
+
+  release:
+    needs: [plan, engine, ios, android, extension, desktop]
+    if: >-
+      always() && !cancelled() && needs.plan.outputs.publish == 'true' &&
+      needs.engine.result == 'success' &&
+      (needs.ios.result == 'success' || needs.ios.result == 'skipped') &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped') &&
+      (needs.extension.result == 'success' || needs.extension.result == 'skipped') &&
+      (needs.desktop.result == 'success' || needs.desktop.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: packages
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd packages
+          sha256sum ./* > SHA256SUMS
+          gh release create "$RELEASE_TAG" ./* --target "$GITHUB_SHA" \
+            --title "Nockster $RELEASE_VERSION ($RELEASE_TAG)" --generate-notes

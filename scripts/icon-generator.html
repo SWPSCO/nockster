@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Icon Generator</title>
+</head>
+<body>
+    <h1>Generate PNG Icons for Nockster</h1>
+    <p>Right-click each canvas and save as PNG with the specified filename.</p>
+
+    <div>
+        <h3>icon16.png (16x16)</h3>
+        <canvas id="icon16" width="16" height="16" style="border: 1px solid #ccc; image-rendering: pixelated; width: 64px; height: 64px;"></canvas>
+    </div>
+
+    <div>
+        <h3>icon48.png (48x48)</h3>
+        <canvas id="icon48" width="48" height="48" style="border: 1px solid #ccc;"></canvas>
+    </div>
+
+    <div>
+        <h3>icon128.png (128x128)</h3>
+        <canvas id="icon128" width="128" height="128" style="border: 1px solid #ccc;"></canvas>
+    </div>
+
+    <script>
+        function drawIcon(canvasId, size) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+
+            // Clear canvas with transparent background
+            ctx.clearRect(0, 0, size, size);
+
+            // Draw white "F" logo
+            ctx.fillStyle = 'white';
+            ctx.font = `bold ${size * 0.6}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('F', size / 2, size / 2);
+        }
+
+        // Generate all icons
+        drawIcon('icon16', 16);
+        drawIcon('icon48', 48);
+        drawIcon('icon128', 128);
+    </script>
+</body>
+</html>

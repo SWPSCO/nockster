@@ -1,0 +1,5744 @@
+
+
+
+========================================
+FILE: ./svelte.config.js
+========================================
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
+
+/** @type {import("@sveltejs/vite-plugin-svelte").SvelteConfig} */
+export default {
+  // Consult https://svelte.dev/docs#compile-time-svelte-preprocess
+  // for more information about preprocessors
+  preprocess: vitePreprocess(),
+}
+
+
+========================================
+FILE: ./tsconfig.node.json
+========================================
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "types": [],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["vite.config.ts"]
+}
+
+
+========================================
+FILE: ./tsconfig.app.json
+========================================
+{
+  "extends": "@tsconfig/svelte/tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "types": ["svelte", "vite/client"],
+    "noEmit": true,
+    /**
+     * Typecheck JS in `.svelte` and `.js` files by default.
+     * Disable checkJs if you'd like to use dynamic types in JS.
+     * Note that setting allowJs false does not prevent the use
+     * of JS in `.svelte` files.
+     */
+    "allowJs": true,
+    "checkJs": true,
+    "moduleDetection": "force"
+  },
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
+}
+
+
+========================================
+FILE: ./package.json
+========================================
+{
+  "name": "fletch-svelte",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.2.0",
+    "@tsconfig/svelte": "^5.0.5",
+    "svelte": "^5.39.4",
+    "svelte-check": "^4.3.1",
+    "typescript": "~5.8.3",
+    "vite": "^7.1.7"
+  }
+}
+
+
+========================================
+FILE: ./tsconfig.json
+========================================
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+
+
+========================================
+FILE: ./vite.config.ts
+========================================
+import { defineConfig } from 'vite'
+import { svelte } from '@sveltejs/vite-plugin-svelte'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [svelte()],
+})
+
+
+========================================
+FILE: ./.vscode/extensions.json
+========================================
+{
+  "recommendations": ["svelte.svelte-vscode"]
+}
+
+
+========================================
+FILE: ./src/AppShowcase.svelte
+========================================
+<script lang="ts">
+  import Showcase from './Showcase.svelte';
+</script>
+
+<Showcase />
+
+========================================
+FILE: ./src/main.ts
+========================================
+import './lib/styles/global.css'
+import { mount } from 'svelte'
+// Toggle between these two imports to switch views:
+// import App from './App.svelte'  // Single screen view
+import App from './Showcase.svelte'  // Showcase view with all screens
+
+const app = mount(App, {
+  target: document.getElementById('app')!,
+})
+
+export default app
+
+========================================
+FILE: ./src/App.svelte
+========================================
+<script lang="ts">
+  import { router } from './lib/stores/router';
+  import type { Route } from './lib/stores/router';
+  import { walletStore, activeWallet } from './lib/stores/wallet';
+  import { transactionStore } from './lib/stores/transactions';
+  
+  import WelcomeScreen from './lib/components/organisms/WelcomeScreen.svelte';
+  import SeedPhraseDisplay from './lib/components/organisms/SeedPhraseDisplay.svelte';
+  import WalletDashboard from './lib/components/organisms/WalletDashboard.svelte';
+  import SendTransaction from './lib/components/organisms/SendTransaction.svelte';
+  import TransactionHistory from './lib/components/organisms/TransactionHistory.svelte';
+  import Settings from './lib/components/organisms/Settings.svelte';
+  
+  let currentRoute: Route = 'welcome';
+  
+  router.subscribe(state => {
+    currentRoute = state.currentRoute;
+  });
+  
+  function handleCreateWallet() {
+    const seedPhrase = generateMockSeedPhrase();
+    walletStore.createWallet({
+      name: 'My Wallet',
+      address: `bc1q${Math.random().toString(36).substr(2, 15)}`,
+      balance: 0.12345678,
+      seedPhrase,
+      network: 'mainnet'
+    });
+    router.navigate('seed-phrase');
+  }
+  
+  function handleImportWallet() {
+    console.log('Import wallet flow');
+    router.navigate('dashboard');
+  }
+  
+  function handleSeedPhraseConfirm() {
+    router.navigate('dashboard');
+  }
+  
+  function handleSendTransaction(data: any) {
+    console.log('Sending transaction:', data);
+    transactionStore.addTransaction({
+      walletId: $activeWallet?.id || '',
+      type: 'send',
+      amount: data.amount,
+      address: data.recipient,
+      date: new Date(),
+      status: 'pending',
+      confirmations: 0,
+      txHash: `${Math.random().toString(36).substr(2, 64)}`,
+      fee: data.fee
+    });
+    router.navigate('dashboard');
+  }
+  
+  function handleLogout() {
+    walletStore.logout();
+    transactionStore.clearTransactions();
+    router.reset();
+  }
+  
+  function handleExportSeed() {
+    if ($activeWallet) {
+      console.log('Exporting seed phrase:', $activeWallet.seedPhrase);
+      alert('Seed phrase: ' + $activeWallet.seedPhrase.join(' '));
+    }
+  }
+  
+  function handleTabChange(tab: any) {
+    if (tab.id === 'wallet') {
+      router.navigate('dashboard');
+    } else if (tab.id === 'send') {
+      router.navigate('send');
+    } else if (tab.id === 'history') {
+      router.navigate('history');
+    } else if (tab.id === 'settings') {
+      router.navigate('settings');
+    }
+  }
+  
+  function generateMockSeedPhrase() {
+    const words = [
+      'abandon', 'ability', 'able', 'about', 'above', 'absent',
+      'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident'
+    ];
+    return Array.from({ length: 12 }, () => 
+      words[Math.floor(Math.random() * words.length)]
+    );
+  }
+</script>
+
+<main class="app">
+  {#if currentRoute === 'welcome'}
+    <WelcomeScreen 
+      onCreateWallet={handleCreateWallet}
+      onImportWallet={handleImportWallet}
+    />
+  {:else if currentRoute === 'seed-phrase'}
+    <SeedPhraseDisplay 
+      seedPhrase={$activeWallet?.seedPhrase || []}
+      onContinue={handleSeedPhraseConfirm}
+    />
+  {:else if currentRoute === 'dashboard'}
+    <WalletDashboard 
+      balance={$activeWallet?.balance || 0}
+      address={$activeWallet?.address || ''}
+      on:navigate={(e) => router.navigate(e.detail)}
+    />
+  {:else if currentRoute === 'send'}
+    <SendTransaction 
+      balance={$activeWallet?.balance || 0}
+      onSend={handleSendTransaction}
+      onCancel={() => router.navigate('dashboard')}
+    />
+  {:else if currentRoute === 'history'}
+    <TransactionHistory 
+      transactions={$activeWallet ? transactionStore.getTransactionsByWallet($activeWallet.id) : []}
+      on:navigate={(e) => router.navigate(e.detail)}
+    />
+  {:else if currentRoute === 'settings'}
+    <Settings 
+      onLogout={handleLogout}
+      onExportSeed={handleExportSeed}
+      on:navigate={(e) => router.navigate(e.detail)}
+    />
+  {/if}
+</main>
+
+<style>
+  .app {
+    width: 100%;
+    height: 100%;
+    background: var(--color-background);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+    display: flex;
+    flex-direction: column;
+  }
+  
+  @media (max-width: 400px) {
+    .app {
+      border-radius: 0;
+      box-shadow: none;
+    }
+  }
+</style>
+
+========================================
+FILE: ./src/TestShowcase.svelte
+========================================
+<script lang="ts">
+  console.log('TestShowcase loaded');
+</script>
+
+<div style="padding: 20px; background: white; min-height: 100vh;">
+  <h1 style="color: black;">Test Showcase - Component Display</h1>
+  <p style="color: #666;">If you can see this, the app is working.</p>
+  
+  <div style="display: flex; gap: 20px; margin-top: 40px; flex-wrap: wrap;">
+    <div style="width: 360px; height: 600px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 8px; padding: 20px;">
+      <h2 style="color: black;">Screen 1</h2>
+      <p>Welcome Screen would go here</p>
+    </div>
+    
+    <div style="width: 360px; height: 600px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 8px; padding: 20px;">
+      <h2 style="color: black;">Screen 2</h2>
+      <p>Dashboard would go here</p>
+    </div>
+  </div>
+</div>
+
+========================================
+FILE: ./src/lib/stores/wallet.ts
+========================================
+import { writable, derived } from 'svelte/store';
+
+export interface Wallet {
+  id: string;
+  name: string;
+  address: string;
+  balance: number;
+  seedPhrase: string[];
+  network: 'mainnet' | 'testnet';
+}
+
+export interface WalletState {
+  wallets: Wallet[];
+  activeWalletId: string | null;
+  isAuthenticated: boolean;
+}
+
+const initialState: WalletState = {
+  wallets: [],
+  activeWalletId: null,
+  isAuthenticated: false
+};
+
+function createWalletStore() {
+  const { subscribe, set, update } = writable<WalletState>(initialState);
+  
+  return {
+    subscribe,
+    
+    createWallet: (wallet: Omit<Wallet, 'id'>) => {
+      update(state => {
+        const newWallet: Wallet = {
+          ...wallet,
+          id: `wallet-${Date.now()}`
+        };
+        return {
+          ...state,
+          wallets: [...state.wallets, newWallet],
+          activeWalletId: newWallet.id,
+          isAuthenticated: true
+        };
+      });
+    },
+    
+    importWallet: (seedPhrase: string[], name: string = 'Imported Wallet') => {
+      update(state => {
+        const newWallet: Wallet = {
+          id: `wallet-${Date.now()}`,
+          name,
+          address: `bc1q${Math.random().toString(36).substr(2, 15)}`,
+          balance: 0,
+          seedPhrase,
+          network: 'mainnet'
+        };
+        return {
+          ...state,
+          wallets: [...state.wallets, newWallet],
+          activeWalletId: newWallet.id,
+          isAuthenticated: true
+        };
+      });
+    },
+    
+    selectWallet: (walletId: string) => {
+      update(state => ({
+        ...state,
+        activeWalletId: walletId
+      }));
+    },
+    
+    updateBalance: (walletId: string, balance: number) => {
+      update(state => ({
+        ...state,
+        wallets: state.wallets.map(w => 
+          w.id === walletId ? { ...w, balance } : w
+        )
+      }));
+    },
+    
+    logout: () => {
+      set(initialState);
+    },
+    
+    authenticate: () => {
+      update(state => ({
+        ...state,
+        isAuthenticated: true
+      }));
+    }
+  };
+}
+
+export const walletStore = createWalletStore();
+
+export const activeWallet = derived(
+  walletStore,
+  $walletStore => $walletStore.wallets.find(w => w.id === $walletStore.activeWalletId)
+);
+
+========================================
+FILE: ./src/lib/stores/router.ts
+========================================
+import { writable } from 'svelte/store';
+
+export type Route = 
+  | 'welcome'
+  | 'seed-phrase'
+  | 'dashboard'
+  | 'send'
+  | 'receive'
+  | 'history'
+  | 'settings';
+
+export interface RouterState {
+  currentRoute: Route;
+  previousRoute: Route | null;
+}
+
+const initialState: RouterState = {
+  currentRoute: 'welcome',
+  previousRoute: null
+};
+
+function createRouter() {
+  const { subscribe, set, update } = writable<RouterState>(initialState);
+  
+  return {
+    subscribe,
+    
+    navigate: (route: Route) => {
+      update(state => ({
+        currentRoute: route,
+        previousRoute: state.currentRoute
+      }));
+    },
+    
+    back: () => {
+      update(state => {
+        if (state.previousRoute) {
+          return {
+            currentRoute: state.previousRoute,
+            previousRoute: null
+          };
+        }
+        return state;
+      });
+    },
+    
+    reset: () => {
+      set(initialState);
+    }
+  };
+}
+
+export const router = createRouter();
+
+========================================
+FILE: ./src/lib/stores/settings.ts
+========================================
+import { writable } from 'svelte/store';
+
+export interface Settings {
+  network: 'mainnet' | 'testnet';
+  currency: 'USD' | 'EUR' | 'GBP';
+  notifications: boolean;
+  biometrics: boolean;
+  autoLockTime: string;
+  theme: 'light' | 'dark';
+  language: 'en' | 'es' | 'fr' | 'de';
+}
+
+const defaultSettings: Settings = {
+  network: 'mainnet',
+  currency: 'USD',
+  notifications: true,
+  biometrics: false,
+  autoLockTime: '5',
+  theme: 'light',
+  language: 'en'
+};
+
+function createSettingsStore() {
+  const stored = localStorage.getItem('fletch-settings');
+  const initial = stored ? JSON.parse(stored) : defaultSettings;
+  
+  const { subscribe, set, update } = writable<Settings>(initial);
+  
+  return {
+    subscribe,
+    
+    updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => {
+      update(settings => {
+        const updated = {
+          ...settings,
+          [key]: value
+        };
+        localStorage.setItem('fletch-settings', JSON.stringify(updated));
+        return updated;
+      });
+    },
+    
+    reset: () => {
+      set(defaultSettings);
+      localStorage.setItem('fletch-settings', JSON.stringify(defaultSettings));
+    }
+  };
+}
+
+export const settingsStore = createSettingsStore();
+
+========================================
+FILE: ./src/lib/stores/transactions.ts
+========================================
+import { writable } from 'svelte/store';
+
+export interface Transaction {
+  id: string;
+  walletId: string;
+  type: 'send' | 'receive';
+  amount: number;
+  address: string;
+  date: Date;
+  status: 'pending' | 'confirmed' | 'failed';
+  confirmations: number;
+  txHash: string;
+  fee?: number;
+  note?: string;
+}
+
+export interface TransactionState {
+  transactions: Transaction[];
+  pendingTransaction: Partial<Transaction> | null;
+}
+
+const initialState: TransactionState = {
+  transactions: [],
+  pendingTransaction: null
+};
+
+function createTransactionStore() {
+  const { subscribe, set, update } = writable<TransactionState>(initialState);
+  
+  return {
+    subscribe,
+    
+    addTransaction: (transaction: Omit<Transaction, 'id'>) => {
+      update(state => {
+        const newTransaction: Transaction = {
+          ...transaction,
+          id: `tx-${Date.now()}`
+        };
+        return {
+          ...state,
+          transactions: [newTransaction, ...state.transactions]
+        };
+      });
+    },
+    
+    updateTransaction: (id: string, updates: Partial<Transaction>) => {
+      update(state => ({
+        ...state,
+        transactions: state.transactions.map(tx =>
+          tx.id === id ? { ...tx, ...updates } : tx
+        )
+      }));
+    },
+    
+    setPendingTransaction: (transaction: Partial<Transaction> | null) => {
+      update(state => ({
+        ...state,
+        pendingTransaction: transaction
+      }));
+    },
+    
+    getTransactionsByWallet: (walletId: string) => {
+      let transactions: Transaction[] = [];
+      subscribe(state => {
+        transactions = state.transactions.filter(tx => tx.walletId === walletId);
+      })();
+      return transactions;
+    },
+    
+    clearTransactions: () => {
+      set(initialState);
+    }
+  };
+}
+
+export const transactionStore = createTransactionStore();
+
+========================================
+FILE: ./src/lib/styles/variables.css
+========================================
+:root {
+  /* Colors - Matches Original HTML Mockup */
+  --color-primary: #000000;
+  --color-secondary: #666666;
+  --color-tertiary: #999999;
+  --color-background: #ffffff;
+  --color-surface: #f3f4f6;
+  --color-border: #e5e7eb;
+  --color-text: #1a1a1a;
+  --color-text-secondary: #666666;
+  --color-text-tertiary: #999999;
+  --color-success: #16a34a;
+  --color-error: #dc2626;
+  --color-warning: #fde047;
+  
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+  
+  /* Border Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+  
+  /* Font Sizes */
+  --font-xs: 12px;
+  --font-sm: 14px;
+  --font-base: 16px;
+  --font-lg: 18px;
+  --font-xl: 20px;
+  --font-2xl: 24px;
+  --font-3xl: 32px;
+  
+  /* Font Weights */
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+  --font-black: 800;
+  
+  /* Shadows - Matches Original HTML Mockup */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 20px rgba(0, 0, 0, 0.1);
+  --shadow-xl: 0 10px 40px rgba(0, 0, 0, 0.1);
+  
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 350ms ease;
+  
+  /* Z-index */
+  --z-base: 1;
+  --z-dropdown: 10;
+  --z-sticky: 20;
+  --z-modal: 30;
+  --z-toast: 40;
+}
+
+========================================
+FILE: ./src/lib/styles/global.css
+========================================
+@import './variables.css';
+@import './themes.css';
+@import './designs.css';
+@import url('https://fonts.googleapis.com/css2?family=Nokora:wght@700;800;900&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: var(--color-background);
+  color: #1a1a1a;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  width: 100%;
+  background: var(--color-background);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 700;
+  line-height: 1.2;
+  color: #000;
+}
+
+.fletch-brand {
+  font-family: 'Nokora', sans-serif;
+  font-weight: 800;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.fade-in {
+  animation: fadeIn var(--transition-normal);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.slide-up {
+  animation: slideUp var(--transition-normal);
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+========================================
+FILE: ./src/lib/styles/themes.css
+========================================
+/* Light Theme (Default) - Matches Original HTML Mockup */
+[data-theme="light"] {
+  --color-primary: #000000;
+  --color-secondary: #666666;
+  --color-tertiary: #999999;
+  --color-background: #ffffff;
+  --color-surface: #f3f4f6;
+  --color-border: #e5e7eb;
+  --color-text: #1a1a1a;
+  --color-text-secondary: #666666;
+  --color-text-tertiary: #999999;
+  --color-success: #16a34a;
+  --color-error: #dc2626;
+  --color-warning: #fde047;
+  
+  /* Component specific */
+  --color-input-bg: #f3f4f6;
+  --color-button-hover: #333333;
+  --color-card-bg: #ffffff;
+  --color-header-bg: #ffffff;
+  --color-tab-active: #000000;
+}
+
+/* Dark Theme */
+[data-theme="dark"] {
+  --color-primary: #ffffff;
+  --color-secondary: #a0a0a0;
+  --color-tertiary: #707070;
+  --color-background: #0a0a0a;
+  --color-surface: #1a1a1a;
+  --color-border: #2a2a2a;
+  --color-text: #f0f0f0;
+  --color-text-secondary: #a0a0a0;
+  --color-text-tertiary: #707070;
+  --color-success: #10b981;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+  
+  /* Component specific */
+  --color-input-bg: #1a1a1a;
+  --color-button-hover: #cccccc;
+  --color-card-bg: #141414;
+  --color-header-bg: #0a0a0a;
+  --color-tab-active: #ffffff;
+}
+
+/* Dark Blue Theme */
+[data-theme="dark-blue"] {
+  --color-primary: #60a5fa;
+  --color-secondary: #93c5fd;
+  --color-tertiary: #6b7280;
+  --color-background: #0f172a;
+  --color-surface: #1e293b;
+  --color-border: #334155;
+  --color-text: #f1f5f9;
+  --color-text-secondary: #cbd5e1;
+  --color-text-tertiary: #94a3b8;
+  --color-success: #34d399;
+  --color-error: #f87171;
+  --color-warning: #fbbf24;
+  
+  /* Component specific */
+  --color-input-bg: #1e293b;
+  --color-button-hover: #93c5fd;
+  --color-card-bg: #1e293b;
+  --color-header-bg: #0f172a;
+  --color-tab-active: #60a5fa;
+}
+
+/* Purple Theme */
+[data-theme="purple"] {
+  --color-primary: #a78bfa;
+  --color-secondary: #c4b5fd;
+  --color-tertiary: #9ca3af;
+  --color-background: #1a0f2e;
+  --color-surface: #2e1f4a;
+  --color-border: #4c3575;
+  --color-text: #f3f0ff;
+  --color-text-secondary: #ddd6fe;
+  --color-text-tertiary: #a78bfa;
+  --color-success: #34d399;
+  --color-error: #f87171;
+  --color-warning: #fbbf24;
+  
+  /* Component specific */
+  --color-input-bg: #2e1f4a;
+  --color-button-hover: #c4b5fd;
+  --color-card-bg: #2e1f4a;
+  --color-header-bg: #1a0f2e;
+  --color-tab-active: #a78bfa;
+}
+
+========================================
+FILE: ./src/lib/styles/designs.css
+========================================
+/* Default Design */
+[data-design="default"] {
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 20px rgba(0, 0, 0, 0.1);
+  --shadow-xl: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+/* Minimal Design */
+[data-design="minimal"] {
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
+}
+
+/* Rounded Design */
+[data-design="rounded"] {
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 8px 16px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 16px 32px rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 20px 48px rgba(0, 0, 0, 0.16);
+}
+
+/* Sharp Design */
+[data-design="sharp"] {
+  --radius-sm: 0px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --shadow-sm: 2px 2px 0px rgba(0, 0, 0, 0.1);
+  --shadow-md: 4px 4px 0px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 6px 6px 0px rgba(0, 0, 0, 0.2);
+  --shadow-xl: 8px 8px 0px rgba(0, 0, 0, 0.25);
+}
+
+========================================
+FILE: ./src/lib/components/molecules/FeeSelector.svelte
+========================================
+<script lang="ts">
+  import Card from '../atoms/Card.svelte';
+  
+  export type FeeLevel = 'slow' | 'medium' | 'fast';
+  
+  export let selected: FeeLevel = 'medium';
+  export let customFee: number | null = null;
+  export let onSelect: (level: FeeLevel) => void = () => {};
+  
+  interface FeeOption {
+    level: FeeLevel;
+    label: string;
+    time: string;
+    rate: number;
+    description: string;
+  }
+  
+  const feeOptions: FeeOption[] = [
+    {
+      level: 'slow',
+      label: 'Slow',
+      time: '~60 min',
+      rate: 5,
+      description: 'Economy'
+    },
+    {
+      level: 'medium',
+      label: 'Medium',
+      time: '~30 min',
+      rate: 15,
+      description: 'Standard'
+    },
+    {
+      level: 'fast',
+      label: 'Fast',
+      time: '~10 min',
+      rate: 30,
+      description: 'Priority'
+    }
+  ];
+  
+  function handleSelect(level: FeeLevel) {
+    selected = level;
+    onSelect(level);
+  }
+</script>
+
+<div class="fee-selector">
+  <h3 class="fee-title">Transaction Fee</h3>
+  
+  <div class="fee-options">
+    {#each feeOptions as option}
+      <Card 
+        clickable={true}
+        selected={selected === option.level}
+        padding="small"
+        shadow="small"
+        on:click={() => handleSelect(option.level)}
+      >
+        <div class="fee-option">
+          <div class="fee-header">
+            <span class="fee-label">{option.label}</span>
+            <span class="fee-time">{option.time}</span>
+          </div>
+          <div class="fee-rate">
+            <span class="rate-value">{option.rate}</span>
+            <span class="rate-unit">sat/vB</span>
+          </div>
+          <div class="fee-description">{option.description}</div>
+        </div>
+      </Card>
+    {/each}
+  </div>
+  
+  {#if customFee !== null}
+    <div class="custom-fee">
+      <span class="custom-fee-label">Custom Fee:</span>
+      <span class="custom-fee-value">{customFee} sat/vB</span>
+    </div>
+  {/if}
+</div>
+
+<style>
+  .fee-selector {
+    width: 100%;
+  }
+  
+  .fee-title {
+    font-size: var(--font-base);
+    font-weight: var(--font-semibold);
+    color: var(--color-text);
+    margin: 0 0 var(--spacing-md) 0;
+  }
+  
+  .fee-options {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-sm);
+  }
+  
+  .fee-option {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    text-align: center;
+  }
+  
+  .fee-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  
+  .fee-label {
+    font-size: var(--font-sm);
+    font-weight: var(--font-semibold);
+    color: var(--color-text);
+  }
+  
+  .fee-time {
+    font-size: var(--font-xs);
+    color: var(--color-text-secondary);
+  }
+  
+  .fee-rate {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 2px;
+    margin: var(--spacing-xs) 0;
+  }
+  
+  .rate-value {
+    font-size: var(--font-lg);
+    font-weight: var(--font-bold);
+    color: var(--color-primary);
+  }
+  
+  .rate-unit {
+    font-size: var(--font-xs);
+    color: var(--color-text-tertiary);
+  }
+  
+  .fee-description {
+    font-size: var(--font-xs);
+    color: var(--color-text-tertiary);
+  }
+  
+  .custom-fee {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+    padding: var(--spacing-sm);
+    background: var(--color-surface);
+    border-radius: var(--radius-md);
+  }
+  
+  .custom-fee-label {
+    font-size: var(--font-sm);
+    color: var(--color-text-secondary);
+  }
+  
+  .custom-fee-value {
+    font-size: var(--font-sm);
+    font-weight: var(--font-semibold);
+    color: var(--color-text);
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/molecules/Header.svelte
+========================================
+<script lang="ts">
+  import Logo from '../atoms/Logo.svelte';
+  import Icon from '../atoms/Icon.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let title: string = '';
+  export let showBack: boolean = false;
+  export let showLogo: boolean = true;
+  export let showActions: boolean = false;
+  
+  function handleBack() {
+    window.history.back();
+  }
+</script>
+
+<header class="header">
+  <div class="header-left">
+    {#if showBack}
+      <Button variant="ghost" size="small" on:click={handleBack}>
+        <Icon name="chevronLeft" />
+      </Button>
+    {/if}
+    {#if showLogo}
+      <Logo size="small" showText={true} />
+    {/if}
+  </div>
+  
+  {#if title}
+    <h1 class="header-title">{title}</h1>
+  {/if}
+  
+  <div class="header-right">
+    {#if showActions}
+      <slot name="actions" />
+    {/if}
+  </div>
+</header>
+
+<style>
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+  }
+  
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+    text-align: center;
+    flex: 0 0 auto;
+  }
+  
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    justify-content: flex-end;
+    flex: 1;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/molecules/TransactionItem.svelte
+========================================
+<script lang="ts">
+  import Icon from '../atoms/Icon.svelte';
+  
+  export type TransactionType = 'send' | 'receive';
+  export type TransactionStatus = 'pending' | 'confirmed' | 'failed';
+  
+  export let type: TransactionType;
+  export let amount: number;
+  export let address: string;
+  export let date: Date;
+  export let status: TransactionStatus = 'confirmed';
+  export let confirmations: number = 0;
+  
+  $: formattedAmount = amount.toFixed(8);
+  $: formattedDate = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+  $: shortAddress = `${address.slice(0, 6)}...${address.slice(-4)}`;
+  $: statusColor = {
+    pending: 'var(--color-warning)',
+    confirmed: 'var(--color-success)',
+    failed: 'var(--color-error)'
+  }[status];
+</script>
+
+<div class="transaction-item" on:click>
+  <div class="transaction-icon">
+    <Icon name={type} size="medium" />
+  </div>
+  
+  <div class="transaction-details">
+    <div class="transaction-header">
+      <span class="transaction-type">
+        {type === 'send' ? 'Sent' : 'Received'}
+      </span>
+      <span class="transaction-amount" class:sent={type === 'send'}>
+        {type === 'send' ? '-' : '+'}{formattedAmount} BTC
+      </span>
+    </div>
+    
+    <div class="transaction-meta">
+      <span class="transaction-address">{shortAddress}</span>
+      <span class="transaction-date">{formattedDate}</span>
+    </div>
+    
+    {#if status !== 'confirmed'}
+      <div class="transaction-status" style="color: {statusColor}">
+        {#if status === 'pending'}
+          <Icon name="refresh" size="small" />
+          <span>Pending ({confirmations}/6)</span>
+        {:else if status === 'failed'}
+          <Icon name="error" size="small" />
+          <span>Failed</span>
+        {/if}
+      </div>
+    {/if}
+  </div>
+  
+  <div class="transaction-arrow">
+    <Icon name="chevronRight" size="small" color="var(--color-text-tertiary)" />
+  </div>
+</div>
+
+<style>
+  .transaction-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: var(--color-background);
+    border-bottom: 1px solid var(--color-border);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+  }
+  
+  .transaction-item:hover {
+    background: var(--color-surface);
+  }
+  
+  .transaction-item:active {
+    background: #f0f0f0;
+  }
+  
+  .transaction-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-full);
+    background: var(--color-surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  
+  .transaction-details {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .transaction-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-xs);
+  }
+  
+  .transaction-type {
+    font-size: var(--font-base);
+    font-weight: var(--font-medium);
+    color: var(--color-text);
+  }
+  
+  .transaction-amount {
+    font-size: var(--font-base);
+    font-weight: var(--font-semibold);
+    color: var(--color-success);
+  }
+  
+  .transaction-amount.sent {
+    color: var(--color-text);
+  }
+  
+  .transaction-meta {
+    display: flex;
+    gap: var(--spacing-sm);
+    font-size: var(--font-sm);
+    color: var(--color-text-secondary);
+  }
+  
+  .transaction-address {
+    font-family: 'SF Mono', Monaco, monospace;
+  }
+  
+  .transaction-status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-sm);
+  }
+  
+  .transaction-arrow {
+    flex-shrink: 0;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/molecules/WalletCard.svelte
+========================================
+<script lang="ts">
+  import Card from '../atoms/Card.svelte';
+  import Icon from '../atoms/Icon.svelte';
+  
+  export let name: string;
+  export let balance: number;
+  export let address: string;
+  export let selected: boolean = false;
+  export let networkType: 'mainnet' | 'testnet' = 'mainnet';
+  
+  $: formattedBalance = balance.toFixed(8);
+  $: shortAddress = `${address.slice(0, 8)}...${address.slice(-8)}`;
+  $: networkColor = networkType === 'mainnet' ? 'var(--color-success)' : 'var(--color-warning)';
+</script>
+
+<Card 
+  clickable={true} 
+  {selected}
+  padding="medium"
+  on:click
+>
+  <div class="wallet-card">
+    <div class="wallet-header">
+      <div class="wallet-info">
+        <h3 class="wallet-name">{name}</h3>
+        <span class="wallet-network" style="color: {networkColor}">
+          {networkType === 'mainnet' ? 'Mainnet' : 'Testnet'}
+        </span>
+      </div>
+      {#if selected}
+        <div class="wallet-selected">
+          <Icon name="check" size="small" color="var(--color-success)" />
+        </div>
+      {/if}
+    </div>
+    
+    <div class="wallet-balance">
+      <span class="balance-amount">{formattedBalance}</span>
+      <span class="balance-unit">BTC</span>
+    </div>
+    
+    <div class="wallet-address">
+      <Icon name="wallet" size="small" color="var(--color-text-tertiary)" />
+      <span class="address-text">{shortAddress}</span>
+    </div>
+  </div>
+</Card>
+
+<style>
+  .wallet-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+  }
+  
+  .wallet-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  
+  .wallet-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+  }
+  
+  .wallet-name {
+    font-size: var(--font-lg);
+    font-weight: var(--font-semibold);
+    color: var(--color-text);
+    margin: 0;
+  }
+  
+  .wallet-network {
+    font-size: var(--font-xs);
+    font-weight: var(--font-medium);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  
+  .wallet-selected {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    background: rgba(16, 185, 129, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .wallet-balance {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-xs);
+  }
+  
+  .balance-amount {
+    font-size: var(--font-3xl);
+    font-weight: var(--font-bold);
+    color: var(--color-text);
+    line-height: 1;
+  }
+  
+  .balance-unit {
+    font-size: var(--font-lg);
+    font-weight: var(--font-medium);
+    color: var(--color-text-secondary);
+  }
+  
+  .wallet-address {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    background: var(--color-surface);
+    border-radius: var(--radius-md);
+  }
+  
+  .address-text {
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: var(--font-sm);
+    color: var(--color-text-secondary);
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/molecules/TabBar.svelte
+========================================
+<script lang="ts">
+  import Icon from '../atoms/Icon.svelte';
+  
+  export type TabItem = {
+    id: string;
+    label: string;
+    icon: string;
+    path: string;
+  };
+  
+  export let tabs: TabItem[] = [
+    { id: 'wallet', label: 'Wallet', icon: 'wallet', path: '/dashboard' },
+    { id: 'send', label: 'Send', icon: 'send', path: '/send' },
+    { id: 'receive', label: 'Receive', icon: 'receive', path: '/receive' },
+    { id: 'history', label: 'History', icon: 'history', path: '/history' },
+    { id: 'settings', label: 'Settings', icon: 'settings', path: '/settings' }
+  ];
+  
+  export let activeTab: string = 'wallet';
+  export let onTabChange: (tab: TabItem) => void = () => {};
+  
+  function handleTabClick(tab: TabItem) {
+    activeTab = tab.id;
+    onTabChange(tab);
+  }
+</script>
+
+<nav class="tab-bar">
+  {#each tabs as tab}
+    <button
+      class="tab-item"
+      class:active={activeTab === tab.id}
+      on:click={() => handleTabClick(tab)}
+      type="button"
+      aria-current={activeTab === tab.id ? 'page' : undefined}
+    >
+      <Icon 
+        name={tab.icon} 
+        size="medium"
+        color={activeTab === tab.id ? '#000' : '#999'}
+      />
+      <span class="tab-label">{tab.label}</span>
+    </button>
+  {/each}
+</nav>
+
+<style>
+  .tab-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    height: 60px;
+    background: #ffffff;
+    border-top: 1px solid #e5e7eb;
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+  }
+  
+  .tab-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: 100%;
+    padding: 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all 150ms ease;
+    position: relative;
+  }
+  
+  .tab-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 2px;
+    background: #000;
+    transition: width 150ms ease;
+  }
+  
+  .tab-item.active::before {
+    width: 100%;
+  }
+  
+  .tab-item:hover {
+    background: #f3f4f6;
+  }
+  
+  .tab-item:active {
+    background: #f0f0f0;
+  }
+  
+  .tab-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #999;
+    transition: color 150ms ease;
+  }
+  
+  .tab-item.active .tab-label {
+    color: #000;
+  }
+  
+  .tab-item:focus-visible {
+    outline: none;
+    background: #f3f4f6;
+  }
+  
+  @media (max-width: 360px) {
+    .tab-label {
+      display: none;
+    }
+    
+    .tab-item {
+      gap: 0;
+    }
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/molecules/SeedWord.svelte
+========================================
+<script lang="ts">
+  export let word: string;
+  export let index: number;
+  export let revealed: boolean = true;
+  export let selectable: boolean = false;
+  export let selected: boolean = false;
+  
+  function handleClick() {
+    if (selectable) {
+      selected = !selected;
+    }
+  }
+</script>
+
+<button
+  class="seed-word"
+  class:hidden={!revealed}
+  class:selectable
+  class:selected
+  on:click={handleClick}
+  disabled={!selectable}
+  type="button"
+>
+  <span class="seed-index">{index}</span>
+  <span class="seed-text">
+    {#if revealed}
+      {word}
+    {:else}
+      ••••••
+    {/if}
+  </span>
+</button>
+
+<style>
+  .seed-word {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-background);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-family: 'SF Mono', Monaco, monospace;
+    transition: all var(--transition-fast);
+    cursor: default;
+    text-align: left;
+  }
+  
+  .seed-word.selectable {
+    cursor: pointer;
+  }
+  
+  .seed-word.selectable:hover {
+    background: var(--color-surface);
+    border-color: var(--color-text-secondary);
+  }
+  
+  .seed-word.selected {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: white;
+  }
+  
+  .seed-word.selected .seed-index {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+  }
+  
+  .seed-word.hidden {
+    background: var(--color-surface);
+  }
+  
+  .seed-index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 var(--spacing-xs);
+    background: var(--color-surface);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-xs);
+    font-weight: var(--font-semibold);
+    color: var(--color-text-secondary);
+  }
+  
+  .seed-text {
+    font-size: var(--font-sm);
+    font-weight: var(--font-medium);
+    flex: 1;
+  }
+  
+  .seed-word:disabled {
+    cursor: default;
+  }
+  
+  .seed-word:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/atoms/Logo.svelte
+========================================
+<script lang="ts">
+  export let size: 'small' | 'medium' | 'large' = 'medium';
+  export let showText: boolean = true;
+  
+  const sizeMap = {
+    small: {
+      logo: 24,
+      font: 'var(--font-lg)'
+    },
+    medium: {
+      logo: 32,
+      font: 'var(--font-2xl)'
+    },
+    large: {
+      logo: 48,
+      font: 'var(--font-3xl)'
+    }
+  };
+  
+  $: dimensions = sizeMap[size];
+</script>
+
+<div class="logo-container">
+  <img 
+    src="/fletch-logo.svg"
+    alt="Fletch Logo"
+    width={dimensions.logo}
+    height={dimensions.logo}
+    class="logo-icon"
+  />
+  
+  {#if showText}
+    <span class="logo-text fletch-brand" style="font-size: {dimensions.font}">
+      Fletch
+    </span>
+  {/if}
+</div>
+
+<style>
+  .logo-container {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    color: var(--color-primary);
+  }
+  
+  .logo-icon {
+    flex-shrink: 0;
+    object-fit: contain;
+  }
+  
+  .logo-text {
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/atoms/Icon.svelte
+========================================
+<script lang="ts">
+  export let name: string;
+  export let size: 'small' | 'medium' | 'large' = 'medium';
+  export let color: string = 'currentColor';
+  
+  const sizeMap = {
+    small: 16,
+    medium: 20,
+    large: 24
+  };
+  
+  const icons = {
+    wallet: `<path d="M19 7h-1V6a3 3 0 00-3-3H5a3 3 0 00-3 3v12a3 3 0 003 3h14a3 3 0 003-3v-8a3 3 0 00-3-3zM5 5h10a1 1 0 011 1v1H5a1 1 0 010-2zm14 13a1 1 0 01-1 1H5a1 1 0 01-1-1V8.83c.32.12.66.17 1 .17h14a1 1 0 011 1v8z"/><circle cx="15" cy="13" r="1.5"/>`,
+    send: `<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    receive: `<path d="M3 12l7 7 7-7M10 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    history: `<path d="M12 8v4l3 3M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    settings: `<path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    copy: `<rect x="9" y="9" width="13" height="13" rx="2" ry="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="2" fill="none"/>`,
+    check: `<path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    close: `<path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    chevronLeft: `<path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    chevronRight: `<path d="M9 18l6-6-6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    chevronDown: `<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    chevronUp: `<path d="M18 15l-6-6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    plus: `<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    minus: `<path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    eye: `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>`,
+    eyeOff: `<path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24M1 1l22 22" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    qr: `<rect x="3" y="3" width="7" height="7" stroke="currentColor" stroke-width="2" fill="none"/><rect x="14" y="3" width="7" height="7" stroke="currentColor" stroke-width="2" fill="none"/><rect x="14" y="14" width="7" height="7" stroke="currentColor" stroke-width="2" fill="none"/><rect x="3" y="14" width="7" height="7" stroke="currentColor" stroke-width="2" fill="none"/>`,
+    refresh: `<path d="M1 4v6h6M23 20v-6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M3.51 15a9 9 0 0014.85-3.36L23 12M1 12l4.64-.36A9 9 0 0020.49 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    info: `<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 16v-4M12 8h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    warning: `<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M12 9v4M12 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    error: `<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/><path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+    success: `<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`
+  };
+  
+  $: iconSize = sizeMap[size];
+  $: svgContent = icons[name] || '';
+</script>
+
+{#if svgContent}
+  <svg 
+    width={iconSize}
+    height={iconSize}
+    viewBox="0 0 24 24"
+    fill={color}
+    class="icon icon--{size}"
+    aria-hidden="true"
+  >
+    {@html svgContent}
+  </svg>
+{/if}
+
+<style>
+  .icon {
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  
+  .icon--small {
+    width: 16px;
+    height: 16px;
+  }
+  
+  .icon--medium {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .icon--large {
+    width: 24px;
+    height: 24px;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/atoms/Button.svelte
+========================================
+<script lang="ts">
+  export let variant: 'primary' | 'secondary' | 'ghost' = 'primary';
+  export let size: 'small' | 'medium' | 'large' = 'medium';
+  export let disabled: boolean = false;
+  export let fullWidth: boolean = false;
+  export let type: 'button' | 'submit' | 'reset' = 'button';
+  
+  $: classes = `
+    button
+    button--${variant}
+    button--${size}
+    ${fullWidth ? 'button--full-width' : ''}
+    ${disabled ? 'button--disabled' : ''}
+  `.trim();
+</script>
+
+<button 
+  {type}
+  {disabled}
+  class={classes}
+  on:click
+>
+  <slot />
+</button>
+
+<style>
+  .button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 150ms ease;
+    cursor: pointer;
+    outline: none;
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .button--small {
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--font-sm);
+    min-height: 32px;
+  }
+  
+  .button--medium {
+    padding: 12px 20px;
+    font-size: 14px;
+    min-height: 44px;
+  }
+  
+  .button--large {
+    padding: var(--spacing-md) var(--spacing-xl);
+    font-size: var(--font-lg);
+    min-height: 48px;
+  }
+  
+  .button--primary {
+    background: #000;
+    color: #ffffff;
+    border: none;
+  }
+  
+  .button--primary:hover:not(.button--disabled) {
+    background: #333333;
+  }
+  
+  .button--primary:active:not(.button--disabled) {
+    background: #000;
+  }
+  
+  .button--secondary {
+    background: #ffffff;
+    color: #000;
+    border: 2px solid #e5e7eb;
+  }
+  
+  .button--secondary:hover:not(.button--disabled) {
+    background: #f3f4f6;
+    border-color: #000;
+  }
+  
+  .button--secondary:active:not(.button--disabled) {
+    background: #ffffff;
+  }
+  
+  .button--ghost {
+    background: transparent;
+    color: #666;
+    border: none;
+    text-decoration: underline;
+    padding: 8px;
+  }
+  
+  .button--ghost:hover:not(.button--disabled) {
+    color: #000;
+  }
+  
+  .button--full-width {
+    width: 100%;
+  }
+  
+  .button--disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  .button:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/atoms/Card.svelte
+========================================
+<script lang="ts">
+  export let padding: 'none' | 'small' | 'medium' | 'large' = 'medium';
+  export let shadow: 'none' | 'small' | 'medium' | 'large' = 'medium';
+  export let clickable: boolean = false;
+  export let selected: boolean = false;
+  
+  $: classes = `
+    card
+    card--padding-${padding}
+    card--shadow-${shadow}
+    ${clickable ? 'card--clickable' : ''}
+    ${selected ? 'card--selected' : ''}
+  `.trim();
+</script>
+
+<div 
+  class={classes}
+  on:click
+  on:keydown
+  role={clickable ? 'button' : undefined}
+  tabindex={clickable ? 0 : undefined}
+>
+  <slot />
+</div>
+
+<style>
+  .card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    transition: all 150ms ease;
+  }
+  
+  .card--padding-none {
+    padding: 0;
+  }
+  
+  .card--padding-small {
+    padding: var(--spacing-sm);
+  }
+  
+  .card--padding-medium {
+    padding: 14px;
+  }
+  
+  .card--padding-large {
+    padding: var(--spacing-lg);
+  }
+  
+  .card--shadow-none {
+    box-shadow: none;
+  }
+  
+  .card--shadow-small {
+    box-shadow: var(--shadow-sm);
+  }
+  
+  .card--shadow-medium {
+    box-shadow: var(--shadow-md);
+  }
+  
+  .card--shadow-large {
+    box-shadow: var(--shadow-lg);
+  }
+  
+  .card--clickable {
+    cursor: pointer;
+  }
+  
+  .card--clickable:hover {
+    border-color: #000;
+    background: #f3f4f6;
+  }
+  
+  .card--clickable:active {
+    background: #ffffff;
+  }
+  
+  .card--selected {
+    border-color: #000;
+    background: #f3f4f6;
+  }
+  
+  .card--clickable:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/atoms/Input.svelte
+========================================
+<script lang="ts">
+  export let type: 'text' | 'password' | 'email' | 'number' = 'text';
+  export let placeholder: string = '';
+  export let value: string = '';
+  export let label: string = '';
+  export let error: string = '';
+  export let disabled: boolean = false;
+  export let readonly: boolean = false;
+  export let required: boolean = false;
+  export let id: string = `input-${Math.random().toString(36).substr(2, 9)}`;
+  
+  let focused = false;
+  
+  function handleFocus() {
+    focused = true;
+  }
+  
+  function handleBlur() {
+    focused = false;
+  }
+</script>
+
+<div class="input-wrapper">
+  {#if label}
+    <label for={id} class="label">
+      {label}
+      {#if required}
+        <span class="required">*</span>
+      {/if}
+    </label>
+  {/if}
+  
+  <div class="input-container" class:focused class:error={!!error} class:disabled>
+    <input
+      {id}
+      {type}
+      {placeholder}
+      {disabled}
+      {readonly}
+      {required}
+      bind:value
+      on:focus={handleFocus}
+      on:blur={handleBlur}
+      on:input
+      on:change
+      on:keydown
+      on:keyup
+      on:keypress
+      class="input"
+    />
+    <slot name="icon" />
+  </div>
+  
+  {#if error}
+    <span class="error-message">{error}</span>
+  {/if}
+</div>
+
+<style>
+  .input-wrapper {
+    width: 100%;
+  }
+  
+  .label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+  }
+  
+  .required {
+    color: var(--color-error);
+    margin-left: 2px;
+  }
+  
+  .input-container {
+    position: relative;
+    width: 100%;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    transition: all 150ms ease;
+  }
+  
+  .input-container.focused {
+    border-color: #000;
+    box-shadow: none;
+  }
+  
+  .input-container.error {
+    border-color: var(--color-error);
+  }
+  
+  .input-container.error.focused {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+  }
+  
+  .input-container.disabled {
+    background: #f3f4f6;
+    opacity: 0.6;
+  }
+  
+  .input {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    color: #1a1a1a;
+    outline: none;
+  }
+  
+  .input::placeholder {
+    color: #999;
+  }
+  
+  .input:disabled {
+    cursor: not-allowed;
+  }
+  
+  .error-message {
+    display: block;
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-sm);
+    color: var(--color-error);
+  }
+  
+  :global(.input-container .icon) {
+    position: absolute;
+    right: var(--spacing-md);
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-secondary);
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/WelcomeScreen.svelte
+========================================
+<script lang="ts">
+  import Logo from '../atoms/Logo.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let onCreateWallet: () => void = () => {};
+  export let onImportWallet: () => void = () => {};
+</script>
+
+<div class="welcome-screen">
+  <div class="welcome-content">
+    <Logo size="large" showText={false} />
+    <h1 class="fletch-brand welcome-title">Fletch</h1>
+    <p class="welcome-text">Your secure gateway to Nockchain</p>
+    <div class="button-container">
+      <Button 
+        variant="primary" 
+        fullWidth={true}
+        on:click={onCreateWallet}
+      >
+        Create New Wallet
+      </Button>
+      
+      <Button 
+        variant="secondary" 
+        fullWidth={true}
+        on:click={onImportWallet}
+      >
+        Import Wallet
+      </Button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .welcome-screen {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+  }
+  
+  .welcome-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    width: 100%;
+    max-width: 300px;
+    padding: 0 30px;
+  }
+  
+  .welcome-title {
+    font-size: 32px;
+    font-weight: 800;
+    margin: 12px 0 8px;
+    color: #000;
+  }
+  
+  .welcome-text {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 32px;
+  }
+  
+  .button-container {
+    width: 80%;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  
+  .button-container :global(.button) {
+    margin-bottom: 10px;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/ConfirmSeedPhrase.svelte
+========================================
+<script lang="ts">
+  import Header from '../molecules/Header.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let seedPhrase: string[] = [];
+  export let onConfirm: () => void = () => {};
+  export let onBack: () => void = () => {};
+  
+  // Randomly select 2 word positions to verify
+  let wordIndices = getRandomIndices();
+  let wordInputs = { [wordIndices[0]]: '', [wordIndices[1]]: '' };
+  let errors = { [wordIndices[0]]: '', [wordIndices[1]]: '' };
+  
+  function getRandomIndices() {
+    const indices: number[] = [];
+    while (indices.length < 2) {
+      const index = Math.floor(Math.random() * 12) + 1;
+      if (!indices.includes(index)) {
+        indices.push(index);
+      }
+    }
+    return indices.sort((a, b) => a - b);
+  }
+  
+  function validateWord(index: number) {
+    const input = wordInputs[index].toLowerCase().trim();
+    const expected = seedPhrase[index - 1].toLowerCase();
+    
+    if (!input) {
+      errors[index] = 'This field is required';
+      return false;
+    }
+    
+    if (input !== expected) {
+      errors[index] = 'Incorrect word';
+      return false;
+    }
+    
+    errors[index] = '';
+    return true;
+  }
+  
+  function handleConfirm() {
+    let valid = true;
+    for (const index of wordIndices) {
+      if (!validateWord(index)) {
+        valid = false;
+      }
+    }
+    
+    if (valid) {
+      onConfirm();
+    }
+  }
+</script>
+
+<div class="confirm-seed">
+  <Header title="" showBack={true} showLogo={true} on:click={onBack} />
+  
+  <div class="content">
+    <h2 class="title">Confirm Your Phrase</h2>
+    <p class="subtitle">
+      Please enter the requested words from your seed phrase to confirm you've saved it.
+    </p>
+    
+    {#each wordIndices as index}
+      <div class="word-input-group">
+        <label class="input-label">Word #{index}</label>
+        <input 
+          type="text" 
+          class="input-field"
+          class:error={errors[index]}
+          placeholder="Enter word #{index}"
+          bind:value={wordInputs[index]}
+          on:blur={() => validateWord(index)}
+        >
+        {#if errors[index]}
+          <span class="error-message">{errors[index]}</span>
+        {/if}
+      </div>
+    {/each}
+    
+    <Button 
+      variant="primary" 
+      fullWidth={true}
+      on:click={handleConfirm}
+    >
+      Confirm
+    </Button>
+  </div>
+</div>
+
+<style>
+  .confirm-seed {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+  }
+  
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 8px;
+  }
+  
+  .subtitle {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 20px;
+  }
+  
+  .word-input-group {
+    margin-bottom: 20px;
+  }
+  
+  .input-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 8px;
+  }
+  
+  .input-field {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    outline: none;
+  }
+  
+  .input-field:focus {
+    border-color: #000;
+  }
+  
+  .input-field.error {
+    border-color: #dc2626;
+  }
+  
+  .error-message {
+    display: block;
+    font-size: 12px;
+    color: #dc2626;
+    margin-top: 4px;
+  }
+  
+  .content :global(.button--primary) {
+    margin-top: auto;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/SeedPhraseDisplay.svelte
+========================================
+<script lang="ts">
+  import Header from '../molecules/Header.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let seedPhrase: string[] = [];
+  export let revealed: boolean = true;
+  export let onContinue: () => void = () => {};
+  
+  let copied = false;
+  
+  
+  async function copySeedPhrase() {
+    try {
+      await navigator.clipboard.writeText(seedPhrase.join(' '));
+      copied = true;
+      setTimeout(() => {
+        copied = false;
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to copy seed phrase:', error);
+    }
+  }
+  
+  function downloadSeedPhrase() {
+    const text = seedPhrase.join(' ');
+    const element = document.createElement('a');
+    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+    element.setAttribute('download', 'fletch-seed-phrase.txt');
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  }
+  
+  function generateMockSeedPhrase() {
+    const words = [
+      'abandon', 'ability', 'able', 'about', 'above', 'absent',
+      'absorb', 'abstract', 'absurd', 'abuse', 'access', 'accident'
+    ];
+    return Array.from({ length: 12 }, () => 
+      words[Math.floor(Math.random() * words.length)]
+    );
+  }
+  
+  $: if (seedPhrase.length === 0) {
+    seedPhrase = generateMockSeedPhrase();
+  }
+</script>
+
+<div class="seed-phrase-display">
+  <Header title="" showBack={true} showLogo={true} />
+  
+  <div class="content">
+    <h2 class="seed-title">Your Secret Recovery Phrase</h2>
+    <p class="seed-subtitle">
+      Write down these 12 words in order. This is the only way to recover your wallet.
+    </p>
+    
+    <div class="seed-grid">
+      {#each seedPhrase as word, index}
+        <div class="seed-word">
+          <span class="seed-word-number">{index + 1}.</span>
+          <span class="seed-word-text">{word}</span>
+        </div>
+      {/each}
+    </div>
+    
+    <div class="button-group">
+      <Button 
+        variant="secondary"
+        fullWidth={true}
+        on:click={copySeedPhrase}
+      >
+        {copied ? 'Copied!' : 'Copy'}
+      </Button>
+      
+      <Button 
+        variant="secondary"
+        fullWidth={true}
+        on:click={downloadSeedPhrase}
+      >
+        Download
+      </Button>
+    </div>
+    
+    <div class="warning-box">
+      ⚠️ Never share this phrase. Anyone with these words can steal your funds.
+    </div>
+    
+    <Button 
+      variant="primary" 
+      fullWidth={true}
+      on:click={onContinue}
+    >
+      I've Written It Down
+    </Button>
+  </div>
+</div>
+
+<style>
+  .seed-phrase-display {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  
+  .seed-title {
+    font-size: 17px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 4px;
+  }
+  
+  .seed-subtitle {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 20px;
+    line-height: 1.4;
+  }
+  
+  .seed-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  
+  .seed-word {
+    background: #f3f4f6;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  .seed-word-number {
+    font-size: 12px;
+    color: #999;
+    min-width: 20px;
+  }
+  
+  .seed-word-text {
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .button-group {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  
+  .button-group :global(.button) {
+    flex: 1;
+    padding: 10px;
+    margin: 0;
+  }
+  
+  .warning-box {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 10px;
+    margin: 10px 0;
+    font-size: 11px;
+    color: #dc2626;
+  }
+  
+  .content :global(.button--primary) {
+    margin-top: auto;
+    margin-bottom: 0;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/AddressBook.svelte
+========================================
+<script lang="ts">
+  import Header from '../molecules/Header.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let onAddContact: () => void = () => {};
+  export let onSelectContact: (contact: any) => void = () => {};
+  
+  let searchQuery = '';
+  let showAddForm = false;
+  let newContact = { name: '', address: '' };
+  let error = '';
+  
+  interface Contact {
+    id: number;
+    name: string;
+    address: string;
+    avatar: string;
+  }
+  
+  let contacts: Contact[] = [
+    {
+      id: 1,
+      name: 'Alice Johnson',
+      address: 'nc1qwx...7s8h',
+      avatar: '👤'
+    },
+    {
+      id: 2,
+      name: 'Bob Smith',
+      address: 'nc1qm2...9k3j',
+      avatar: '👤'
+    },
+    {
+      id: 3,
+      name: 'Charlie Brown',
+      address: 'nc1qp8...2m5n',
+      avatar: '👤'
+    },
+    {
+      id: 4,
+      name: 'David Wilson',
+      address: 'nc1qt5...4h7k',
+      avatar: '👤'
+    }
+  ];
+  
+  $: filteredContacts = contacts.filter(contact =>
+    contact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    contact.address.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  
+  function handleAddContact() {
+    error = '';
+    
+    if (!newContact.name.trim()) {
+      error = 'Please enter a contact name';
+      return;
+    }
+    
+    if (!newContact.address.trim()) {
+      error = 'Please enter a wallet address';
+      return;
+    }
+    
+    if (!newContact.address.startsWith('nc1')) {
+      error = 'Invalid Nockchain address';
+      return;
+    }
+    
+    const newId = Math.max(...contacts.map(c => c.id), 0) + 1;
+    contacts = [
+      ...contacts,
+      {
+        id: newId,
+        name: newContact.name,
+        address: newContact.address,
+        avatar: '👤'
+      }
+    ];
+    
+    newContact = { name: '', address: '' };
+    showAddForm = false;
+  }
+  
+  function handleDeleteContact(id: number) {
+    contacts = contacts.filter(c => c.id !== id);
+  }
+</script>
+
+<div class="address-book">
+  <Header title="Address Book" showBack={false} />
+  
+  <div class="address-content">
+    <div class="search-section">
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Search contacts..."
+        bind:value={searchQuery}
+      />
+      <Button
+        variant="primary"
+        size="small"
+        on:click={() => showAddForm = true}
+      >
+        + Add Contact
+      </Button>
+    </div>
+    
+    {#if showAddForm}
+      <div class="add-form">
+        <h3 class="form-title">Add New Contact</h3>
+        <div class="form-group">
+          <input
+            type="text"
+            class="input-field"
+            placeholder="Contact Name"
+            bind:value={newContact.name}
+          />
+        </div>
+        <div class="form-group">
+          <input
+            type="text"
+            class="input-field"
+            placeholder="Wallet Address (nc1...)"
+            bind:value={newContact.address}
+          />
+        </div>
+        {#if error}
+          <div class="error-message">{error}</div>
+        {/if}
+        <div class="form-actions">
+          <Button
+            variant="secondary"
+            size="small"
+            on:click={() => {
+              showAddForm = false;
+              newContact = { name: '', address: '' };
+              error = '';
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            size="small"
+            on:click={handleAddContact}
+          >
+            Add Contact
+          </Button>
+        </div>
+      </div>
+    {/if}
+    
+    <div class="contacts-list">
+      {#if filteredContacts.length === 0}
+        <div class="empty-state">
+          <p class="empty-text">
+            {searchQuery ? 'No contacts found' : 'No contacts yet'}
+          </p>
+          <p class="empty-subtext">
+            {searchQuery ? 'Try a different search' : 'Add your first contact to get started'}
+          </p>
+        </div>
+      {:else}
+        {#each filteredContacts as contact}
+          <div class="contact-item">
+            <div class="contact-avatar">{contact.avatar}</div>
+            <div class="contact-info">
+              <div class="contact-name">{contact.name}</div>
+              <div class="contact-address">{contact.address}</div>
+            </div>
+            <div class="contact-actions">
+              <button
+                class="btn-icon"
+                on:click={() => onSelectContact(contact)}
+                title="Send to this address"
+              >
+                ↗
+              </button>
+              <button
+                class="btn-icon delete"
+                on:click={() => handleDeleteContact(contact.id)}
+                title="Delete contact"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        {/each}
+      {/if}
+    </div>
+  </div>
+</div>
+
+<style>
+  .address-book {
+    height: 100%;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .address-content {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+  }
+  
+  .search-section {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  
+  .search-input {
+    flex: 1;
+    padding: 10px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    outline: none;
+  }
+  
+  .search-input:focus {
+    border-color: #000;
+  }
+  
+  .add-form {
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  
+  .form-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 12px;
+  }
+  
+  .form-group {
+    margin-bottom: 12px;
+  }
+  
+  .input-field {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #ffffff;
+    font-size: 14px;
+    outline: none;
+  }
+  
+  .input-field:focus {
+    border-color: #000;
+  }
+  
+  .error-message {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #dc2626;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  
+  .form-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  
+  .contacts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .contact-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    transition: all 0.2s;
+  }
+  
+  .contact-item:hover {
+    background: #e5e7eb;
+  }
+  
+  .contact-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+  
+  .contact-info {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .contact-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 2px;
+  }
+  
+  .contact-address {
+    font-size: 12px;
+    color: #666;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  
+  .contact-actions {
+    display: flex;
+    gap: 4px;
+  }
+  
+  .btn-icon {
+    width: 32px;
+    height: 32px;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s;
+  }
+  
+  .btn-icon:hover {
+    background: #f3f4f6;
+    border-color: #000;
+  }
+  
+  .btn-icon.delete {
+    color: #dc2626;
+    font-size: 20px;
+  }
+  
+  .btn-icon.delete:hover {
+    background: #fef2f2;
+    border-color: #dc2626;
+  }
+  
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+  }
+  
+  .empty-text {
+    font-size: 16px;
+    font-weight: 500;
+    color: #000;
+    margin-bottom: 8px;
+  }
+  
+  .empty-subtext {
+    font-size: 14px;
+    color: #666;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/SendTransaction.svelte
+========================================
+<script lang="ts">
+  export let balance: number = 1234.56;
+  export let onSend: (data: any) => void = () => {};
+  export let onCancel: () => void = () => {};
+  
+  let recipients = [{ address: '', amount: '' }];
+  let selectedFee = 'standard';
+  
+  const feeOptions = {
+    economy: { label: 'Economy', amount: 0.01 },
+    standard: { label: 'Standard', amount: 0.02 },
+    fast: { label: 'Fast', amount: 0.05 }
+  };
+  
+  function addRecipient() {
+    recipients = [...recipients, { address: '', amount: '' }];
+  }
+  
+  function getTotalAmount() {
+    const sum = recipients.reduce((total, r) => total + (parseFloat(r.amount) || 0), 0);
+    const fee = feeOptions[selectedFee].amount * 2; // 2 notes
+    return {
+      amount: sum,
+      fee: fee,
+      total: sum + fee
+    };
+  }
+</script>
+
+<div class="send-transaction">
+  <div class="header">
+    <button class="back-btn" on:click={onCancel}>←</button>
+    <span class="header-title">Send</span>
+    <span></span>
+  </div>
+  
+  <div class="content">
+    {#each recipients as recipient, index}
+      <div class="recipient-input-group">
+        <label class="input-label">Recipient {index + 1}</label>
+        <input 
+          type="text" 
+          class="input-field" 
+          placeholder="Address or contact"
+          bind:value={recipient.address}
+        >
+        <input 
+          type="number" 
+          class="input-field" 
+          placeholder="Amount"
+          bind:value={recipient.amount}
+          style="margin-bottom: 0;"
+        >
+      </div>
+    {/each}
+    
+    <button class="add-recipient-btn" on:click={addRecipient}>
+      + Add Another Recipient
+    </button>
+    
+    <div class="fee-section">
+      <label class="input-label">Transaction Fee</label>
+      <div class="fee-selector">
+        {#each Object.entries(feeOptions) as [key, option]}
+          <button 
+            class="fee-option" 
+            class:selected={selectedFee === key}
+            on:click={() => selectedFee = key}
+          >
+            <div class="fee-option-label">{option.label}</div>
+            <div class="fee-option-amount">{option.amount}</div>
+          </button>
+        {/each}
+      </div>
+    </div>
+    
+    <div class="summary-card">
+      <div class="summary-row">
+        <span class="summary-label">Amount</span>
+        <span class="summary-value">{getTotalAmount().amount.toFixed(2)}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-label">Fee (2 notes)</span>
+        <span class="summary-value">{getTotalAmount().fee.toFixed(2)}</span>
+      </div>
+      <div class="summary-row total">
+        <span class="summary-label-total">Total</span>
+        <span class="summary-value-total">{getTotalAmount().total.toFixed(2)}</span>
+      </div>
+    </div>
+    
+    <button 
+      class="btn-primary"
+      on:click={() => onSend({ recipients, fee: selectedFee, ...getTotalAmount() })}
+    >
+      Review Transaction
+    </button>
+  </div>
+</div>
+
+<style>
+  .send-transaction {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  
+  .back-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    color: #000;
+  }
+  
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  
+  .recipient-input-group {
+    margin-bottom: 16px;
+  }
+  
+  .input-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 8px;
+    display: block;
+  }
+  
+  .input-field {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    margin-bottom: 8px;
+    outline: none;
+  }
+  
+  .input-field:focus {
+    border-color: #000;
+  }
+  
+  .add-recipient-btn {
+    background: none;
+    border: none;
+    color: #000;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    margin: 12px 0;
+    padding: 0;
+  }
+  
+  .fee-section {
+    margin: 16px 0;
+  }
+  
+  .fee-selector {
+    display: flex;
+    gap: 8px;
+  }
+  
+  .fee-option {
+    flex: 1;
+    padding: 12px;
+    background: #ffffff;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 150ms ease;
+  }
+  
+  .fee-option.selected {
+    border-color: #000;
+    background: #f3f4f6;
+  }
+  
+  .fee-option-label {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+  }
+  
+  .fee-option-amount {
+    font-size: 16px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .summary-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 14px;
+    margin: 16px 0;
+  }
+  
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  
+  .summary-row.total {
+    border-top: 1px solid #e5e7eb;
+    padding-top: 8px;
+    margin-bottom: 0;
+  }
+  
+  .summary-label {
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .summary-value {
+    font-size: 14px;
+    color: #000;
+  }
+  
+  .summary-label-total,
+  .summary-value-total {
+    font-size: 16px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .btn-primary {
+    background: #000;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin-top: auto;
+  }
+  
+  .btn-primary:hover {
+    background: #333;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/WalletDashboard.svelte
+========================================
+<script lang="ts">
+  import { createEventDispatcher } from 'svelte';
+  
+  export let balance: number = 1234.56;
+  export let noteCount: number = 12;
+  export let recentTransactions: any[] = [];
+  export let activeTab: 'activity' | 'addressBook' | 'settings' = 'activity';
+  export let onSettings: () => void = () => {};
+  
+  const dispatch = createEventDispatcher();
+  
+  function generateMockTransactions() {
+    return [
+      {
+        type: 'sent',
+        amount: 50.00,
+        date: '2 hours ago'
+      },
+      {
+        type: 'received',
+        amount: 125.50,
+        date: '1 day ago'
+      },
+      {
+        type: 'sent',
+        amount: 10.25,
+        date: '2 days ago'
+      }
+    ];
+  }
+  
+  $: if (recentTransactions.length === 0) {
+    recentTransactions = generateMockTransactions();
+  }
+</script>
+
+<div class="wallet-dashboard">
+  <div class="header">
+    <div class="wallet-selector">Main Wallet ▼</div>
+    <div class="network-status">
+      <span class="status-dot"></span>
+      <span>Connected</span>
+    </div>
+    <button class="settings-btn" on:click={onSettings}>⚙</button>
+  </div>
+  
+  <div class="content">
+    <div class="balance-display">
+      <div class="balance-label">Total Balance</div>
+      <div class="balance-amount">{balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+      <div class="balance-notes">{noteCount} notes</div>
+    </div>
+    
+    <div class="quick-actions">
+      <button class="quick-action-btn" on:click={() => dispatch('navigate', 'send')}>Send</button>
+      <button class="quick-action-btn" on:click={() => dispatch('navigate', 'receive')}>Receive</button>
+      <button class="quick-action-btn">Consolidate</button>
+    </div>
+    
+    <div class="tabs">
+      <button 
+        class="tab" 
+        class:active={activeTab === 'activity'}
+        on:click={() => activeTab = 'activity'}
+      >
+        Activity
+      </button>
+      <button 
+        class="tab" 
+        class:active={activeTab === 'addressBook'}
+        on:click={() => activeTab = 'addressBook'}
+      >
+        Address Book
+      </button>
+      <button 
+        class="tab" 
+        class:active={activeTab === 'settings'}
+        on:click={() => activeTab = 'settings'}
+      >
+        Settings
+      </button>
+    </div>
+    
+    {#if activeTab === 'activity'}
+      <div class="transaction-list">
+        {#each recentTransactions as transaction}
+          <div class="transaction-item">
+            <div>
+              <div class="transaction-type">{transaction.type === 'sent' ? 'Sent' : 'Received'}</div>
+              <div class="transaction-date">{transaction.date}</div>
+            </div>
+            <div class="transaction-amount {transaction.type}">{transaction.type === 'sent' ? '-' : '+'}{transaction.amount.toFixed(2)}</div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    
+    {#if activeTab === 'addressBook'}
+      <div class="address-book">
+        <p style="text-align: center; color: #666; padding: 20px;">Address book content here</p>
+      </div>
+    {/if}
+    
+    {#if activeTab === 'settings'}
+      <div class="settings">
+        <p style="text-align: center; color: #666; padding: 20px;">Settings content here</p>
+      </div>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .wallet-dashboard {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  
+  .wallet-selector {
+    font-size: 14px;
+    color: #666;
+    padding: 8px 12px;
+    background: #f3f4f6;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-right: auto;
+  }
+  
+  .network-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #666;
+    margin-right: 12px;
+  }
+  
+  .settings-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .settings-btn:hover {
+    color: #000;
+  }
+  
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    background: #16a34a;
+    border-radius: 50%;
+  }
+  
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px 20px;
+  }
+  
+  .balance-display {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  
+  .balance-label {
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+  
+  .balance-amount {
+    font-size: 36px;
+    font-weight: 700;
+    color: #000;
+    margin-bottom: 4px;
+  }
+  
+  .balance-notes {
+    font-size: 14px;
+    color: #999;
+  }
+  
+  .quick-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  
+  .quick-action-btn {
+    flex: 1;
+    padding: 12px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+    cursor: pointer;
+    transition: all 150ms ease;
+  }
+  
+  .quick-action-btn:hover {
+    background: #e5e7eb;
+  }
+  
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid #e5e7eb;
+    margin-bottom: 24px;
+  }
+  
+  .tab {
+    flex: 1;
+    padding: 12px;
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+    cursor: pointer;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    transition: all 150ms ease;
+  }
+  
+  .tab.active {
+    color: #000;
+    border-bottom-color: #000;
+    font-weight: 600;
+  }
+  
+  .transaction-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  
+  .transaction-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #f3f4f6;
+  }
+  
+  .transaction-item:last-child {
+    border-bottom: none;
+  }
+  
+  .transaction-type {
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 4px;
+  }
+  
+  .transaction-date {
+    font-size: 12px;
+    color: #666;
+  }
+  
+  .transaction-amount {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  
+  .transaction-amount.sent {
+    color: #dc2626;
+  }
+  
+  .transaction-amount.received {
+    color: #16a34a;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/Settings.svelte
+========================================
+<script lang="ts">
+  export let onLogout: () => void = () => {};
+  export let onExportSeed: () => void = () => {};
+  export let onImportWallet: () => void = () => {};
+  export let onAddressBook: () => void = () => {};
+  
+  let autoLockTime = '5';
+  let selectedNetwork = 'mainnet';
+  let developerMode = false;
+  let selectedTheme = 'light';
+  let selectedDesign = 'modern';
+</script>
+
+<div class="settings">
+  <div class="header">
+    <button class="back-btn">←</button>
+    <span class="header-title">Settings</span>
+    <span></span>
+  </div>
+  
+  <div class="content">
+    <div class="settings-section">
+      <h3 class="section-title">Security</h3>
+      
+      <div class="setting-item">
+        <span class="setting-label">Auto-lock</span>
+        <select class="select-control" bind:value={autoLockTime}>
+          <option value="1">1 minute</option>
+          <option value="5">5 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="never">Never</option>
+        </select>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Change Password</span>
+        <button class="btn-text">Change →</button>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Show Seed Phrase</span>
+        <button class="btn-text" on:click={onExportSeed}>View →</button>
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h3 class="section-title">Wallet Management</h3>
+      
+      <div class="setting-item">
+        <span class="setting-label">Import Wallet</span>
+        <button class="btn-text" on:click={onImportWallet}>Import →</button>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Address Book</span>
+        <button class="btn-text" on:click={onAddressBook}>Manage →</button>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Connected Wallets</span>
+        <span class="setting-value">3 wallets</span>
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h3 class="section-title">Network</h3>
+      
+      <div class="setting-item">
+        <span class="setting-label">Active Network</span>
+        <select class="select-control" bind:value={selectedNetwork}>
+          <option value="mainnet">Mainnet</option>
+          <option value="testnet">Testnet</option>
+        </select>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Node Connection</span>
+        <span class="status-indicator">
+          <span class="status-dot"></span>
+          Connected
+        </span>
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h3 class="section-title">Advanced</h3>
+      
+      <div class="setting-item">
+        <span class="setting-label">Developer Mode</span>
+        <button 
+          class="toggle"
+          class:active={developerMode}
+          on:click={() => developerMode = !developerMode}
+        >
+          <span class="toggle-slider"></span>
+        </button>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Export Transactions</span>
+        <button class="btn-text">Export →</button>
+      </div>
+    </div>
+    
+    <div class="settings-section">
+      <h3 class="section-title">About</h3>
+      
+      <div class="setting-item">
+        <span class="setting-label">Version</span>
+        <span class="setting-value">1.0.0</span>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Terms of Service</span>
+        <button class="btn-text">View →</button>
+      </div>
+      
+      <div class="setting-item">
+        <span class="setting-label">Privacy Policy</span>
+        <button class="btn-text">View →</button>
+      </div>
+    </div>
+    
+    <button class="btn-secondary danger" on:click={onLogout}>
+      Clear All Data
+    </button>
+  </div>
+</div>
+
+<style>
+  .settings {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  
+  .back-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    color: #000;
+  }
+  
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  
+  .settings-section {
+    margin-bottom: 32px;
+  }
+  
+  .section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 16px;
+  }
+  
+  .setting-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #f3f4f6;
+  }
+  
+  .setting-item:last-child {
+    border-bottom: none;
+  }
+  
+  .setting-label {
+    font-size: 14px;
+    color: #000;
+  }
+  
+  .setting-value {
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .select-control {
+    padding: 8px 12px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #000;
+    cursor: pointer;
+    outline: none;
+  }
+  
+  .btn-text {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0;
+  }
+  
+  .btn-text:hover {
+    color: #000;
+  }
+  
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #666;
+  }
+  
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    background: #16a34a;
+    border-radius: 50%;
+  }
+  
+  .toggle {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    background: #e5e7eb;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 150ms ease;
+  }
+  
+  .toggle.active {
+    background: #16a34a;
+  }
+  
+  .toggle-slider {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: white;
+    border-radius: 10px;
+    transition: transform 150ms ease;
+  }
+  
+  .toggle.active .toggle-slider {
+    transform: translateX(20px);
+  }
+  
+  .btn-secondary {
+    background: #ffffff;
+    color: #000;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 32px;
+  }
+  
+  .btn-secondary.danger {
+    color: #dc2626;
+    border-color: #dc2626;
+  }
+  
+  .btn-secondary:hover {
+    background: #f3f4f6;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/LockScreen.svelte
+========================================
+<script lang="ts">
+  import Button from '../atoms/Button.svelte';
+  import Logo from '../atoms/Logo.svelte';
+  
+  export let onUnlock: (password: string) => void = () => {};
+  export let onForgotPassword: () => void = () => {};
+  
+  let password = '';
+  let error = '';
+  let isUnlocking = false;
+  
+  async function handleUnlock() {
+    if (!password) {
+      error = 'Password is required';
+      return;
+    }
+    
+    error = '';
+    isUnlocking = true;
+    
+    // Simulate unlock attempt
+    setTimeout(() => {
+      // In a real app, you would verify the password here
+      onUnlock(password);
+      isUnlocking = false;
+    }, 500);
+  }
+  
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.key === 'Enter') {
+      handleUnlock();
+    }
+  }
+</script>
+
+<div class="lock-screen">
+  <div class="lock-content">
+    <Logo size="large" showText={false} />
+    <h2 class="lock-title">Wallet Locked</h2>
+    <p class="lock-subtitle">Enter your password to unlock</p>
+    
+    <div class="unlock-form">
+      <input 
+        type="password" 
+        class="input-field"
+        class:error
+        placeholder="Enter password"
+        bind:value={password}
+        on:keydown={handleKeydown}
+        disabled={isUnlocking}
+      >
+      
+      {#if error}
+        <span class="error-message">{error}</span>
+      {/if}
+      
+      <Button 
+        variant="primary" 
+        fullWidth={true}
+        disabled={isUnlocking}
+        on:click={handleUnlock}
+      >
+        {isUnlocking ? 'Unlocking...' : 'Unlock'}
+      </Button>
+      
+      <button 
+        class="btn-ghost"
+        on:click={onForgotPassword}
+      >
+        Forgot password?
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .lock-screen {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff;
+  }
+  
+  .lock-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    width: 100%;
+    max-width: 300px;
+    padding: 0 30px;
+  }
+  
+  .lock-content :global(.logo-container) {
+    margin-bottom: 24px;
+    color: #000;
+  }
+  
+  .lock-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 8px;
+  }
+  
+  .lock-subtitle {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 32px;
+  }
+  
+  .unlock-form {
+    width: 80%;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  
+  .input-field {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    margin-bottom: 16px;
+    outline: none;
+  }
+  
+  .input-field:focus {
+    border-color: #000;
+  }
+  
+  .input-field.error {
+    border-color: #dc2626;
+  }
+  
+  .input-field:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  
+  .error-message {
+    display: block;
+    font-size: 12px;
+    color: #dc2626;
+    margin: -12px 0 12px;
+    text-align: left;
+  }
+  
+  .unlock-form :global(.button) {
+    margin-bottom: 10px;
+  }
+  
+  .btn-ghost {
+    background: none;
+    border: none;
+    color: #666;
+    font-size: 14px;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 8px;
+  }
+  
+  .btn-ghost:hover {
+    color: #000;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/TransactionFailed.svelte
+========================================
+<script lang="ts">
+  import Button from '../atoms/Button.svelte';
+  
+  export let errorMessage: string = 'Insufficient balance. You need 50.02 but only have 45.00 available.';
+  export let onTryAgain: () => void = () => {};
+  export let onGoBack: () => void = () => {};
+  export let onBack: () => void = () => {};
+</script>
+
+<div class="transaction-failed">
+  <div class="header">
+    <button class="back-btn" on:click={onBack}>←</button>
+    <span class="header-title">Transaction Failed</span>
+    <span></span>
+  </div>
+  
+  <div class="content">
+    <div class="error-container">
+      <div class="error-icon">❌</div>
+      <h2 class="error-title">Transaction Failed</h2>
+      <p class="error-subtitle">Unable to complete your transaction</p>
+    </div>
+    
+    <div class="error-message">
+      <strong>Error:</strong> {errorMessage}
+    </div>
+    
+    <div class="card">
+      <h3 class="suggestions-title">Suggested Actions:</h3>
+      <ul class="suggestions-list">
+        <li>Reduce the transaction amount</li>
+        <li>Consolidate notes to reduce fees</li>
+        <li>Wait for pending transactions to confirm</li>
+      </ul>
+    </div>
+    
+    <Button
+      variant="primary"
+      fullWidth={true}
+      on:click={onTryAgain}
+    >
+      Try Again
+    </Button>
+    
+    <Button
+      variant="secondary"
+      fullWidth={true}
+      on:click={onGoBack}
+    >
+      Go Back
+    </Button>
+  </div>
+</div>
+
+<style>
+  .transaction-failed {
+    height: 100%;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  
+  .back-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    color: #000;
+  }
+  
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .content {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  
+  .error-container {
+    text-align: center;
+    padding: 32px 0;
+  }
+  
+  .error-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+  }
+  
+  .error-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #000;
+  }
+  
+  .error-subtitle {
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .error-message {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    color: #dc2626;
+  }
+  
+  .error-message strong {
+    color: #b91c1c;
+  }
+  
+  .card {
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  
+  .suggestions-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #000;
+  }
+  
+  .suggestions-list {
+    font-size: 14px;
+    color: #666;
+    padding-left: 20px;
+    margin: 0;
+  }
+  
+  .suggestions-list li {
+    margin-bottom: 4px;
+  }
+  
+  .suggestions-list li:last-child {
+    margin-bottom: 0;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/ConfirmTransaction.svelte
+========================================
+<script lang="ts">
+  import Button from '../atoms/Button.svelte';
+  
+  export let recipientName: string = 'Alice';
+  export let recipientAddress: string = 'nock1qvk8x9y7...ht4k3n2p5m';
+  export let amount: number = 50.00;
+  export let fee: number = 0.02;
+  export let onConfirm: () => void = () => {};
+  export let onCancel: () => void = () => {};
+  export let onBack: () => void = () => {};
+  
+  let isConfirming = false;
+  
+  $: total = amount + fee;
+  
+  async function handleConfirm() {
+    isConfirming = true;
+    // Simulate transaction processing
+    setTimeout(() => {
+      isConfirming = false;
+      onConfirm();
+    }, 1500);
+  }
+</script>
+
+<div class="confirm-transaction">
+  <div class="header">
+    <button class="back-btn" on:click={onBack}>←</button>
+    <span class="header-title">Confirm Transaction</span>
+    <span></span>
+  </div>
+  
+  <div class="content no-scroll">
+    <h2 class="review-title">Review Transaction</h2>
+    
+    <div class="card recipient-card">
+      <div class="label">SENDING TO</div>
+      <div class="recipient-name">{recipientName}</div>
+      <div class="recipient-address">{recipientAddress}</div>
+    </div>
+    
+    <div class="card amount-card">
+      <div class="amount-display">
+        <div class="amount-value">{amount.toFixed(2)}</div>
+        <div class="amount-label">Amount</div>
+      </div>
+    </div>
+    
+    <div class="fee-details">
+      <div class="fee-row">
+        <span class="fee-label">Transaction Amount:</span>
+        <span class="fee-value">{amount.toFixed(2)}</span>
+      </div>
+      <div class="fee-row">
+        <span class="fee-label">Network Fee:</span>
+        <span class="fee-value">{fee.toFixed(2)}</span>
+      </div>
+      <div class="fee-row total">
+        <span class="fee-label">Total:</span>
+        <span class="fee-value">{total.toFixed(2)}</span>
+      </div>
+    </div>
+    
+    <div class="warning-box">
+      <span class="warning-icon">⚠️</span>
+      <p class="warning-text">
+        This transaction cannot be reversed once sent.
+      </p>
+    </div>
+    
+    <Button
+      variant="primary"
+      fullWidth={true}
+      on:click={handleConfirm}
+      disabled={isConfirming}
+    >
+      {isConfirming ? 'Processing...' : 'Confirm & Send'}
+    </Button>
+    
+    <Button
+      variant="secondary"
+      fullWidth={true}
+      on:click={onCancel}
+      disabled={isConfirming}
+    >
+      Cancel
+    </Button>
+  </div>
+</div>
+
+<style>
+  .confirm-transaction {
+    height: 100%;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  
+  .back-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    color: #000;
+  }
+  
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .content {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  
+  .content.no-scroll {
+    overflow: hidden;
+  }
+  
+  .review-title {
+    font-size: 18px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  
+  .card {
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  
+  .recipient-card {
+    background: #f3f4f6;
+  }
+  
+  .label {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+  }
+  
+  .recipient-name {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  
+  .recipient-address {
+    font-size: 12px;
+    color: #666;
+  }
+  
+  .amount-card {
+    background: #ffffff;
+  }
+  
+  .amount-display {
+    text-align: center;
+    padding: 16px 0;
+  }
+  
+  .amount-value {
+    font-size: 32px;
+    font-weight: 700;
+    color: #000;
+  }
+  
+  .amount-label {
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .fee-details {
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  
+  .fee-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    padding: 8px 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  
+  .fee-row:last-child {
+    border-bottom: none;
+  }
+  
+  .fee-row.total {
+    font-weight: 600;
+    margin-top: 8px;
+    padding-top: 12px;
+    border-top: 2px solid #e5e7eb;
+    border-bottom: none;
+  }
+  
+  .fee-label {
+    color: #666;
+  }
+  
+  .fee-value {
+    color: #000;
+  }
+  
+  .fee-row.total .fee-label,
+  .fee-row.total .fee-value {
+    color: #000;
+    font-weight: 600;
+  }
+  
+  .warning-box {
+    display: flex;
+    gap: 8px;
+    padding: 12px;
+    background: #fef3c7;
+    border: 1px solid #fde68a;
+    border-radius: 8px;
+    margin-bottom: 20px;
+  }
+  
+  .warning-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  
+  .warning-text {
+    font-size: 13px;
+    color: #92400e;
+    margin: 0;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/ImportWallet.svelte
+========================================
+<script lang="ts">
+  import Header from '../molecules/Header.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let onImport: () => void = () => {};
+  export let onBack: () => void = () => {};
+  export let showHeader: boolean = true;
+  
+  let seedPhrase = '';
+  let walletName = '';
+  let error = '';
+  let isImporting = false;
+  
+  function validateSeedPhrase(phrase: string): boolean {
+    const words = phrase.trim().split(/\s+/);
+    return words.length === 12 && words.every(word => word.length > 0);
+  }
+  
+  async function handleImport() {
+    error = '';
+    
+    if (!walletName.trim()) {
+      error = 'Please enter a wallet name';
+      return;
+    }
+    
+    if (!seedPhrase.trim()) {
+      error = 'Please enter your seed phrase';
+      return;
+    }
+    
+    if (!validateSeedPhrase(seedPhrase)) {
+      error = 'Invalid seed phrase. Please enter exactly 12 words';
+      return;
+    }
+    
+    isImporting = true;
+    
+    // Simulate import process
+    setTimeout(() => {
+      isImporting = false;
+      onImport();
+    }, 1000);
+  }
+</script>
+
+<div class="import-wallet">
+  {#if showHeader}
+    <Header title="Import Wallet" showBack={true} on:click={onBack} />
+  {/if}
+  
+  <div class="import-content">
+    <div class="import-header">
+      <h2 class="import-title">Import Your Wallet</h2>
+      <p class="import-subtitle">Enter your 12-word seed phrase to restore your wallet</p>
+    </div>
+    
+    <div class="import-form">
+      <div class="form-group">
+        <label for="wallet-name" class="form-label">Wallet Name</label>
+        <input
+          id="wallet-name"
+          type="text"
+          class="input-field"
+          placeholder="e.g., Main Wallet"
+          bind:value={walletName}
+          disabled={isImporting}
+        />
+      </div>
+      
+      <div class="form-group">
+        <label for="seed-phrase" class="form-label">Seed Phrase</label>
+        <textarea
+          id="seed-phrase"
+          class="textarea-field"
+          class:error
+          placeholder="Enter your 12-word seed phrase..."
+          bind:value={seedPhrase}
+          disabled={isImporting}
+          rows="4"
+        />
+        <p class="helper-text">Enter the words separated by spaces</p>
+      </div>
+      
+      {#if error}
+        <div class="error-message">{error}</div>
+      {/if}
+      
+      <div class="button-group-single">
+        <Button
+          variant="primary"
+          fullWidth={true}
+          on:click={handleImport}
+          disabled={isImporting}
+        >
+          {isImporting ? 'Importing...' : 'Import Wallet'}
+        </Button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .import-wallet {
+    height: 100%;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .import-content {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+  }
+  
+  .import-header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  
+  .import-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 8px;
+  }
+  
+  .import-subtitle {
+    font-size: 14px;
+    color: #666;
+  }
+  
+  .import-form {
+    max-width: 400px;
+    margin: 0 auto;
+  }
+  
+  .form-group {
+    margin-bottom: 24px;
+  }
+  
+  .form-label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    color: #000;
+    margin-bottom: 8px;
+  }
+  
+  .input-field,
+  .textarea-field {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  
+  .textarea-field {
+    resize: vertical;
+    min-height: 100px;
+    font-family: inherit;
+    line-height: 1.5;
+  }
+  
+  .input-field:focus,
+  .textarea-field:focus {
+    border-color: #000;
+  }
+  
+  .input-field.error,
+  .textarea-field.error {
+    border-color: #dc2626;
+  }
+  
+  .input-field:disabled,
+  .textarea-field:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  
+  .helper-text {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+  }
+  
+  .error-message {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #dc2626;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  
+  .button-group-single {
+    margin-top: 32px;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/PasswordCreation.svelte
+========================================
+<script lang="ts">
+  import Header from '../molecules/Header.svelte';
+  import Button from '../atoms/Button.svelte';
+  
+  export let onCreateWallet: () => void = () => {};
+  export let onBack: () => void = () => {};
+  
+  let password = '';
+  let confirmPassword = '';
+  let agreedToTerms = false;
+  let passwordError = '';
+  let confirmError = '';
+  
+  $: passwordStrength = getPasswordStrength(password);
+  
+  function getPasswordStrength(pwd: string) {
+    if (!pwd) return { level: 0, text: '', color: '#e5e7eb' };
+    
+    let strength = 0;
+    if (pwd.length >= 8) strength++;
+    if (pwd.length >= 12) strength++;
+    if (/[a-z]/.test(pwd)) strength++;
+    if (/[A-Z]/.test(pwd)) strength++;
+    if (/[0-9]/.test(pwd)) strength++;
+    if (/[^a-zA-Z0-9]/.test(pwd)) strength++;
+    
+    const levels = [
+      { level: 0, text: '', color: '#e5e7eb' },
+      { level: 1, text: 'Weak', color: '#dc2626' },
+      { level: 2, text: 'Weak', color: '#dc2626' },
+      { level: 3, text: 'Medium', color: '#fde047' },
+      { level: 4, text: 'Medium', color: '#fde047' },
+      { level: 5, text: 'Strong', color: '#16a34a' },
+      { level: 6, text: 'Strong', color: '#16a34a' }
+    ];
+    
+    return levels[strength];
+  }
+  
+  function validatePassword() {
+    if (password.length < 8) {
+      passwordError = 'Password must be at least 8 characters';
+      return false;
+    }
+    passwordError = '';
+    return true;
+  }
+  
+  function validateConfirmPassword() {
+    if (confirmPassword !== password) {
+      confirmError = 'Passwords do not match';
+      return false;
+    }
+    confirmError = '';
+    return true;
+  }
+  
+  function handleCreateWallet() {
+    const validPassword = validatePassword();
+    const validConfirm = validateConfirmPassword();
+    
+    if (validPassword && validConfirm && agreedToTerms) {
+      onCreateWallet();
+    }
+  }
+</script>
+
+<div class="password-creation">
+  <Header title="" showBack={true} showLogo={true} on:click={onBack} />
+  
+  <div class="content">
+    <h2 class="title">Set Your Password</h2>
+    <p class="subtitle">
+      This password will unlock your wallet on this device.
+    </p>
+    
+    <div class="input-group">
+      <label class="input-label">Password</label>
+      <input 
+        type="password" 
+        class="input-field"
+        class:error={passwordError}
+        placeholder="Enter password"
+        bind:value={password}
+        on:blur={validatePassword}
+      >
+      {#if passwordError}
+        <span class="error-message">{passwordError}</span>
+      {/if}
+    </div>
+    
+    <div class="input-group">
+      <label class="input-label">Confirm Password</label>
+      <input 
+        type="password" 
+        class="input-field"
+        class:error={confirmError}
+        placeholder="Confirm password"
+        bind:value={confirmPassword}
+        on:blur={validateConfirmPassword}
+      >
+      {#if confirmError}
+        <span class="error-message">{confirmError}</span>
+      {/if}
+    </div>
+    
+    {#if password}
+      <div class="password-strength">
+        <div class="strength-bar">
+          <div 
+            class="strength-fill" 
+            style="width: {(passwordStrength.level / 6) * 100}%; background: {passwordStrength.color};"
+          ></div>
+        </div>
+        <p class="strength-text" style="color: {passwordStrength.color};">
+          {passwordStrength.text ? `${passwordStrength.text} password` : ''}
+        </p>
+      </div>
+    {/if}
+    
+    <div class="checkbox-group">
+      <button 
+        class="checkbox" 
+        class:checked={agreedToTerms}
+        on:click={() => agreedToTerms = !agreedToTerms}
+      ></button>
+      <label class="checkbox-label">
+        I agree to the <a href="#" class="link">Terms of Service</a> and <a href="#" class="link">Privacy Policy</a>
+      </label>
+    </div>
+    
+    <Button 
+      variant="primary" 
+      fullWidth={true}
+      disabled={!password || !confirmPassword || !agreedToTerms}
+      on:click={handleCreateWallet}
+    >
+      Create Wallet
+    </Button>
+  </div>
+</div>
+
+<style>
+  .password-creation {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+  }
+  
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 8px;
+  }
+  
+  .subtitle {
+    font-size: 13px;
+    color: #666;
+    margin-bottom: 20px;
+  }
+  
+  .input-group {
+    margin-bottom: 16px;
+  }
+  
+  .input-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: #666;
+    margin-bottom: 8px;
+  }
+  
+  .input-field {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    outline: none;
+  }
+  
+  .input-field:focus {
+    border-color: #000;
+  }
+  
+  .input-field.error {
+    border-color: #dc2626;
+  }
+  
+  .error-message {
+    display: block;
+    font-size: 12px;
+    color: #dc2626;
+    margin-top: 4px;
+  }
+  
+  .password-strength {
+    margin-bottom: 20px;
+  }
+  
+  .strength-bar {
+    height: 4px;
+    background: #e5e7eb;
+    border-radius: 2px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  
+  .strength-fill {
+    height: 100%;
+    transition: all 300ms ease;
+    border-radius: 2px;
+  }
+  
+  .strength-text {
+    font-size: 12px;
+    margin: 0;
+  }
+  
+  .checkbox-group {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  
+  .checkbox {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    border: 2px solid #e5e7eb;
+    border-radius: 3px;
+    background: #ffffff;
+    cursor: pointer;
+    margin-top: 2px;
+    position: relative;
+  }
+  
+  .checkbox.checked {
+    background: #000;
+    border-color: #000;
+  }
+  
+  .checkbox.checked::after {
+    content: '✓';
+    position: absolute;
+    top: -2px;
+    left: 2px;
+    color: white;
+    font-size: 12px;
+  }
+  
+  .checkbox-label {
+    font-size: 12px;
+    color: #666;
+    line-height: 1.4;
+  }
+  
+  .link {
+    color: #000;
+    text-decoration: underline;
+  }
+  
+  .content :global(.button--primary) {
+    margin-top: auto;
+  }
+  
+  .content :global(.button--disabled) {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+</style>
+
+========================================
+FILE: ./src/lib/components/organisms/TransactionHistory.svelte
+========================================
+<script lang="ts">
+  export let transactions: any[] = [];
+  
+  let searchQuery = '';
+  
+  function generateMockTransactions() {
+    return [
+      {
+        type: 'sent',
+        amount: 50.00,
+        address: 'nock1qvk...3n2p5m',
+        fee: 0.02,
+        date: '2 hours ago',
+        confirmations: 12
+      },
+      {
+        type: 'received',
+        amount: 125.50,
+        address: 'nock1abc...xyz',
+        date: '1 day ago',
+        confirmations: 144
+      },
+      {
+        type: 'consolidation',
+        amount: 0.00,
+        notes: 'Combined 8 notes → 1 note',
+        fee: 0.08,
+        date: '2 days ago',
+        confirmations: 288
+      }
+    ];
+  }
+  
+  $: if (transactions.length === 0) {
+    transactions = generateMockTransactions();
+  }
+</script>
+
+<div class="transaction-history">
+  <div class="header">
+    <button class="back-btn">←</button>
+    <span class="header-title">History</span>
+    <button class="settings-btn">⚙</button>
+  </div>
+  
+  <div class="content">
+    <div class="search-bar">
+      <input 
+        type="text" 
+        class="input-field" 
+        placeholder="Search transactions..."
+        bind:value={searchQuery}
+      >
+      <button class="filter-btn">Filter</button>
+    </div>
+    
+    <div class="transaction-count">Showing {transactions.length} transactions</div>
+    
+    <div class="transaction-list">
+      {#each transactions as transaction}
+        <div class="transaction-card">
+          <div class="transaction-header">
+            <span class="transaction-type">
+              {transaction.type === 'sent' ? 'Sent' : 
+               transaction.type === 'received' ? 'Received' : 
+               'Consolidation'}
+            </span>
+            <span class="transaction-amount {transaction.type}">
+              {transaction.type === 'sent' ? '-' : 
+               transaction.type === 'received' ? '+' : ''}{transaction.amount.toFixed(2)}
+            </span>
+          </div>
+          {#if transaction.address}
+            <div class="transaction-detail">{transaction.type === 'sent' ? 'To' : 'From'}: {transaction.address}</div>
+          {/if}
+          {#if transaction.notes}
+            <div class="transaction-detail">{transaction.notes}</div>
+          {/if}
+          {#if transaction.fee}
+            <div class="transaction-detail">Fee: {transaction.fee}</div>
+          {/if}
+          <div class="transaction-detail">{transaction.date} • {transaction.confirmations} confirmations</div>
+        </div>
+      {/each}
+    </div>
+    
+    <button class="btn-secondary">Export History</button>
+  </div>
+</div>
+
+<style>
+  .transaction-history {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+  }
+  
+  .header {
+    height: 60px;
+    background: #ffffff;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  
+  .back-btn,
+  .settings-btn {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    color: #000;
+  }
+  
+  .header-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    overflow-y: auto;
+  }
+  
+  .search-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  
+  .input-field {
+    flex: 1;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #f3f4f6;
+    font-size: 14px;
+    outline: none;
+  }
+  
+  .filter-btn {
+    padding: 0 16px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .transaction-count {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 16px;
+  }
+  
+  .transaction-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  
+  .transaction-card {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 14px;
+  }
+  
+  .transaction-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  
+  .transaction-type {
+    font-size: 14px;
+    font-weight: 600;
+    color: #000;
+  }
+  
+  .transaction-amount {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  
+  .transaction-amount.sent {
+    color: #dc2626;
+  }
+  
+  .transaction-amount.received {
+    color: #16a34a;
+  }
+  
+  .transaction-amount.consolidation {
+    color: #000;
+  }
+  
+  .transaction-detail {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 4px;
+  }
+  
+  .transaction-detail:last-child {
+    margin-bottom: 0;
+  }
+  
+  .btn-secondary {
+    background: #ffffff;
+    color: #000;
+    border: 2px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 16px;
+  }
+  
+  .btn-secondary:hover {
+    background: #f3f4f6;
+  }
+</style>
+
+========================================
+FILE: ./src/Showcase.svelte
+========================================
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import WelcomeScreen from './lib/components/organisms/WelcomeScreen.svelte';
+  import SeedPhraseDisplay from './lib/components/organisms/SeedPhraseDisplay.svelte';
+  import ConfirmSeedPhrase from './lib/components/organisms/ConfirmSeedPhrase.svelte';
+  import PasswordCreation from './lib/components/organisms/PasswordCreation.svelte';
+  import WalletDashboard from './lib/components/organisms/WalletDashboard.svelte';
+  import SendTransaction from './lib/components/organisms/SendTransaction.svelte';
+  import TransactionHistory from './lib/components/organisms/TransactionHistory.svelte';
+  import Settings from './lib/components/organisms/Settings.svelte';
+  import LockScreen from './lib/components/organisms/LockScreen.svelte';
+  import ImportWallet from './lib/components/organisms/ImportWallet.svelte';
+  import AddressBook from './lib/components/organisms/AddressBook.svelte';
+  import ConfirmTransaction from './lib/components/organisms/ConfirmTransaction.svelte';
+  import TransactionFailed from './lib/components/organisms/TransactionFailed.svelte';
+  
+  type ViewMode = 'all' | 'setup' | 'main' | 'management' | 'settings';
+  type ThemeMode = 'light' | 'dark' | 'dark-blue' | 'purple';
+  type DesignMode = 'default' | 'minimal' | 'rounded' | 'sharp';
+  
+  let selectedView: ViewMode = 'all';
+  let selectedTheme: ThemeMode = 'light';
+  let selectedDesign: DesignMode = 'default';
+  
+  let mockSeedPhrase = [
+    'apple', 'bridge', 'cancel', 'danger',
+    'energy', 'forest', 'garden', 'harvest',
+    'island', 'jungle', 'kitchen', 'laptop'
+  ];
+  
+  let mockTransactions = [
+    {
+      id: 'tx-1',
+      type: 'send' as const,
+      amount: 0.05,
+      address: 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq',
+      date: new Date(Date.now() - 3600000),
+      status: 'confirmed' as const,
+      confirmations: 12,
+      txHash: 'abc123...',
+      fee: 0.0001
+    },
+    {
+      id: 'tx-2',
+      type: 'receive' as const,
+      amount: 0.1,
+      address: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4',
+      date: new Date(Date.now() - 7200000),
+      status: 'confirmed' as const,
+      confirmations: 24,
+      txHash: 'def456...',
+      fee: 0.0001
+    },
+    {
+      id: 'tx-3',
+      type: 'send' as const,
+      amount: 0.025,
+      address: 'bc1q5xvftzgd8a4x8f6g3k4jw5a2j4k5j6k5j6k5j6',
+      date: new Date(Date.now() - 86400000),
+      status: 'pending' as const,
+      confirmations: 2,
+      txHash: 'ghi789...',
+      fee: 0.0002
+    }
+  ];
+</script>
+
+<div class="showcase-container">
+  <header class="showcase-header">
+    <h1>Fletch Wallet - Chrome Extension Design</h1>
+    <p class="subtitle">Complete User Flow Mockup - Svelte Component Architecture</p>
+    
+    <div class="controls-container">
+      <!-- View Selector -->
+      <div class="selector-group">
+        <label class="selector-label" for="view-select">View:</label>
+        <select id="view-select" class="dropdown-select" bind:value={selectedView}>
+          <option value="all">All Screens</option>
+          <option value="setup">Initial Setup</option>
+          <option value="main">Main Interface</option>
+          <option value="management">Wallet Management</option>
+          <option value="settings">Settings & Security</option>
+        </select>
+      </div>
+
+      <!-- Theme Selector -->
+      <div class="selector-group">
+        <label class="selector-label" for="theme-select">Theme:</label>
+        <select id="theme-select" class="dropdown-select" bind:value={selectedTheme}>
+          <option value="light">☀️ Light</option>
+          <option value="dark">🌙 Dark</option>
+          <option value="dark-blue">🌊 Dark Blue</option>
+          <option value="purple">💜 Purple</option>
+        </select>
+      </div>
+
+      <!-- Design Selector -->
+      <div class="selector-group">
+        <label class="selector-label" for="design-select">Design:</label>
+        <select id="design-select" class="dropdown-select" bind:value={selectedDesign}>
+          <option value="default">Default</option>
+          <option value="minimal">Minimal</option>
+          <option value="rounded">Rounded</option>
+          <option value="sharp">Sharp</option>
+        </select>
+      </div>
+    </div>
+  </header>
+  
+  {#if selectedView === 'all' || selectedView === 'setup'}
+  <section class="showcase-section">
+    <h2 class="section-title">Initial Setup Flow</h2>
+    <div class="screens-row">
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Welcome Screen</h3>
+        <p class="screen-description">Entry point for new and existing users</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <WelcomeScreen 
+            onCreateWallet={() => console.log('Create wallet')}
+            onImportWallet={() => console.log('Import wallet')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Create New Wallet</h3>
+        <p class="screen-description">Generated 12-word seed phrase display</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <SeedPhraseDisplay 
+            seedPhrase={mockSeedPhrase}
+            revealed={true}
+            onContinue={() => console.log('Continue')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Confirm Seed Phrase</h3>
+        <p class="screen-description">Verification of seed phrase backup</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <ConfirmSeedPhrase 
+            seedPhrase={mockSeedPhrase}
+            onConfirm={() => console.log('Confirmed')}
+            onBack={() => console.log('Back')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Set Password</h3>
+        <p class="screen-description">Secure the wallet with password</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <PasswordCreation 
+            onCreateWallet={() => console.log('Create wallet')}
+            onBack={() => console.log('Back')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Import Wallet</h3>
+        <p class="screen-description">Restore existing wallet from seed phrase</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <ImportWallet 
+            onImport={() => console.log('Import wallet')}
+            onBack={() => console.log('Back')}
+            showHeader={true}
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+  {/if}
+  
+  {#if selectedView === 'all' || selectedView === 'main'}
+  <section class="showcase-section">
+    <h2 class="section-title">Main Wallet Interface</h2>
+    <div class="screens-row">
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Dashboard</h3>
+        <p class="screen-description">Main wallet view with balance and quick actions</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <WalletDashboard 
+            balance={1234.56}
+            noteCount={12}
+            recentTransactions={mockTransactions.slice(0, 3)}
+            onSettings={() => console.log('Settings clicked')}
+            on:navigate={(e) => console.log('Navigate:', e.detail)}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Send Transaction</h3>
+        <p class="screen-description">Send Bitcoin with fee selection</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <SendTransaction 
+            balance={0.12345678}
+            onSend={(data) => console.log('Send', data)}
+            onCancel={() => console.log('Cancel')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Transaction History</h3>
+        <p class="screen-description">Complete transaction records with filtering</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <TransactionHistory 
+            transactions={mockTransactions}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Confirm Transaction</h3>
+        <p class="screen-description">Transaction review before sending</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <ConfirmTransaction 
+            recipientName="Alice"
+            recipientAddress="nock1qvk8x9y7...ht4k3n2p5m"
+            amount={50.00}
+            fee={0.02}
+            onConfirm={() => console.log('Confirmed')}
+            onCancel={() => console.log('Cancelled')}
+            onBack={() => console.log('Back')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Transaction Failed</h3>
+        <p class="screen-description">Error handling for failed transactions</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <TransactionFailed 
+            errorMessage="Insufficient balance. You need 50.02 but only have 45.00 available."
+            onTryAgain={() => console.log('Try again')}
+            onGoBack={() => console.log('Go back')}
+            onBack={() => console.log('Back')}
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+  {/if}
+  
+  {#if selectedView === 'all' || selectedView === 'management'}
+  <section class="showcase-section">
+    <h2 class="section-title">Wallet Management</h2>
+    <div class="screens-row">
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Address Book</h3>
+        <p class="screen-description">Manage saved wallet addresses</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <AddressBook
+            onAddContact={() => console.log('Add contact')}
+            onSelectContact={(contact) => console.log('Selected:', contact)}
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+  {/if}
+  
+  {#if selectedView === 'all' || selectedView === 'settings'}
+  <section class="showcase-section">
+    <h2 class="section-title">Settings & Security</h2>
+    <div class="screens-row">
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Settings</h3>
+        <p class="screen-description">Wallet configuration and security</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <Settings 
+            onLogout={() => console.log('Logout')}
+            onExportSeed={() => console.log('Export seed')}
+            onImportWallet={() => console.log('Import wallet')}
+            onAddressBook={() => console.log('Open address book')}
+          />
+        </div>
+      </div>
+      
+      <div class="screen-wrapper">
+        <h3 class="screen-title">Locked Wallet</h3>
+        <p class="screen-description">Security lock screen</p>
+        <div class="screen" data-theme={selectedTheme} data-design={selectedDesign}>
+          <LockScreen 
+            onUnlock={(password) => console.log('Unlock with:', password)}
+            onForgotPassword={() => console.log('Forgot password')}
+          />
+        </div>
+      </div>
+    </div>
+  </section>
+  {/if}
+  
+  {#if selectedView === 'all'}
+  <section class="showcase-section">
+    <h2 class="section-title">Component Architecture</h2>
+    <div class="architecture-grid">
+      <div class="architecture-card">
+        <h3>Atomic Components</h3>
+        <ul>
+          <li>Button - Multiple variants</li>
+          <li>Input - With validation</li>
+          <li>Card - Container component</li>
+          <li>Icon - SVG icon library</li>
+          <li>Logo - Brand component</li>
+        </ul>
+      </div>
+      
+      <div class="architecture-card">
+        <h3>Molecular Components</h3>
+        <ul>
+          <li>Header - Navigation header</li>
+          <li>TabBar - Bottom navigation</li>
+          <li>TransactionItem - Transaction display</li>
+          <li>WalletCard - Wallet selector</li>
+          <li>FeeSelector - Fee options</li>
+          <li>SeedWord - Seed phrase word</li>
+        </ul>
+      </div>
+      
+      <div class="architecture-card">
+        <h3>Organism Components</h3>
+        <ul>
+          <li>WelcomeScreen - Onboarding</li>
+          <li>SeedPhraseDisplay - Seed management</li>
+          <li>WalletDashboard - Main interface</li>
+          <li>SendTransaction - Send flow</li>
+          <li>TransactionHistory - History view</li>
+          <li>Settings - Preferences</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+  {/if}
+</div>
+
+<style>
+  :global(html), :global(body) {
+    margin: 0;
+    padding: 0;
+    height: auto !important;
+    overflow: auto !important;
+  }
+  
+  :global(body) {
+    background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);
+    min-height: 100vh;
+  }
+  
+  :global(#app) {
+    height: auto !important;
+  }
+  
+  .showcase-container {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+  
+  .showcase-header {
+    text-align: center;
+    margin-bottom: 60px;
+  }
+  
+  .showcase-header h1 {
+    font-size: 36px;
+    font-weight: 700;
+    color: #000;
+    margin-bottom: 20px;
+  }
+  
+  .subtitle {
+    font-size: 16px;
+    color: #666;
+    margin-bottom: 30px;
+  }
+  
+  .controls-container {
+    display: flex;
+    flex-direction: row;
+    gap: 30px;
+    margin: 30px 0;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .selector-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  
+  .selector-label {
+    font-weight: 600;
+    font-size: 14px;
+    color: #333;
+    min-width: 60px;
+  }
+  
+  .dropdown-select {
+    padding: 10px 16px;
+    background: white;
+    border: 2px solid #e0e0e0;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 150px;
+    outline: none;
+  }
+
+  .dropdown-select:hover {
+    background: #f5f5f5;
+    border-color: #999;
+  }
+
+  .dropdown-select:focus {
+    border-color: #000;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.1);
+  }
+  
+  
+  .showcase-section {
+    margin-bottom: 80px;
+  }
+  
+  .section-title {
+    font-size: 24px;
+    font-weight: 600;
+    color: #000;
+    margin: 60px 0 30px;
+    padding-left: 20px;
+    border-left: 4px solid #000;
+  }
+  
+  .screens-row {
+    display: flex;
+    gap: 30px;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .screen-wrapper {
+    text-align: center;
+  }
+  
+  .screen-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #333;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  
+  .screen-description {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 15px;
+    max-width: 360px;
+  }
+  
+  .screen {
+    width: 360px;
+    height: 600px;
+    background: var(--color-background, #ffffff);
+    border-radius: 16px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    position: relative;
+  }
+  
+  .architecture-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 30px;
+    margin-top: 40px;
+  }
+  
+  .architecture-card {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  }
+  
+  .architecture-card h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #000;
+    margin-bottom: 20px;
+  }
+  
+  .architecture-card ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  
+  .architecture-card li {
+    padding: 8px 0;
+    color: #666;
+    font-size: 14px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  
+  .architecture-card li:last-child {
+    border-bottom: none;
+  }
+  
+  @media (max-width: 768px) {
+    .screens-row {
+      flex-direction: column;
+      align-items: center;
+    }
+    
+    .architecture-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -1,0 +1,15 @@
+name: Set up JavaScript dependencies
+description: Install the pinned npm CLI and the exact dependency lockfile without dependency lifecycle scripts.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22'
+        cache: npm
+    - name: Install npm
+      shell: bash
+      run: npm install --global npm@12.1.0 --ignore-scripts --no-audit --no-fund
+    - name: Install locked dependencies
+      shell: bash
+      run: npm ci

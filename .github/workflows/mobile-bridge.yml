@@ -1,0 +1,105 @@
+name: Test mobile wallet bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/mobile-bridge.yml'
+      - '.github/actions/setup-js/**'
+      - 'apps/mobile/**'
+      - 'packages/wallet/src/**'
+      - '!apps/desktop/src/**'
+      - '!packages/wallet/src/platform/desktopStorage.ts'
+      - '!apps/extension/src/**'
+      - '!packages/wallet/src/components/**'
+      - '!packages/wallet/src/lib/components/**'
+      - '!packages/wallet/src/styles/**'
+      - '!packages/wallet/src/App.svelte'
+      - '!apps/extension/src/main.ts'
+      - '!packages/wallet/src/app.css'
+      - 'packages/wallet-engine/**'
+      - 'tests/mobile/**'
+      - 'tests/fixtures/**'
+      - 'playwright.mobile.config.ts'
+      - 'apps/mobile/vite.config.ts'
+      - 'tsconfig*.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.npmrc'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - 'scripts/build-wasm.sh'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/mobile-bridge.yml'
+      - '.github/actions/setup-js/**'
+      - 'apps/mobile/**'
+      - 'packages/wallet/src/**'
+      - '!apps/desktop/src/**'
+      - '!packages/wallet/src/platform/desktopStorage.ts'
+      - '!apps/extension/src/**'
+      - '!packages/wallet/src/components/**'
+      - '!packages/wallet/src/lib/components/**'
+      - '!packages/wallet/src/styles/**'
+      - '!packages/wallet/src/App.svelte'
+      - '!apps/extension/src/main.ts'
+      - '!packages/wallet/src/app.css'
+      - 'packages/wallet-engine/**'
+      - 'tests/mobile/**'
+      - 'tests/fixtures/**'
+      - 'playwright.mobile.config.ts'
+      - 'apps/mobile/vite.config.ts'
+      - 'tsconfig*.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.npmrc'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
+      - 'scripts/build-wasm.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-bridge-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  mobile-bridge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - name: Install pinned Rust and WASM tools
+        run: |
+          rustup toolchain install nightly-2025-02-14 --profile minimal --target wasm32-unknown-unknown
+          cargo +stable install wasm-pack --version 0.15.0 --locked
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/wallet-engine/target
+          key: rust-${{ runner.os }}-nightly-2025-02-14-${{ hashFiles('packages/wallet-engine/**/Cargo.lock', 'packages/wallet-engine/**/Cargo.toml', 'packages/wallet-engine/**/*.rs') }}
+          restore-keys: rust-${{ runner.os }}-nightly-2025-02-14-
+      - name: Build the WASM engine
+        run: npm run build:wasm
+      - name: Test mobile wallet bridge
+        run: |
+          npx playwright install --with-deps chrome
+          npm run test:mobile
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mobile-bridge-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -93,3 +93,48 @@ test('Xcode project edits round-trip with the patched UUID dependency', () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('concurrently quotes arguments and rejects line terminators after comments', () => {
+  const dependency = createRequire(require.resolve('concurrently'));
+  const { quote, parse } = dependency('shell-quote');
+  const args = ['echo', 'a b', "single'quote", 'double"quote', '$literal;value'];
+  assert.deepEqual(parse(quote(args)), args);
+  for (const separator of ['\n', '\r', '\u2028', '\u2029']) {
+    assert.throws(
+      () => quote(['echo', 'ok', { comment: 'note' }, `a${separator}echo injected`]),
+      TypeError
+    );
+  }
+});
+
+test('indexed source maps preserve mappings and reject excessive section offsets', () => {
+  const { SourceMapConsumer, SourceNode } = require('source-map-js');
+  const map = {
+    version: 3,
+    sources: ['input.js'],
+    names: [],
+    mappings: 'AAAA',
+    sourcesContent: ['x']
+  };
+  const indexed = (line: number) => ({
+    version: 3,
+    sections: [{ offset: { line, column: 0 }, map }]
+  });
+  const consumer = new SourceMapConsumer(indexed(1));
+  assert.equal(SourceNode.fromStringWithSourceMap('\nx', consumer).toString(), '\nx');
+  for (const offset of [1e12, Infinity, -1, 1.5]) {
+    assert.throws(() => new SourceMapConsumer(indexed(offset)), /Section offset/);
+  }
+});
+
+test('sharp renders SVG icons with its bundled image libraries', async () => {
+  const sharp = require('sharp');
+  const svg = Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#fff"/></svg>'
+  );
+  const png = await sharp(svg).resize(32, 32).png().toBuffer();
+  const metadata = await sharp(png).metadata();
+  assert.equal(metadata.format, 'png');
+  assert.equal(metadata.width, 32);
+  assert.equal(metadata.height, 32);
+});

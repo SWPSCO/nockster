@@ -6,9 +6,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use tx_types::crypto::utils_nostd::{be32_lt, is_zero32, CHEETAH_N};
-use tx_types::crypto::vanity::{
-    encode_pkh, key_json, Match, MatchMode, Mnemonic, MnemonicSearch, Prefix, Search,
-};
+use vanity::{encode_pkh, key_json, Match, MatchMode, Mnemonic, MnemonicSearch, Prefix, Search};
 use zeroize::Zeroizing;
 
 use crate::{cli::VanityArgs, ui};
@@ -257,7 +255,7 @@ fn mine(args: Args) -> Result<bool, String> {
 mod tests {
     use super::*;
     use tx_types::crypto::cheetah_nostd::{cheetah_pub_from_sk, ser_a_pt};
-    use tx_types::crypto::vanity::pkh_from_public_key;
+    use vanity::pkh_from_public_key;
 
     #[test]
     fn output_contains_a_recoverable_key_and_matching_address() {

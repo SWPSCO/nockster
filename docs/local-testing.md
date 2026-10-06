@@ -32,7 +32,9 @@ npm run build:wasm
 Keep `packages/wallet-engine/Cargo.lock` and the package lockfile in place. The build uses the
 pinned Git dependencies in `packages/wallet-engine/Cargo.toml`; sibling Nockchain, Iris, and RPC
 repositories are not needed to run client tests. `npm ci` installs the Iris SDK
-under the `iris-v1` package name. The WASM build also generates the shared vanity miner in `packages/wallet/public/vanity`.
+under the `iris-v1` package name. The WASM build also compiles the root `vanity`
+crate from the pinned `tx-types` checkout into the shared browser miner in
+`packages/wallet/public/vanity`.
 Build outputs go in `packages/wallet/src/pkg`, `apps/extension/ext/dist`, and
 `apps/mobile/dist`.
 

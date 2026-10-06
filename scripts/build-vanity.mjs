@@ -25,7 +25,7 @@ const source = resolve(dirname(library.manifest_path), '..');
 execFileSync(
   process.env.PYTHON || 'python3',
   [
-    resolve(source, 'tx-types/vanity/build-browser.py'),
+    resolve(source, 'vanity/build-browser.py'),
     '--out-dir',
     resolve(root, 'packages/wallet/public/vanity')
   ],

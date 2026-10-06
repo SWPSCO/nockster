@@ -1,9 +1,10 @@
 import { test, expect, chromium } from '@playwright/test';
+import { generateExtendedKey } from '../vanity.fixture';
 import { mkdtemp, cp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-for (const recovery of ['mnemonic', 'raw']) {
+for (const recovery of ['mnemonic', 'raw', 'extended']) {
   test(`${recovery} wallets appear immediately and remain selected after storage synchronization`, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'nockster-wallet-creation-'));
     const extension = join(dir, 'extension');
@@ -30,6 +31,7 @@ for (const recovery of ['mnemonic', 'raw']) {
       });
       const origin = `chrome-extension://${new URL(worker.url()).host}`;
       const page = await context.newPage();
+      await page.setViewportSize({ width: 360, height: 600 });
       await page.goto(`${origin}/test.html`);
       await page.evaluate(async () => {
         const created = await chrome.runtime.sendMessage({
@@ -49,9 +51,34 @@ for (const recovery of ['mnemonic', 'raw']) {
         .getByRole('button', { name: 'Manage wallets: Existing wallet', exact: true })
         .click();
       await page.getByRole('button', { name: '+ Add Wallet', exact: true }).click();
-      await page.getByRole('button', { name: 'Create New Wallet', exact: true }).click();
-      if (recovery === 'raw') {
-        await page.getByLabel('Custom address', { exact: false }).check();
+      await page
+        .getByRole('button', {
+          name: recovery === 'extended' ? 'Import Wallet' : 'Create New Wallet',
+          exact: true
+        })
+        .click();
+      if (recovery === 'extended') {
+        const candidate = await generateExtendedKey(page);
+        await page.getByLabel('Import with', { exact: true }).selectOption('extended');
+        await page.getByLabel('Extended private key', { exact: true }).fill(candidate.key);
+        await page.getByRole('button', { name: 'Import Wallet', exact: true }).click();
+        await expect
+          .poll(async () =>
+            page.evaluate(async () => {
+              const { data } = await chrome.runtime.sendMessage({ type: 'vault:getWallets' });
+              return data.wallets.find(
+                (wallet: { nickname: string }) => wallet.nickname === 'My Wallet 2'
+              )?.publicKey;
+            })
+          )
+          .toBe(candidate.address);
+        expect(
+          await page.evaluate(async () => JSON.stringify(await chrome.storage.local.get(null)))
+        ).not.toContain(candidate.key);
+      } else if (recovery === 'raw') {
+        await page.screenshot({ path: '/tmp/vanity-extension-collapsed.png' });
+        await page.getByRole('button', { name: 'Generate a custom address', exact: true }).click();
+        await page.getByLabel('Enable custom address generation', { exact: true }).check();
         await page.getByLabel('Address starts with', { exact: true }).fill('2');
         await page.getByLabel('Recovery', { exact: true }).selectOption('raw');
         await page.getByText('Search settings', { exact: true }).click();

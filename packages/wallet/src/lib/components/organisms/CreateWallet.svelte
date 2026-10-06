@@ -11,6 +11,7 @@
     type WalletCandidate,
     type RecoveryKind
   } from '../../services/vanity';
+  import { expectedVanityAttempts, formatVanityDuration } from '../../utils/vanityEstimate';
   import Header from '../molecules/Header.svelte';
   import Button from '../atoms/Button.svelte';
 
@@ -18,6 +19,7 @@
   export let onBack: () => void;
   let name = nextWalletName(get(walletStore).wallets.map(wallet => wallet.name));
   let custom = false;
+  let miningExpanded = false;
   let prefix = '';
   let insensitive = false;
   let keyMode: RecoveryKind = 'mnemonic';
@@ -33,8 +35,12 @@
   let progressElement: HTMLDivElement | undefined;
   const search = new VanitySearch(value => {
     const changedStatus = progress.status !== value.status;
+    const measuredRate = progress.rate <= 0 && value.rate > 0;
     progress = value;
-    if (changedStatus && ['mining', 'found', 'exhausted', 'error'].includes(value.status)) {
+    if (
+      measuredRate ||
+      (changedStatus && ['mining', 'found', 'exhausted', 'error'].includes(value.status))
+    ) {
       void tick().then(() => {
         if (!disposed) progressElement?.scrollIntoView({ block: 'nearest' });
       });
@@ -44,6 +50,19 @@
   $: mining = progress.status === 'mining';
   $: found = progress.status === 'found';
   $: canStart = !!name.trim() && !nameExists && !busy;
+  $: expectedAttempts = expectedVanityAttempts(prefix, insensitive);
+  $: averageTime =
+    expectedAttempts !== null && progress.rate > 0
+      ? formatVanityDuration(expectedAttempts / progress.rate)
+      : null;
+
+  function toggleMining() {
+    miningExpanded = !miningExpanded;
+    if (!miningExpanded) {
+      custom = false;
+      resetSearch();
+    }
+  }
 
   function resetSearch() {
     search.clear();
@@ -60,7 +79,7 @@
       const address = await validateWalletKey(candidate.key);
       if (disposed) return;
       if (candidate.address && candidate.address !== address)
-        throw new Error('The wallet address does not match the mining result.');
+        throw new Error('The wallet address does not match the generated result.');
       await onReady({ ...candidate, address }, name.trim());
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'Unable to create wallet.';
@@ -116,19 +135,42 @@
       />
     </label>
     {#if nameExists}<p class="error" role="status">A wallet with this name already exists.</p>{/if}
-    <div class="custom-choice">
-      <label class="switch-row"
-        ><span><strong>Custom address</strong><small>Choose how your address starts</small></span
-        ><input
+    <button
+      class="mining-disclosure"
+      aria-expanded={miningExpanded}
+      aria-controls="custom-address-options"
+      disabled={busy || mining}
+      on:click={toggleMining}
+    >
+      <svg
+        class:expanded={miningExpanded}
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="m9 5 7 7-7 7"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
+      Generate a custom address
+    </button>
+    <div id="custom-address-options" hidden={!miningExpanded}>
+      <label class="check-row enable-mining">
+        <input
           type="checkbox"
           bind:checked={custom}
           on:change={resetSearch}
           disabled={busy || mining}
-        /></label
-      >
-    </div>
-    {#if custom}
-      <fieldset disabled={mining || busy} class="mining-options">
+        />
+        Enable custom address generation
+      </label>
+      <fieldset disabled={!custom || mining || busy} class="mining-options">
         <label class="field" for="vanity-prefix"
           >Address starts with
           <input
@@ -142,6 +184,9 @@
             spellcheck="false"
           />
         </label>
+        {#if prefix.trim().length > 4}
+          <p class="hint slow-search" role="status">This might take a while!</p>
+        {/if}
         <label class="check-row"
           ><input type="checkbox" bind:checked={insensitive} on:change={resetSearch} /> Ignore case and
           match letter / digit equivalents</label
@@ -221,11 +266,19 @@
                 progress.rate
               ).toLocaleString()}/s{progress.backend ? ` · ${progress.backend}` : ''}</small
             >{/if}
+          {#if mining}
+            <p class="estimate">
+              {averageTime ? `Estimated average: ${averageTime}` : 'Measuring generation speed…'}
+            </p>
+            {#if averageTime}<small
+                >At the current speed. A match may come sooner or take longer.</small
+              >{/if}
+          {/if}
           {#if found}<p class="address">{progress.address}</p>{/if}
         </div>
       {/if}
       <p class="hint local-note">Search runs on this device. Your keys stay here.</p>
-    {/if}
+    </div>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </div>
   <div class="button-footer">
@@ -309,21 +362,39 @@
     height: 17px;
     flex-shrink: 0;
   }
-  .custom-choice {
-    border-block: 1px solid var(--color-border);
-    margin: 22px 0;
-    padding: 16px 0;
-  }
-  .switch-row {
+  .mining-disclosure {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    gap: 16px;
+    gap: 7px;
+    min-height: 44px;
+    margin: 12px 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-size: 13px;
     cursor: pointer;
   }
-  strong {
-    font-size: 14px;
-    font-weight: 500;
+  .mining-disclosure:hover:not(:disabled) {
+    color: var(--color-text);
+  }
+  .mining-disclosure svg {
+    flex-shrink: 0;
+  }
+  .mining-disclosure svg.expanded {
+    transform: rotate(90deg);
+  }
+  .enable-mining {
+    margin-bottom: 20px;
+    cursor: pointer;
+  }
+  .slow-search {
+    color: var(--color-text);
+  }
+  .search-status .estimate {
+    margin-top: 10px;
+    font-variant-numeric: tabular-nums;
   }
   small {
     display: block;
@@ -396,7 +467,8 @@
     line-height: 1.5;
   }
   input:disabled,
-  select:disabled {
+  select:disabled,
+  .mining-disclosure:disabled {
     opacity: 0.55;
   }
   :focus-visible {

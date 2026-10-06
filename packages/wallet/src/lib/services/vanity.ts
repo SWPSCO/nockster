@@ -133,7 +133,7 @@ export class VanitySearch {
               data.passphrase !== '' ||
               key.split(' ').length !== 24))
         ) {
-          throw new Error('The miner returned invalid recovery material.');
+          throw new Error('The generator returned invalid recovery material.');
         }
         this.candidate = { kind: options.keyMode!, key, address: found.pkh };
         const seconds = (performance.now() - started) / 1000;
@@ -150,7 +150,7 @@ export class VanitySearch {
         if (this.generation === generation)
           this.update({
             status: 'error',
-            message: error instanceof Error ? error.message : 'Unable to mine an address.'
+            message: error instanceof Error ? error.message : 'Unable to generate an address.'
           });
       } finally {
         found?.keyJson.fill(0);

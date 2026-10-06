@@ -84,3 +84,25 @@ test('native vanity limits, cancellation, stale controls and locking discard can
   expect((await request(page, 'vanityStatus', { searchId: 'lock' })).vanity.status).toBe('idle');
   expect((await request(page, 'vanityTake', { searchId: 'lock' })).error).toBeTruthy();
 });
+
+test('mobile bridge imports a generated zprv and restores its address after reload', async ({
+  page
+}) => {
+  const { generateExtendedKey } = await import('../vanity.fixture');
+  const candidate = await generateExtendedKey(page);
+  const password = 'synthetic extended-key recovery password';
+  const imported = await request(page, 'import', {
+    name: 'Extended',
+    password,
+    key: candidate.key
+  });
+  expect(imported.error).toBeUndefined();
+  expect(imported.state.wallets[0].address).toBe(candidate.address);
+  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(candidate.key);
+  await request(page, 'lock');
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.nocksterNative));
+  const restored = await request(page, 'unlock', { password });
+  expect(restored.error).toBeUndefined();
+  expect(restored.state.wallets[0].address).toBe(candidate.address);
+});

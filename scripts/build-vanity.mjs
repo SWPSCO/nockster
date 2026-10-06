@@ -22,6 +22,9 @@ const metadata = JSON.parse(
 const library = metadata.packages.find(pkg => pkg.name === 'tx-types');
 if (!library) throw new Error('The wallet engine must depend on tx-types.');
 const source = resolve(dirname(library.manifest_path), '..');
+const revision = library.source?.split('#')[1];
+if (!/^[a-f0-9]{40}$/.test(revision ?? ''))
+  throw new Error('The wallet engine must pin tx-types to a Git revision.');
 execFileSync(
   process.env.PYTHON || 'python3',
   [
@@ -36,7 +39,7 @@ execFileSync(
       ...process.env,
       CARGO: cargo,
       RUSTUP_TOOLCHAIN: 'nightly-2025-02-14',
-      CARGO_TARGET_DIR: resolve(root, 'packages/wallet-engine/target/vanity')
+      CARGO_TARGET_DIR: resolve(root, 'packages/wallet-engine/target/vanity', revision)
     }
   }
 );

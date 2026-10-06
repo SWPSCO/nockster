@@ -88,10 +88,23 @@ pub enum Cmd {
 }
 
 #[derive(Args)]
+#[command(group(clap::ArgGroup::new("pattern").required(true).args(["prefix", "suffix", "contains"])))]
 pub struct VanityArgs {
-    /// Base58 address prefix to match
+    /// Match the start of the Base58 address
     #[arg(long)]
-    pub prefix: String,
+    pub prefix: Option<String>,
+
+    /// Match the end of the Base58 address
+    #[arg(long)]
+    pub suffix: Option<String>,
+
+    /// Match anywhere in the Base58 address
+    #[arg(long)]
+    pub contains: Option<String>,
+
+    /// Keep finding keys and atomically save a JSON array after each match
+    #[arg(long)]
+    pub continuous: bool,
 
     /// Private recovery JSON output; the file must not exist
     #[arg(long)]

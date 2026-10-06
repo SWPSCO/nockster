@@ -1,23 +1,25 @@
-use std::fs::{File, OpenOptions};
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use tx_types::crypto::utils_nostd::{be32_lt, is_zero32, CHEETAH_N};
-use vanity::{encode_pkh, key_json, Match, MatchMode, Mnemonic, MnemonicSearch, Prefix, Search};
+use vanity::{
+    encode_pkh, key_json, KeyOutput, Match, MatchMode, MatchPosition, Mnemonic, MnemonicSearch,
+    Pattern, Search,
+};
 use zeroize::Zeroizing;
 
 use crate::{cli::VanityArgs, ui};
 use rand::RngCore;
 
 struct Args {
-    prefix: Prefix,
+    prefix: Pattern,
     output: PathBuf,
     threads: usize,
     max_attempts: u64,
     raw_key: bool,
+    continuous: bool,
 }
 
 pub fn run(input: VanityArgs) -> anyhow::Result<()> {
@@ -26,8 +28,14 @@ pub fn run(input: VanityArgs) -> anyhow::Result<()> {
     } else {
         MatchMode::Exact
     };
+    let (text, position, label) = match (&input.prefix, &input.suffix, &input.contains) {
+        (Some(text), None, None) => (text, MatchPosition::Prefix, "prefix"),
+        (None, Some(text), None) => (text, MatchPosition::Suffix, "suffix"),
+        (None, None, Some(text)) => (text, MatchPosition::Contains, "contains"),
+        _ => anyhow::bail!("choose exactly one of --prefix, --suffix, or --contains"),
+    };
     let args = Args {
-        prefix: Prefix::with_mode(input.prefix.trim(), mode)
+        prefix: Pattern::with_mode(text, position, mode)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
         output: input.out,
         threads: input
@@ -40,9 +48,10 @@ pub fn run(input: VanityArgs) -> anyhow::Result<()> {
             input.max_attempts
         },
         raw_key: input.raw_key,
+        continuous: input.continuous,
     };
     ui::header("vanity");
-    ui::kv("prefix", ui::accent(input.prefix.trim()));
+    ui::kv(label, ui::accent(text));
     ui::kv(
         "matching",
         if input.insensitive {
@@ -61,11 +70,11 @@ pub fn run(input: VanityArgs) -> anyhow::Result<()> {
     );
     ui::kv("workers", args.threads.to_string());
     ui::note("Search runs locally. Recovery material is saved only to the output file.");
-    if mine(args).map_err(anyhow::Error::msg)? {
-        Ok(())
-    } else {
-        anyhow::bail!("no match within the attempt limit")
+    let code = mine(args).map_err(anyhow::Error::msg)?;
+    if code != 0 {
+        std::process::exit(code);
     }
+    Ok(())
 }
 
 fn random_search() -> Result<Search, String> {
@@ -81,28 +90,14 @@ fn random_search() -> Result<Search, String> {
     }
 }
 
-fn create_output(path: &PathBuf) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options
-        .open(path)
-        .map_err(|e| format!("cannot create {}: {e}", path.display()))
-}
-
 struct Found {
     key: Match,
     mnemonic: Option<Mnemonic>,
 }
 
-fn write_match(file: &mut File, found: &Found) -> Result<(), String> {
+fn write_match(file: &mut KeyOutput, found: &Found) -> Result<(), String> {
     let json = key_json(&found.key, found.mnemonic.as_ref());
-    file.write_all(json.as_bytes())
-        .and_then(|_| file.sync_all())
+    file.save(&json)
         .map_err(|e| format!("cannot save winning key: {e}"))
 }
 
@@ -123,7 +118,7 @@ impl WorkerSearch {
         Ok(Self::Mnemonic(MnemonicSearch::new(entropy)))
     }
 
-    fn batch(&mut self, prefix: &Prefix, limit: u64) -> (u64, Option<Found>, bool) {
+    fn batch(&mut self, prefix: &Pattern, limit: u64) -> (u64, Option<Found>, bool) {
         match self {
             Self::Mnemonic(search) => {
                 let batch = search.search_batch(prefix, limit);
@@ -151,15 +146,24 @@ impl WorkerSearch {
     }
 }
 
-fn mine(args: Args) -> Result<bool, String> {
-    // Reserve the private file before spending time mining or generating keys.
-    let mut output = create_output(&args.output)?;
-    let stop = AtomicBool::new(false);
+fn mine(args: Args) -> Result<i32, String> {
+    let mut output = KeyOutput::create(&args.output, args.continuous)
+        .map_err(|e| format!("cannot create backup: {e}"))?;
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let interrupted = std::sync::Arc::new(AtomicBool::new(false));
+    let (signal_stop, signal_interrupted) = (stop.clone(), interrupted.clone());
+    ctrlc::set_handler(move || {
+        signal_interrupted.store(true, Ordering::Relaxed);
+        signal_stop.store(true, Ordering::Relaxed);
+    })
+    .map_err(|e| format!("cannot install Ctrl+C handler: {e}"))?;
     let claimed = AtomicU64::new(0);
     let completed = AtomicU64::new(0);
+
     let start = Instant::now();
-    let winner = std::thread::scope(|scope| -> Result<Option<Found>, String> {
-        let (sender, receiver) = mpsc::channel();
+    std::thread::scope(|scope| -> Result<(), String> {
+        // Bound queued private material and apply backpressure while saving.
+        let (sender, receiver) = mpsc::sync_channel(args.threads);
         let mut workers = Vec::new();
         for _ in 0..args.threads {
             let sender = sender.clone();
@@ -179,18 +183,23 @@ fn mine(args: Args) -> Result<bool, String> {
                             break;
                         };
                         let limit = batch_size.min(args.max_attempts - first);
-                        let (attempts, matched, exhausted) = search.batch(&args.prefix, limit);
-                        completed.fetch_add(attempts, Ordering::Relaxed);
-                        if let Some(found) = matched {
-                            if !stop.swap(true, Ordering::Relaxed) {
-                                sender
-                                    .send(found)
-                                    .map_err(|_| "result receiver disconnected")?;
+                        // Consume the whole reservation, including after a match.
+                        let mut remaining = limit;
+                        while remaining > 0 && !stop.load(Ordering::Relaxed) {
+                            let (attempts, matched, exhausted) =
+                                search.batch(&args.prefix, remaining);
+                            completed.fetch_add(attempts, Ordering::Relaxed);
+                            remaining -= attempts;
+                            if let Some(found) = matched {
+                                if args.continuous || !stop.swap(true, Ordering::Relaxed) {
+                                    sender
+                                        .send(found)
+                                        .map_err(|_| "result receiver disconnected")?;
+                                }
                             }
-                            break;
-                        }
-                        if exhausted {
-                            search = WorkerSearch::random(args.raw_key)?;
+                            if exhausted {
+                                search = WorkerSearch::random(args.raw_key)?;
+                            }
                         }
                     }
                     Ok(())
@@ -204,51 +213,71 @@ fn mine(args: Args) -> Result<bool, String> {
                 Ok(worker) => workers.push(worker),
                 Err(error) => {
                     stop.store(true, Ordering::Relaxed);
+                    drop(receiver);
                     return Err(format!("cannot start worker: {error}"));
                 }
             }
         }
         drop(sender);
-        let winner = loop {
+        let mut save_error = None;
+        loop {
             match receiver.recv_timeout(Duration::from_secs(1)) {
-                Ok(found) => break Some(found),
-                Err(mpsc::RecvTimeoutError::Disconnected) => break None,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    let count = completed.load(Ordering::Relaxed);
-                    ui::info(&format!(
-                        "{count} candidates · {:.0}/s · {:.1}s elapsed",
-                        count as f64 / start.elapsed().as_secs_f64(),
-                        start.elapsed().as_secs_f64()
+                Ok(found) => {
+                    if let Err(error) = write_match(&mut output, &found) {
+                        stop.store(true, Ordering::Relaxed);
+                        save_error = Some(error);
+                        break;
+                    }
+
+                    ui::kv("address", ui::accent(encode_pkh(found.key.pkh).as_str()));
+                    ui::ok(&format!(
+                        "Match {} saved to {}",
+                        output.count(),
+                        args.output.display()
                     ));
                 }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => ui::info(&format!(
+                    "{} candidates · {:.1}s elapsed",
+                    completed.load(Ordering::Relaxed),
+                    start.elapsed().as_secs_f64()
+                )),
             }
-        };
-        // Save a winning key before waiting for the remaining workers.
-        if let Some(found) = &winner {
-            write_match(&mut output, found)?;
         }
+        // Disconnect before joining so a failed save cannot strand a sender.
+        drop(receiver);
+        let mut worker_error = None;
         for worker in workers {
-            let result = worker.join().map_err(|_| "mining worker panicked")?;
-            if winner.is_none() {
-                result?;
+            match worker.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    worker_error.get_or_insert(error);
+                }
+                Err(_) => {
+                    worker_error.get_or_insert("mining worker panicked".into());
+                }
             }
         }
-        Ok(winner)
+        if let Some(error) = save_error.or(worker_error) {
+            return Err(error);
+        }
+        Ok(())
     })?;
-    let count = completed.load(Ordering::Relaxed);
+
     ui::note(&format!(
-        "Tested {count} candidates in {:.2}s ({:.0}/s)",
+        "Tested {} candidates in {:.2}s; {} matches saved to {}",
+        completed.load(Ordering::Relaxed),
         start.elapsed().as_secs_f64(),
-        count as f64 / start.elapsed().as_secs_f64()
+        output.count(),
+        args.output.display()
     ));
-    if let Some(found) = winner {
-        ui::kv("address", ui::accent(encode_pkh(found.key.pkh).as_str()));
-        ui::ok(&format!("Recovery JSON saved to {}", args.output.display()));
-        Ok(true)
+    Ok(if interrupted.load(Ordering::Relaxed) {
+        130
+    } else if output.count() > 0 {
+        0
     } else {
-        ui::note(&format!("{} is empty.", args.output.display()));
-        Ok(false)
-    }
+        2
+    })
 }
 
 #[cfg(test)]
@@ -272,12 +301,15 @@ mod tests {
             "vanity-pkh-output-test-{}.json",
             std::process::id()
         ));
-        let mut file = create_output(&path).unwrap();
-        assert!(create_output(&path).is_err());
+        let mut file = KeyOutput::create(&path, false).unwrap();
+        assert!(KeyOutput::create(&path, false).is_err());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         write_match(
             &mut file,

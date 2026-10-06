@@ -10,6 +10,13 @@
   export let showHeader: boolean = true;
 
   let seedPhrase = '';
+  let importKind: 'mnemonic' | 'raw' | 'extended' = 'mnemonic';
+  $: inputLabel =
+    importKind === 'mnemonic'
+      ? 'Seed phrase'
+      : importKind === 'raw'
+        ? 'Secret key · hex'
+        : 'Extended private key';
   let walletName = nextWalletName(get(walletStore).wallets.map(wallet => wallet.name));
   $: nameExists = $walletStore.wallets.some(wallet => wallet.name === walletName.trim());
   let error = '';
@@ -25,12 +32,19 @@
     if (nameExists) return;
 
     if (!seedPhrase.trim()) {
-      error = 'Please enter your seed phrase';
+      error = `Enter your ${inputLabel.toLowerCase()}.`;
       return;
     }
-
-    if (!validateSeedPhrase(seedPhrase)) {
-      error = 'Invalid seed phrase. Please enter exactly 24 words';
+    if (importKind === 'mnemonic' && !validateSeedPhrase(seedPhrase)) {
+      error = 'Enter exactly 24 recovery words.';
+      return;
+    }
+    if (importKind === 'raw' && !/^(?:0x)?[a-fA-F0-9]{64}$/i.test(seedPhrase.trim())) {
+      error = 'Enter a 64-character hexadecimal secret key.';
+      return;
+    }
+    if (importKind === 'extended' && !seedPhrase.trim().startsWith('zprv')) {
+      error = 'Enter an extended private key starting with zprv.';
       return;
     }
 
@@ -38,17 +52,14 @@
 
     try {
       // Call the import function and wait for it to complete
-      await onImport(seedPhrase, walletName.trim());
+      await onImport(seedPhrase.trim(), walletName.trim());
+      seedPhrase = '';
       // If successful, the parent component will handle navigation
     } catch (err) {
-      // Handle import errors
-      console.error('Import error:', err);
-      const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
-      const errorMessage =
-        message.includes('invalid') || message.includes('seed') || message.includes('mnemonic')
-          ? 'Invalid seed phrase. Please check your words and try again.'
-          : 'Failed to import wallet. Please try again.';
-      error = errorMessage;
+      error =
+        err instanceof Error
+          ? err.message
+          : 'Unable to import wallet. Check your recovery material.';
     } finally {
       isImporting = false;
     }
@@ -63,7 +74,7 @@
   <div class="import-content">
     <div class="import-header">
       <h2 class="import-title">Import Wallet</h2>
-      <p class="import-subtitle">Enter your 24 word seed phrase to access your existing wallet</p>
+      <p class="import-subtitle">Restore a wallet with your recovery phrase or private key.</p>
     </div>
 
     <div class="import-form">
@@ -81,22 +92,52 @@
           maxlength="20"
         />
         {#if nameExists}
-        <p class="duplicate-name" role="status">A wallet with this name already exists</p>
-      {/if}
+          <p class="duplicate-name" role="status">A wallet with this name already exists</p>
+        {/if}
       </div>
 
       <div class="form-group">
-        <label for="seed-phrase" class="form-label">Seed Phrase</label>
+        <label for="import-kind" class="form-label">Import with</label>
+        <select
+          id="import-kind"
+          class="input-field"
+          bind:value={importKind}
+          on:change={() => {
+            seedPhrase = '';
+            error = '';
+          }}
+          disabled={isImporting}
+        >
+          <option value="mnemonic">24-word seed phrase</option>
+          <option value="raw">Secret key · hex</option>
+          <option value="extended">Extended private key</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="seed-phrase" class="form-label">{inputLabel}</label>
         <textarea
           id="seed-phrase"
           class="textarea-field"
           class:error
-          placeholder="Enter your 24-word seed phrase..."
+          placeholder={importKind === 'mnemonic'
+            ? 'Enter your 24 words…'
+            : importKind === 'raw'
+              ? '64 hexadecimal characters'
+              : 'zprv…'}
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
           bind:value={seedPhrase}
           disabled={isImporting}
           rows="4"
         ></textarea>
-        <p class="helper-text">Enter the words separated by spaces</p>
+        <p class="helper-text">
+          {importKind === 'mnemonic'
+            ? 'Enter the words separated by spaces.'
+            : importKind === 'raw'
+              ? 'A 32-byte private signing key. An optional 0x prefix is accepted. This wallet has no seed phrase.'
+              : 'Paste your zprv extended private key.'}
+        </p>
       </div>
 
       {#if error}
@@ -106,13 +147,22 @@
   </div>
 
   <div class="button-footer">
-    <Button variant="primary" fullWidth={true} on:click={handleImport} disabled={nameExists || isImporting}>
+    <Button
+      variant="primary"
+      fullWidth={true}
+      on:click={handleImport}
+      disabled={nameExists || isImporting}
+    >
       {isImporting ? 'Importing...' : 'Import Wallet'}
     </Button>
   </div>
 </div>
 
 <style>
+  .button-footer {
+    position: static;
+    flex-shrink: 0;
+  }
   .input-field.duplicate-name,
   .duplicate-name {
     color: var(--color-error);
@@ -128,6 +178,7 @@
 
   .import-content {
     flex: 1;
+    min-height: 0;
     padding: 20px 16px 16px;
     overflow-y: auto;
   }
@@ -175,6 +226,7 @@
     border-radius: 10px;
     background: var(--color-surface);
     font-size: 15px;
+    color: var(--color-text);
     outline: none;
     transition: all 0.15s ease;
   }

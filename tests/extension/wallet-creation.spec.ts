@@ -3,79 +3,115 @@ import { mkdtemp, cp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-test('additional wallets appear immediately and remain selected after storage synchronization', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'nockster-wallet-creation-'));
-  const extension = join(dir, 'extension');
-  await cp(resolve('apps/extension/ext'), extension, { recursive: true });
-  await writeFile(
-    join(extension, 'test.html'),
-    '<!doctype html><title>Wallet creation test</title>'
-  );
-  const context = await chromium.launchPersistentContext(join(dir, 'profile'), {
-    channel: 'chromium',
-    headless: true,
-    args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
-  });
-  try {
-    await context.route('https://**', route => route.abort());
-    const worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
-    await worker.evaluate(() => {
-      const fetchLocal = globalThis.fetch;
-      globalThis.fetch = (input, init) => {
-        if (new Request(input, init).url.startsWith('chrome-extension:'))
-          return fetchLocal(input, init);
-        return Promise.reject(new Error('Network unavailable in wallet creation test'));
-      };
+for (const recovery of ['mnemonic', 'raw']) {
+  test(`${recovery} wallets appear immediately and remain selected after storage synchronization`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nockster-wallet-creation-'));
+    const extension = join(dir, 'extension');
+    await cp(resolve('apps/extension/ext'), extension, { recursive: true });
+    await writeFile(
+      join(extension, 'test.html'),
+      '<!doctype html><title>Wallet creation test</title>'
+    );
+    const context = await chromium.launchPersistentContext(join(dir, 'profile'), {
+      channel: 'chromium',
+      headless: true,
+      args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`]
     });
-    const origin = `chrome-extension://${new URL(worker.url()).host}`;
-    const page = await context.newPage();
-    await page.goto(`${origin}/test.html`);
-    await page.evaluate(async () => {
-      const created = await chrome.runtime.sendMessage({
-        type: 'vault:newVault',
-        password: 'synthetic wallet creation test password'
-      });
-      if (!created.success) throw new Error(created.error);
-      const imported = await chrome.runtime.sendMessage({
-        type: 'vault:importWallet',
-        nickname: 'Existing wallet',
-        key: 'fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float'
-      });
-      if (!imported.success) throw new Error(imported.error);
-    });
-    await page.goto(`${origin}/dist/index.html`);
-    await page
-      .getByRole('button', { name: 'Manage wallets: Existing wallet', exact: true })
-      .click();
-    await page.getByRole('button', { name: '+ Add Wallet', exact: true }).click();
-    await page.getByRole('button', { name: 'Create New Wallet', exact: true }).click();
-    await expect(page.locator('.seed-word-text')).toHaveCount(24);
-    const words = await page.locator('.seed-word-text').allTextContents();
-    await page.getByRole('button', { name: "I've Written It Down", exact: true }).click();
-    const question = await page.locator('.question-label').innerText();
-    const index = Number(question.match(/#(\d+)/)![1]) - 1;
-    await page.getByRole('button', { name: words[index], exact: true }).click();
-    await page.getByRole('button', { name: 'Continue', exact: true }).click();
-
-    const savedWallets = () =>
-      page.evaluate(async () => {
-        const { walletState } = await chrome.storage.local.get('walletState');
-        return {
-          names: walletState?.wallets.map((wallet: { name: string }) => wallet.name),
-          active: walletState?.activeWallet?.name
+    try {
+      await context.route('https://**', route => route.abort());
+      const worker = context.serviceWorkers()[0] || (await context.waitForEvent('serviceworker'));
+      await worker.evaluate(() => {
+        const fetchLocal = globalThis.fetch;
+        globalThis.fetch = (input, init) => {
+          if (new Request(input, init).url.startsWith('chrome-extension:'))
+            return fetchLocal(input, init);
+          return Promise.reject(new Error('Network unavailable in wallet creation test'));
         };
       });
-    await expect
-      .poll(savedWallets)
-      .toEqual({ names: ['Existing wallet', 'My Wallet 2'], active: 'My Wallet 2' });
-    await page.getByRole('button', { name: 'Manage wallets: My Wallet 2', exact: true }).click();
-    await expect(page.getByText('Existing wallet', { exact: true })).toBeVisible();
-    await expect(page.getByText('My Wallet 2', { exact: true })).toBeVisible();
-    await page.reload();
-    await expect(page.getByText('Existing wallet', { exact: true })).toBeVisible();
-    await expect(page.getByText('My Wallet 2', { exact: true })).toBeVisible();
-  } finally {
-    await context.close();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+      const origin = `chrome-extension://${new URL(worker.url()).host}`;
+      const page = await context.newPage();
+      await page.goto(`${origin}/test.html`);
+      await page.evaluate(async () => {
+        const created = await chrome.runtime.sendMessage({
+          type: 'vault:newVault',
+          password: 'synthetic wallet creation test password'
+        });
+        if (!created.success) throw new Error(created.error);
+        const imported = await chrome.runtime.sendMessage({
+          type: 'vault:importWallet',
+          nickname: 'Existing wallet',
+          key: 'fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float'
+        });
+        if (!imported.success) throw new Error(imported.error);
+      });
+      await page.goto(`${origin}/dist/index.html`);
+      await page
+        .getByRole('button', { name: 'Manage wallets: Existing wallet', exact: true })
+        .click();
+      await page.getByRole('button', { name: '+ Add Wallet', exact: true }).click();
+      await page.getByRole('button', { name: 'Create New Wallet', exact: true }).click();
+      if (recovery === 'raw') {
+        await page.getByLabel('Custom address', { exact: false }).check();
+        await page.getByLabel('Address starts with', { exact: true }).fill('2');
+        await page.getByLabel('Recovery', { exact: true }).selectOption('raw');
+        await page.getByText('Search settings', { exact: true }).click();
+        await page.getByLabel('Compute with', { exact: true }).selectOption('cpu');
+        await page.getByRole('button', { name: 'Find Address', exact: true }).click();
+        await expect(
+          page.getByRole('button', { name: 'Use This Address', exact: true })
+        ).toBeVisible();
+        const address = await page.locator('.search-status .address').textContent();
+        expect(address).toMatch(/^2/);
+        await page.screenshot({ path: 'test-results/extension-vanity-found.png' });
+        await page.getByRole('button', { name: 'Use This Address', exact: true }).click();
+        const secret = await page.getByLabel('Secret key · hex').inputValue();
+        expect(secret).toMatch(/^[a-f0-9]{64}$/);
+        await page.getByLabel('I saved my secret key somewhere private.').check();
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+        await expect
+          .poll(async () =>
+            page.evaluate(async () => {
+              const { data } = await chrome.runtime.sendMessage({ type: 'vault:getWallets' });
+              return data.wallets.find(
+                (wallet: { nickname: string }) => wallet.nickname === 'My Wallet 2'
+              )?.publicKey;
+            })
+          )
+          .toBe(address);
+        expect(
+          await page.evaluate(async () => JSON.stringify(await chrome.storage.local.get(null)))
+        ).not.toContain(secret);
+      } else {
+        await page.getByRole('button', { name: 'Generate Wallet', exact: true }).click();
+        await expect(page.locator('.seed-word-text')).toHaveCount(24);
+        const words = await page.locator('.seed-word-text').allTextContents();
+        await page.getByRole('button', { name: "I've Written It Down", exact: true }).click();
+        const question = await page.locator('.question-label').innerText();
+        const index = Number(question.match(/#(\d+)/)![1]) - 1;
+        await page.getByRole('button', { name: words[index], exact: true }).click();
+        await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      }
+
+      const savedWallets = () =>
+        page.evaluate(async () => {
+          const { walletState } = await chrome.storage.local.get('walletState');
+          return {
+            names: walletState?.wallets.map((wallet: { name: string }) => wallet.name),
+            active: walletState?.activeWallet?.name
+          };
+        });
+      await expect
+        .poll(savedWallets)
+        .toEqual({ names: ['Existing wallet', 'My Wallet 2'], active: 'My Wallet 2' });
+      await page.getByRole('button', { name: 'Manage wallets: My Wallet 2', exact: true }).click();
+      await expect(page.getByText('Existing wallet', { exact: true })).toBeVisible();
+      await expect(page.getByText('My Wallet 2', { exact: true })).toBeVisible();
+      await page.reload();
+      await expect(page.getByText('Existing wallet', { exact: true })).toBeVisible();
+      await expect(page.getByText('My Wallet 2', { exact: true })).toBeVisible();
+    } finally {
+      await context.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}

@@ -3,7 +3,10 @@
   import App from '../../../packages/wallet/src/App.svelte';
   import { router, type Route } from '../../../packages/wallet/src/lib/stores/router';
   import { walletStore, activeWallet } from '../../../packages/wallet/src/lib/stores/wallet';
-  import { lockVaultSession, clearPendingMnemonic } from '../../../packages/wallet/src/lib/utils/vaultBridge';
+  import {
+    lockVaultSession,
+    clearPendingWallet
+  } from '../../../packages/wallet/src/lib/utils/vaultBridge';
 
   const navigation: { label: string; route: Route; path: string }[] = [
     {
@@ -23,6 +26,8 @@
   ];
   const flowRoutes: Route[] = [
     'welcome',
+    'create-wallet',
+    'backup-secret-key',
     'lock-screen',
     'seed-phrase',
     'confirm-seed',
@@ -43,7 +48,7 @@
       error = 'Unable to lock your wallet. Try again.';
       return;
     }
-    clearPendingMnemonic();
+    clearPendingWallet();
     walletStore.lock();
     router.navigate('lock-screen');
   }

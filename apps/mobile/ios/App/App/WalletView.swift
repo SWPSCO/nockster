@@ -111,6 +111,10 @@ struct SetupView: View {
     @State private var importing = false
     @State private var name: String
     @State private var key = ""
+    @State private var importKind = "mnemonic"
+    @State private var customAddress = false
+    @State private var minedKey = ""
+    @State private var minedAddress = ""
     @State private var password = ""
     @State private var confirmation = ""
     @State private var enableDeviceUnlock = false
@@ -125,7 +129,8 @@ struct SetupView: View {
     }
 
     private var confirmed: Bool {
-        !mnemonic.isEmpty && saved && wordOne.trimmingCharacters(in: .whitespacesAndNewlines) == mnemonic.first &&
+        if !minedKey.isEmpty { return saved }
+        return !mnemonic.isEmpty && saved && wordOne.trimmingCharacters(in: .whitespacesAndNewlines) == mnemonic.first &&
         wordLast.trimmingCharacters(in: .whitespacesAndNewlines) == mnemonic.last
     }
     private var nameExists: Bool {
@@ -155,18 +160,48 @@ struct SetupView: View {
                 if nameExists { Text("A wallet with this name already exists").font(.caption).foregroundStyle(.red) }
             }
             if importing {
-                Section("Recovery phrase or extended private key") {
-                    TextEditor(text: $key).frame(minHeight: 120)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .accessibilityIdentifier("import-key")
-                }
-            } else if mnemonic.isEmpty {
                 Section {
-                    Button("Generate Recovery Phrase", systemImage: "sparkles") {
-                        Task {
-                            if let reply = await model.perform("generate") { mnemonic = reply.mnemonic ?? [] }
-                        }
-                    }.disabled(model.busy)
+                    Picker("Import with", selection: $importKind) {
+                        Text("24-word seed phrase").tag("mnemonic")
+                        Text("Secret key · hex").tag("raw")
+                        Text("Extended private key").tag("extended")
+                    }
+                    TextEditor(text: $key).frame(minHeight: importKind == "mnemonic" ? 120 : 80)
+                        .font(importKind == "raw" ? .system(.body, design: .monospaced) : .body)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityLabel(importKind == "raw" ? "Secret key in hex" : "Recovery material")
+                        .accessibilityIdentifier("import-key")
+                } header: { Text(importKind == "raw" ? "Secret key" : "Recovery material") }
+                  footer: { Text(importKind == "raw" ? "Enter 64 hexadecimal characters, with an optional 0x prefix. A raw key has no seed phrase." : importKind == "extended" ? "Paste your zprv extended private key." : "Enter your 24 words separated by spaces.") }
+            } else if mnemonic.isEmpty && minedKey.isEmpty {
+                Section {
+                    Toggle("Custom address", isOn: $customAddress)
+                } footer: { Text("Choose how your address starts. Search runs on this device.") }
+                if customAddress {
+                    VanityControls(model: model) { candidate in
+                        minedAddress = candidate.address ?? ""
+                        if candidate.kind == "mnemonic" { mnemonic = candidate.key.split(separator: " ").map(String.init) }
+                        else { minedKey = candidate.key }
+                        saved = false
+                    }
+                } else {
+                    Section {
+                        Button("Generate Recovery Phrase", systemImage: "sparkles") {
+                            Task {
+                                if let reply = await model.perform("generate") { mnemonic = reply.mnemonic ?? [] }
+                            }
+                        }.disabled(model.busy)
+                    }
+                }
+            } else if !minedKey.isEmpty {
+                Section {
+                    Text(minedKey).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                        .accessibilityIdentifier("generated-secret-key")
+                    Toggle("I saved my secret key somewhere private", isOn: $saved)
+                } header: { Text("Back up your secret key") }
+                  footer: { Text("This wallet has no seed phrase. Save this key privately to restore it.") }
+                if !minedAddress.isEmpty {
+                    Section("Wallet address") { Text(minedAddress).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                 }
             } else {
                 Section {
@@ -214,12 +249,12 @@ struct SetupView: View {
             }
             Section {
                 Button {
-                    let value = importing ? key : mnemonic.joined(separator: " ")
+                    let value = importing ? key : minedKey.isEmpty ? mnemonic.joined(separator: " ") : minedKey
                     let setupPassword = password
                     let enrollDeviceUnlock = !model.snapshot.exists && enableDeviceUnlock
                     Task {
                         if await model.perform("import", ["name": name, "key": value, "password": setupPassword]) != nil {
-                            key = ""; password = ""; confirmation = ""; mnemonic = []
+                            key = ""; password = ""; confirmation = ""; mnemonic = []; minedKey = ""
                             if enrollDeviceUnlock { await model.enableDeviceUnlock(password: setupPassword) }
                             dismiss()
                         }
@@ -234,8 +269,125 @@ struct SetupView: View {
                 .accessibilityIdentifier("save-wallet")
             }
         }
-        .navigationTitle("Welcome to Nockster")
-        .onDisappear { key = ""; password = ""; confirmation = ""; mnemonic = [] }
+        .navigationTitle(model.snapshot.wallets.isEmpty ? "Welcome to Nockster" : "Add a wallet")
+        .onChange(of: importKind) { _, _ in key = "" }
+        .onChange(of: importing) { _, _ in key = ""; mnemonic = []; minedKey = ""; minedAddress = ""; saved = false; wordOne = ""; wordLast = "" }
+        .onDisappear { key = ""; password = ""; confirmation = ""; mnemonic = []; minedKey = "" }
+    }
+}
+
+private struct VanityControls: View {
+    @ObservedObject var model: WalletModel
+    let onFound: (WalletCandidate) -> Void
+    @State private var prefix = ""
+    @State private var insensitive = false
+    @State private var recovery = "mnemonic"
+    @State private var backend = "auto"
+    @State private var lanes = 4096
+    @State private var steps = 1
+    @State private var limit = "0"
+    @State private var advanced = false
+    @State private var progress = VanityProgress()
+    @State private var searchID = UUID().uuidString
+    @State private var active = true
+    private var mining: Bool { progress.status == "mining" }
+
+    var body: some View {
+        Section {
+            TextField("Address starts with, e.g. nock", text: $prefix)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .accessibilityIdentifier("vanity-prefix")
+            Toggle("Ignore case and match letter / digit equivalents", isOn: $insensitive)
+            if insensitive { Text("a / 4 · b / 8 · e / 3 · i / 1 · l / 1 · o / 0 · s / 5 · t / 7 · z / 2. i and l stay distinct.").font(.caption).foregroundStyle(.secondary) }
+            Picker("Recovery", selection: $recovery) {
+                Text("24-word seed phrase").tag("mnemonic")
+                Text("Secret key (no phrase)").tag("raw")
+            }
+            Text("Seed phrases take longer to find. A secret key has no recovery phrase.").font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("Search settings", isExpanded: $advanced) {
+                Picker("Compute with", selection: $backend) {
+                    Text("Automatic · GPU or CPU").tag("auto")
+                    Text("CPU only").tag("cpu")
+                }
+                HStack { Text("GPU lanes"); TextField("GPU lanes", value: $lanes, format: .number).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                if recovery == "raw" { Stepper("Steps per batch: \(steps)", value: $steps, in: 1...16) }
+                HStack { Text("Attempt limit"); TextField("Attempt limit", text: $limit).keyboardType(.numberPad).multilineTextAlignment(.trailing) }
+                Text("0 means no limit. Shorter prefixes are faster to find.").font(.caption).foregroundStyle(.secondary)
+            }
+        }.disabled(mining || model.busy)
+        Section {
+            if !progress.message.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(progress.message)
+                    if progress.attempts > 0 {
+                        Text("\(Int(progress.attempts).formatted()) tried · \(Int(progress.rate).formatted())/s · \(progress.backend)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let address = progress.address { Text(address).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                }
+            }
+            if mining {
+                Button("Stop Search") { Task {
+                    if let reply = await model.perform("vanityStop", ["searchId": searchID]) { progress = reply.vanity ?? VanityProgress() }
+                } }
+            } else if progress.status == "found" {
+                Button("Use This Address") { Task {
+                    if let reply = await model.perform("vanityTake", ["searchId": searchID]), let candidate = reply.candidate { onFound(candidate) }
+                } }.disabled(model.busy)
+            } else {
+                Button("Find Address", systemImage: "sparkles") { start() }
+                    .disabled(prefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy)
+            }
+        } footer: { Text("Your keys stay on this device.") }
+        .onChange(of: recovery) { _, value in lanes = value == "raw" ? 64 : 4096; resetResult() }
+        .onChange(of: prefix) { _, _ in resetResult() }
+        .onChange(of: insensitive) { _, _ in resetResult() }
+        .onChange(of: backend) { _, _ in resetResult() }
+        .onChange(of: lanes) { _, _ in resetResult() }
+        .onChange(of: steps) { _, _ in resetResult() }
+        .onChange(of: limit) { _, _ in resetResult() }
+        .onChange(of: model.privateScreen) { _, hidden in if hidden { progress = VanityProgress(status: "stopped", message: "Search stopped when the app locked.") } }
+        .task(id: mining) {
+            while mining && !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                    if model.privateScreen || Task.isCancelled { break }
+                    let reply = try await model.call("vanityStatus", ["searchId": searchID])
+                    if Task.isCancelled { break }
+                    if let value = reply.vanity { progress = value }
+                    if let error = reply.error { progress = VanityProgress(status: "error", message: error) }
+                } catch is CancellationError { break }
+                catch { progress = VanityProgress(status: "error", message: error.localizedDescription) }
+            }
+        }
+        .onAppear { active = true }
+        .onDisappear {
+            active = false
+            let id = searchID
+            Task { _ = try? await model.call("vanityStop", ["searchId": id]) }
+        }
+    }
+
+    private func resetResult() {
+        guard !mining else { return }
+        progress = VanityProgress()
+        let id = searchID
+        Task { _ = try? await model.call("vanityStop", ["searchId": id]) }
+        searchID = UUID().uuidString
+    }
+
+    private func start() {
+        guard let attempts = Double(limit), attempts.isFinite, attempts >= 0, attempts.rounded() == attempts, attempts <= 9007199254740991 else {
+            progress = VanityProgress(status: "error", message: "Enter a nonnegative whole number for the attempt limit."); return
+        }
+        let id = searchID
+        let settings: [String: Any] = ["prefix": prefix, "insensitive": insensitive, "keyMode": recovery, "backend": backend, "lanes": lanes, "steps": steps, "maxAttempts": attempts]
+        Task {
+            guard active else { return }
+            if let reply = await model.perform("vanityStart", ["searchId": id, "vanity": settings]) {
+                if active && searchID == id { progress = reply.vanity ?? VanityProgress() }
+                else { _ = try? await model.call("vanityStop", ["searchId": id]) }
+            }
+        }
     }
 }
 

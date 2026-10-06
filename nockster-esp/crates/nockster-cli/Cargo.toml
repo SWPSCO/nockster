@@ -44,7 +44,7 @@ nockvm_macros = { workspace = true }
 
 
 nockster-core = { path = "../nockster-core", features = ["std", "alloc-path"] }
-tx-types = { workspace = true }
+tx-types = { workspace = true, features = ["vanity-export"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }

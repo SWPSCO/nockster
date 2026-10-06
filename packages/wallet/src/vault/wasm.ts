@@ -10,6 +10,7 @@ import init, {
   lockVault as wasmLockVault,
   generateKey as wasmGenerateKey,
   importWallet as wasmImportWallet,
+  validateWalletKey as wasmValidateWalletKey,
   renameWallet as wasmRenameWallet,
   deleteWallet as wasmDeleteWallet,
   getPubkey as wasmGetPubkey,
@@ -106,6 +107,10 @@ export function lockVault(vault: StoredVault, vaultKey: number) {
 
 export function generateKey(): GeneratedKeyResponse {
   return wasmGenerateKey() as GeneratedKeyResponse;
+}
+
+export function validateWalletKey(key: string): string {
+  return wasmValidateWalletKey(key);
 }
 
 export function importWallet(

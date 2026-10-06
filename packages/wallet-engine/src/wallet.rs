@@ -2,11 +2,14 @@ use bip39::{Language, Mnemonic};
 use getrandom::getrandom;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsValue;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::js_error::js_error;
 use tx_types::{
-    crypto::{cheetah::point::cheetah_pub_from_sk, utils::be32_atom_to_t8_le},
+    crypto::{
+        cheetah::point::cheetah_pub_from_sk,
+        utils::{be32_atom_to_t8_le, be32_lt, is_zero32, CHEETAH_N},
+    },
     transaction_types::{Hash, SchnorrPubkey, F6LT, T8},
 };
 
@@ -14,14 +17,14 @@ use tx_types::{
 #[serde(rename_all = "camelCase")]
 pub struct Wallet {
     pub public_key: String,
-    pub extended_public_key: String,
+    pub extended_public_key: Option<String>,
     pub private_key: String,
-    pub extended_private_key: String,
-    pub chain_code: [u8; 32],
-    pub depth: u8,
-    pub index: u32,
-    pub parent_fingerprint: [u8; 4],
-    pub version: u8,
+    pub extended_private_key: Option<String>,
+    pub chain_code: Option<[u8; 32]>,
+    pub depth: Option<u8>,
+    pub index: Option<u32>,
+    pub parent_fingerprint: Option<[u8; 4]>,
+    pub version: Option<u8>,
     pub seedphrase: Option<Vec<String>>,
 }
 
@@ -33,14 +36,50 @@ impl std::fmt::Debug for Wallet {
     }
 }
 
+impl Drop for Wallet {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
+        self.extended_private_key.zeroize();
+        self.chain_code.zeroize();
+        self.seedphrase.zeroize();
+    }
+}
+
 impl Wallet {
     pub fn from_key(key: &str) -> Result<Self, JsValue> {
-        let value = key.to_string();
+        let value = key.trim().to_string();
         if value.starts_with("zprv") {
             Wallet::from_extended_key(value)
+        } else if !value.contains(char::is_whitespace) {
+            Wallet::from_secret_key_hex(&value)
         } else {
             Wallet::from_seedphrase(value)
         }
+    }
+
+    /// Import one signing scalar without inventing a recovery phrase or HD metadata.
+    pub fn from_secret_key_hex(value: &str) -> Result<Self, JsValue> {
+        let scalar = parse_secret_key_hex(value).map_err(|error| js_error(&error))?;
+        let coords = cheetah_pub_from_sk(*scalar);
+        let public_key = SchnorrPubkey {
+            x: F6LT { values: coords[0] },
+            y: F6LT { values: coords[1] },
+            inf: false,
+        }
+        .to_hash()
+        .to_b58();
+        Ok(Self {
+            public_key,
+            private_key: bs58::encode(scalar.as_ref()).into_string(),
+            extended_public_key: None,
+            extended_private_key: None,
+            chain_code: None,
+            depth: None,
+            index: None,
+            parent_fingerprint: None,
+            version: None,
+            seedphrase: None,
+        })
     }
 
     /// Construct wallet from extended private key
@@ -66,14 +105,14 @@ impl Wallet {
         Ok(Self {
             public_key,
             //: "to_hash() doesn't work".to_string(),
-            extended_public_key,
+            extended_public_key: Some(extended_public_key),
             private_key,
-            extended_private_key: key,
-            chain_code: decoded.chain_code,
-            depth: decoded.depth,
-            index: decoded.index,
-            parent_fingerprint: decoded.parent_fingerprint,
-            version: decoded.version,
+            extended_private_key: Some(key),
+            chain_code: Some(decoded.chain_code),
+            depth: Some(decoded.depth),
+            index: Some(decoded.index),
+            parent_fingerprint: Some(decoded.parent_fingerprint),
+            version: Some(decoded.version),
             seedphrase: None, // no way to derive from zprv
         })
     }
@@ -115,14 +154,14 @@ impl Wallet {
 
         Ok(Self {
             public_key,
-            extended_public_key,
+            extended_public_key: Some(extended_public_key),
             private_key,
-            extended_private_key,
-            chain_code: extended.chain_code,
-            depth: extended.depth,
-            index: extended.index,
-            parent_fingerprint: extended.parent_fingerprint,
-            version: extended.version,
+            extended_private_key: Some(extended_private_key),
+            chain_code: Some(extended.chain_code),
+            depth: Some(extended.depth),
+            index: Some(extended.index),
+            parent_fingerprint: Some(extended.parent_fingerprint),
+            version: Some(extended.version),
             seedphrase: Some(words),
         })
     }
@@ -182,4 +221,68 @@ fn decode_private_key_bytes(value: &str) -> Result<[u8; 32], String> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn parse_secret_key_hex(value: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Secret key must contain exactly 64 hexadecimal characters".into());
+    }
+    let mut scalar = Zeroizing::new([0u8; 32]);
+    hex::decode_to_slice(value, &mut scalar[..])
+        .map_err(|_| "Invalid hexadecimal secret key".to_string())?;
+    if is_zero32(&scalar) || !be32_lt(&scalar, &CHEETAH_N) {
+        return Err("Secret key must be nonzero and less than the Cheetah curve order".into());
+    }
+    Ok(scalar)
+}
+
+#[cfg(test)]
+mod raw_key_tests {
+    use super::*;
+
+    #[test]
+    fn scalar_validation_preserves_big_endian_bytes_and_rejects_boundaries() {
+        let key = format!("{:064x}", 1);
+        assert_eq!(parse_secret_key_hex(&format!(" 0x{key} ")).unwrap()[31], 1);
+        assert!(parse_secret_key_hex(&"00".repeat(32)).is_err());
+        assert!(parse_secret_key_hex(&hex::encode(CHEETAH_N)).is_err());
+        assert!(parse_secret_key_hex(&"ff".repeat(32)).is_err());
+        for invalid in ["1", "zprv-invalid", &"gg".repeat(32), &"01".repeat(33)] {
+            assert!(parse_secret_key_hex(invalid).is_err());
+        }
+        let mut largest = CHEETAH_N;
+        for byte in largest.iter_mut().rev() {
+            let (next, borrow) = byte.overflowing_sub(1);
+            *byte = next;
+            if !borrow {
+                break;
+            }
+        }
+        assert_eq!(
+            *parse_secret_key_hex(&hex::encode(largest)).unwrap(),
+            largest
+        );
+    }
+
+    #[test]
+    fn raw_key_keeps_the_signing_address_without_hd_or_seed_material() {
+        let wallet = Wallet::from_key(&format!("{:064x}", 1)).unwrap();
+        assert_eq!(
+            wallet.public_key,
+            wallet.schnorr_pubkey().unwrap().to_hash().to_b58()
+        );
+        assert_eq!(
+            decode_private_key_bytes(&wallet.private_key).unwrap()[31],
+            1
+        );
+        assert!(wallet.seedphrase.is_none());
+        assert!(wallet.extended_private_key.is_none());
+        assert!(wallet.extended_public_key.is_none());
+        assert!(wallet.chain_code.is_none());
+    }
 }

@@ -89,3 +89,5 @@ pkg/
 .helix/
 debug/
 .env
+
+/packages/wallet/public/vanity/

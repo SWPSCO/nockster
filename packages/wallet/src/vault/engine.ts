@@ -16,6 +16,7 @@ import init, {
   freeVaultKey as wasmFreeVaultKey,
   generateKey as wasmGenerateKey,
   importWallet as wasmImportWallet,
+  validateWalletKey as wasmValidateWalletKey,
   renameWallet as wasmRenameWallet,
   deleteWallet as wasmDeleteWallet,
   getPubkey as wasmGetPubkey,
@@ -147,6 +148,7 @@ export type VaultMessage =
   | { type: 'vault:checkPassword'; password: string }
   | { type: 'vault:showLogs' }
   | { type: 'vault:generateKey' }
+  | { type: 'vault:validateKey'; key: string }
   | { type: 'vault:importWallet'; nickname: string; key: string }
   | { type: 'vault:renameWallet'; oldNickname: string; newNickname: string }
   | { type: 'vault:deleteWallet'; nickname: string }
@@ -372,6 +374,9 @@ async function processVaultMessage(
         }
         return { success: true, data: { mnemonic: response } };
       }
+
+      case 'vault:validateKey':
+        return { success: true, data: { address: wasmValidateWalletKey(message.key) } };
 
       case 'vault:importWallet': {
         if (vaultKey === null) {

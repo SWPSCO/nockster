@@ -352,6 +352,7 @@ dependencies = [
  "bitcoin_hashes",
  "serde",
  "unicode-normalization",
+ "zeroize",
 ]
 
 [[package]]
@@ -2801,7 +2802,7 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "cfg-if",
  "num-traits",
@@ -3523,7 +3524,7 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.5.2"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 
 [[package]]
 name = "nb"
@@ -3603,7 +3604,7 @@ dependencies = [
 [[package]]
 name = "nockapp"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "bincode",
  "bitvec",
@@ -3618,10 +3619,10 @@ dependencies = [
 [[package]]
 name = "nockchain-libp2p-io"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "bs58",
- "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47)",
  "nockapp",
  "nockvm",
  "noun-serde",
@@ -3630,14 +3631,14 @@ dependencies = [
 [[package]]
 name = "nockchain-math"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "arrayref",
  "bs58",
  "bytes",
  "either",
  "hex-literal 1.1.0",
- "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47)",
  "nockapp",
  "nockvm",
  "nockvm_macros",
@@ -3816,13 +3817,13 @@ dependencies = [
 [[package]]
 name = "nockvm"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "autotools",
  "bitvec",
  "cc",
  "either",
- "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47)",
  "intmap",
  "json",
  "lazy_static",
@@ -3842,7 +3843,7 @@ dependencies = [
 [[package]]
 name = "nockvm_macros"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "quote",
  "syn 2.0.111",
@@ -3857,7 +3858,7 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "nockapp",
  "nockvm",
@@ -3869,7 +3870,7 @@ dependencies = [
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "nockvm",
  "proc-macro2",
@@ -4552,7 +4553,7 @@ dependencies = [
 [[package]]
 name = "pokenoun"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 
 [[package]]
 name = "polyval"
@@ -6633,7 +6634,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 [[package]]
 name = "tx-types"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "anyhow",
  "bip39",
@@ -6642,7 +6643,7 @@ dependencies = [
  "chrono",
  "either",
  "hmac",
- "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47)",
  "nockapp",
  "nockchain-libp2p-io",
  "nockchain-math",
@@ -7939,6 +7940,20 @@ name = "zeroize"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
 
 [[package]]
 name = "zerotrie"
@@ -7976,14 +7991,14 @@ dependencies = [
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
-source = "git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401#1f78fd2c91c44c1b1386baa64f8a4c16ae57c401"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47#5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47"
 dependencies = [
  "bitvec",
  "bs58",
  "bytes",
  "either",
  "hex-literal 1.1.0",
- "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=1f78fd2c91c44c1b1386baa64f8a4c16ae57c401)",
+ "ibig 0.3.6 (git+https://github.com/SWPSCO/tx-types.git?rev=5422d2c7ad7c66f53b6db5d1dfc556b0e5ab4c47)",
  "nockapp",
  "nockchain-math",
  "nockvm",

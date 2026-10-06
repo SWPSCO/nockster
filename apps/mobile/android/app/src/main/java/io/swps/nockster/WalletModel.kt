@@ -104,6 +104,19 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
         } finally { busy = false }
     }
 
+    suspend fun vanityStatus(searchId: String): JSONObject? {
+        val generation = session
+        return try {
+            val reply = call("vanityStatus", JSONObject().put("searchId", searchId))
+            if (generation == session && !privateScreen) reply.optJSONObject("vanity") else null
+        } catch (failure: CancellationException) { throw failure }
+        catch (failure: Exception) { JSONObject().put("status", "error").put("message", failure.message) }
+    }
+
+    fun stopVanity(searchId: String) {
+        scope.launch { try { call("vanityStop", JSONObject().put("searchId", searchId)) } catch (_: Exception) {} }
+    }
+
     fun lock() {
         automaticUnlockPending = false
         session++

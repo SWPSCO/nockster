@@ -37,6 +37,9 @@ pub enum Cmd {
     /// Seed management and optional key file export (replaces old Seed + Keys::Import)
     Seed(SeedArgs),
 
+    /// search locally for a custom software-wallet address
+    Vanity(VanityArgs),
+
     /// send a jammed transaction noun and have the device parse + sign it (FragKind::SignDraft)
     SignDraft(SignDraftArgs),
 
@@ -82,6 +85,33 @@ pub enum Cmd {
 
     /// offline Shamir backup: split a coil into k-of-n shares, or combine them
     Shamir(ShamirArgs),
+}
+
+#[derive(Args)]
+pub struct VanityArgs {
+    /// Base58 address prefix to match
+    #[arg(long)]
+    pub prefix: String,
+
+    /// Private recovery JSON output; the file must not exist
+    #[arg(long)]
+    pub out: PathBuf,
+
+    /// Ignore case and match a/4, b/8, e/3, i/1, l/1, o/0, s/5, t/7, z/2
+    #[arg(long)]
+    pub insensitive: bool,
+
+    /// Search secret keys without a seed phrase (faster)
+    #[arg(long)]
+    pub raw_key: bool,
+
+    /// CPU workers (defaults to available parallelism)
+    #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+    pub threads: Option<u16>,
+
+    /// Maximum candidates across all workers (0 means no limit)
+    #[arg(long, default_value_t = 0)]
+    pub max_attempts: u64,
 }
 
 #[derive(Args, Clone)]
@@ -745,6 +775,7 @@ pub fn run() -> anyhow::Result<()> {
         Cmd::Touch(args) => commands::touch::run(&args),
         Cmd::Update(args) => commands::update::run(&args),
         Cmd::Seed(args) => commands::seed::run(args),
+        Cmd::Vanity(args) => commands::vanity::run(args),
         Cmd::SignDraft(args) => commands::sign_draft::run(
             &args.port,
             args.baud,

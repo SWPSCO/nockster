@@ -23,10 +23,9 @@ import {
   type WalletPayload
 } from '../../vaultApi';
 import type { Wallet } from '../types/wallet';
+import type { WalletCandidate } from '../services/vanity';
 
-// Temporary storage for mnemonic during wallet creation flow
-let pendingMnemonic: string[] | null = null;
-let pendingWalletName: string | null = null;
+let pendingWallet: (WalletCandidate & { walletName: string }) | null = null;
 
 /**
  * Check the current vault status
@@ -98,33 +97,24 @@ export async function generateMnemonic(): Promise<{
   return { success: true, mnemonic: result.data };
 }
 
-/**
- * Store mnemonic temporarily during wallet creation flow
- */
-export function setPendingMnemonic(mnemonic: string[], walletName?: string): void {
-  pendingMnemonic = mnemonic;
-  pendingWalletName = walletName || null;
+export function setPendingWallet(candidate: WalletCandidate, walletName: string): void {
+  clearPendingWallet();
+  pendingWallet = { ...candidate, walletName };
 }
 
-/**
- * Get the pending mnemonic for wallet creation
- */
-export function getPendingMnemonic(): { mnemonic: string[] | null; walletName: string | null } {
-  return { mnemonic: pendingMnemonic, walletName: pendingWalletName };
+export function getPendingWallet(): (WalletCandidate & { walletName: string }) | null {
+  return pendingWallet;
 }
 
-/**
- * Clear the pending mnemonic
- */
-export function clearPendingMnemonic(): void {
-  pendingMnemonic = null;
-  pendingWalletName = null;
+export function clearPendingWallet(): void {
+  if (pendingWallet) pendingWallet.key = '';
+  pendingWallet = null;
 }
 
 /**
  * Import a wallet into the vault
  * @param nickname - Wallet name/nickname
- * @param key - Either a 24-word mnemonic (space-separated) or extended private key
+ * @param key - A 24-word mnemonic, extended private key, or 32-byte secret key in hex
  */
 export async function importWalletToVault(
   nickname: string,
@@ -206,7 +196,7 @@ function mapVaultWalletToStoreWallet(vaultWallet: WalletSummaryPayload): Wallet 
     id: `vault-${vaultWallet.nickname}`,
     name: vaultWallet.nickname,
     addresses: [vaultWallet.publicKey],
-    masterPublicKey: vaultWallet.extendedPublicKey,
+    masterPublicKey: vaultWallet.extendedPublicKey ?? undefined,
     currentAddressIndex: 0,
     balance: 0,
     createdAt: Date.now(),

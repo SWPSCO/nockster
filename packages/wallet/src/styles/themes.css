@@ -1,5 +1,6 @@
 /* CSS Variables and Theme System */
 :root {
+  color-scheme: light;
   /* Spacing */
   --spacing-xs: 4px;
   --spacing-sm: 8px;
@@ -52,6 +53,7 @@
 
 /* Light Theme - Clean modern design without visible borders */
 [data-theme='light'] {
+  color-scheme: light;
   --color-primary: #000000;
   --color-secondary: #666666;
   --color-tertiary: #999999;
@@ -154,6 +156,7 @@
 
 /* Dark Theme - Jony Ive inspired minimal elegance */
 [data-theme='dark'] {
+  color-scheme: dark;
   /* Premium dark palette with perfect contrast */
   --color-primary: rgba(255, 255, 255, 0.95);
   --color-secondary: rgba(255, 255, 255, 0.7);
@@ -267,6 +270,7 @@
 
 /* Dark Blue Theme */
 [data-theme='dark-blue'] {
+  color-scheme: dark;
   --color-primary: #60a5fa;
   --color-secondary: #93c5fd;
   --color-tertiary: #6b7280;
@@ -294,6 +298,7 @@
 
 /* Purple Theme */
 [data-theme='purple'] {
+  color-scheme: dark;
   --color-primary: #a78bfa;
   --color-secondary: #c4b5fd;
   --color-tertiary: #9ca3af;
@@ -317,4 +322,10 @@
 
 [data-theme='purple'] .nockster-wallet {
   background: linear-gradient(135deg, #1a0f2e, #2e1f4a) !important;
+}
+
+/* Native select menus follow the wallet palette as well as the closed control. */
+select option {
+  background: var(--color-surface);
+  color: var(--color-text);
 }

@@ -8,7 +8,7 @@
     "dev:setup": "node scripts/generate-manifest.cjs development",
     "dev:rpc": "node scripts/local-rpc-server.cjs",
     "start:rpc": "node scripts/local-rpc-server.cjs",
-    "build:wasm": "bash scripts/build-wasm.sh",
+    "build:wasm": "bash scripts/build-wasm.sh && npm run build:vanity",
     "build:svelte": "npm run build:web --workspace @nockster/extension --",
     "build": "node scripts/generate-manifest.cjs production && npm run build:wasm && npm run build:svelte",
     "build:prod": "node scripts/generate-manifest.cjs production && npm run build",
@@ -45,7 +45,8 @@
     "build:desktop:web": "npm run build:web --workspace @nockster/desktop --",
     "dev:desktop": "npm run dev --workspace @nockster/desktop --",
     "build:desktop": "npm run build --workspace @nockster/desktop --",
-    "test:desktop": "playwright test --config playwright.desktop.config.ts"
+    "test:desktop": "playwright test --config playwright.desktop.config.ts",
+    "build:vanity": "node scripts/build-vanity.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.2",

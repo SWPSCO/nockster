@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { nextWalletName } from '../../utils/walletName';
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
   import { walletStore, activeWallet } from '../../stores/wallet';
@@ -11,12 +10,9 @@
   import RenameWalletModal from '../molecules/RenameWalletModal.svelte';
   import DeleteWalletModal from '../molecules/DeleteWalletModal.svelte';
   import {
-    generateMnemonic,
-    setPendingMnemonic,
     renameWalletInVault,
     deleteWalletFromVault,
-    getVaultNickname,
-    getWalletsFromVault
+    getVaultNickname
   } from '../../utils/vaultBridge';
 
   export let onBack: () => void = () => {};
@@ -122,34 +118,10 @@
     selectedWallet = null;
   }
 
-  async function handleCreateWallet() {
+  function handleCreateWallet() {
     showAddMenu = false;
-
-    // Generate a new mnemonic using the vault API
-    const result = await generateMnemonic();
-    if (!result.success || !result.mnemonic) {
-      alert('Failed to generate wallet: ' + (result.error || 'Unknown error'));
-      return;
-    }
-
-    // Generate a unique wallet name by checking existing vault wallets
-    const vaultResult = await getWalletsFromVault();
-    const walletName = nextWalletName([...new Set([...wallets.map(wallet => wallet.name), ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])])]);
-
-    setPendingMnemonic(result.mnemonic, walletName);
-
-    // Mark as creating additional wallet
     walletStore.setCreatingAdditionalWallet(true);
-
-    // Create a temporary wallet in the store with the seed phrase for display
-    await walletStore.createWallet(
-      walletName,
-      [], // addresses will be set after vault import
-      result.mnemonic
-    );
-
-    // Navigate to seed phrase display
-    router.navigate('seed-phrase');
+    router.navigate('create-wallet');
   }
 
   function handleImportWallet() {

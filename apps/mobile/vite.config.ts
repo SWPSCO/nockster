@@ -4,8 +4,20 @@ import { resolve } from 'node:path';
 export default defineConfig({
   root: import.meta.dirname,
   base: './',
-  resolve: { alias: { '/src': resolve(import.meta.dirname, '../../packages/wallet/src'), $lib: resolve(import.meta.dirname, '../../packages/wallet/src/lib') } },
-  server: { watch: { ignored: ['**/target/**', '**/nockster-esp/**'] }, host: '127.0.0.1', port: 5174, strictPort: true, fs: { allow: [resolve(import.meta.dirname, '../..')] } },
+  publicDir: '../../packages/wallet/public',
+  resolve: {
+    alias: {
+      '/src': resolve(import.meta.dirname, '../../packages/wallet/src'),
+      $lib: resolve(import.meta.dirname, '../../packages/wallet/src/lib')
+    }
+  },
+  server: {
+    watch: { ignored: ['**/target/**', '**/nockster-esp/**'] },
+    host: '127.0.0.1',
+    port: 5174,
+    strictPort: true,
+    fs: { allow: [resolve(import.meta.dirname, '../..')] }
+  },
   build: { outDir: 'dist', emptyOutDir: true, target: 'es2022' },
   clearScreen: false
 });

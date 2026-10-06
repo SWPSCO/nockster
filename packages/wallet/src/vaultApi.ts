@@ -72,19 +72,19 @@ export async function newVault(localPassword: string): Promise<ApiResponse<{ suc
 export type WalletSummaryPayload = {
   nickname: string;
   publicKey: string;
-  extendedPublicKey: string;
+  extendedPublicKey: string | null;
 };
 
 export type WalletPayload = {
   publicKey: string;
-  extendedPublicKey: string;
+  extendedPublicKey: string | null;
   privateKey: string;
-  extendedPrivateKey: string;
-  chainCode: number[];
-  depth: number;
-  index: number;
-  parentFingerprint: number[];
-  version: number;
+  extendedPrivateKey: string | null;
+  chainCode: number[] | null;
+  depth: number | null;
+  index: number | null;
+  parentFingerprint: number[] | null;
+  version: number | null;
   seedphrase: string[] | null;
 };
 

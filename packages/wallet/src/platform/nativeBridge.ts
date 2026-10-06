@@ -1,6 +1,11 @@
 import { pendingStatus, pendingWithoutConfirmed } from '../lib/utils/pendingStatus';
 import { nextWalletName } from '../lib/utils/walletName';
-import { BRIDGE_LOCK_ROOT, bridgeDetails, verifyBridgeTransaction, type BridgeRecipient } from '../lib/utils/bridge';
+import {
+  BRIDGE_LOCK_ROOT,
+  bridgeDetails,
+  verifyBridgeTransaction,
+  type BridgeRecipient
+} from '../lib/utils/bridge';
 import { priceStore, nockPrice } from '../lib/stores/price';
 import { formatUsdEstimate } from '../lib/utils/usd';
 import {
@@ -26,9 +31,12 @@ import {
 import type { Wallet } from '../lib/types/wallet';
 import { submissionStatusLabel } from '../lib/utils/submissionStatus';
 import { parseRecipientAddress } from '../lib/utils/recipientAddress';
+import { VanitySearch, initialVanityProgress, type VanityOptions } from '../lib/services/vanity';
 
 type Request = {
   action: string;
+  vanity?: VanityOptions;
+  searchId?: string;
   password?: string;
   name?: string;
   key?: string;
@@ -54,6 +62,8 @@ type PreparedPayment = {
   transaction: { signedTx: string; feePaid: number; txId: string; inputNotes: string[] };
 };
 
+const vanitySearch = new VanitySearch();
+let vanitySearchId: string | null = null;
 let contacts: AddressAlias[] = [];
 let prepared: PreparedPayment | null = null;
 let generation = 0;
@@ -86,7 +96,7 @@ async function synchronize() {
       id: `vault-${summary.nickname}`,
       name: summary.nickname,
       addresses: [summary.publicKey],
-      masterPublicKey: summary.extendedPublicKey,
+      masterPublicKey: summary.extendedPublicKey ?? undefined,
       currentAddressIndex: 0,
       createdAt: previous?.createdAt ?? Date.now(),
       lastUsed: Date.now()
@@ -139,7 +149,14 @@ async function snapshot() {
       : [],
     history: [
       ...pending.map(tx => ({
-        bridge: tx.bridge ? { destination: tx.bridge.destination, amount: amount(tx.bridge.amount), protocolFee: amount(tx.bridge.protocolFee), expectedReceived: amount(tx.bridge.expectedReceived) } : null,
+        bridge: tx.bridge
+          ? {
+              destination: tx.bridge.destination,
+              amount: amount(tx.bridge.amount),
+              protocolFee: amount(tx.bridge.protocolFee),
+              expectedReceived: amount(tx.bridge.expectedReceived)
+            }
+          : null,
         id: tx.txId,
         amount: amount(tx.totalAmount),
         amountUsd: formatUsdEstimate(tx.totalAmount / 65536, get(nockPrice)),
@@ -151,7 +168,9 @@ async function snapshot() {
         pendingDetail: pendingStatus(tx).detail,
         canClear: true,
         direction: 'sent',
-        parties: parties(tx.bridge ? [tx.bridge.destination] : tx.recipients.map(recipient => recipient.address)),
+        parties: parties(
+          tx.bridge ? [tx.bridge.destination] : tx.recipients.map(recipient => recipient.address)
+        ),
         from: tx.fromAddress,
         blockHeight: null,
         error: tx.lastSubmitError ?? null
@@ -159,7 +178,14 @@ async function snapshot() {
       ...(active?.transactions ?? [])
         .filter(tx => !pendingIds.has(tx.txId))
         .map(tx => ({
-          bridge: tx.bridge ? { destination: tx.bridge.destination, amount: amount(tx.bridge.amount), protocolFee: amount(tx.bridge.protocolFee), expectedReceived: amount(tx.bridge.expectedReceived) } : null,
+          bridge: tx.bridge
+            ? {
+                destination: tx.bridge.destination,
+                amount: amount(tx.bridge.amount),
+                protocolFee: amount(tx.bridge.protocolFee),
+                expectedReceived: amount(tx.bridge.expectedReceived)
+              }
+            : null,
           id: tx.txId,
           amount: amount(tx.amount),
           amountUsd: formatUsdEstimate(tx.amount / 65536, get(nockPrice)),
@@ -223,6 +249,8 @@ async function requireUnlocked() {
 
 async function suspend() {
   generation++;
+  vanitySearch.clear();
+  vanitySearchId = null;
   clearRpcAuth();
   contacts = [];
   prepared = null;
@@ -255,7 +283,45 @@ async function perform(
       await vault.unlockWithDeviceKey(request.key ?? '');
       await synchronize();
       break;
+    case 'vanityStart': {
+      const status = await vault.vaultStatus();
+      if (status.exists) await requireUnlocked();
+      if (!request.vanity) throw new Error('Choose your address prefix.');
+      if (!request.searchId || request.searchId.length > 100)
+        throw new Error('Start a new search.');
+      vanitySearch.start(request.vanity);
+      vanitySearchId = request.searchId;
+      result.vanity = vanitySearch.snapshot();
+      break;
+    }
+    case 'vanityStatus':
+      result.vanity =
+        request.searchId === vanitySearchId ? vanitySearch.snapshot() : initialVanityProgress();
+      break;
+    case 'vanityStop':
+      if (request.searchId === vanitySearchId) {
+        vanitySearch.stop();
+        vanitySearchId = null;
+      }
+      result.vanity = vanitySearch.snapshot();
+      break;
+    case 'vanityTake': {
+      if (request.searchId !== vanitySearchId) throw new Error('This search has ended.');
+      vanitySearchId = null;
+      const candidate = vanitySearch.take();
+      try {
+        const address = await vault.validateWalletKey(candidate.key);
+        if (address !== candidate.address)
+          throw new Error('The recovered wallet does not match the mined address.');
+        result.candidate = { ...candidate };
+      } finally {
+        candidate.key = '';
+      }
+      break;
+    }
     case 'generate':
+      vanitySearch.clear();
+      vanitySearchId = null;
       result.mnemonic = await vault.generateKey();
       break;
     case 'unlock':
@@ -263,6 +329,9 @@ async function perform(
       await synchronize();
       break;
     case 'import': {
+      await vault.validateWalletKey(request.key?.trim() ?? '');
+      vanitySearch.clear();
+      vanitySearchId = null;
       const status = await vault.vaultStatus();
       if (!status.exists) {
         if ((request.password?.length ?? 0) < 12) throw new Error('Use at least 12 characters');
@@ -271,7 +340,9 @@ async function perform(
       const wallets = await vault.getWallets();
       const name = request.name?.trim() || nextWalletName(wallets.map(wallet => wallet.nickname));
       if (wallets.some(wallet => wallet.nickname === name)) {
-        throw new Error(`A wallet named “${name}” already exists on this device. Choose a different wallet name.`);
+        throw new Error(
+          `A wallet named “${name}” already exists on this device. Choose a different wallet name.`
+        );
       }
       const imported = await vault.importWallet(name, request.key?.trim() ?? '');
       await synchronize();
@@ -296,9 +367,18 @@ async function perform(
     case 'clearPending': {
       await requireUnlocked();
       const active = get(walletStore).activeWallet;
-      if (!active || request.walletId !== active.id || !request.txId || request.confirmation !== request.txId)
+      if (
+        !active ||
+        request.walletId !== active.id ||
+        !request.txId ||
+        request.confirmation !== request.txId
+      )
         throw new Error('Confirm clearing this transaction in the selected wallet');
-      if (!pendingWithoutConfirmed(active.pendingTransactions, active.transactions).some(tx => tx.txId === request.txId))
+      if (
+        !pendingWithoutConfirmed(active.pendingTransactions, active.transactions).some(
+          tx => tx.txId === request.txId
+        )
+      )
         throw new Error('Transaction is no longer pending');
       prepared = null;
       walletStore.deletePendingTransaction(active.id, request.txId);
@@ -326,7 +406,9 @@ async function perform(
     case 'rename': {
       await requireUnlocked();
       const state = get(walletStore);
-      const wallet = state.wallets.find(wallet => wallet.id === (request.walletId ?? state.activeWallet?.id));
+      const wallet = state.wallets.find(
+        wallet => wallet.id === (request.walletId ?? state.activeWallet?.id)
+      );
       if (!wallet) throw new Error('Wallet not found');
       const name = request.name?.trim() ?? '';
       if (!name) throw new Error('Enter a wallet name');
@@ -345,7 +427,8 @@ async function perform(
       const state = get(walletStore);
       const wallet = state.wallets.find(wallet => wallet.id === request.walletId);
       if (!wallet) throw new Error('Wallet not found');
-      if (state.wallets.length <= 1) throw new Error('Add another wallet before deleting your only wallet.');
+      if (state.wallets.length <= 1)
+        throw new Error('Add another wallet before deleting your only wallet.');
       if (request.confirmation !== wallet.name || request.backupConfirmed !== true)
         throw new Error('Confirm your recovery backup and type the wallet name to delete it.');
       await vault.deleteWallet(wallet.name);
@@ -379,19 +462,30 @@ async function perform(
       prepared = null;
       const wallet = get(walletStore).activeWallet;
       if (!wallet) throw new Error('Select a wallet');
-      const bridge = request.bridge ? bridgeDetails(request.bridge.destination, parseNocksInput(request.bridge.amount) ?? 0n) : undefined;
-      if (bridge && request.privateOutputs) throw new Error('Bridge deposits require public outputs');
-      const recipients: BridgeRecipient[] = bridge ? [{ address: BRIDGE_LOCK_ROOT, amount: bridge.amount, bridgeEvmAddress: bridge.destination }] : (request.recipients ?? []).map(recipient => {
-        if (request.amountUnit !== undefined && !['nock', 'nicks'].includes(request.amountUnit))
-          throw new Error('Choose NOCK or nicks');
-        const value =
-          request.amountUnit === 'nicks'
-            ? parseNicksInput(recipient.amount)
-            : parseNocksInput(recipient.amount);
-        if (!value || !recipient.address.trim())
-          throw new Error('Enter a valid address and amount');
-        return { address: recipient.address.trim(), amount: Number(value) };
-      });
+      const bridge = request.bridge
+        ? bridgeDetails(request.bridge.destination, parseNocksInput(request.bridge.amount) ?? 0n)
+        : undefined;
+      if (bridge && request.privateOutputs)
+        throw new Error('Bridge deposits require public outputs');
+      const recipients: BridgeRecipient[] = bridge
+        ? [
+            {
+              address: BRIDGE_LOCK_ROOT,
+              amount: bridge.amount,
+              bridgeEvmAddress: bridge.destination
+            }
+          ]
+        : (request.recipients ?? []).map(recipient => {
+            if (request.amountUnit !== undefined && !['nock', 'nicks'].includes(request.amountUnit))
+              throw new Error('Choose NOCK or nicks');
+            const value =
+              request.amountUnit === 'nicks'
+                ? parseNicksInput(recipient.amount)
+                : parseNocksInput(recipient.amount);
+            if (!value || !recipient.address.trim())
+              throw new Error('Enter a valid address and amount');
+            return { address: recipient.address.trim(), amount: Number(value) };
+          });
       if (!recipients.length || recipients.length > 16)
         throw new Error('Use between 1 and 16 recipients');
       await walletStore.fetchNotes(wallet.id, true);
@@ -403,7 +497,11 @@ async function perform(
       const signed = await createSignedTransaction(
         getVaultNickname(current),
         notes as unknown as Array<Record<string, unknown>>,
-        recipients.map(recipient => ({ address: recipient.address, gift: recipient.amount, bridgeEvmAddress: recipient.bridgeEvmAddress })),
+        recipients.map(recipient => ({
+          address: recipient.address,
+          gift: recipient.amount,
+          bridgeEvmAddress: recipient.bridgeEvmAddress
+        })),
         current.addresses[0],
         { privateOutputs: Boolean(request.privateOutputs) }
       );
@@ -416,7 +514,12 @@ async function perform(
       ) {
         throw new Error(signed.error ?? 'Unable to prepare payment');
       }
-      await verifyBridgeTransaction(signed.signedTx, current.addresses[0], recipients, signed.feePaid);
+      await verifyBridgeTransaction(
+        signed.signedTx,
+        current.addresses[0],
+        recipients,
+        signed.feePaid
+      );
       prepared = {
         id: crypto.randomUUID(),
         walletId: current.id,
@@ -433,7 +536,14 @@ async function perform(
       const netSent = recipients.reduce((sum, recipient) => sum + recipient.amount, 0);
       const price = get(nockPrice);
       result.preview = {
-        bridge: bridge ? { destination: bridge.destination, amount: amount(bridge.amount), protocolFee: amount(bridge.protocolFee), expectedReceived: amount(bridge.expectedReceived) } : null,
+        bridge: bridge
+          ? {
+              destination: bridge.destination,
+              amount: amount(bridge.amount),
+              protocolFee: amount(bridge.protocolFee),
+              expectedReceived: amount(bridge.expectedReceived)
+            }
+          : null,
         netSent: amount(netSent),
         netSentNicks: formatNicksWithSeparator(toNicks(netSent)),
         netSentUsd: formatUsdEstimate(netSent / 65536, price),
@@ -505,7 +615,8 @@ async function confirmSubmission(request: Request) {
     const checked = await handleVaultMessage({ type: 'vault:checkDeviceKey', key: request.key });
     if (!checked.success) throw new Error('Device authentication failed');
   } else {
-    if (!request.password) throw new Error('Confirm this payment with your wallet password or device unlock');
+    if (!request.password)
+      throw new Error('Confirm this payment with your wallet password or device unlock');
     if (!(await vault.checkPassword(request.password)))
       throw new Error('Incorrect wallet password');
   }

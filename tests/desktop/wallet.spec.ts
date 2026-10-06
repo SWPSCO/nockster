@@ -115,7 +115,7 @@ test('importing a distinct wallet preserves both wallets across restart', async 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Import →', exact: true }).click();
   await page.getByLabel('Wallet Name', { exact: true }).fill('Second wallet');
-  await page.getByLabel('Seed Phrase', { exact: true }).fill(secondMnemonic);
+  await page.getByLabel('Seed phrase', { exact: true }).fill(secondMnemonic);
   await page.getByRole('button', { name: 'Import Wallet', exact: true }).click();
   await expect(page.locator('.desktop-wallets')).toContainText('Savings');
   await expect(page.locator('.desktop-wallets')).toContainText('Second wallet');
@@ -137,14 +137,15 @@ test('onboarding never persists plaintext signing secrets and fits the minimum w
   await page.setViewportSize({ width: 800, height: 640 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Create New Wallet', exact: true }).click();
+  await page.getByRole('button', { name: 'Generate Wallet', exact: true }).click();
   await expect(
     page.getByText('Write down these 24 words in order.', { exact: false })
   ).toBeVisible();
   const seed = await page.evaluate(async source => {
-    const { getPendingMnemonic } = await import(`${source}/lib/utils/vaultBridge.ts`);
+    const { getPendingWallet } = await import(`${source}/lib/utils/vaultBridge.ts`);
     const { walletStore } = await import(`${source}/lib/stores/wallet.ts`);
     await walletStore.saveToStorage();
-    return getPendingMnemonic().mnemonic;
+    return getPendingWallet().key.split(' ');
   }, source);
   expect(seed).toHaveLength(24);
   const saved = await page.evaluate(() => localStorage.getItem('desktop-test-native-store'));

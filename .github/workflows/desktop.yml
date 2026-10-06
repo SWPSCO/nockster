@@ -29,7 +29,8 @@ jobs:
             platform: windows-x64
             bundles: nsis
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    # The macOS budget includes building, signing, and waiting for Apple.
+    timeout-minutes: ${{ matrix.platform == 'macos-arm64' && 360 || 90 }}
     env:
       NOCKSTER_VERSION: ${{ inputs.version }}
       RUSTUP_TOOLCHAIN: 1.99.0

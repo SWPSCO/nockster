@@ -8,6 +8,10 @@ import { fetch as nativeFetch } from '@tauri-apps/plugin-http';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import DesktopApp from './DesktopApp.svelte';
 import { priceStore } from '../../../packages/wallet/src/lib/stores/price';
+import { setSigningDeviceProvider } from '../../../packages/wallet/src/lib/utils/hardwareDevice';
+import { hardwareSession } from './hardware/session';
+
+setSigningDeviceProvider(hardwareSession.signingProvider);
 
 const webFetch = globalThis.fetch.bind(globalThis);
 globalThis.fetch = (input, init) => {

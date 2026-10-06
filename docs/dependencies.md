@@ -30,8 +30,12 @@ age limit governs resolving updates. Commit `package.json` and `package-lock.jso
 together. The `iris-v1` alias names the pinned Iris SDK used for wallet auth.
 
 Dependabot checks npm dependencies in both projects weekly and waits fourteen
-days for routine version updates. Capacitor and TypeScript ESLint packages are
-grouped for compatible minor/patch updates. Major upgrades remain separate PRs.
+days for routine version updates. Vite, its Svelte plugin, and Svelte update as
+one group, including major versions, so their peer requirements can resolve
+together. Capacitor and TypeScript ESLint packages are grouped for minor/patch
+updates. TypeScript compiler majors require a coordinated manual upgrade with
+Svelte and TypeScript ESLint; routine compiler minor/patch updates remain enabled.
+Other major upgrades use separate PRs.
 GitHub Actions updates have the same routine cooldown and retain commit-SHA pins.
 Updates require review; auto-merge is not configured.
 

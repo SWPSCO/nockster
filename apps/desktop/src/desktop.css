@@ -57,6 +57,13 @@ body {
   height: 18px;
   flex-shrink: 0;
 }
+.desktop-device-connected {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .desktop-sidebar button:not(:disabled):hover,
 .desktop-sidebar button[aria-current='page'],
 .desktop-sidebar button.chosen {

@@ -25,6 +25,7 @@ shell pins its own toolchain in `apps/desktop/src-tauri/rust-toolchain.toml`.
 ```sh
 npm ci
 npm run build:wasm
+npm run build:hardware:wasm # Required for desktop hardware features
 npm run dev:ext          # Extension UI on localhost:5173
 npm run dev:mobile       # Headless mobile bridge on localhost:5174
 npm run dev:desktop      # Native desktop wallet; requires Tauri system dependencies

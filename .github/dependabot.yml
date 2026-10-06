@@ -13,7 +13,14 @@ updates:
       default-days: 14
     versioning-strategy: increase
     open-pull-requests-limit: 5
+    ignore:
+      # Compiler majors need a coordinated check of Svelte and TypeScript ESLint support.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
     groups:
+      svelte-vite:
+        patterns: ['vite', '@sveltejs/vite-plugin-svelte', '@sveltejs/vite-plugin-svelte-inspector', 'svelte']
+        update-types: [major, minor, patch]
       capacitor:
         patterns: ['@capacitor/*']
         update-types: [minor, patch]

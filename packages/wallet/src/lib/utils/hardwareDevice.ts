@@ -16,6 +16,20 @@ export type NocksterHIDDevice = HIDDevice & {
 export type HardwareAddress = { address: string; slot: number; path: number[] };
 export type DeviceInfo = Extract<Response, { type: 'Info' }>;
 export type PublicKeyAddress = (x: string[], y: string[]) => string;
+export type SigningDeviceProvider = <T>(
+  address: string,
+  toAddress: PublicKeyAddress,
+  action: (device: NocksterDevice) => Promise<T>
+) => Promise<T>;
+
+let signingDeviceProvider: SigningDeviceProvider | undefined;
+
+export function setSigningDeviceProvider(provider: SigningDeviceProvider): () => void {
+  signingDeviceProvider = provider;
+  return () => {
+    if (signingDeviceProvider === provider) signingDeviceProvider = undefined;
+  };
+}
 
 export function isNockster(device: NocksterHIDDevice): boolean {
   return (
@@ -76,6 +90,7 @@ export async function withSigningDevice<T>(
   toAddress: PublicKeyAddress,
   action: (device: NocksterDevice) => Promise<T>
 ): Promise<T> {
+  if (signingDeviceProvider) return signingDeviceProvider(address, toAddress, action);
   if (!navigator.hid) throw new Error('WebHID is unavailable in this context');
   const devices = (await navigator.hid.getDevices()).filter(isNockster);
   if (!devices.length) throw new Error('Open Hardware Wallet and connect your Nockster first');

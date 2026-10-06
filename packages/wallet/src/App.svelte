@@ -1,4 +1,5 @@
 <script lang="ts">
+  export let allowHardwareWhileLocked = false;
   import { nextWalletName } from './lib/utils/walletName';
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
@@ -320,7 +321,11 @@
       }
     } else if (vaultState.exists && !vaultState.unlocked) {
       // Vault exists but is locked - show lock screen
-      if (!isInCreationFlow && currentRouteFromStorage !== 'lock-screen') {
+      if (
+        !isInCreationFlow &&
+        currentRouteFromStorage !== 'lock-screen' &&
+        !(allowHardwareWhileLocked && currentRouteFromStorage === 'hardware-wallet')
+      ) {
         router.navigate('lock-screen');
       }
     } else if (vaultState.exists && vaultState.unlocked) {
@@ -339,7 +344,10 @@
           router.navigate('dashboard');
         }
         // Otherwise keep current route
-      } else if (!isInCreationFlow) {
+      } else if (
+        !isInCreationFlow &&
+        !(allowHardwareWhileLocked && currentRouteFromStorage === 'hardware-wallet')
+      ) {
         // Vault unlocked but no wallets - go to welcome
         router.navigate('welcome');
       }
@@ -377,7 +385,8 @@
         const didLock = walletStore.checkAutoLock(currentSettings.autoLockTimeout);
         if (didLock) {
           await lockVaultSession();
-          router.navigate('lock-screen');
+          if (!(allowHardwareWhileLocked && get(router).currentRoute === 'hardware-wallet'))
+            router.navigate('lock-screen');
         }
       } catch (error) {
         console.warn('Unable to check wallet auto-lock:', error);
@@ -479,7 +488,12 @@
     // Generate a unique wallet name by checking existing vault wallets
     const state = get(walletStore);
     const vaultResult = await getWalletsFromVault();
-    const walletName = nextWalletName([...new Set([...state.wallets.map(wallet => wallet.name), ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])])]);
+    const walletName = nextWalletName([
+      ...new Set([
+        ...state.wallets.map(wallet => wallet.name),
+        ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])
+      ])
+    ]);
 
     setPendingMnemonic(result.mnemonic, walletName);
 
@@ -631,7 +645,12 @@
     let finalWalletName = walletName.trim();
     if (!finalWalletName) {
       const vaultResult = await getWalletsFromVault();
-      finalWalletName = nextWalletName([...new Set([...state.wallets.map(wallet => wallet.name), ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])])]);
+      finalWalletName = nextWalletName([
+        ...new Set([
+          ...state.wallets.map(wallet => wallet.name),
+          ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])
+        ])
+      ]);
     }
 
     // If vault exists and is unlocked, import directly
@@ -873,7 +892,9 @@
             onBack={() => router.navigate('wallet-management')}
           />
         {:else if currentRoute === 'hardware-wallet'}
-          <HardwareWallet onBack={() => router.navigate('wallet-management')} />
+          <slot name="hardware"
+            ><HardwareWallet onBack={() => router.navigate('wallet-management')} /></slot
+          >
         {:else if currentRoute === 'address-book'}
           <AddressBook onBack={() => router.navigate('settings')} />
         {:else if currentRoute === 'lock-screen'}

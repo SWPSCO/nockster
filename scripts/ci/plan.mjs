@@ -7,6 +7,10 @@ export function affectedPlatforms(paths) {
   const selected = new Set();
   const all = () => ['ios', 'android', 'extension', 'desktop'].forEach(platform => selected.add(platform));
   for (const path of paths) {
+    if (/^(nockster-esp\/(crates\/(nockster-core|nockster-wasm)\/|Cargo\.(toml|lock)$|rust-toolchain\.toml$)|scripts\/build-hardware-wasm\.sh$|tests\/desktop-hardware\.test\.ts$)/.test(path)) {
+      selected.add('desktop');
+      continue;
+    }
     if (/^(nockster-esp\/|examples\/|docs\/|.*\.md$|\.gitignore$|\.gitmodules$|\.claude\/|\.github\/workflows\/(esp-ci|esp-desktop-release|firmware-release|deploy-web)\.yml$)/.test(path)) continue;
     if (/^(tests\/mobile\/|playwright\.mobile\.config\.ts$|\.github\/workflows\/mobile-bridge\.yml$)/.test(path)) continue;
     if (/^(apps\/desktop\/|packages\/wallet\/src\/platform\/desktopStorage\.ts$|playwright\.desktop\.config\.ts$|tests\/desktop\/|tests\/desktop-release\.test\.ts$|tools\/macos-release\/|scripts\/ci\/(configure-desktop|collect-desktop)\.mjs$|\.github\/workflows\/desktop\.yml$)/.test(path)) selected.add('desktop');

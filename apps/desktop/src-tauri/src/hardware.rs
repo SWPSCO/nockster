@@ -27,11 +27,30 @@ impl HardwareState {
     pub fn is_updating(&self) -> bool {
         self.updating.load(Ordering::SeqCst)
     }
+
+    pub fn begin_update(&self) -> Result<(), String> {
+        self.updating
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| ())
+            .map_err(|_| "Wait for the active update to finish".into())
+    }
+
+    pub fn finish_update(&self) {
+        self.updating.store(false, Ordering::SeqCst);
+    }
 }
 
 #[tauri::command]
-pub fn hardware_protect_update(state: tauri::State<'_, HardwareState>, active: bool) {
-    state.updating.store(active, Ordering::SeqCst);
+pub fn hardware_protect_update(
+    state: tauri::State<'_, HardwareState>,
+    active: bool,
+) -> Result<(), String> {
+    if active {
+        state.begin_update()
+    } else {
+        state.finish_update();
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]

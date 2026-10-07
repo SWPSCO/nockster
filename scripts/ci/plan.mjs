@@ -13,7 +13,7 @@ export function affectedPlatforms(paths) {
     }
     if (/^(nockster-esp\/|examples\/|docs\/|.*\.md$|\.gitignore$|\.gitmodules$|\.claude\/|\.github\/workflows\/(esp-ci|esp-desktop-release|firmware-release|deploy-web)\.yml$)/.test(path)) continue;
     if (/^(tests\/mobile\/|playwright\.mobile\.config\.ts$|\.github\/workflows\/mobile-bridge\.yml$)/.test(path)) continue;
-    if (/^(apps\/desktop\/|packages\/wallet\/src\/platform\/desktopStorage\.ts$|playwright\.desktop\.config\.ts$|tests\/desktop\/|tests\/desktop-release\.test\.ts$|tools\/macos-release\/|scripts\/ci\/(configure-desktop|collect-desktop)\.mjs$|\.github\/workflows\/desktop\.yml$)/.test(path)) selected.add('desktop');
+    if (/^(apps\/desktop\/|packages\/wallet\/src\/platform\/desktopStorage\.ts$|playwright\.desktop\.config\.ts$|tests\/desktop\/|tests\/desktop-(release|updates)\.test\.ts$|tools\/macos-release\/|scripts\/ci\/(configure-desktop|collect-desktop|desktop-updates)\.mjs$|\.github\/workflows\/desktop\.yml$)/.test(path)) selected.add('desktop');
     else if (/^(apps\/mobile\/ios\/|\.github\/workflows\/ios\.yml$|scripts\/ci\/ios-|tests\/ci\/ios_)/.test(path)) selected.add('ios');
     else if (/^(apps\/mobile\/android\/|\.github\/workflows\/android\.yml$|scripts\/ci\/android-)/.test(path)) selected.add('android');
     else if (/^(apps\/mobile\/|packages\/wallet\/src\/platform\/nativeBridge\.ts$|scripts\/configure-mobile\.mjs$)/.test(path)) {

@@ -6,9 +6,11 @@ import { mockAccounts } from '../mobile/rpcAuth.fixture';
 // Emulate only native I/O. Wallet cryptography, auth, routing, and UI run unchanged.
 export async function desktopIO(
   page: Page,
-  hardware?: (command: string, args: any) => Promise<unknown>
+  hardware?: (command: string, args: any) => Promise<unknown>,
+  updates?: (command: string) => Promise<unknown>
 ) {
   if (hardware) await page.exposeFunction('desktopHardware', hardware);
+  if (updates) await page.exposeFunction('desktopUpdates', updates);
   await page.route('https://**', route => route.abort());
   await mockAccounts(page);
   await page.route('https://nockblocks.com/rpc{,/v1}', route => {
@@ -36,6 +38,10 @@ export async function desktopIO(
       localStorage.setItem('desktop-test-native-store', JSON.stringify(data));
     (window as any).__TAURI_INTERNALS__ = {
       invoke: async (command: string, args: any) => {
+        if (command.startsWith('desktop_update_')) {
+          if ((window as any).desktopUpdates) return (window as any).desktopUpdates(command);
+          return { phase: 'disabled', downloaded: 0 };
+        }
         if (command.startsWith('hardware_')) {
           if ((window as any).desktopHardware)
             return (window as any).desktopHardware(command, args);

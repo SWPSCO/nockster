@@ -621,3 +621,26 @@ for (const outcome of ['rejected', 'unknown'] as const) {
     expect(pending.inputNotes.length).toBeGreaterThan(0);
   });
 }
+
+test('native bridge history shares inclusion-based progress with unknown-tip handling', async ({ page }) => {
+  await mockAccounts(page, {anyPublicKey:true});
+  let tip: number | null = 1123;
+  await page.route('https://nockblocks.com/rpc**', async route => {
+    const body = route.request().postDataJSON();
+    const bridgeOutput = { note: {lockScriptHash: 'AcsPkuhXQoGeEsF91yynpm1kcW17PQ2Z1MEozgx7YnDPkZwrtzLuuqd', assets: 6553600000, noteData: {bridge: '0x'+'1'.repeat(40)}} };
+    const result = body.method === 'getTransactionsByAddress' ? {transactions:[{
+      txId:'deposit',type:'sent',amount:6553600000,fee:100,timestamp:1790000000,blockHeight:1000,
+      counterparties:['test'],inputs:[],outputs:[bridgeOutput]
+    }]} : body.method === 'getTip' ? {height:tip}
+      : body.method === 'getNotes' ? {nicks:0,notes:[]}
+      : body.method === 'getAddressBook' ? {entries:[]} : [];
+    await route.fulfill({json:{jsonrpc:'2.0',id:body.id,result}});
+  });
+  await create(page);
+  expect((await request(page,'status')).state.history[0].bridgeProgress).toMatchObject({blocks:123,target:400,phase:'confirming'});
+  for (const [height,phase,blocks] of [[1400,'ready',400],[2000,'ready',400],[null,'unavailable',null]] as const) {
+    tip=height;
+    const updated=await request(page,'refresh');
+    expect(updated.state.history[0].bridgeProgress).toMatchObject({blocks,phase});
+  }
+});

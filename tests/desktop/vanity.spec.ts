@@ -83,13 +83,21 @@ test('mining requires disclosure and opt-in, warns on long prefixes, and estimat
     await import('../../packages/wallet/src/lib/utils/vanityEstimate');
   await desktopIO(page);
   await page.setViewportSize({ width: 800, height: 640 });
-  await page.route('**/vanity/miner.js', route =>
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        (window as any).updateMiningRate = (rate: number) => this.postMessage({ rate });
+      }
+    };
+  });
+  await page.route('**/vanity/worker.js', route =>
     route.fulfill({
       contentType: 'text/javascript',
-      body: `export function mineAddress({ onProgress, signal }) {
-      window.updateMiningRate = rate => onProgress({ type: 'progress', attempts: 100, seconds: 1, rate, adapter: 'CPU' });
-      return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError'))));
-    }`
+      body: `onmessage = ({data}) => {
+      if (data.rate) postMessage({type:'progress',attempts:100,seconds:1,rate:data.rate,adapter:'CPU'});
+    };`
     })
   );
   await page.goto('/');
@@ -124,7 +132,7 @@ test('mining requires disclosure and opt-in, warns on long prefixes, and estimat
     page.getByText('Estimated average: about 45 seconds', { exact: true })
   ).toBeVisible();
   await page.screenshot({ path: '/tmp/vanity-create-estimate.png' });
-  await page.getByRole('button', { name: 'Stop Search', exact: true }).click();
+  await page.getByRole('button', { name: 'Cancel Search', exact: true }).click();
   await expect(page.locator('.estimate')).toBeHidden();
   await disclosure.click();
   await expect(page.getByRole('button', { name: 'Generate Wallet', exact: true })).toBeEnabled();
@@ -197,4 +205,86 @@ test('first-run zprv import preserves the generated address through vault recove
       }, source)
     )
     .toEqual([candidate.address]);
+});
+
+test('vanity search survives navigation, cancels its worker, and can restart without reopening', async ({
+  page
+}) => {
+  await desktopIO(page);
+  await mockAccounts(page, { anyPublicKey: true });
+  await page.addInitScript(() => {
+    (window as any).liveMiners = 0;
+    const NativeWorker = window.Worker;
+    window.Worker = class extends NativeWorker {
+      private mining = false;
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        this.mining = String(url).includes('vanity/worker.js');
+        if (this.mining) (window as any).liveMiners++;
+      }
+      terminate() {
+        if (this.mining) {
+          (window as any).liveMiners--;
+          this.mining = false;
+        }
+        super.terminate();
+      }
+    };
+  });
+  await page.goto('/');
+  await createWallet(page);
+  await page.reload();
+  await page.locator('input[type="password"]').fill('synthetic desktop wallet password');
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage wallets', exact: true }).click();
+  await page.getByRole('button', { name: '+ Add Wallet', exact: true }).click();
+  await page.getByRole('button', { name: 'Create New Wallet', exact: true }).click();
+  await page.getByRole('button', { name: 'Generate a custom address', exact: true }).click();
+  await page.getByLabel('Enable custom address generation', { exact: true }).check();
+  await page.getByLabel('Wallet name', { exact: true }).fill('Background wallet');
+  await page.getByLabel('Address starts with', { exact: true }).fill('zzzzzzzzzzzzzz');
+  await page.getByLabel('Recovery', { exact: true }).selectOption('raw');
+  await page.getByText('Search settings', { exact: true }).click();
+  await page.getByLabel('Compute with', { exact: true }).selectOption('cpu');
+  await page.getByRole('button', { name: 'Find Address', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Cancel Search', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Continue in Background', exact: true }).click();
+  await expect(page.getByText('Vanity search running', { exact: true })).toBeVisible();
+  const nav = page.getByRole('navigation', { name: 'Main' });
+  await nav.getByRole('button', { name: 'Receive', exact: true }).click();
+  await expect(page.getByAltText('QR Code')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).liveMiners)).toBe(1);
+  await page.getByRole('button', { name: 'Return to Search', exact: true }).click();
+  await expect(page.getByLabel('Wallet name', { exact: true })).toHaveValue('Background wallet');
+  await expect(page.getByLabel('Address starts with', { exact: true })).toHaveValue(
+    'zzzzzzzzzzzzzz'
+  );
+  await page.getByRole('button', { name: 'Cancel Search', exact: true }).click();
+  expect(await page.evaluate(() => (window as any).liveMiners)).toBe(0);
+  await expect(page.getByLabel('Address starts with', { exact: true })).toBeEnabled();
+  await page.getByLabel('Address starts with', { exact: true }).fill('2');
+  await page.getByRole('button', { name: 'Find Address', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Use This Address', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Continue in Background', exact: true }).click();
+  await expect(page.getByText('Vanity address ready', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Return to Search', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Use This Address', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Discard Address', exact: true }).click();
+  await page.getByLabel('Address starts with', { exact: true }).fill('zzzzzzzzzzzzzz');
+  await page.getByRole('button', { name: 'Find Address', exact: true }).click();
+  await page.getByRole('button', { name: 'Continue in Background', exact: true }).click();
+  await page.getByRole('button', { name: 'Cancel Search', exact: true }).click();
+  await expect(page.locator('.vanity-banner')).toBeHidden();
+  expect(await page.evaluate(() => (window as any).liveMiners)).toBe(0);
+  await nav.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByRole('tab', { name: 'Payment', exact: true })).toBeVisible();
+  await page.evaluate(async source => {
+    const {vanitySession} = await import(`${source}/lib/stores/vanitySession.ts`);
+    vanitySession.start('Lock test', {prefix:'zzzzzzzzzzzzzz',keyMode:'raw',backend:'cpu'});
+  }, source);
+  await expect(page.getByText('Vanity search running', {exact:true})).toBeVisible();
+  await page.keyboard.press('Control+Shift+L');
+  await expect(page.getByText('Wallet Locked', {exact:true})).toBeVisible();
+  expect(await page.evaluate(() => (window as any).liveMiners)).toBe(0);
+  await expect(page.locator('.vanity-banner')).toBeHidden();
 });

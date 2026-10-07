@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BridgeProgress from '../molecules/BridgeProgress.svelte';
   import { onMount } from 'svelte';
   import { startPendingTransactionPoller, stopPendingTransactionPoller } from '../../services/pendingTransactionPoller';
   onMount(() => { startPendingTransactionPoller(); return stopPendingTransactionPoller; });
@@ -326,6 +327,10 @@
           <span class="detail-value">{blockHeight.toLocaleString()}</span>
         </div>
       </div>
+
+      {#if confirmedRecord?.bridge || transaction.bridge || pendingRecord?.bridge}
+        <div class="detail-card"><BridgeProgress blockHeight={confirmedRecord?.blockHeight ?? transaction.blockHeight} {status} /></div>
+      {/if}
 
       <!-- Fee Card -->
       <div class="detail-card">

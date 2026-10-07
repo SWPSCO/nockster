@@ -6,6 +6,7 @@ import UIKit
 struct WalletRootView: View {
     @ObservedObject var model: WalletModel
     @State private var tab = 0
+    @State private var showingVanity = false
 
     var body: some View {
         ZStack {
@@ -41,6 +42,16 @@ struct WalletRootView: View {
                         }
                     }
                     .id(model.sessionID)
+                    .safeAreaInset(edge: .top) {
+                        if let search = model.snapshot.vanitySearch {
+                            HStack {
+                                Button(search.progress.status == "found" ? "Vanity address ready" : "Return to vanity search") { showingVanity = true }
+                                Spacer()
+                                Button("Cancel", role: .destructive) { Task { await model.stopVanity(search.id) } }
+                            }.font(.caption).padding(12).background(NocksterPalette.background)
+                        }
+                    }
+                    .sheet(isPresented: $showingVanity) { NavigationStack { SetupView(model: model) } }
                 }
             }
             .background(NocksterPalette.background)
@@ -51,8 +62,15 @@ struct WalletRootView: View {
         }
         .tint(.primary)
         .task { await model.start() }
+        .task(id: model.snapshot.vanitySearch?.id) {
+            while model.snapshot.vanitySearch?.progress.status == "mining" && !Task.isCancelled {
+                await model.updateVanityStatus()
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
+            }
+        }
         .onChange(of: model.snapshot.unlocked) { _, unlocked in
             if unlocked { tab = model.pendingRecipients.isEmpty ? 0 : 1 }
+            else { showingVanity = false }
         }
         .onChange(of: model.pendingRecipients) { _, recipients in
             if !recipients.isEmpty && model.snapshot.unlocked { tab = 1 }
@@ -125,7 +143,8 @@ struct SetupView: View {
 
     init(model: WalletModel) {
         self.model = model
-        _name = State(initialValue: model.snapshot.suggestedWalletName)
+        _name = State(initialValue: model.snapshot.vanitySearch?.name ?? model.snapshot.suggestedWalletName)
+        _customAddress = State(initialValue: model.snapshot.vanitySearch != nil)
     }
 
     private var confirmed: Bool {
@@ -159,6 +178,14 @@ struct SetupView: View {
                     .foregroundStyle(nameExists ? Color.red : Color.primary)
                 if nameExists { Text("A wallet with this name already exists").font(.caption).foregroundStyle(.red) }
             }
+            if let search = model.snapshot.vanitySearch, importing || !customAddress {
+                Section {
+                    Button(search.progress.status == "found" ? "Vanity address ready" : "Return to vanity search") {
+                        importing = false; customAddress = true; name = search.name
+                    }
+                    Button("Cancel Search", role: .destructive) { Task { await model.stopVanity(search.id) } }
+                }
+            }
             if importing {
                 Section {
                     Picker("Import with", selection: $importKind) {
@@ -178,7 +205,10 @@ struct SetupView: View {
                     Toggle("Custom address", isOn: $customAddress)
                 } footer: { Text("Choose how your address starts. Search runs on this device.") }
                 if customAddress {
-                    VanityControls(model: model) { candidate in
+                    VanityControls(model: model, walletName: name, onBackground: {
+                        if model.snapshot.wallets.isEmpty { customAddress = false; importing = true }
+                        else { dismiss() }
+                    }) { candidate in
                         minedAddress = candidate.address ?? ""
                         if candidate.kind == "mnemonic" { mnemonic = candidate.key.split(separator: " ").map(String.init) }
                         else { minedKey = candidate.key }
@@ -278,6 +308,8 @@ struct SetupView: View {
 
 private struct VanityControls: View {
     @ObservedObject var model: WalletModel
+    let walletName: String
+    let onBackground: () -> Void
     let onFound: (WalletCandidate) -> Void
     @State private var prefix = ""
     @State private var insensitive = false
@@ -289,7 +321,22 @@ private struct VanityControls: View {
     @State private var advanced = false
     @State private var progress = VanityProgress()
     @State private var searchID = UUID().uuidString
-    @State private var active = true
+    init(model: WalletModel, walletName: String, onBackground: @escaping () -> Void, onFound: @escaping (WalletCandidate) -> Void) {
+        self.model = model
+        self.walletName = walletName
+        self.onBackground = onBackground
+        self.onFound = onFound
+        let session = model.snapshot.vanitySearch
+        _prefix = State(initialValue: session?.options.prefix ?? "")
+        _insensitive = State(initialValue: session?.options.insensitive ?? false)
+        _recovery = State(initialValue: session?.options.keyMode ?? "mnemonic")
+        _backend = State(initialValue: session?.options.backend ?? "auto")
+        _lanes = State(initialValue: session?.options.lanes ?? 4096)
+        _steps = State(initialValue: session?.options.steps ?? 1)
+        _limit = State(initialValue: String(Int(session?.options.maxAttempts ?? 0)))
+        _progress = State(initialValue: session?.progress ?? VanityProgress())
+        _searchID = State(initialValue: session?.id ?? UUID().uuidString)
+    }
     private var mining: Bool { progress.status == "mining" }
 
     var body: some View {
@@ -326,8 +373,8 @@ private struct VanityControls: View {
                 }
             }
             if mining {
-                Button("Stop Search") { Task {
-                    if let reply = await model.perform("vanityStop", ["searchId": searchID]) { progress = reply.vanity ?? VanityProgress() }
+                Button("Cancel Search") { Task {
+                    if let value = await model.stopVanity(searchID) { progress = value }
                 } }
             } else if progress.status == "found" {
                 Button("Use This Address") { Task {
@@ -337,7 +384,15 @@ private struct VanityControls: View {
                 Button("Find Address", systemImage: "sparkles") { start() }
                     .disabled(prefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.busy)
             }
-        } footer: { Text("Your keys stay on this device.") }
+            if mining || progress.status == "found" {
+                Button("Continue in Background", action: onBackground)
+                if progress.status == "found" {
+                    Button("Discard Address", role: .destructive) { Task {
+                        if let value = await model.stopVanity(searchID) { progress = value }
+                    } }
+                }
+            }
+        } footer: { Text("Search continues while you use the wallet. Locking or closing the app cancels it. Your keys stay on this device.") }
         .onChange(of: recovery) { _, value in lanes = value == "raw" ? 64 : 4096; resetResult() }
         .onChange(of: prefix) { _, _ in resetResult() }
         .onChange(of: insensitive) { _, _ in resetResult() }
@@ -359,19 +414,14 @@ private struct VanityControls: View {
                 catch { progress = VanityProgress(status: "error", message: error.localizedDescription) }
             }
         }
-        .onAppear { active = true }
-        .onDisappear {
-            active = false
-            let id = searchID
-            Task { _ = try? await model.call("vanityStop", ["searchId": id]) }
-        }
+
     }
 
     private func resetResult() {
         guard !mining else { return }
         progress = VanityProgress()
         let id = searchID
-        Task { _ = try? await model.call("vanityStop", ["searchId": id]) }
+        Task { await model.stopVanity(id) }
         searchID = UUID().uuidString
     }
 
@@ -382,10 +432,8 @@ private struct VanityControls: View {
         let id = searchID
         let settings: [String: Any] = ["prefix": prefix, "insensitive": insensitive, "keyMode": recovery, "backend": backend, "lanes": lanes, "steps": steps, "maxAttempts": attempts]
         Task {
-            guard active else { return }
-            if let reply = await model.perform("vanityStart", ["searchId": id, "vanity": settings]) {
-                if active && searchID == id { progress = reply.vanity ?? VanityProgress() }
-                else { _ = try? await model.call("vanityStop", ["searchId": id]) }
+            if let reply = await model.perform("vanityStart", ["searchId": id, "name": walletName, "vanity": settings]), searchID == id {
+                progress = reply.vanity ?? VanityProgress()
             }
         }
     }
@@ -891,7 +939,7 @@ struct TransactionDetailView: View {
                             LabeledContent("Bridge deposit", value: "\(groupedAmount(bridge.amount)) NOCK")
                             LabeledContent("Bridge protocol fee (≈0.3%)", value: "\(groupedAmount(bridge.protocolFee)) NOCK")
                             LabeledContent("Expected on Base", value: "\(groupedAmount(bridge.expectedReceived)) NOCK")
-                            Text("L1 confirmation does not mean delivery on Base. The bridge waits 400 blocks before processing.").font(.footnote)
+                            if let progress = transaction.bridgeProgress { BridgeProgressView(progress: progress) }
                             if let url = URL(string: "https://basescan.org/address/\(bridge.destination)") { Link("View destination on Base", destination: url) }
                         }
                     }
@@ -963,6 +1011,7 @@ struct ActivityView: View {
                                 Text((transaction.bridge != nil ? "To Base: " : transaction.direction == "self" ? "Own: " : transaction.direction == "sent" ? "To: " : "From: ") + (party.label ?? "\(party.address.prefix(8))…\(party.address.suffix(8))") + (transaction.parties.count > 1 ? " +\(transaction.parties.count - 1)" : "")).font(.headline).lineLimit(1).truncationMode(.tail)
                             }
                             Text(transaction.date, style: .date).font(.caption).foregroundStyle(.secondary)
+                            if let progress = transaction.bridgeProgress { BridgeProgressView(progress: progress) }
                         }
                         Spacer()
                         VStack(alignment: .trailing) {
@@ -1265,5 +1314,22 @@ private struct UsdSubtitle: View {
     let value: String?
     var body: some View {
         if let value { Text(value).font(.caption).foregroundStyle(.secondary) }
+    }
+}
+
+private struct BridgeProgressView: View {
+    let progress: BridgeProgress
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(progress.label).font(.caption).foregroundStyle(.secondary)
+            if progress.phase != "failed" {
+                ProgressView(value: Double(progress.blocks ?? 0), total: Double(progress.target))
+                    .accessibilityLabel("Bridge block wait")
+                    .accessibilityValue(progress.label)
+            }
+            if progress.phase == "ready" {
+                Text("Delivery on Base requires bridge processing.").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
     }
 }

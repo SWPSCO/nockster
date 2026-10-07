@@ -1,10 +1,11 @@
+import { mineAddress } from './vanityWorker';
 import type { MineOptions, MineProgress, MineResult } from '../../../public/vanity/miner.js';
 
 export type RecoveryKind = 'mnemonic' | 'raw';
 export type VanityOptions = Pick<
   MineOptions,
-  'prefix' | 'insensitive' | 'keyMode' | 'backend' | 'lanes' | 'steps' | 'maxAttempts'
->;
+  'prefix' | 'insensitive' | 'backend' | 'lanes' | 'steps' | 'maxAttempts'
+> & { keyMode?: RecoveryKind };
 export type WalletCandidate = { kind: RecoveryKind | 'extended'; key: string; address?: string };
 export type VanityProgress = {
   status: 'idle' | 'mining' | 'found' | 'stopped' | 'exhausted' | 'error';
@@ -55,16 +56,6 @@ export function validateVanityOptions(options: VanityOptions): VanityOptions {
   };
 }
 
-let library:
-  Promise<{ mineAddress: (options: MineOptions) => Promise<MineResult | null> }> | undefined;
-function loadLibrary() {
-  const url = new URL('vanity/miner.js', document.baseURI).href;
-  return (library ??= import(/* @vite-ignore */ url).catch(error => {
-    library = undefined;
-    throw error;
-  }));
-}
-
 /** One transient search. Only take() returns recovery material; status is public. */
 export class VanitySearch {
   private controller: AbortController | null = null;
@@ -112,7 +103,6 @@ export class VanitySearch {
     void (async () => {
       let found: MineResult | null = null;
       try {
-        const { mineAddress } = await loadLibrary();
         if (this.generation !== generation) return;
         found = await mineAddress({ ...options, signal: controller.signal, onProgress });
         if (this.generation !== generation) return;

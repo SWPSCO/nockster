@@ -104,6 +104,19 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
         } finally { busy = false }
     }
 
+    suspend fun updateVanityStatus() {
+        val id = snapshot.optJSONObject("vanitySearch")?.text("id") ?: return
+        if (busy || privateScreen) return
+        val generation = session
+        try {
+            val reply = call("vanityStatus", JSONObject().put("searchId", id))
+            if (generation == session && snapshot.optJSONObject("vanitySearch")?.text("id") == id) {
+                snapshot = JSONObject(snapshot.toString()).put("vanitySearch", reply.optJSONObject("state")?.optJSONObject("vanitySearch") ?: JSONObject.NULL)
+            }
+        } catch (failure: CancellationException) { throw failure }
+        catch (_: Exception) { /* Keep the search available for retry. */ }
+    }
+
     suspend fun vanityStatus(searchId: String): JSONObject? {
         val generation = session
         return try {
@@ -113,8 +126,22 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
         catch (failure: Exception) { JSONObject().put("status", "error").put("message", failure.message) }
     }
 
+    suspend fun cancelVanity(searchId: String): JSONObject? {
+        val generation = session
+        return try {
+            val reply = call("vanityStop", JSONObject().put("searchId", searchId))
+            if (generation != session) null else {
+                if (snapshot.optJSONObject("vanitySearch")?.text("id") == searchId) {
+                    snapshot = JSONObject(snapshot.toString()).put("vanitySearch", reply.optJSONObject("state")?.optJSONObject("vanitySearch") ?: JSONObject.NULL)
+                }
+                reply.optJSONObject("vanity")
+            }
+        } catch (failure: CancellationException) { throw failure }
+        catch (_: Exception) { null }
+    }
+
     fun stopVanity(searchId: String) {
-        scope.launch { try { call("vanityStop", JSONObject().put("searchId", searchId)) } catch (_: Exception) {} }
+        scope.launch { cancelVanity(searchId) }
     }
 
     fun lock() {

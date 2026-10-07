@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BridgeProgress from '../molecules/BridgeProgress.svelte';
   import { pendingStatus, pendingWithoutConfirmed } from '../../utils/pendingStatus';
   import { formatUsdEstimate } from '../../utils/usd';
   import { onMount, onDestroy } from 'svelte';
@@ -427,6 +428,7 @@
                         {formatTransactionTime(transaction.timestamp)}
                       {/if}
                     </div>
+                    {#if transaction.bridge}<BridgeProgress blockHeight={transaction.blockHeight} status={transaction.status} />{/if}
                   </div>
                 </div>
                 <div class="transaction-right">

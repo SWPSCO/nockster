@@ -1,3 +1,5 @@
+import { chainTip, refreshChainTip } from '../lib/stores/chainTip';
+import { bridgeProgress } from '../lib/utils/bridgeProgress';
 import { pendingStatus, pendingWithoutConfirmed } from '../lib/utils/pendingStatus';
 import { nextWalletName } from '../lib/utils/walletName';
 import {
@@ -31,7 +33,12 @@ import {
 import type { Wallet } from '../lib/types/wallet';
 import { submissionStatusLabel } from '../lib/utils/submissionStatus';
 import { parseRecipientAddress } from '../lib/utils/recipientAddress';
-import { VanitySearch, initialVanityProgress, type VanityOptions } from '../lib/services/vanity';
+import {
+  VanitySearch,
+  initialVanityProgress,
+  validateVanityOptions,
+  type VanityOptions
+} from '../lib/services/vanity';
 
 type Request = {
   action: string;
@@ -64,6 +71,8 @@ type PreparedPayment = {
 
 const vanitySearch = new VanitySearch();
 let vanitySearchId: string | null = null;
+let vanityOptions: VanityOptions | null = null;
+let vanityName = '';
 let contacts: AddressAlias[] = [];
 let prepared: PreparedPayment | null = null;
 let generation = 0;
@@ -127,6 +136,15 @@ async function snapshot() {
   return {
     ...status,
     unlocked,
+    vanitySearch:
+      vanitySearchId && (!status.exists || unlocked)
+        ? {
+            id: vanitySearchId,
+            name: vanityName,
+            options: vanityOptions,
+            progress: vanitySearch.snapshot()
+          }
+        : null,
     suggestedWalletName: nextWalletName(unlocked ? state.wallets.map(wallet => wallet.name) : []),
     activeId: active?.id ?? null,
     usdPerNock: get(nockPrice) || null,
@@ -157,6 +175,9 @@ async function snapshot() {
               expectedReceived: amount(tx.bridge.expectedReceived)
             }
           : null,
+        bridgeProgress: tx.bridge
+          ? bridgeProgress(undefined, get(chainTip), tx.submissionStatus)
+          : null,
         id: tx.txId,
         amount: amount(tx.totalAmount),
         amountUsd: formatUsdEstimate(tx.totalAmount / 65536, get(nockPrice)),
@@ -185,6 +206,9 @@ async function snapshot() {
                 protocolFee: amount(tx.bridge.protocolFee),
                 expectedReceived: amount(tx.bridge.expectedReceived)
               }
+            : null,
+          bridgeProgress: tx.bridge
+            ? bridgeProgress(tx.blockHeight, get(chainTip), tx.status)
             : null,
           id: tx.txId,
           amount: amount(tx.amount),
@@ -230,6 +254,8 @@ async function refresh() {
   ];
   // Spendable notes are fetched when preparing a payment, not to display a balance.
   const results = await Promise.allSettled(tasks.map(task => task.run()));
+  if (refreshGeneration !== generation) return;
+  if (get(walletStore).activeWallet?.transactions?.some(tx => tx.bridge)) await refreshChainTip();
   if (refreshGeneration !== generation) return;
   networkError =
     results
@@ -289,7 +315,12 @@ async function perform(
       if (!request.vanity) throw new Error('Choose your address prefix.');
       if (!request.searchId || request.searchId.length > 100)
         throw new Error('Start a new search.');
-      vanitySearch.start(request.vanity);
+      const options = validateVanityOptions(request.vanity);
+      vanitySearch.start(options);
+      vanityOptions = options;
+      vanityName = (
+        request.name?.trim() || nextWalletName(get(walletStore).wallets.map(wallet => wallet.name))
+      ).slice(0, 20);
       vanitySearchId = request.searchId;
       result.vanity = vanitySearch.snapshot();
       break;
@@ -298,17 +329,10 @@ async function perform(
       result.vanity =
         request.searchId === vanitySearchId ? vanitySearch.snapshot() : initialVanityProgress();
       break;
-    case 'vanityStop':
-      if (request.searchId === vanitySearchId) {
-        vanitySearch.stop();
-        vanitySearchId = null;
-      }
-      result.vanity = vanitySearch.snapshot();
-      break;
     case 'vanityTake': {
       if (request.searchId !== vanitySearchId) throw new Error('This search has ended.');
-      vanitySearchId = null;
       const candidate = vanitySearch.take();
+      vanitySearchId = null;
       try {
         const address = await vault.validateWalletKey(candidate.key);
         if (address !== candidate.address)
@@ -320,8 +344,6 @@ async function perform(
       break;
     }
     case 'generate':
-      vanitySearch.clear();
-      vanitySearchId = null;
       result.mnemonic = await vault.generateKey();
       break;
     case 'unlock':
@@ -330,8 +352,6 @@ async function perform(
       break;
     case 'import': {
       await vault.validateWalletKey(request.key?.trim() ?? '');
-      vanitySearch.clear();
-      vanitySearchId = null;
       const status = await vault.vaultStatus();
       if (!status.exists) {
         if ((request.password?.length ?? 0) < 12) throw new Error('Use at least 12 characters');
@@ -627,6 +647,13 @@ async function dispatch(request: Request): Promise<string> {
     if (request.action === 'lock') {
       await suspend();
       return JSON.stringify({ state: await snapshot() });
+    }
+    if (request.action === 'vanityStop') {
+      if (request.searchId === vanitySearchId) {
+        vanitySearch.stop();
+        vanitySearchId = null;
+      }
+      return JSON.stringify({ vanity: vanitySearch.snapshot(), state: await snapshot() });
     }
     const requestedGeneration = generation;
     const operation = queue.then(() => perform(request, requestedGeneration));

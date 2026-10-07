@@ -89,6 +89,10 @@ for (const recovery of ['mnemonic', 'raw', 'extended']) {
         ).toBeVisible();
         const address = await page.locator('.search-status .address').textContent();
         expect(address).toMatch(/^2/);
+        await page.getByRole('button', { name: 'Continue in Background', exact: true }).click();
+        await expect(page.getByText('Vanity address ready', { exact: true })).toBeVisible();
+        await page.getByRole('button', { name: 'Return to Search', exact: true }).click();
+        await expect(page.locator('.search-status .address')).toHaveText(address!);
         await page.screenshot({ path: 'test-results/extension-vanity-found.png' });
         await page.getByRole('button', { name: 'Use This Address', exact: true }).click();
         const secret = await page.getByLabel('Secret key · hex').inputValue();

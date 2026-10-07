@@ -28,6 +28,7 @@
   // Import all the components from the design concept
   import { validateWalletKey } from './vaultController';
   import type { WalletCandidate } from './lib/services/vanity';
+  import { vanitySession } from './lib/stores/vanitySession';
   import CreateWallet from './lib/components/organisms/CreateWallet.svelte';
   import SecretKeyBackup from './lib/components/organisms/SecretKeyBackup.svelte';
   import WelcomeScreen from './lib/components/organisms/WelcomeScreen.svelte';
@@ -213,6 +214,7 @@
   $: {
     console.log('📍 Route changed to:', currentRoute);
     if (currentRoute === 'lock-screen') clearPendingWallet();
+    if (currentRoute === 'lock-screen' || $walletStore.isLocked) vanitySession.clear();
   }
 
   // Fetch transactions when navigating to history
@@ -280,6 +282,7 @@
     void retryInitialization();
     return () => {
       disposed = true;
+      vanitySession.clear();
       clearPendingWallet();
       cleanup();
     };
@@ -520,7 +523,7 @@
 
   function cancelWalletCreation() {
     clearPendingWallet();
-    const additional = get(walletStore).isCreatingAdditionalWallet;
+    const additional = get(walletStore).wallets.length > 0;
     walletStore.setCreatingAdditionalWallet(false);
     router.navigate(additional ? 'wallet-management' : 'welcome');
   }
@@ -743,6 +746,16 @@
         </div>
       {/if}
 
+      {#if $vanitySession.options && currentRoute !== 'create-wallet' && currentRoute !== 'lock-screen'}
+        <div class="vanity-banner" role="status">
+          <span>{$vanitySession.progress.status === 'found' ? 'Vanity address ready' : $vanitySession.progress.status === 'mining' ? 'Vanity search running' : 'Vanity search stopped'}</span>
+          <button on:click={() => {
+            walletStore.setCreatingAdditionalWallet($walletStore.wallets.length > 0);
+            router.navigate('create-wallet');
+          }}>Return to Search</button>
+          <button on:click={() => vanitySession.clear()}>Cancel Search</button>
+        </div>
+      {/if}
       <div class="route-content">
         {#if currentRoute === 'welcome'}
           <WelcomeScreen
@@ -951,6 +964,10 @@
 {/if}
 
 <style>
+  .vanity-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
+  .vanity-banner span { flex: 1; min-width: 120px; }
+  .vanity-banner button { color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 8px; cursor: pointer; }
+
   .nockster-wallet {
     width: 357px;
     height: 600px;

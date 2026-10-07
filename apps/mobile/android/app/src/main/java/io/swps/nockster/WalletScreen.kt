@@ -73,6 +73,12 @@ fun NocksterApp(model: WalletModel) {
     val appScope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     LaunchedEffect(model.privateScreen) { if (model.privateScreen) focus.clearFocus() }
+    LaunchedEffect(model.snapshot.optJSONObject("vanitySearch")?.text("id")) {
+        while (model.snapshot.optJSONObject("vanitySearch")?.optJSONObject("progress")?.text("status") == "mining" && !model.privateScreen) {
+            model.updateVanityStatus()
+            delay(1000)
+        }
+    }
     val scheme = if (isSystemInDarkTheme()) NocksterDarkColors else NocksterLightColors
     MaterialTheme(colorScheme = scheme, shapes = Shapes(small = RoundedCornerShape(8.dp), medium = RoundedCornerShape(12.dp), large = RoundedCornerShape(16.dp))) {
         Surface(Modifier.fillMaxSize()) {
@@ -109,6 +115,14 @@ fun NocksterApp(model: WalletModel) {
                         Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             if (model.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                            model.snapshot.optJSONObject("vanitySearch")?.let { search ->
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(onClick = { addingWallet = true }, modifier = Modifier.weight(1f)) {
+                                        Text(if (search.optJSONObject("progress")?.text("status") == "found") "Vanity address ready" else "Return to vanity search")
+                                    }
+                                    TextButton(onClick = { appScope.launch { model.cancelVanity(search.text("id")) } }) { Text("Cancel") }
+                                }
+                            }
                             if (addressBook) {
                                 TextButton(onClick = { addressBook = false }) { Text("Back to wallet") }
                                 AddressBookScreen(model)
@@ -158,14 +172,14 @@ private fun UnlockScreen(model: WalletModel) {
 private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -> Unit) {
     val scope = rememberCoroutineScope()
     var importing by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf(model.snapshot.text("suggestedWalletName")) }
+    var name by remember { mutableStateOf(model.snapshot.optJSONObject("vanitySearch")?.text("name") ?: model.snapshot.text("suggestedWalletName")) }
     var secret by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmation by remember { mutableStateOf("") }
     var enableDeviceUnlock by remember { mutableStateOf(false) }
     var mnemonic by remember { mutableStateOf<List<String>>(emptyList()) }
     var importKind by remember { mutableStateOf("mnemonic") }
-    var customAddress by remember { mutableStateOf(false) }
+    var customAddress by remember { mutableStateOf(model.snapshot.optJSONObject("vanitySearch") != null) }
     var minedKey by remember { mutableStateOf("") }
     var minedAddress by remember { mutableStateOf("") }
     var first by remember { mutableStateOf("") }
@@ -187,6 +201,14 @@ private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -
         OutlinedTextField(name, { name = it }, label = { Text("Wallet name") }, isError = nameExists,
             textStyle = LocalTextStyle.current.copy(color = if (nameExists) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface),
             supportingText = { if (nameExists) Text("A wallet with this name already exists") }, modifier = Modifier.fillMaxWidth())
+        model.snapshot.optJSONObject("vanitySearch")?.let { search ->
+            if (importing || !customAddress) {
+                TextButton(onClick = { importing = false; customAddress = true; name = search.text("name") }) {
+                    Text(if (search.optJSONObject("progress")?.text("status") == "found") "Vanity address ready" else "Return to vanity search")
+                }
+                TextButton(onClick = { scope.launch { model.cancelVanity(search.text("id")) } }) { Text("Cancel Search") }
+            }
+        }
         if (importing) {
             WalletChoice("Import with", importKind, listOf("mnemonic" to "24-word seed phrase", "raw" to "Secret key · hex", "extended" to "Extended private key")) { importKind = it; secret = "" }
             OutlinedTextField(secret, { secret = it }, label = { Text(if (importKind == "raw") "Secret key in hex" else "Recovery material") },
@@ -197,7 +219,9 @@ private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Custom address", Modifier.weight(1f)); Switch(customAddress, { customAddress = it }, modifier = Modifier.semantics { contentDescription = "Custom address" })
             }
-            if (customAddress) VanityControls(model) { candidate ->
+            if (customAddress) VanityControls(model, name, {
+                if (model.wallets.isEmpty()) { customAddress = false; importing = true } else done()
+            }) { candidate ->
                 minedAddress = candidate.text("address")
                 if (candidate.text("kind") == "mnemonic") mnemonic = candidate.text("key").split(" ") else minedKey = candidate.text("key")
                 saved = false
@@ -273,22 +297,23 @@ private fun WalletChoice(label: String, value: String, choices: List<Pair<String
 }
 
 @Composable
-private fun VanityControls(model: WalletModel, onFound: (JSONObject) -> Unit) {
+private fun VanityControls(model: WalletModel, walletName: String, onBackground: () -> Unit, onFound: (JSONObject) -> Unit) {
     val scope = rememberCoroutineScope()
-    var prefix by remember { mutableStateOf("") }
-    var insensitive by remember { mutableStateOf(false) }
-    var recovery by remember { mutableStateOf("mnemonic") }
-    var backend by remember { mutableStateOf("auto") }
-    var lanes by remember { mutableStateOf("4096") }
-    var steps by remember { mutableStateOf("1") }
-    var limit by remember { mutableStateOf("0") }
+    val session = remember { model.snapshot.optJSONObject("vanitySearch") }
+    val settings = session?.optJSONObject("options")
+    var prefix by remember { mutableStateOf(settings?.text("prefix") ?: "") }
+    var insensitive by remember { mutableStateOf(settings?.optBoolean("insensitive") ?: false) }
+    var recovery by remember { mutableStateOf(settings?.text("keyMode") ?: "mnemonic") }
+    var backend by remember { mutableStateOf(settings?.text("backend") ?: "auto") }
+    var lanes by remember { mutableStateOf(settings?.text("lanes") ?: "4096") }
+    var steps by remember { mutableStateOf(settings?.text("steps") ?: "1") }
+    var limit by remember { mutableStateOf(settings?.optLong("maxAttempts")?.toString() ?: "0") }
     var advanced by remember { mutableStateOf(false) }
-    var progress by remember { mutableStateOf(JSONObject()) }
-    var searchId by remember { mutableStateOf(UUID.randomUUID().toString()) }
+    var progress by remember { mutableStateOf(session?.optJSONObject("progress") ?: JSONObject()) }
+    var searchId by remember { mutableStateOf(session?.text("id") ?: UUID.randomUUID().toString()) }
     val mining = progress.text("status") == "mining"
     val editable = !mining && !model.busy
     fun reset() { model.stopVanity(searchId); searchId = UUID.randomUUID().toString(); progress = JSONObject() }
-    DisposableEffect(searchId) { val id = searchId; onDispose { model.stopVanity(id) } }
     LaunchedEffect(model.privateScreen) {
         if (model.privateScreen) progress = JSONObject().put("status", "stopped").put("message", "Search stopped when the app locked.")
     }
@@ -317,7 +342,7 @@ private fun VanityControls(model: WalletModel, onFound: (JSONObject) -> Unit) {
     if (progress.text("address").isNotEmpty()) SelectionContainer { Text(progress.text("address"), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
     if (mining) {
         LinearProgressIndicator(Modifier.fillMaxWidth())
-        OutlinedButton(onClick = { scope.launch { model.perform("vanityStop", JSONObject().put("searchId", searchId))?.optJSONObject("vanity")?.let { progress = it } } }, enabled = !model.busy) { Text("Stop Search") }
+        OutlinedButton(onClick = { scope.launch { model.cancelVanity(searchId)?.let { progress = it } } }) { Text("Cancel Search") }
     } else if (progress.text("status") == "found") {
         Button(onClick = { scope.launch { model.perform("vanityTake", JSONObject().put("searchId", searchId))?.optJSONObject("candidate")?.let(onFound) } }, enabled = !model.busy) { Text("Use This Address") }
     } else {
@@ -327,11 +352,18 @@ private fun VanityControls(model: WalletModel, onFound: (JSONObject) -> Unit) {
                 progress = JSONObject().put("status", "error").put("message", "Enter whole numbers for the search settings.")
             } else scope.launch {
                 val settings = JSONObject().put("prefix", prefix).put("insensitive", insensitive).put("keyMode", recovery).put("backend", backend).put("lanes", laneCount).put("steps", stepCount).put("maxAttempts", attempts)
-                model.perform("vanityStart", JSONObject().put("searchId", searchId).put("vanity", settings))?.optJSONObject("vanity")?.let { progress = it }
+                model.perform("vanityStart", JSONObject().put("searchId", searchId).put("name", walletName).put("vanity", settings))?.optJSONObject("vanity")?.let { progress = it }
             }
         }, enabled = prefix.isNotBlank() && !model.busy) { Text("Find Address") }
     }
-    Text("Your keys stay on this device. Shorter prefixes are faster to find.", style = MaterialTheme.typography.bodySmall)
+
+    if (mining || progress.text("status") == "found") {
+        OutlinedButton(onClick = onBackground) { Text("Continue in Background") }
+        if (progress.text("status") == "found") TextButton(onClick = { scope.launch {
+            model.cancelVanity(searchId)?.let { progress = it }
+        } }) { Text("Discard Address") }
+    }
+    Text("Search continues while you use the wallet. Locking or closing the app cancels it. Your keys stay on this device.", style = MaterialTheme.typography.bodySmall)
 }
 
 private fun shortWalletAddress(address: String): String = if (address.length > 12) "${address.take(6)}…${address.takeLast(4)}" else address
@@ -695,7 +727,7 @@ private fun ActivityScreen(model: WalletModel) {
                     Text("Bridge deposit: ${groupedAmount(bridge.text("amount"))} NOCK")
                     Text("Bridge protocol fee (≈0.3%): ${groupedAmount(bridge.text("protocolFee"))} NOCK")
                     Text("Expected on Base: ${groupedAmount(bridge.text("expectedReceived"))} NOCK")
-                    Text("L1 confirmation does not mean delivery on Base. The bridge waits 400 blocks before processing.")
+                    transaction.optJSONObject("bridgeProgress")?.let { BridgeProgressMeter(it) }
                     TextButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://basescan.org/address/${bridge.text("destination")}"))) }) { Text("View destination on Base") }
                 }
                 Text("Transaction ID", style = MaterialTheme.typography.titleMedium)
@@ -747,6 +779,7 @@ private fun ActivityScreen(model: WalletModel) {
                     Text((if (transaction.optJSONObject("bridge") != null) "To Base: " else if (self) "Own: " else if (sent) "To: " else "From: ") + label + if (parties.size > 1) " +${parties.size - 1}" else "", maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
                     Text(transaction.text("statusLabel", "Pending"), style = MaterialTheme.typography.bodySmall)
                     Text(DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(transaction.optLong("timestamp"))), style = MaterialTheme.typography.bodySmall)
+                    transaction.optJSONObject("bridgeProgress")?.let { BridgeProgressMeter(it) }
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text("${if (self) "" else if (sent) "−" else "+"}${groupedAmount(transaction.text("amount"))}", color = color, fontWeight = FontWeight.SemiBold)
@@ -972,4 +1005,18 @@ private fun composeUsd(input: String, inNicks: Boolean, price: Double): String? 
 @Composable
 private fun UsdSubtitle(value: String?) {
     if (!value.isNullOrBlank()) Text(value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun BridgeProgressMeter(progress: JSONObject) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(progress.text("label"), style = MaterialTheme.typography.bodySmall)
+        if (progress.text("phase") != "failed") {
+            LinearProgressIndicator(
+                progress = { progress.optInt("blocks", 0).toFloat() / progress.optInt("target", 400).coerceAtLeast(1) },
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Bridge block wait: ${progress.text("label")}" }
+            )
+        }
+        if (progress.text("phase") == "ready") Text("Delivery on Base requires bridge processing.", style = MaterialTheme.typography.labelSmall)
+    }
 }

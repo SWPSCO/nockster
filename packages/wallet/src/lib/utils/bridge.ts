@@ -4,7 +4,7 @@ import type { Digest, Noun } from 'iris-v1/wasm';
 
 export const BRIDGE_LOCK_ROOT = 'AcsPkuhXQoGeEsF91yynpm1kcW17PQ2Z1MEozgx7YnDPkZwrtzLuuqd';
 export const BRIDGE_MINIMUM_NICKS = 100_000n * 65_536n;
-export const BRIDGE_CONFIRMATION_BLOCKS = 400;
+export { BRIDGE_CONFIRMATION_BLOCKS } from './bridgeProgress.ts';
 
 export type BridgeDetails = {
   destination: string;

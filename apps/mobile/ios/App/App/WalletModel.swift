@@ -25,7 +25,15 @@ struct BridgeSummary: Codable {
     let expectedReceived: String
 }
 
+struct BridgeProgress: Codable {
+    let blocks: Int?
+    let target: Int
+    let phase: String
+    let label: String
+}
+
 struct WalletTransaction: Codable, Identifiable {
+    let bridgeProgress: BridgeProgress?
     let bridge: BridgeSummary?
     let id: String
     let amount: String
@@ -60,6 +68,7 @@ struct WalletSnapshot: Codable {
     var contacts: [AddressAlias] = []
     var networkError: String?
     var usdPerNock: Double?
+    var vanitySearch: VanitySession?
     var active: WalletAccount? { wallets.first { $0.id == activeId } }
 }
 
@@ -94,6 +103,23 @@ struct VanityProgress: Codable {
     var seconds: Double = 0
     var backend = ""
     var address: String?
+}
+
+struct VanityOptions: Codable {
+    let prefix: String
+    let insensitive: Bool
+    let keyMode: String
+    let backend: String
+    let lanes: Int
+    let steps: Int
+    let maxAttempts: Double
+}
+
+struct VanitySession: Codable {
+    let id: String
+    let name: String
+    let options: VanityOptions
+    let progress: VanityProgress
 }
 
 struct WalletCandidate: Codable {
@@ -185,6 +211,22 @@ final class WalletModel: ObservableObject {
             throw WalletFailure(message: "Invalid wallet response")
         }
         return try JSONDecoder().decode(WalletReply.self, from: data)
+    }
+
+    @discardableResult
+    func stopVanity(_ id: String) async -> VanityProgress? {
+        let requestEpoch = epoch
+        guard let reply = try? await call("vanityStop", ["searchId": id]), requestEpoch == epoch else { return nil }
+        if snapshot.vanitySearch?.id == id { snapshot.vanitySearch = reply.state?.vanitySearch }
+        return reply.vanity
+    }
+
+    func updateVanityStatus() async {
+        guard !busy && !privateScreen, let id = snapshot.vanitySearch?.id else { return }
+        let requestEpoch = epoch
+        guard let reply = try? await call("vanityStatus", ["searchId": id]),
+              requestEpoch == epoch, snapshot.vanitySearch?.id == id else { return }
+        snapshot.vanitySearch = reply.state?.vanitySearch
     }
 
     @discardableResult

@@ -1,39 +1,36 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { walletStore } from '../../stores/wallet';
   import { nextWalletName } from '../../utils/walletName';
   import { generateMnemonic } from '../../utils/vaultBridge';
   import { validateWalletKey } from '../../../vaultController';
-  import {
-    VanitySearch,
-    initialVanityProgress,
-    type WalletCandidate,
-    type RecoveryKind
-  } from '../../services/vanity';
+  import { type WalletCandidate, type RecoveryKind } from '../../services/vanity';
+  import { vanitySession as search } from '../../stores/vanitySession';
   import { expectedVanityAttempts, formatVanityDuration } from '../../utils/vanityEstimate';
   import Header from '../molecules/Header.svelte';
   import Button from '../atoms/Button.svelte';
 
   export let onReady: (candidate: WalletCandidate, name: string) => Promise<void>;
   export let onBack: () => void;
-  let name = nextWalletName(get(walletStore).wallets.map(wallet => wallet.name));
-  let custom = false;
-  let miningExpanded = false;
-  let prefix = '';
-  let insensitive = false;
-  let keyMode: RecoveryKind = 'mnemonic';
-  let backend: 'auto' | 'cpu' = 'auto';
-  let lanes = 4096;
-  let steps = 1;
-  let maxAttempts = 0;
-  let progress = initialVanityProgress();
+  const session = search.snapshot();
+  let name = session.name || nextWalletName(get(walletStore).wallets.map(wallet => wallet.name));
+  let custom = !!session.options;
+  let miningExpanded = !!session.options;
+  let prefix = session.options?.prefix ?? '';
+  let insensitive = session.options?.insensitive ?? false;
+  let keyMode: RecoveryKind = session.options?.keyMode ?? 'mnemonic';
+  let backend: 'auto' | 'cpu' = session.options?.backend ?? 'auto';
+  let lanes = session.options?.lanes ?? 4096;
+  let steps = session.options?.steps ?? 1;
+  let maxAttempts = session.options?.maxAttempts ?? 0;
+  let progress = session.progress;
   let busy = false;
   let error = '';
   let disposed = false;
   let advanced = false;
   let progressElement: HTMLDivElement | undefined;
-  const search = new VanitySearch(value => {
+  const unsubscribe = search.subscribe(({ progress: value }) => {
     const changedStatus = progress.status !== value.status;
     const measuredRate = progress.rate <= 0 && value.rate > 0;
     progress = value;
@@ -108,14 +105,25 @@
     error = '';
     advanced = false;
     try {
-      search.start({ prefix, insensitive, keyMode, backend, lanes, steps, maxAttempts });
+      search.start(name.trim(), {
+        prefix,
+        insensitive,
+        keyMode,
+        backend,
+        lanes,
+        steps,
+        maxAttempts
+      });
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'Unable to start the search.';
     }
   }
+  onMount(() => {
+    if (session.options) progressElement?.scrollIntoView({ block: 'nearest' });
+  });
   onDestroy(() => {
     disposed = true;
-    search.clear();
+    unsubscribe();
   });
 </script>
 
@@ -282,13 +290,21 @@
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </div>
   <div class="button-footer">
+    {#if mining || found}
+      <Button variant="secondary" fullWidth={true} on:click={onBack}>Continue in Background</Button>
+      <p class="hint">
+        Search continues while this window stays open and the wallet stays unlocked.
+      </p>
+    {/if}
     {#if !custom}<Button variant="primary" fullWidth={true} on:click={generate} disabled={!canStart}
         >{busy ? 'Preparing wallet…' : 'Generate Wallet'}</Button
       >
     {:else if mining}<Button variant="secondary" fullWidth={true} on:click={() => search.stop()}
-        >Stop Search</Button
+        >Cancel Search</Button
       >
-    {:else if found}<Button
+    {:else if found}<Button variant="secondary" fullWidth={true} on:click={() => search.stop()}
+        >Discard Address</Button
+      ><Button
         variant="primary"
         fullWidth={true}
         on:click={() => continueWith(search.take())}

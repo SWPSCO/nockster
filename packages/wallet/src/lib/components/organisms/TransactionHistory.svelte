@@ -1,8 +1,12 @@
 <script lang="ts">
+  import BridgeProgress from '../molecules/BridgeProgress.svelte';
   import { formatUsdEstimate } from '../../utils/usd';
   import Header from '../molecules/Header.svelte';
   import { nockPrice } from '../../stores/price';
   import type { TransactionData } from '../../utils/rpc';
+  import { onMount } from 'svelte';
+  import { pendingWithoutConfirmed } from '../../utils/pendingStatus';
+  import { startPendingTransactionPoller, stopPendingTransactionPoller } from '../../services/pendingTransactionPoller';
   import { activeWallet } from '../../stores/wallet';
   import { formatNocksWithSeparator, nicksToNocks } from '../../utils/nicks';
 
@@ -11,6 +15,15 @@
   export let isLoading: boolean = false;
 
   let searchQuery = '';
+  onMount(() => { startPendingTransactionPoller(); return stopPendingTransactionPoller; });
+  $: displayedTransactions = [
+    ...pendingWithoutConfirmed($activeWallet?.pendingTransactions, transactions).map(tx => ({
+      txId: tx.txId, amount: tx.totalAmount, fee: tx.fee, timestamp: tx.timestamp,
+      bridge: tx.bridge, from: tx.fromAddress, to: tx.bridge?.destination ?? tx.recipients[0]?.address,
+      type: 'sent' as const, status: tx.submissionStatus ?? 'pending'
+    })),
+    ...transactions
+  ] as TransactionData[];
 
   function formatUSD(nockAmount: number): string {
     return formatUsdEstimate(nockAmount, $nockPrice) ?? '';
@@ -68,16 +81,16 @@
 
     {#if isLoading}
       <div class="loading-state">Loading transactions...</div>
-    {:else if transactions.length === 0}
+    {:else if displayedTransactions.length === 0}
       <div class="empty-state">
         <p>No transactions yet</p>
         <p class="empty-subtitle">Your transaction history will appear here</p>
       </div>
     {:else}
-      <div class="transaction-count">Showing {transactions.length} transactions</div>
+      <div class="transaction-count">Showing {displayedTransactions.length} transactions</div>
 
       <div class="transaction-list">
-        {#each transactions as transaction}
+        {#each displayedTransactions as transaction}
           {@const txType = getTransactionType(transaction)}
           {@const counterpartyAddress = transaction.bridge?.destination ?? (txType === 'sent' ? transaction.to : transaction.from)}
           {@const amountNicks = BigInt(Math.trunc(transaction.amount || 0))}
@@ -131,7 +144,8 @@
                 Fee: {formatNocksWithSeparator(feeNicks, 8)} NOCK ({formatUSD(feeNOCK)})
               </div>
             {/if}
-            {#if transaction.blockHeight}
+            {#if transaction.bridge}<BridgeProgress blockHeight={transaction.blockHeight} status={transaction.status} />{/if}
+            {#if transaction.blockHeight !== undefined}
               <div class="transaction-detail">Block: {transaction.blockHeight.toLocaleString('en-US')}</div>
             {/if}
           </div>

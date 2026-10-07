@@ -1753,6 +1753,74 @@ fn settle_candidate_fees(
     }))
 }
 
+// Consume the largest notes first and stop as soon as outputs and their actual
+// serialized fee fit. Seed fragments fill each input without subset enumeration.
+fn choose_largest_first_plan(
+    arena: &mut Arena,
+    notes: &[NoteSpec],
+    seeds: &[SeedSpec],
+    source_pkh: [u64; 5],
+    refund_lock_root: [u64; 5],
+    refund_note_data: Noun,
+    refund_recipient_b58: &str,
+    current_height: u64,
+    fee_policy: FeePolicy,
+) -> Result<CandidatePlan, JsValue> {
+    let mut order: Vec<usize> = (0..notes.len()).collect();
+    order.sort_by(|a, b| {
+        notes[*b]
+            .assets
+            .cmp(&notes[*a].assets)
+            .then_with(|| notes[*a].origin_page.cmp(&notes[*b].origin_page))
+            .then_with(|| notes[*a].name_last.cmp(&notes[*b].name_last))
+    });
+    let mut remaining: std::collections::VecDeque<SeedSpec> = seeds.to_vec().into();
+    let mut plans = Vec::new();
+    for note_index in order {
+        let mut available = notes[note_index].assets;
+        let mut accepted = Vec::new();
+        while available > 0 {
+            let Some(seed) = remaining.front_mut() else {
+                break;
+            };
+            let gift = seed.gift.min(available);
+            accepted.push(SeedSpec {
+                gift,
+                ..seed.clone()
+            });
+            available -= gift;
+            seed.gift -= gift;
+            if seed.gift == 0 {
+                remaining.pop_front();
+            }
+        }
+        plans.push(SpendPlan {
+            note_index,
+            accepted,
+            refund_gift: available,
+            fee: 0,
+        });
+        if remaining.is_empty() && plans.iter().any(|plan| plan.refund_gift > 0) {
+            if let Some(candidate) = settle_candidate_fees(
+                arena,
+                notes,
+                plans.clone(),
+                source_pkh,
+                refund_lock_root,
+                refund_note_data,
+                refund_recipient_b58,
+                current_height,
+                fee_policy,
+            )? {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(js_err(
+        "insufficient funds to cover requested outputs and fee",
+    ))
+}
+
 fn candidate_better(candidate: &CandidatePlan, best: Option<&CandidatePlan>) -> bool {
     let Some(best) = best else {
         return true;
@@ -2244,6 +2312,14 @@ pub fn compose_tx_v1_unsigned(input: JsValue) -> Result<ComposedTransactionV1, J
     compose_tx_v1_unsigned_inner(input)
 }
 
+/// Compose using largest-first inputs without enumerating note subsets.
+#[wasm_bindgen]
+pub fn compose_tx_v1_min_inputs(input: JsValue) -> Result<ComposedTransactionV1, JsValue> {
+    let input: ComposeTxV1Input = serde_wasm_bindgen::from_value(input)
+        .map_err(|e| js_err(format!("bad input: {e}")))?;
+    compose_tx_v1_with_selection(input, true)
+}
+
 pub fn estimate_tx_v1_fee(input: ComposeTxV1Input) -> Result<u64, String> {
     let composed = compose_tx_v1_unsigned_inner(input).map_err(js_value_to_string)?;
     let summary: serde_json::Value = serde_json::from_str(&composed.summary_json)
@@ -2261,6 +2337,13 @@ fn js_value_to_string(value: JsValue) -> String {
 }
 
 fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTransactionV1, JsValue> {
+    compose_tx_v1_with_selection(input, false)
+}
+
+fn compose_tx_v1_with_selection(
+    input: ComposeTxV1Input,
+    largest_first: bool,
+) -> Result<ComposedTransactionV1, JsValue> {
     if input.outputs.is_empty() {
         return Err(js_err("at least one output is required"));
     }
@@ -2360,18 +2443,32 @@ fn compose_tx_v1_unsigned_inner(input: ComposeTxV1Input) -> Result<ComposedTrans
     }
     seeds.sort_by(|a, b| b.gift.cmp(&a.gift));
 
-    let best_plan = choose_best_candidate_plan(
-        &mut arena,
-        notes.as_slice(),
-        seeds.as_slice(),
-        output_total,
-        source_pkh,
-        refund_lock_root,
-        refund_note_data,
-        &refund_recipient_b58,
-        current_height,
-        fee_policy,
-    )?;
+    let best_plan = if largest_first {
+        choose_largest_first_plan(
+            &mut arena,
+            notes.as_slice(),
+            seeds.as_slice(),
+            source_pkh,
+            refund_lock_root,
+            refund_note_data,
+            &refund_recipient_b58,
+            current_height,
+            fee_policy,
+        )
+    } else {
+        choose_best_candidate_plan(
+            &mut arena,
+            notes.as_slice(),
+            seeds.as_slice(),
+            output_total,
+            source_pkh,
+            refund_lock_root,
+            refund_note_data,
+            &refund_recipient_b58,
+            current_height,
+            fee_policy,
+        )
+    }?;
     let plans = best_plan.plans;
     let final_fee_breakdown = best_plan.fee_breakdown;
 

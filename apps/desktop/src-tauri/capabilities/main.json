@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Local wallet window with persistent ciphertext and Nockblocks network access.",
+  "description": "Local wallet window with persistent ciphertext, device control, Nockblocks access, and signed firmware downloads.",
   "windows": [
     "main"
   ],
@@ -12,6 +12,9 @@
       "allow": [
         {
           "url": "https://nockblocks.com/**"
+        },
+        {
+          "url": "https://bin.aeroe.io/nockster/updates/**"
         }
       ]
     },
@@ -32,6 +35,9 @@
         },
         {
           "url": "https://swps.io/**"
+        },
+        {
+          "url": "https://my.nockster.com/manual/**"
         }
       ]
     }

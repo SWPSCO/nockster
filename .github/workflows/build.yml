@@ -80,6 +80,7 @@ jobs:
       - name: Install pinned Rust and WASM tools
         run: |
           rustup toolchain install nightly-2025-02-14 --profile minimal --target wasm32-unknown-unknown
+          rustup toolchain install nightly-2026-06-06 --profile minimal --target wasm32-unknown-unknown
           cargo +stable install wasm-pack --version 0.15.0 --locked
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -87,12 +88,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             packages/wallet-engine/target
-          key: rust-${{ runner.os }}-nightly-2025-02-14-${{ hashFiles('packages/wallet-engine/**/Cargo.lock', 'packages/wallet-engine/**/Cargo.toml', 'packages/wallet-engine/**/*.rs') }}
+            nockster-esp/target
+          key: rust-${{ runner.os }}-nightly-2025-02-14-${{ hashFiles('packages/wallet-engine/**/Cargo.lock', 'packages/wallet-engine/**/Cargo.toml', 'packages/wallet-engine/**/*.rs', 'nockster-esp/Cargo.lock', 'nockster-esp/Cargo.toml', 'nockster-esp/rust-toolchain.toml', 'nockster-esp/crates/nockster-core/**', 'nockster-esp/crates/nockster-wasm/src/**', 'nockster-esp/crates/nockster-wasm/Cargo.toml') }}
           restore-keys: rust-${{ runner.os }}-nightly-2025-02-14-
       - name: Test Rust and build the WASM engine
         run: |
           npm run test:core
           npm run build:wasm
+          npm run build:hardware:wasm
       - name: Check shared wallet code
         run: |
           npm run typecheck
@@ -109,6 +112,13 @@ jobs:
           path: |
             packages/wallet/src/pkg/
             packages/wallet/public/vanity/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: needs.plan.outputs.desktop == 'true'
+        with:
+          name: hardware-engine
+          path: nockster-esp/crates/nockster-wasm/pkg/
           if-no-files-found: error
           retention-days: 7
 

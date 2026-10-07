@@ -9,6 +9,7 @@
     "dev:rpc": "node scripts/local-rpc-server.cjs",
     "start:rpc": "node scripts/local-rpc-server.cjs",
     "build:wasm": "bash scripts/build-wasm.sh && npm run build:vanity",
+    "build:hardware:wasm": "bash scripts/build-hardware-wasm.sh",
     "build:svelte": "npm run build:web --workspace @nockster/extension --",
     "build": "node scripts/generate-manifest.cjs production && npm run build:wasm && npm run build:svelte",
     "build:prod": "node scripts/generate-manifest.cjs production && npm run build",

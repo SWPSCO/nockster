@@ -7,6 +7,12 @@
     lockVaultSession,
     clearPendingWallet
   } from '../../../packages/wallet/src/lib/utils/vaultBridge';
+  import HardwareWorkspace from './hardware/HardwareWorkspace.svelte';
+  import { hardwareSession } from './hardware/session';
+  import { firmwareUpdate } from './hardware/firmware';
+  import DesktopSend from './transactions/DesktopSend.svelte';
+  import TransactionReview from './transactions/TransactionReview.svelte';
+  import JamTransaction from '../../../packages/wallet/src/lib/components/organisms/JamTransaction.svelte';
 
   const navigation: { label: string; route: Route; path: string }[] = [
     {
@@ -39,9 +45,14 @@
   ];
   $: locked = $walletStore.isLocked;
   $: inFlow = flowRoutes.includes($router.currentRoute);
-  $: canNavigate = !locked && !inFlow && Boolean($activeWallet);
+  $: canNavigate =
+    (!locked || Boolean($activeWallet?.hardware || $activeWallet?.watchOnly)) &&
+    !inFlow &&
+    Boolean($activeWallet);
   $: activeRoute = $router.currentRoute;
   let error = '';
+  let workspace: HTMLDivElement;
+  $: if (activeRoute) workspace?.scrollTo({ top: 0 });
 
   async function lock() {
     if (!(await lockVaultSession())) {
@@ -90,6 +101,26 @@
           {item.label}
         </button>
       {/each}
+      <button
+        aria-label="Hardware"
+        title={$hardwareSession.connection === 'connected' ? 'Device connected' : undefined}
+        aria-current={activeRoute === 'hardware-wallet' ? 'page' : undefined}
+        onclick={() => router.navigate('hardware-wallet')}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          aria-hidden="true"
+          ><rect x="6" y="2" width="12" height="20" rx="3" /><path d="M9 6h6v7H9zM10 18h4" /></svg
+        >
+        Hardware
+        {#if $hardwareSession.connection === 'connected'}<span
+            class="desktop-device-connected"
+            aria-hidden="true"
+          ></span>{/if}
+      </button>
     </nav>
     {#if canNavigate}
       <div class="desktop-wallets">
@@ -99,7 +130,7 @@
             onclick={() => router.navigate('wallet-management')}>+</button
           >
         </div>
-        {#each $walletStore.wallets as wallet}
+        {#each $walletStore.wallets.filter(wallet => !locked || wallet.hardware || wallet.watchOnly) as wallet}
           <button
             class:chosen={$activeWallet?.id === wallet.id}
             onclick={() => {
@@ -112,10 +143,10 @@
             >
             <span class="wallet-label"
               >{wallet.name}<small
-                >{wallet.watchOnly
-                  ? 'Watch only'
-                  : wallet.hardware
-                    ? 'Hardware'
+                >{wallet.hardware
+                  ? 'Hardware'
+                  : wallet.watchOnly
+                    ? 'Watch only'
                     : 'Nockchain'}</small
               ></span
             >
@@ -129,22 +160,49 @@
         aria-current={activeRoute === 'settings' ? 'page' : undefined}
         onclick={() => router.navigate('settings')}>Settings</button
       >
-      <button disabled={!canNavigate} onclick={lock}
-        >Lock wallet <kbd>⇧ {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} L</kbd></button
-      >
+      {#if locked}<button onclick={() => router.navigate('lock-screen')}
+          >Unlock software wallets</button
+        >
+      {:else}<button disabled={!canNavigate} onclick={lock}
+          >Lock wallet <kbd>⇧ {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} L</kbd></button
+        >{/if}
       <div class="desktop-network">Nockchain <span>Mainnet</span></div>
     </div>
   </aside>
   <div
+    bind:this={workspace}
     class="desktop-workspace"
-    class:wide={['dashboard', 'history', 'wallet-management', 'address-book'].includes(activeRoute)}
+    class:wide={[
+      'dashboard',
+      'history',
+      'wallet-management',
+      'address-book',
+      'hardware-wallet'
+    ].includes(activeRoute)}
   >
-    <App />
+    <App allowHardwareWhileLocked>
+      <HardwareWorkspace slot="hardware" />
+      <DesktopSend slot="send" />
+      <svelte:fragment slot="transaction" let:jam let:origin let:toSign>
+        {#if jam}
+          <JamTransaction {jam} {origin} {toSign} onBack={() => router.navigate('dashboard')} />
+        {:else}
+          <TransactionReview />
+        {/if}
+      </svelte:fragment>
+    </App>
   </div>
   {#if error}
     <div class="desktop-error" role="alert">
       <span>{error}</span><button onclick={() => (error = '')} aria-label="Dismiss error"
         >Dismiss</button
+      >
+    </div>
+  {/if}
+  {#if $firmwareUpdate.installing && activeRoute !== 'hardware-wallet'}
+    <div class="desktop-error" role="status">
+      <span>Installing firmware. Keep your Nockster connected.</span><button
+        onclick={() => router.navigate('hardware-wallet')}>Show device</button
       >
     </div>
   {/if}

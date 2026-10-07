@@ -1,4 +1,5 @@
 <script lang="ts">
+  export let allowHardwareWhileLocked = false;
   import { nextWalletName } from './lib/utils/walletName';
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
@@ -350,7 +351,11 @@
       }
     } else if (vaultState.exists && !vaultState.unlocked) {
       // Vault exists but is locked - show lock screen
-      if (!isInCreationFlow && currentRouteFromStorage !== 'lock-screen') {
+      if (
+        !isInCreationFlow &&
+        currentRouteFromStorage !== 'lock-screen' &&
+        !(allowHardwareWhileLocked && currentRouteFromStorage === 'hardware-wallet')
+      ) {
         router.navigate('lock-screen');
       }
     } else if (vaultState.exists && vaultState.unlocked) {
@@ -369,7 +374,10 @@
           router.navigate('dashboard');
         }
         // Otherwise keep current route
-      } else if (!isInCreationFlow) {
+      } else if (
+        !isInCreationFlow &&
+        !(allowHardwareWhileLocked && currentRouteFromStorage === 'hardware-wallet')
+      ) {
         // Vault unlocked but no wallets - go to welcome
         router.navigate('welcome');
       }
@@ -407,7 +415,8 @@
         const didLock = walletStore.checkAutoLock(currentSettings.autoLockTimeout);
         if (didLock) {
           await lockVaultSession();
-          router.navigate('lock-screen');
+          if (!(allowHardwareWhileLocked && get(router).currentRoute === 'hardware-wallet'))
+            router.navigate('lock-screen');
         }
       } catch (error) {
         console.warn('Unable to check wallet auto-lock:', error);
@@ -650,8 +659,19 @@
     const address = await validateWalletKey(key);
     const state = get(walletStore);
     const vaultState = await getVaultStatus();
-    const finalWalletName =
-      walletName.trim() || nextWalletName(state.wallets.map(wallet => wallet.name));
+
+    // Generate a unique wallet name if not provided
+    let finalWalletName = walletName.trim();
+    if (!finalWalletName) {
+      const vaultResult = await getWalletsFromVault();
+      finalWalletName = nextWalletName([
+        ...new Set([
+          ...state.wallets.map(wallet => wallet.name),
+          ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])
+        ])
+      ]);
+    }
+
     const kind = key.trim().startsWith('zprv')
       ? 'extended'
       : key.trim().split(/\s+/).length === 24
@@ -789,18 +809,27 @@
         {:else if currentRoute === 'wallet-management'}
           <WalletManagement onBack={() => router.navigate('dashboard')} />
         {:else if currentRoute === 'send'}
-          <SendTransaction
-            balance={nicksToNocks(BigInt(Math.trunc(activeWalletValue?.balance || 0)))}
-            onBack={() => router.navigate('dashboard')}
-            onSend={txData => router.navigate('confirm-transaction', txData)}
-          />
+          <slot name="send">
+            <SendTransaction
+              balance={nicksToNocks(BigInt(Math.trunc(activeWalletValue?.balance || 0)))}
+              onBack={() => router.navigate('dashboard')}
+              onSend={txData => router.navigate('confirm-transaction', txData)}
+            />
+          </slot>
         {:else if currentRoute === 'jam'}
-          <JamTransaction
+          <slot
+            name="transaction"
             jam={routeData?.jam || ''}
             toSign={Boolean(routeData?.toSign)}
             origin={routeData?.origin || undefined}
-            onBack={() => router.navigate('dashboard')}
-          />
+          >
+            <JamTransaction
+              jam={routeData?.jam || ''}
+              toSign={Boolean(routeData?.toSign)}
+              origin={routeData?.origin || undefined}
+              onBack={() => router.navigate('dashboard')}
+            />
+          </slot>
         {:else if currentRoute === 'receive'}
           <ReceiveTransaction
             address={activeWalletValue?.addresses?.[0] || ''}
@@ -871,7 +900,9 @@
             onBack={() => router.navigate('wallet-management')}
           />
         {:else if currentRoute === 'hardware-wallet'}
-          <HardwareWallet onBack={() => router.navigate('wallet-management')} />
+          <slot name="hardware"
+            ><HardwareWallet onBack={() => router.navigate('wallet-management')} /></slot
+          >
         {:else if currentRoute === 'address-book'}
           <AddressBook onBack={() => router.navigate('settings')} />
         {:else if currentRoute === 'lock-screen'}

@@ -26,6 +26,7 @@
   import type { NoteV1 } from '../../utils/rpc';
 
   export let balance: number = 1234.56;
+  export let desktopLayout = false;
   export const onSend: (data: any) => void = () => {};
   export let onBack: () => void = () => {};
   export const onAddressBook: () => void = () => {};
@@ -106,7 +107,7 @@
       if (typeof state.routeData?.scrollPosition === 'number') {
         console.log('[SendTransaction] Restoring scroll position:', state.routeData.scrollPosition);
         requestAnimationFrame(() => {
-          const content = document.querySelector('.send-transaction .content');
+          const content = scrollContainer();
           if (content) {
             content.scrollTop = state.routeData.scrollPosition;
           }
@@ -137,11 +138,16 @@
     };
   });
 
+  function scrollContainer() {
+    const content = document.querySelector('.send-transaction .content');
+    return content?.closest('.desktop-workspace') ?? content;
+  }
+
   function openAddressBook(index: number) {
     console.log(`[SendTransaction] Opening address book for recipient #${index}`);
 
     // Save current scroll position
-    const content = document.querySelector('.send-transaction .content');
+    const content = scrollContainer();
     const scrollPosition = content ? content.scrollTop : 0;
 
     // Navigate to address book with return context, recipient index, scroll position, AND current recipients state
@@ -256,6 +262,10 @@
   }
 
   let previewGeneration = 0;
+  $: canPreviewFee = bridgeMode
+    ? bridgeValid
+    : recipients.length > 0 &&
+      recipients.every(r => r.address.trim() && (parseNocksInput(r.amount) ?? 0n) > 0n);
 
   // Preview transaction to calculate dynamic fee
   async function previewTransactionFee() {
@@ -389,16 +399,18 @@
     cachedRecipientsKey = null;
     calculatedFee = null;
     isCalculatingFee = false;
+    if (desktopLayout) feeError = null;
     if (feeDebounceTimer) {
       clearTimeout(feeDebounceTimer);
     }
+    if (desktopLayout && !canPreviewFee) return;
     feeDebounceTimer = setTimeout(() => {
       previewTransactionFee();
     }, 500); // 500ms debounce
   }
 
   // Trigger fee preview when recipients change
-  $: if (recipients && privateOutputs !== undefined && availableNotes && $activeWallet && bridgeMode !== undefined && bridgeEvmAddress !== undefined && bridgeAmountNocks !== undefined) {
+  $: if (recipients && privateOutputs !== undefined && availableNotes && $activeWallet && bridgeMode !== undefined && bridgeEvmAddress !== undefined && bridgeAmountNocks !== undefined && canPreviewFee !== undefined) {
     debouncedFeePreview();
   }
 
@@ -521,7 +533,7 @@
   }
 </script>
 
-<div class="send-transaction fixed-screen">
+<div class="send-transaction fixed-screen" class:desktop-layout={desktopLayout}>
   <Header title={bridgeMode ? 'Bridge to Base' : 'Send'} showBack={true} on:click={onBack} />
 
   <div class="content">
@@ -615,8 +627,8 @@
               />
               <span class="input-suffix">NOCK</span>
             </div>
-            {#if bridgeAmountNocks.trim() && parseNocksInput(bridgeAmountNocks) !== null}
-              <div class="usd-subtitle">{formatUSD(bridgeAmountInNocks)}</div>
+            {#if desktopLayout || (bridgeAmountNocks.trim() && parseNocksInput(bridgeAmountNocks) !== null)}
+              <div class="usd-subtitle">{bridgeAmountNocks.trim() && parseNocksInput(bridgeAmountNocks) !== null ? formatUSD(bridgeAmountInNocks) : ''}</div>
             {/if}
             {#if bridgeAmountNocks && !bridgeAmountValid}
               <div class="input-hint error">
@@ -721,8 +733,8 @@
                 />
                 <span class="input-suffix">NOCK</span>
               </div>
-              {#if recipient.amount.trim() && parseNocksInput(recipient.amount) !== null}
-                <div class="usd-subtitle">{formatUSD(Number(parseNocksInput(recipient.amount)) / 65536)}</div>
+              {#if desktopLayout || (recipient.amount.trim() && parseNocksInput(recipient.amount) !== null)}
+                <div class="usd-subtitle">{recipient.amount.trim() && parseNocksInput(recipient.amount) !== null ? formatUSD(Number(parseNocksInput(recipient.amount)) / 65536) : ''}</div>
               {/if}
             </div>
           </div>
@@ -738,14 +750,12 @@
       <div class="fee-section">
         <div class="fee-display">
           <span class="fee-label">Network Fee</span>
-          <div class="fee-amount-group">
-            {#if isCalculatingFee}
+          <div class="fee-amount-group" aria-busy={isCalculatingFee}>
+            {#if !desktopLayout && (isCalculatingFee || calculatedFee === null)}
               <span class="fee-skeleton"></span>
-            {:else if calculatedFee !== null}
-              <span class="fee-amount-nicks">{formatFeeInNicks(calculatedFee)}</span>
-              <span class="usd-subtitle">{formatUSD(Number(calculatedFee) / 65536)}</span>
             {:else}
-              <span class="fee-skeleton"></span>
+            <span class="fee-amount-nicks">{isCalculatingFee ? 'Calculating…' : calculatedFee !== null ? formatFeeInNicks(calculatedFee) : '—'}</span>
+            <span class="usd-subtitle">{calculatedFee !== null ? formatUSD(Number(calculatedFee) / 65536) : ''}</span>
             {/if}
           </div>
         </div>
@@ -775,10 +785,10 @@
       <div class="summary-card">
         <div class="summary-section-label">Transaction Summary</div>
 
-        {#each recipients.filter(r => r.amount && parseFloat(r.amount) > 0) as recipient, index}
+        {#each desktopLayout ? recipients : recipients.filter(r => r.amount && parseFloat(r.amount) > 0) as recipient, index}
           <div class="summary-row recipient-summary">
             <span class="summary-label">Recipient #{index + 1}</span>
-            <span class="summary-value">{formatNumber(recipient.amount)} NOCK<span class="usd-subtitle">{formatUSD(Number(parseNocksInput(recipient.amount) ?? 0n) / 65536)}</span></span>
+            <span class="summary-value">{recipient.amount.trim() ? `${formatNumber(recipient.amount)} NOCK` : '—'}<span class="usd-subtitle">{recipient.amount.trim() ? formatUSD(Number(parseNocksInput(recipient.amount) ?? 0n) / 65536) : ''}</span></span>
           </div>
         {/each}
 
@@ -788,23 +798,23 @@
         </div>
         <div class="summary-row">
           <span class="summary-label">Total fees</span>
-          <span class="summary-value">
-            {#if calculatedFee !== null}
-              {formatFeeInNicks(totals.feeNicks)}
-              <span class="usd-subtitle">{formatUSD(Number(totals.feeNicks) / 65536)}</span>
-            {:else}
+          <span class="summary-value" aria-busy={isCalculatingFee}>
+            {#if !desktopLayout && calculatedFee === null}
               <span class="fee-skeleton-small"></span>
+            {:else}
+            {isCalculatingFee ? 'Calculating…' : calculatedFee !== null ? formatFeeInNicks(totals.feeNicks) : '—'}
+            <span class="usd-subtitle">{calculatedFee !== null ? formatUSD(Number(totals.feeNicks) / 65536) : ''}</span>
             {/if}
           </span>
         </div>
         <div class="summary-row total">
           <span class="summary-label-total">Total</span>
-          <span class="summary-value-total">
-            {#if calculatedFee !== null}
-              {formatNumber(totals.total.toString())} NOCK
-              <span class="usd-subtitle">{formatUSD(totals.total)}</span>
-            {:else}
+          <span class="summary-value-total" aria-busy={isCalculatingFee}>
+            {#if !desktopLayout && calculatedFee === null}
               <span class="fee-skeleton-small"></span>
+            {:else}
+            {isCalculatingFee ? 'Calculating…' : calculatedFee !== null ? `${formatNumber(totals.total.toString())} NOCK` : '—'}
+            <span class="usd-subtitle">{calculatedFee !== null ? formatUSD(totals.total) : ''}</span>
             {/if}
           </span>
         </div>
@@ -885,6 +895,10 @@
 
 <style>
   .usd-subtitle { display: block; font-size: 12px; font-weight: 400; color: var(--color-text-secondary, #6b7280); margin-top: 4px; }
+  .desktop-layout .usd-subtitle { min-height: 18px; line-height: 18px; }
+  .desktop-layout .recipient-header { min-height: 32px; }
+  .desktop-layout .fee-amount-group { line-height: 21px; gap: 0; }
+  .desktop-layout .summary-value { text-align: right; line-height: 21px; }
   .send-transaction {
     height: 100%;
     display: flex;

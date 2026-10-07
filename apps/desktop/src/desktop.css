@@ -57,6 +57,13 @@ body {
   height: 18px;
   flex-shrink: 0;
 }
+.desktop-device-connected {
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
 .desktop-sidebar button:not(:disabled):hover,
 .desktop-sidebar button[aria-current='page'],
 .desktop-sidebar button.chosen {
@@ -127,25 +134,59 @@ body {
   min-width: 0;
   min-height: 0;
   padding: 24px 40px;
-  display: flex;
-  justify-content: center;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 .desktop-shell .desktop-workspace .nockster-wallet {
   width: 100%;
   max-width: 620px;
   min-width: 0;
-  min-height: 0;
-  height: 100%;
+  min-height: 100%;
+  height: auto;
+  margin-inline: auto;
+  overflow: visible;
 }
 .desktop-workspace.wide .nockster-wallet {
   max-width: 1080px;
+}
+.desktop-shell .desktop-workspace .nockster-wallet:has(.desktop-send.composing) {
+  max-width: 1200px;
+}
+.desktop-shell .desktop-workspace .wallet-content,
+.desktop-shell .desktop-workspace .route-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: auto;
+  overflow: visible;
+}
+.desktop-workspace
+  .route-content
+  > :is(.fixed-screen, .wallet-dashboard, .settings, .transaction-history, .hardware-workspace) {
+  flex: 1;
+  height: auto;
+  overflow: visible;
+}
+.desktop-workspace
+  .route-content
+  > *
+  > :is(.content, .create-content, .import-content, .backup-content, .receive-content) {
+  flex: 1 0 auto;
+  overflow: visible;
+}
+.desktop-workspace .route-content > * > .content > * {
+  flex-shrink: 0;
+}
+.desktop-workspace .route-content > * > .button-footer {
+  position: static;
+  flex-shrink: 0;
 }
 .desktop-workspace .wallet-dashboard > .header {
   padding: 0 0 24px;
 }
 .desktop-workspace .wallet-dashboard > .content {
   padding: 0;
-  overflow-y: auto;
+  overflow: visible;
 }
 .desktop-workspace .wallet-dashboard .balance-display {
   text-align: left;
@@ -166,8 +207,7 @@ body {
 .desktop-workspace .wallet-dashboard .transaction-list {
   flex: 1;
   min-height: 160px;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
+  overflow: visible;
   padding-right: 16px;
 }
 .desktop-workspace .wallet-dashboard .transaction-list-inner {
@@ -281,7 +321,7 @@ body {
   padding: 8px 0 8px 16px;
 }
 .desktop-shell .seed-phrase-display .content {
-  overflow-y: auto;
+  overflow: visible;
   min-height: 0;
   padding-bottom: 16px;
 }

@@ -11,6 +11,7 @@ mod review_v1;
 mod tip5;
 
 pub use compose_v1::{
+    compose_tx_v1_min_inputs,
     estimate_tx_v1_fee, ComposeTxV1Input, NoteInput, OutputInput, RecipientInput,
 };
 

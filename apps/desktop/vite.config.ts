@@ -1,8 +1,12 @@
+import release from '../../release-version.json';
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 export default defineConfig({
+  define: {
+    'import.meta.env.VITE_APP_VERSION': JSON.stringify(process.env.NOCKSTER_VERSION || release.version)
+  },
   root: import.meta.dirname,
   base: './',
   publicDir: '../../packages/wallet/public',

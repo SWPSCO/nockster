@@ -47,11 +47,15 @@ jobs:
         with:
           name: wallet-engine
           path: packages/wallet
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: hardware-engine
+          path: nockster-esp/crates/nockster-wasm/pkg
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libudev-dev patchelf libfuse2
       - name: Install desktop Rust toolchain
         run: rustup toolchain install 1.99.0 --profile minimal --target '${{ matrix.target }}'
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -66,7 +70,7 @@ jobs:
         run: node scripts/ci/configure-desktop.mjs
       - name: Build desktop bundle
         run: npm run build:desktop -- --ci --no-sign --target '${{ matrix.target }}' --bundles '${{ matrix.bundles }}' --config src-tauri/tauri.ci.conf.json -- --locked
-      - name: Test native wallet storage
+      - name: Test native storage and hardware transport
         run: cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Build Rust macOS release tool
         if: runner.os == 'macOS'

@@ -584,6 +584,11 @@ pub fn verify_signed_draft(draft: &str, signed: &str) -> Result<(), JsValue> {
     tx_jam::verify_signed_draft(draft, signed).map_err(|e| JsValue::from_str(&e))
 }
 
+#[wasm_bindgen(js_name = verifyPartialSignedDraft)]
+pub fn verify_partial_signed_draft(draft: &str, signed: &str) -> Result<(), JsValue> {
+    tx_jam::verify_partial_signed_draft(draft, signed).map_err(|e| JsValue::from_str(&e))
+}
+
 #[wasm_bindgen(js_name = toRawTxJam)]
 pub fn to_raw_tx_jam_wasm(base64_jam: &str) -> Result<String, JsValue> {
     to_raw_tx_jam(base64_jam).map_err(|err| JsValue::from_str(&err))

@@ -1,10 +1,40 @@
 # Desktop app
 
-Nockster runs on Linux, macOS, and Windows. It supports software and watch-only
-wallets. Use the Chrome extension for hardware wallets.
+Nockster runs on Linux, macOS, and Windows. It supports software, watch-only,
+and Nockster hardware wallets.
 
 The wallet locks when you quit. To lock it while the app is open, press
 Ctrl+Shift+L, or Cmd+Shift+L on macOS. Links open in your default browser.
+
+## Connect a Nockster
+
+Open **Hardware**, connect your Nockster with a USB data cable, and select it
+from the device list. Enter its device PIN to unlock it. Hardware management is
+available while the software vault is locked and without creating a software wallet.
+
+The **Wallets** tab shows device addresses. **Use wallet** adds its public account
+to the app for balances, receiving, and sending. **Verify address** displays the
+address on the Nockster. Transaction signing uses the connected device and requires
+approval on its screen. The connection stays open as you navigate the app.
+
+- **Wallets:** import a 24-word recovery phrase or zprv private key, rename device
+  wallets, export a master public key, and remove seeds with explicit confirmation.
+- **Firmware:** fetch an update or choose a signed manifest and matching image,
+  review the release, and install it. The app checks the image hash and compatibility;
+  the device verifies the signature. Keep USB connected until installation finishes.
+- **Security:** inspect reported chip security settings, change the device PIN,
+  calibrate or test the touchscreen, restart, and factory reset with confirmation.
+- **Tools:** manage device contacts and preimage secrets, sign or verify messages
+  and hashes, split and restore Shamir backups, and inspect jammed nouns.
+
+Features depend on the connected firmware. Signature verification, backup
+splitting, and noun inspection are also available under **Open offline tools**.
+Device contacts and preimages stay on the Nockster. Import and backup secrets are
+not saved to app storage. Public addresses and account names are saved locally.
+
+USB access uses native HID. Close another app or CLI using the device before
+connecting. On Linux, the signed-in user needs permission to access its HID device
+(USB vendor `303a`, product `2001`). Follow the device manual for USB setup.
 
 ## Back up your wallet
 
@@ -43,11 +73,13 @@ Install the tools in the [README](../README.md#build-and-run) and the
 rustup toolchain install 1.99.0 --profile minimal
 npm ci
 npm run build:wasm
+npm run build:hardware:wasm
 npm run dev:desktop
 ```
 
-The desktop app uses Rust 1.99.0; the shared WASM engine uses the pinned nightly
-toolchain. To check the app and build an installer:
+The desktop app uses Rust 1.99.0. The wallet and hardware WASM engines use their
+own pinned nightly toolchains. Linux builds also require `libudev-dev` for HID.
+To check the app and build an installer:
 
 ```sh
 npm run typecheck
@@ -58,7 +90,33 @@ npm run build:desktop -- -- --locked
 ```
 
 Desktop tests cover password unlock, copying and restoring a backup, locking,
-onboarding, and corrupt files. They use test wallets and never send real funds.
+onboarding, corrupt files, hardware-only accounts, device approval and unplugging,
+and firmware validation and transfer. Device tests simulate native USB I/O while
+using the real SDK and WASM. They use test wallets and never send real funds.
+
+### Hardware interface
+
+Hardware extends the desktop wallet's visual system. Shared
+[wallet variables](../packages/wallet/src/styles/variables.css) and
+[themes](../packages/wallet/src/styles/themes.css) own color and type tokens;
+[desktop styles](../apps/desktop/src/desktop.css) own the sidebar and workspace.
+[Hardware styles](../apps/desktop/src/hardware/hardware.css) apply those tokens
+to device management, with flat divided rows for devices, wallets, and facts.
+Surface backgrounds distinguish inputs, confirmations, and results. Primary actions
+use the theme's text color against its background color.
+
+The hardware workspace scrolls vertically inside the desktop shell. Long
+addresses and output wrap, actions wrap into additional rows, and paired form
+fields stack at window widths of 960px or less. This keeps management usable
+within the desktop app's minimum 800×640 window.
+
+[HardwareWorkspace](../apps/desktop/src/hardware/HardwareWorkspace.svelte)
+presents connection state and the Wallets, Firmware, Security, and Tools navigation.
+Session errors and pending device instructions stay visible in a sticky feedback
+region; errors use alerts and pending operations use status announcements.
+Opening wallet import reveals the form and focuses its first field. Preparing
+firmware reveals its review before installation. Less frequent operations use
+disclosures, and destructive operations expose explicit confirmation controls.
 
 ## Build releases
 
@@ -67,6 +125,7 @@ Pushes to `master` build the platforms affected by the changed files.
 | Changed files                                            | Builds                |
 | -------------------------------------------------------- | --------------------- |
 | Desktop app, Tauri config, desktop tests or signing tool | Desktop               |
+| Hardware core, hardware WASM or its build inputs         | Desktop               |
 | iOS app                                                  | iOS                   |
 | Android app                                              | Android               |
 | Mobile bridge and mobile config                          | iOS and Android       |

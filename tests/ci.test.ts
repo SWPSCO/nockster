@@ -117,11 +117,13 @@ test('desktop UI checks follow the desktop platform selection', () => {
   assert.match(workflow, /name: Test desktop wallet flows\n\s+if: needs\.plan\.outputs\.desktop == 'true'/);
 });
 
-test('hardware and examples do not select wallet releases', () => {
+test('hardware crypto selects desktop while independent firmware and examples select no wallet releases', () => {
   const none = { ios: false, android: false, extension: false, desktop: false };
-  for (const path of ['nockster-esp/crates/nockster-core/src/lib.rs', 'nockster-esp/web/package.json', '.github/workflows/esp-ci.yml', '.github/workflows/esp-desktop-release.yml', '.github/workflows/firmware-release.yml', '.github/workflows/deploy-web.yml', 'examples/design-reference/package.json'])
+  for (const path of ['nockster-esp/crates/nockster-fw/src/bin/main.rs', 'nockster-esp/web/package.json', '.github/workflows/esp-ci.yml', '.github/workflows/esp-desktop-release.yml', '.github/workflows/firmware-release.yml', '.github/workflows/deploy-web.yml', 'examples/design-reference/package.json'])
     assert.deepEqual(affectedPlatforms([path]), none);
-  assert.deepEqual(affectedPlatforms(['nockster-esp/Cargo.toml', 'apps/extension/src/main.ts']), { ...none, extension: true });
+  for (const path of ['nockster-esp/crates/nockster-core/src/lib.rs', 'nockster-esp/crates/nockster-wasm/src/lib.rs', 'nockster-esp/Cargo.toml', 'nockster-esp/Cargo.lock', 'nockster-esp/rust-toolchain.toml', 'scripts/build-hardware-wasm.sh'])
+    assert.deepEqual(affectedPlatforms([path]), { ...none, desktop: true });
+  assert.deepEqual(affectedPlatforms(['nockster-esp/Cargo.toml', 'apps/extension/src/main.ts']), { ...none, extension: true, desktop: true });
 });
 
 test('release numbering reserves the configured sequence and validates its bounds', () => {

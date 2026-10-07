@@ -159,3 +159,72 @@ the device app, verifies its signature, and exports the IPA with Xcode.
 References: [Apple signing in GitHub Actions](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications),
 [App Store Connect uploads](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds),
 [Android app signing](https://developer.android.com/studio/publish/app-signing).
+
+## Desktop automatic updates
+
+Installed desktop releases check for updates at launch, every six hours, and when
+network connectivity returns. Downloads run in the background and persist in the
+app cache. The app verifies the package signature and signed version before marking
+an update ready, and verifies cached bytes again immediately before installation.
+**Restart to update** locks the wallet and installs the complete app. Firmware
+installation and desktop installation cannot run together. Development builds do
+not update themselves.
+
+The feed is `https://bin.aeroe.io/fletch/updates/latest.json`. CI publishes immutable,
+versioned packages before publishing the feed, and prevents an older workflow run
+from replacing a newer release. Each desktop release intended for automatic update
+needs a higher version in `release-version.json`; rebuilding the same version does
+not update installed copies. The first release containing the updater requires a
+normal installer download.
+
+### Set up the signing key
+
+Use a dedicated Tauri key, separate from the ESP firmware key and Apple signing
+certificate. From the repository root, generate it outside the checkout:
+
+```sh
+umask 077
+mkdir -p "$HOME/.config/nockster/signing"
+npx tauri signer generate -w "$HOME/.config/nockster/signing/desktop.key"
+```
+
+Choose a password when prompted. Back up the private key and password in a secure
+location. The private key must never be committed; installed apps trust its public
+key and future automatic updates require the matching private key.
+
+Configure the repository's Actions secrets and variable:
+
+```sh
+gh secret set NOCKSTER_DESKTOP_UPDATER_PRIVATE_KEY \
+  --repo SWPSCO/nockster < "$HOME/.config/nockster/signing/desktop.key"
+gh secret set NOCKSTER_DESKTOP_UPDATER_PRIVATE_KEY_PASSWORD --repo SWPSCO/nockster
+gh variable set NOCKSTER_DESKTOP_UPDATER_PUBLIC_KEY --repo SWPSCO/nockster \
+  --body "$(cat "$HOME/.config/nockster/signing/desktop.key.pub")"
+```
+
+Enter the same password for the password secret. The public variable contains the
+complete `.pub` file contents, not a path and not an additional base64 encoding.
+CI embeds this public key into the app, signs packages with the secret, and verifies
+that the signatures match the embedded key. Missing or mismatched keys fail the
+release. The macOS updater archive contains the signed, notarized, and stapled app.
+Linux publishes separate AppImage and Debian updates; Windows publishes NSIS updates.
+The existing R2 upload credentials also publish the updater packages and feed.
+
+### Releases that require a manual installer
+
+`apps/desktop/update-policy.json` controls the release metadata:
+
+- `minimumUpdaterProtocol`: the minimum updater protocol that can install the release.
+  The app supports protocol `1`.
+- `manualInstallRequired`: when `true`, automatic installation is disabled for that
+  release and the app shows **Download from nockster.com**.
+
+An unknown or unsupported protocol also offers the installer link. Set the manual
+flag for releases that require a separate installer, including signing-key changes.
+The download link always opens `https://nockster.com/`; the feed cannot choose a
+navigation destination. Failed update checks or installation also offer this link.
+
+Tauri requires authenticated package signatures. `requireSignedVersion` also binds
+the announced release version to the signed artifact, preventing an old signed
+package from being presented as a newer version. See the
+[Tauri updater documentation](https://v2.tauri.app/plugin/updater/).

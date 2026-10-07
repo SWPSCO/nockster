@@ -11,6 +11,7 @@
   import { hardwareSession } from './hardware/session';
   import { firmwareUpdate } from './hardware/firmware';
   import DesktopSend from './transactions/DesktopSend.svelte';
+  import AppUpdates from './updates/AppUpdates.svelte';
   import TransactionReview from './transactions/TransactionReview.svelte';
   import JamTransaction from '../../../packages/wallet/src/lib/components/organisms/JamTransaction.svelte';
 
@@ -167,6 +168,7 @@
           >Lock wallet <kbd>⇧ {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} L</kbd></button
         >{/if}
       <div class="desktop-network">Nockchain <span>Mainnet</span></div>
+      <AppUpdates />
     </div>
   </aside>
   <div

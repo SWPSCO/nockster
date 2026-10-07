@@ -35,6 +35,7 @@ jobs:
       NOCKSTER_VERSION: ${{ inputs.version }}
       RUSTUP_TOOLCHAIN: 1.99.0
       CARGO_TERM_COLOR: always
+      NOCKSTER_DESKTOP_UPDATER_PUBLIC_KEY: ${{ vars.NOCKSTER_DESKTOP_UPDATER_PUBLIC_KEY }}
     defaults:
       run:
         shell: bash
@@ -91,10 +92,24 @@ jobs:
           "release/desktop/Nockster_${NOCKSTER_VERSION}_macos-arm64.dmg"
       - name: Collect installers and checksums
         run: node scripts/ci/collect-desktop.mjs '${{ matrix.target }}' '${{ matrix.platform }}'
+      - name: Sign and verify updater packages
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.NOCKSTER_DESKTOP_UPDATER_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.NOCKSTER_DESKTOP_UPDATER_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/ci/desktop-updates.mjs package '${{ matrix.platform }}'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-desktop-${{ matrix.platform }}
-          path: release/desktop/*
+          path: |
+            release/desktop/*
+            !release/desktop/updates/**
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-updates-${{ matrix.platform }}
+          path: release/desktop/updates/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -109,11 +124,24 @@ jobs:
       group: desktop-r2-latest
       cancel-in-progress: false
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: release-desktop-*
           path: release/desktop
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: desktop-updates-*
+          path: release/desktop/updates
+          merge-multiple: true
+      - name: Verify updater feed and publication order
+        env:
+          NOCKSTER_DESKTOP_UPDATER_PUBLIC_KEY: ${{ vars.NOCKSTER_DESKTOP_UPDATER_PUBLIC_KEY }}
+        run: node scripts/ci/desktop-updates.mjs publish-manifest
       - name: Install rclone
         run: |
           sudo apt-get update
@@ -124,6 +152,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ ! -f release/desktop/updates/latest.json ]; then
+            exit 0
+          fi
           : "${RCLONE_B64:?Set the RCLONE_B64 Actions secret}"
           for file in nockster-linux-x64-latest.deb nockster-linux-x64-latest.AppImage nockster-macos-arm64-latest.dmg nockster-windows-x64-latest.exe; do
             test -s "release/desktop/$file"
@@ -134,9 +165,18 @@ jobs:
           trap 'rm -f "$rclone_config"' EXIT
           printf '%s' "$RCLONE_B64" | base64 --decode > "$rclone_config"
           unset RCLONE_B64
+          rclone --config "$rclone_config" copy release/desktop/updates/ r2:swpsco/fletch/updates/ \
+            --exclude '*.json' \
+            --immutable \
+            --s3-no-check-bucket \
+            --header-upload 'Cache-Control: public, max-age=31536000, immutable'
           rclone --config "$rclone_config" copy release/desktop/ r2:swpsco/fletch/ \
             --include 'nockster-*-latest.*' \
             --s3-no-check-bucket \
             --header-upload 'Cache-Control: no-cache, no-transform' \
             --header-upload 'Content-Disposition: attachment'
+          rclone --config "$rclone_config" copyto release/desktop/updates/latest.json r2:swpsco/fletch/updates/latest.json \
+            --s3-no-check-bucket \
+            --header-upload 'Cache-Control: no-cache, no-transform' \
+            --header-upload 'Content-Type: application/json'
           printf 'Desktop downloads: https://bin.aeroe.io/fletch/nockster-<platform>-latest.<ext>\n' >> "$GITHUB_STEP_SUMMARY"

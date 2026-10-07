@@ -254,7 +254,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: desktop-linux-x64
           path: nockster-esp/dist/*
@@ -401,7 +401,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: desktop-linux-aarch64
           path: nockster-esp/dist/*
@@ -636,7 +636,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: desktop-macos-aarch64
           path: nockster-esp/dist/*
@@ -693,7 +693,7 @@ jobs:
           fi
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: packaged-desktop-release
           path: out/*

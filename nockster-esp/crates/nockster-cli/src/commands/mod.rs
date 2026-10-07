@@ -20,3 +20,4 @@ pub mod touch;
 pub mod unlock;
 pub mod vault;
 pub mod update;
+pub mod vanity;

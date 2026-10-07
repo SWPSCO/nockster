@@ -270,6 +270,12 @@ pub fn generate_key() -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&words).map_err(|err| JsValue::from_str(&err.to_string()))
 }
 
+/// Validate recovery material without creating or changing a vault.
+#[wasm_bindgen(js_name = validateWalletKey)]
+pub fn validate_wallet_key(key: &str) -> Result<String, JsValue> {
+    Ok(Wallet::from_key(key)?.public_key.clone())
+}
+
 #[wasm_bindgen(js_name = importWallet)]
 pub fn import_wallet(
     vault_js: JsValue,

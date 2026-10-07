@@ -29,19 +29,19 @@ export type StoredVault = {
 export type WalletSummary = {
   nickname: string;
   publicKey: string;
-  extendedPublicKey: string;
+  extendedPublicKey: string | null;
 };
 
 export type WalletDetail = {
   publicKey: string;
-  extendedPublicKey: string;
+  extendedPublicKey: string | null;
   privateKey: string;
-  extendedPrivateKey: string;
-  chainCode: number[];
-  depth: number;
-  index: number;
-  parentFingerprint: number[];
-  version: number;
+  extendedPrivateKey: string | null;
+  chainCode: number[] | null;
+  depth: number | null;
+  index: number | null;
+  parentFingerprint: number[] | null;
+  version: number | null;
   seedphrase: string[] | null;
 };
 
@@ -189,7 +189,7 @@ function isWalletSummary(value: unknown): value is WalletSummary {
   return (
     typeof record.nickname === 'string' &&
     typeof record.publicKey === 'string' &&
-    typeof record.extendedPublicKey === 'string'
+    (record.extendedPublicKey == null || typeof record.extendedPublicKey === 'string')
   );
 }
 
@@ -215,14 +215,14 @@ function isWalletDetail(value: unknown): value is WalletDetail {
 
   return (
     typeof record.publicKey === 'string' &&
-    typeof record.extendedPublicKey === 'string' &&
+    (record.extendedPublicKey == null || typeof record.extendedPublicKey === 'string') &&
     typeof record.privateKey === 'string' &&
-    typeof record.extendedPrivateKey === 'string' &&
-    isByteArray(record.chainCode, 32) &&
-    typeof record.depth === 'number' &&
-    typeof record.index === 'number' &&
-    typeof record.version === 'number' &&
-    isByteArray(record.parentFingerprint, 4) &&
+    (record.extendedPrivateKey == null || typeof record.extendedPrivateKey === 'string') &&
+    (record.chainCode == null || isByteArray(record.chainCode, 32)) &&
+    (record.depth == null || typeof record.depth === 'number') &&
+    (record.index == null || typeof record.index === 'number') &&
+    (record.version == null || typeof record.version === 'number') &&
+    (record.parentFingerprint == null || isByteArray(record.parentFingerprint, 4)) &&
     isSeedphraseValid
   );
 }

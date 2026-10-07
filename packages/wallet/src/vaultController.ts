@@ -61,7 +61,7 @@ export async function unlockVault(localPassword: string) {
     throw new Error('localPassword missing');
   }
   const result = await sendVaultMessage<{
-    wallets: Array<{ nickname: string; publicKey: string; extendedPublicKey: string }>;
+    wallets: Array<{ nickname: string; publicKey: string; extendedPublicKey: string | null }>;
   }>({ type: 'vault:unlock', password: localPassword });
   return result.wallets;
 }
@@ -107,6 +107,11 @@ export async function generateKey(): Promise<string[]> {
   return result.mnemonic;
 }
 
+export async function validateWalletKey(key: string): Promise<string> {
+  const result = await sendVaultMessage<{ address: string }>({ type: 'vault:validateKey', key });
+  return result.address;
+}
+
 export async function importWallet(nickname: string, key: string) {
   if (typeof nickname !== 'string' || !nickname) {
     throw new Error('nickname missing');
@@ -115,7 +120,7 @@ export async function importWallet(nickname: string, key: string) {
     throw new Error('key missing');
   }
   const result = await sendVaultMessage<{
-    wallet: { nickname: string; publicKey: string; extendedPublicKey: string };
+    wallet: { nickname: string; publicKey: string; extendedPublicKey: string | null };
   }>({ type: 'vault:importWallet', nickname, key });
   return result.wallet;
 }
@@ -128,7 +133,7 @@ export async function renameWallet(oldNickname: string, newNickname: string) {
     throw new Error('newNickname missing');
   }
   const result = await sendVaultMessage<{
-    wallet: { nickname: string; publicKey: string; extendedPublicKey: string };
+    wallet: { nickname: string; publicKey: string; extendedPublicKey: string | null };
   }>({ type: 'vault:renameWallet', oldNickname, newNickname });
   return result.wallet;
 }
@@ -149,14 +154,14 @@ export async function getPubkey(nickname: string) {
     throw new Error('nickname missing');
   }
   const result = await sendVaultMessage<{
-    wallet: { nickname: string; publicKey: string; extendedPublicKey: string };
+    wallet: { nickname: string; publicKey: string; extendedPublicKey: string | null };
   }>({ type: 'vault:getPubkey', nickname });
   return result.wallet;
 }
 
 export async function getWallets() {
   const result = await sendVaultMessage<{
-    wallets: Array<{ nickname: string; publicKey: string; extendedPublicKey: string }>;
+    wallets: Array<{ nickname: string; publicKey: string; extendedPublicKey: string | null }>;
   }>({ type: 'vault:getWallets' });
   return result.wallets;
 }
@@ -281,14 +286,14 @@ export async function exportWallet(nickname: string) {
   const result = await sendVaultMessage<{
     wallet: {
       publicKey: string;
-      extendedPublicKey: string;
+      extendedPublicKey: string | null;
       privateKey: string;
-      extendedPrivateKey: string;
-      chainCode: number[];
-      depth: number;
-      index: number;
-      parentFingerprint: number[];
-      version: number;
+      extendedPrivateKey: string | null;
+      chainCode: number[] | null;
+      depth: number | null;
+      index: number | null;
+      parentFingerprint: number[] | null;
+      version: number | null;
       seedphrase: string[] | null;
     };
   }>({ type: 'vault:exportWallet', nickname });
@@ -298,10 +303,12 @@ export async function exportWallet(nickname: string) {
     extendedPublicKey: result.wallet.extendedPublicKey,
     privateKey: result.wallet.privateKey,
     extendedPrivateKey: result.wallet.extendedPrivateKey,
-    chainCode: [...result.wallet.chainCode],
+    chainCode: result.wallet.chainCode ? [...result.wallet.chainCode] : null,
     depth: result.wallet.depth,
     index: result.wallet.index,
-    parentFingerprint: [...result.wallet.parentFingerprint],
+    parentFingerprint: result.wallet.parentFingerprint
+      ? [...result.wallet.parentFingerprint]
+      : null,
     version: result.wallet.version,
     seedphrase: result.wallet.seedphrase ? [...result.wallet.seedphrase] : null
   };

@@ -1,14 +1,24 @@
 use anyhow::{bail, ensure, Context, Result};
+use app_store_connect::notary_api::SubmissionResponseStatus;
 use apple_codesign::{
     cryptography::{parse_pfx_data, PrivateKey},
     stapling::Stapler,
-    Notarizer, SigningSettings, UnifiedSigner,
+    NotarizationUpload, Notarizer, SigningSettings, UnifiedSigner,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use std::{env, ffi::OsStr, fs, path::Path, process::Command, time::Duration};
+use std::{
+    env,
+    ffi::OsStr,
+    fs,
+    path::Path,
+    process::Command,
+    time::{Duration, Instant},
+};
 use zeroize::Zeroizing;
 
 const TEAM_ID: &str = "484J85QW9N";
+const NOTARIZATION_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+const NOTARIZATION_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 fn secret(name: &str) -> Result<Zeroizing<String>> {
     let value = env::var(name).with_context(|| format!("Set the {name} GitHub Actions secret"))?;
@@ -62,10 +72,61 @@ fn verify_app(app: &Path) -> Result<()> {
     )
 }
 
+fn wait_for_notarization(
+    mut poll: impl FnMut() -> Result<SubmissionResponseStatus>,
+    elapsed: impl Fn() -> Duration,
+    mut sleep: impl FnMut(Duration),
+) -> Result<()> {
+    loop {
+        match poll()? {
+            SubmissionResponseStatus::Accepted => return Ok(()),
+            SubmissionResponseStatus::InProgress => {}
+            status => bail!("Notarization {status}"),
+        }
+        let remaining = NOTARIZATION_TIMEOUT.saturating_sub(elapsed());
+        ensure!(
+            !remaining.is_zero(),
+            "Notarization timed out after six hours"
+        );
+        sleep(NOTARIZATION_POLL_INTERVAL.min(remaining));
+    }
+}
+
 fn notarize(notary: &Notarizer, path: &Path) -> Result<()> {
-    println!("Notarizing {}", path.display());
-    // The library rejects an unsuccessful submission or a timeout.
-    notary.notarize_path(path, Some(Duration::from_secs(1800)))?;
+    println!(
+        "Notarizing {} (up to six hours, polling once a minute)",
+        path.display()
+    );
+    // Submit once and poll explicitly to control the interval.
+    let submission_id = match notary.notarize_path(path, None)? {
+        NotarizationUpload::UploadId(id) => id,
+        NotarizationUpload::NotaryResponse(response) => response.data.id,
+    };
+    println!("Notarization submission: {submission_id}");
+    let started = Instant::now();
+    wait_for_notarization(
+        || {
+            let status = notary
+                .get_submission(&submission_id)?
+                .data
+                .attributes
+                .status;
+            println!(
+                "Notarization {submission_id}: {status} after {}s",
+                started.elapsed().as_secs()
+            );
+            if status != SubmissionResponseStatus::InProgress {
+                println!(
+                    "Notarization log: {}",
+                    notary.fetch_notarization_log(&submission_id)?
+                );
+            }
+            Ok(status)
+        },
+        || started.elapsed(),
+        std::thread::sleep,
+    )
+    .with_context(|| format!("Notarizing {} (submission {submission_id})", path.display()))?;
     Stapler::new()?.staple_path(path)?;
     Ok(())
 }
@@ -182,6 +243,73 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_a_submission_after_hours_of_minute_interval_polling() {
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let mut polls = 0;
+        wait_for_notarization(
+            || {
+                polls += 1;
+                Ok(if elapsed.get() >= Duration::from_secs(3 * 60 * 60) {
+                    SubmissionResponseStatus::Accepted
+                } else {
+                    SubmissionResponseStatus::InProgress
+                })
+            },
+            || elapsed.get(),
+            |delay| {
+                assert_eq!(delay, Duration::from_secs(60));
+                elapsed.set(elapsed.get() + delay);
+            },
+        )
+        .unwrap();
+        assert_eq!(polls, 181);
+    }
+
+    #[test]
+    fn pending_submission_times_out_at_six_hours() {
+        let elapsed = std::cell::Cell::new(Duration::ZERO);
+        let mut polls = 0;
+        let error = wait_for_notarization(
+            || {
+                polls += 1;
+                Ok(SubmissionResponseStatus::InProgress)
+            },
+            || elapsed.get(),
+            |delay| {
+                assert_eq!(delay, Duration::from_secs(60));
+                elapsed.set(elapsed.get() + delay);
+            },
+        )
+        .unwrap_err();
+        assert_eq!(elapsed.get(), Duration::from_secs(6 * 60 * 60));
+        assert_eq!(polls, 361);
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn rejected_submissions_and_api_errors_stop_without_sleeping() {
+        for status in [
+            SubmissionResponseStatus::Invalid,
+            SubmissionResponseStatus::Rejected,
+            SubmissionResponseStatus::Unknown,
+        ] {
+            assert!(wait_for_notarization(
+                || Ok(status),
+                || Duration::ZERO,
+                |_| panic!("must not sleep after rejection")
+            )
+            .is_err());
+        }
+        let error = wait_for_notarization(
+            || bail!("API unavailable"),
+            || Duration::ZERO,
+            |_| panic!("must not sleep after API failure"),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "API unavailable");
+    }
 
     #[test]
     fn accepts_wrapped_base64_secrets_and_rejects_invalid_data() {

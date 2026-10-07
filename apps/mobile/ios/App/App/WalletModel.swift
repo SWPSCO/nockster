@@ -86,10 +86,28 @@ struct PaymentPreview: Codable, Identifiable {
     let privateOutputs: Bool
 }
 
+struct VanityProgress: Codable {
+    var status = "idle"
+    var message = ""
+    var attempts: Double = 0
+    var rate: Double = 0
+    var seconds: Double = 0
+    var backend = ""
+    var address: String?
+}
+
+struct WalletCandidate: Codable {
+    let kind: String
+    var key: String
+    let address: String?
+}
+
 struct WalletReply: Codable {
     let state: WalletSnapshot?
     let error: String?
     let mnemonic: [String]?
+    let vanity: VanityProgress?
+    let candidate: WalletCandidate?
     let preview: PaymentPreview?
     let txId: String?
     let unlockKey: String?

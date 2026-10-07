@@ -8,7 +8,7 @@
     "dev:setup": "node scripts/generate-manifest.cjs development",
     "dev:rpc": "node scripts/local-rpc-server.cjs",
     "start:rpc": "node scripts/local-rpc-server.cjs",
-    "build:wasm": "bash scripts/build-wasm.sh",
+    "build:wasm": "bash scripts/build-wasm.sh && npm run build:vanity",
     "build:hardware:wasm": "bash scripts/build-hardware-wasm.sh",
     "build:svelte": "npm run build:web --workspace @nockster/extension --",
     "build": "node scripts/generate-manifest.cjs production && npm run build:wasm && npm run build:svelte",
@@ -46,7 +46,8 @@
     "build:desktop:web": "npm run build:web --workspace @nockster/desktop --",
     "dev:desktop": "npm run dev --workspace @nockster/desktop --",
     "build:desktop": "npm run build --workspace @nockster/desktop --",
-    "test:desktop": "playwright test --config playwright.desktop.config.ts"
+    "test:desktop": "playwright test --config playwright.desktop.config.ts",
+    "build:vanity": "node scripts/build-vanity.mjs"
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.2",
@@ -68,7 +69,7 @@
     "openapi-typescript": "7.13.0",
     "prettier": "3.9.7",
     "prettier-plugin-svelte": "3.5.2",
-    "sharp": "0.35.4",
+    "sharp": "0.35.5",
     "svelte": "5.57.0",
     "svelte-check": "4.6.0",
     "tslib": "2.8.1",
@@ -81,6 +82,9 @@
     },
     "xcode": {
       "uuid": "11.1.1"
+    },
+    "concurrently": {
+      "shell-quote": "1.11.0"
     }
   },
   "packageManager": "npm@12.1.0",

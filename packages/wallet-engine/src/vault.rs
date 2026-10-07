@@ -150,7 +150,7 @@ pub struct VaultLogEntryExtern {
 pub struct WalletSummary {
     pub nickname: String,
     pub public_key: String,
-    pub extended_public_key: String,
+    pub extended_public_key: Option<String>,
 }
 
 impl VaultExtern {

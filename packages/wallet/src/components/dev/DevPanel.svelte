@@ -517,13 +517,13 @@
               <strong>Extended Private:</strong>
               {exportedWallet.extendedPrivateKey}<br />
               <strong>Chain Code:</strong>
-              {formatByteArray(exportedWallet.chainCode)}<br />
+              {formatByteArray(exportedWallet.chainCode ?? [])}<br />
               <strong>Depth:</strong>
               {exportedWallet.depth} &middot;
               <strong>Index:</strong>
               {exportedWallet.index}<br />
               <strong>Parent FP:</strong>
-              {formatByteArray(exportedWallet.parentFingerprint)}<br />
+              {formatByteArray(exportedWallet.parentFingerprint ?? [])}<br />
               <strong>Version:</strong>
               {exportedWallet.version}
             </p>

@@ -5,6 +5,7 @@ version = "0.2.1"
 edition = "2021"
 
 [dependencies]
+ctrlc = "3.4"
 anyhow = "1"
 bytes = "1.10.1"
 clap = { workspace = true, features = ["derive"] }
@@ -45,6 +46,10 @@ nockvm_macros = { workspace = true }
 
 nockster-core = { path = "../nockster-core", features = ["std", "alloc-path"] }
 tx-types = { workspace = true }
+vanity = { workspace = true, features = ["export", "std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

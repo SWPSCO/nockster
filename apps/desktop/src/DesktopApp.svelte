@@ -5,7 +5,7 @@
   import { walletStore, activeWallet } from '../../../packages/wallet/src/lib/stores/wallet';
   import {
     lockVaultSession,
-    clearPendingMnemonic
+    clearPendingWallet
   } from '../../../packages/wallet/src/lib/utils/vaultBridge';
   import HardwareWorkspace from './hardware/HardwareWorkspace.svelte';
   import { hardwareSession } from './hardware/session';
@@ -29,6 +29,8 @@
   ];
   const flowRoutes: Route[] = [
     'welcome',
+    'create-wallet',
+    'backup-secret-key',
     'lock-screen',
     'seed-phrase',
     'confirm-seed',
@@ -52,7 +54,7 @@
       error = 'Unable to lock your wallet. Try again.';
       return;
     }
-    clearPendingMnemonic();
+    clearPendingWallet();
     walletStore.lock();
     router.navigate('lock-screen');
   }

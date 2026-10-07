@@ -109,7 +109,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wallet-engine
-          path: packages/wallet/src/pkg/
+          path: |
+            packages/wallet/src/pkg/
+            packages/wallet/public/vanity/
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -16,10 +16,9 @@
     createVault,
     unlockVaultWithPassword,
     lockVaultSession,
-    generateMnemonic,
-    setPendingMnemonic,
-    getPendingMnemonic,
-    clearPendingMnemonic,
+    setPendingWallet,
+    getPendingWallet,
+    clearPendingWallet,
     importWalletToVault,
     getWalletsFromVault,
     verifyPassword
@@ -27,6 +26,10 @@
   import { nicksToNocks } from './lib/utils/nicks';
 
   // Import all the components from the design concept
+  import { validateWalletKey } from './vaultController';
+  import type { WalletCandidate } from './lib/services/vanity';
+  import CreateWallet from './lib/components/organisms/CreateWallet.svelte';
+  import SecretKeyBackup from './lib/components/organisms/SecretKeyBackup.svelte';
   import WelcomeScreen from './lib/components/organisms/WelcomeScreen.svelte';
   import SeedPhraseDisplay from './lib/components/organisms/SeedPhraseDisplay.svelte';
   import ConfirmSeedPhrase from './lib/components/organisms/ConfirmSeedPhrase.svelte';
@@ -171,6 +174,8 @@
     routerRoute: Route
   ): Promise<boolean> {
     const creationFlowRoutes: Route[] = [
+      'create-wallet',
+      'backup-secret-key',
       'seed-phrase',
       'confirm-seed',
       'password-creation',
@@ -202,10 +207,12 @@
   // Subscribe to stores with reactive assignment
   $: currentRoute = $router.currentRoute;
   $: routeData = $router.routeData;
+  $: pendingForDisplay = currentRoute ? getPendingWallet() : null;
 
   // Debug logging for route changes
   $: {
     console.log('📍 Route changed to:', currentRoute);
+    if (currentRoute === 'lock-screen') clearPendingWallet();
   }
 
   // Fetch transactions when navigating to history
@@ -227,16 +234,22 @@
   $: activeWalletValue = $activeWallet;
 
   // Progress bar logic
-  const createFlowRoutes: Route[] = ['seed-phrase', 'confirm-seed', 'password-creation'];
+  const createFlowRoutes: Route[] = [
+    'seed-phrase',
+    'confirm-seed',
+    'backup-secret-key',
+    'password-creation'
+  ];
   const importFlowRoutes: Route[] = ['import-wallet', 'password-creation-import'];
 
   $: shouldShowProgressBar = [...createFlowRoutes, ...importFlowRoutes].includes(currentRoute);
   $: isImportFlow = importFlowRoutes.includes(currentRoute);
-  $: totalSteps = isImportFlow ? 2 : 3;
+  $: totalSteps = isImportFlow || pendingForDisplay?.kind === 'raw' ? 2 : 3;
   $: currentStep = (() => {
     if (currentRoute === 'seed-phrase') return 1;
     if (currentRoute === 'confirm-seed') return 2;
-    if (currentRoute === 'password-creation') return 3;
+    if (currentRoute === 'backup-secret-key') return 1;
+    if (currentRoute === 'password-creation') return pendingForDisplay?.kind === 'raw' ? 2 : 3;
     if (currentRoute === 'import-wallet') return 1;
     if (currentRoute === 'password-creation-import') return 2;
     return 1;
@@ -267,6 +280,7 @@
     void retryInitialization();
     return () => {
       disposed = true;
+      clearPendingWallet();
       cleanup();
     };
   });
@@ -292,6 +306,8 @@
 
     // Don't interrupt wallet creation flow - these routes should be preserved
     const creationFlowRoutes = [
+      'create-wallet',
+      'backup-secret-key',
       'seed-phrase',
       'confirm-seed',
       'password-creation',
@@ -299,6 +315,20 @@
       'import-wallet'
     ];
     const isInCreationFlow = creationFlowRoutes.includes(currentRouteFromStorage);
+    if (
+      [
+        'seed-phrase',
+        'confirm-seed',
+        'backup-secret-key',
+        'password-creation',
+        'password-creation-import'
+      ].includes(currentRouteFromStorage) &&
+      !getPendingWallet()
+    ) {
+      router.navigate(
+        currentRouteFromStorage === 'password-creation-import' ? 'import-wallet' : 'create-wallet'
+      );
+    }
 
     if (!vaultState.exists) {
       walletStore.unlock();
@@ -477,39 +507,31 @@
     }
   }
 
-  async function handleCreateWallet() {
-    // Generate a new mnemonic using the vault API
-    const result = await generateMnemonic();
-    if (!result.success || !result.mnemonic) {
-      alert('Failed to generate wallet: ' + (result.error || 'Unknown error'));
-      return;
-    }
+  function handleCreateWallet() {
+    clearPendingWallet();
+    walletStore.setCreatingAdditionalWallet(false);
+    router.navigate('create-wallet');
+  }
 
-    // Generate a unique wallet name by checking existing vault wallets
-    const state = get(walletStore);
-    const vaultResult = await getWalletsFromVault();
-    const walletName = nextWalletName([
-      ...new Set([
-        ...state.wallets.map(wallet => wallet.name),
-        ...(vaultResult.wallets?.map(wallet => wallet.name) ?? [])
-      ])
-    ]);
+  async function handleGeneratedWallet(candidate: WalletCandidate, name: string) {
+    setPendingWallet(candidate, name);
+    router.navigate(candidate.kind === 'mnemonic' ? 'seed-phrase' : 'backup-secret-key');
+  }
 
-    setPendingMnemonic(result.mnemonic, walletName);
+  function cancelWalletCreation() {
+    clearPendingWallet();
+    const additional = get(walletStore).isCreatingAdditionalWallet;
+    walletStore.setCreatingAdditionalWallet(false);
+    router.navigate(additional ? 'wallet-management' : 'welcome');
+  }
 
-    // Create a temporary wallet in the store with the seed phrase for display
-    await walletStore.createWallet(
-      walletName,
-      [], // addresses will be set after vault import
-      result.mnemonic
-    );
-
-    // Navigate to seed phrase display
-    router.navigate('seed-phrase');
+  function backToCreation() {
+    clearPendingWallet();
+    router.navigate('create-wallet');
   }
 
   function handleImportWallet() {
-    // Navigate to import wallet screen
+    clearPendingWallet();
     walletStore.setCreatingAdditionalWallet(false);
     router.navigate('import-wallet');
   }
@@ -520,7 +542,6 @@
   }
 
   async function handleSeedPhraseConfirmed() {
-    const state = get(walletStore);
     const vaultState = await getVaultStatus();
 
     // If vault already exists and is unlocked (adding additional wallet)
@@ -582,7 +603,7 @@
       }
     }
 
-    // Finalize the wallet import (import pending mnemonic to vault)
+    // Import the pending recovery material into the vault
     if (!(await finalizeWalletCreation())) return;
 
     const state = get(walletStore);
@@ -595,17 +616,16 @@
   }
 
   /**
-   * Finalize wallet creation by importing the pending mnemonic to the vault
+   * Save pending recovery material in the encrypted vault.
    */
   async function finalizeWalletCreation() {
-    const { mnemonic, walletName } = getPendingMnemonic();
-    if (!mnemonic) {
-      console.error('No pending mnemonic found');
-      return false;
-    }
-
-    const name = walletName || `Wallet ${get(walletStore).wallets.length}`;
-    const result = await importWalletToVault(name, mnemonic.join(' '));
+    const pending = getPendingWallet();
+    if (!pending) return false;
+    const name = pending.walletName;
+    const address = await validateWalletKey(pending.key);
+    if (pending.address && address !== pending.address)
+      throw new Error('Wallet address verification failed.');
+    const result = await importWalletToVault(name, pending.key);
 
     if (!result.success || !result.wallet) {
       alert('Failed to save wallet to vault: ' + result.error);
@@ -627,7 +647,7 @@
     walletStore.selectWallet(wallet.id);
     await walletStore.saveToStorage();
 
-    clearPendingMnemonic();
+    clearPendingWallet();
     return true;
   }
 
@@ -635,9 +655,8 @@
     router.navigate('dashboard');
   }
 
-  async function handleWalletImported(seedPhraseString: string, walletName: string) {
-    console.log('Starting wallet import...');
-
+  async function handleWalletImported(key: string, walletName: string) {
+    const address = await validateWalletKey(key);
     const state = get(walletStore);
     const vaultState = await getVaultStatus();
 
@@ -653,41 +672,17 @@
       ]);
     }
 
-    // If vault exists and is unlocked, import directly
+    const kind = key.trim().startsWith('zprv')
+      ? 'extended'
+      : key.trim().split(/\s+/).length === 24
+        ? 'mnemonic'
+        : 'raw';
+    setPendingWallet({ kind, key: key.trim(), address }, finalWalletName);
     if (vaultState.exists && vaultState.unlocked) {
-      const result = await importWalletToVault(finalWalletName, seedPhraseString);
-      if (!result.success || !result.wallet) {
-        alert('Failed to import wallet: ' + result.error);
-        return;
-      }
-
-      // Add to store
-      await walletStore.importWallet(
-        seedPhraseString.split(' '),
-        result.wallet.addresses,
-        finalWalletName,
-        undefined,
-        result.wallet.masterPublicKey
-      );
-
-      walletStore.saveToStorage();
+      if (!(await finalizeWalletCreation())) throw new Error('Unable to import wallet.');
       walletStore.setCreatingAdditionalWallet(false);
       router.navigate('dashboard');
     } else {
-      // Vault doesn't exist or is locked - store pending and go to password creation
-      const seedWords = seedPhraseString
-        .split(' ')
-        .map(w => w.trim())
-        .filter(w => w);
-      setPendingMnemonic(seedWords, finalWalletName);
-
-      // Create temp wallet in store for UI
-      await walletStore.importWallet(
-        seedWords,
-        [], // addresses will be set after vault import
-        finalWalletName
-      );
-
       router.navigate('password-creation-import');
     }
   }
@@ -755,39 +750,42 @@
             onImportWallet={handleImportWallet}
             onConnectHardware={() => router.navigate('hardware-wallet')}
           />
+        {:else if currentRoute === 'create-wallet'}
+          <CreateWallet onReady={handleGeneratedWallet} onBack={cancelWalletCreation} />
+        {:else if currentRoute === 'backup-secret-key'}
+          <SecretKeyBackup
+            secretKey={pendingForDisplay?.key || ''}
+            address={pendingForDisplay?.address || ''}
+            onContinue={handleSeedPhraseConfirmed}
+            onBack={backToCreation}
+          />
         {:else if currentRoute === 'seed-phrase'}
           <SeedPhraseDisplay
-            seedPhrase={activeWalletValue?.seedPhrase || []}
+            seedPhrase={pendingForDisplay?.key.split(' ') || []}
             onContinue={handleSeedPhraseContinue}
-            onBack={() => {
-              const state = get(walletStore);
-              if (state.isCreatingAdditionalWallet) {
-                walletStore.setCreatingAdditionalWallet(false);
-                // Remove the just created wallet since user cancelled
-                if (activeWalletValue) {
-                  walletStore.deleteWallet(activeWalletValue.id);
-                }
-                router.navigate('wallet-management');
-              } else {
-                router.navigate('welcome');
-              }
-            }}
+            onBack={backToCreation}
           />
         {:else if currentRoute === 'confirm-seed'}
           <ConfirmSeedPhrase
-            seedPhrase={activeWalletValue?.seedPhrase || []}
+            seedPhrase={pendingForDisplay?.key.split(' ') || []}
             onConfirm={handleSeedPhraseConfirmed}
             onBack={() => router.navigate('seed-phrase')}
           />
         {:else if currentRoute === 'password-creation'}
           <PasswordCreation
             onCreateWallet={handlePasswordCreated}
-            onBack={() => router.navigate('confirm-seed')}
+            onBack={() =>
+              router.navigate(
+                pendingForDisplay?.kind === 'raw' ? 'backup-secret-key' : 'confirm-seed'
+              )}
           />
         {:else if currentRoute === 'password-creation-import'}
           <PasswordCreation
             onCreateWallet={handlePasswordCreatedImport}
-            onBack={() => router.navigate('import-wallet')}
+            onBack={() => {
+              clearPendingWallet();
+              router.navigate('import-wallet');
+            }}
           />
         {:else if currentRoute === 'wallet-created'}
           <WalletCreatedAnimation onContinue={handleWalletCreated} />
@@ -877,6 +875,7 @@
           <ImportWallet
             onImport={(phrase, name) => handleWalletImported(phrase, name)}
             onBack={() => {
+              clearPendingWallet();
               const state = get(walletStore);
               if (state.isCreatingAdditionalWallet) {
                 walletStore.setCreatingAdditionalWallet(false);

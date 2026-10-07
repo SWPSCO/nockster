@@ -10,6 +10,7 @@ import {
   unlockVault,
   composeUnsignedTx,
   verifySignedDraft,
+  verifyPartialSignedDraft,
   inspectTxJam,
   validateWalletKey,
   cheetahPkhB58
@@ -55,6 +56,8 @@ test('Nockster drafts round-trip through the Nockster firmware signing core', ()
   assert.deepEqual(signed.spends[0].signedBy, [fixture.source]);
   assert.equal(signed.feePaid, fixture.fee);
   assert.throws(() => verifySignedDraft(draft.base64Tx, draft.base64Tx));
+  verifyPartialSignedDraft(draft.base64Tx, draft.base64Tx);
+  verifyPartialSignedDraft(draft.base64Tx, fixture.signedTx);
   const altered = composeUnsignedTx(
     fixture.source,
     [fixture.note],
@@ -62,6 +65,7 @@ test('Nockster drafts round-trip through the Nockster firmware signing core', ()
     fixture.height
   );
   assert.throws(() => verifySignedDraft(altered.base64Tx, fixture.signedTx));
+  assert.throws(() => verifyPartialSignedDraft(draft.base64Tx, altered.base64Tx));
 });
 
 test('raw signing keys restore the same address without HD recovery fields', () => {

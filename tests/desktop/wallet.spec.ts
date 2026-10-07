@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import release from '../../release-version.json' with { type: 'json' };
 import { mockAccounts } from '../mobile/rpcAuth.fixture';
 import { desktopIO, createWallet, password, mnemonic, source } from './native.fixture';
 
@@ -40,6 +41,11 @@ test('desktop wallet persists ciphertext, unlocks, navigates, opens links extern
   await expect(page.getByText('Wallet Locked', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(page.getByText('Pop Out Window', { exact: true })).toHaveCount(0);
+  await expect(
+    page.locator('.setting-item')
+      .filter({ has: page.getByText('Version', { exact: true }) })
+      .locator('.setting-value')
+  ).toHaveText(process.env.NOCKSTER_VERSION || release.version);
   await page.keyboard.press('Control+Shift+L');
   await expect(page.getByText('Wallet Locked', { exact: true })).toBeVisible();
   const saved = await page.evaluate(() => localStorage.getItem('desktop-test-native-store'));

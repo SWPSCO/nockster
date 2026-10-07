@@ -215,7 +215,7 @@ test('approval prompts and rejection stay visible when signing below the fold', 
   await page.getByLabel('Message text', { exact: true }).fill('Synthetic approval test');
   await page.getByRole('button', { name: 'Sign on device', exact: true }).click();
   await expect.poll(() => peer.approvalId).not.toBeNull();
-  await page.locator('.hardware-workspace').evaluate(element => {
+  await page.locator('.desktop-workspace').evaluate(element => {
     element.scrollTop = element.scrollHeight;
   });
   await expect(page.getByRole('status').filter({ hasText: 'Review and approve' })).toBeInViewport();

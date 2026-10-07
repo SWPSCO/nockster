@@ -809,18 +809,27 @@
         {:else if currentRoute === 'wallet-management'}
           <WalletManagement onBack={() => router.navigate('dashboard')} />
         {:else if currentRoute === 'send'}
-          <SendTransaction
-            balance={nicksToNocks(BigInt(Math.trunc(activeWalletValue?.balance || 0)))}
-            onBack={() => router.navigate('dashboard')}
-            onSend={txData => router.navigate('confirm-transaction', txData)}
-          />
+          <slot name="send">
+            <SendTransaction
+              balance={nicksToNocks(BigInt(Math.trunc(activeWalletValue?.balance || 0)))}
+              onBack={() => router.navigate('dashboard')}
+              onSend={txData => router.navigate('confirm-transaction', txData)}
+            />
+          </slot>
         {:else if currentRoute === 'jam'}
-          <JamTransaction
+          <slot
+            name="transaction"
             jam={routeData?.jam || ''}
             toSign={Boolean(routeData?.toSign)}
             origin={routeData?.origin || undefined}
-            onBack={() => router.navigate('dashboard')}
-          />
+          >
+            <JamTransaction
+              jam={routeData?.jam || ''}
+              toSign={Boolean(routeData?.toSign)}
+              origin={routeData?.origin || undefined}
+              onBack={() => router.navigate('dashboard')}
+            />
+          </slot>
         {:else if currentRoute === 'receive'}
           <ReceiveTransaction
             address={activeWalletValue?.addresses?.[0] || ''}

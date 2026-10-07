@@ -10,6 +10,9 @@
   import HardwareWorkspace from './hardware/HardwareWorkspace.svelte';
   import { hardwareSession } from './hardware/session';
   import { firmwareUpdate } from './hardware/firmware';
+  import DesktopSend from './transactions/DesktopSend.svelte';
+  import TransactionReview from './transactions/TransactionReview.svelte';
+  import JamTransaction from '../../../packages/wallet/src/lib/components/organisms/JamTransaction.svelte';
 
   const navigation: { label: string; route: Route; path: string }[] = [
     {
@@ -48,6 +51,8 @@
     Boolean($activeWallet);
   $: activeRoute = $router.currentRoute;
   let error = '';
+  let workspace: HTMLDivElement;
+  $: if (activeRoute) workspace?.scrollTo({ top: 0 });
 
   async function lock() {
     if (!(await lockVaultSession())) {
@@ -165,6 +170,7 @@
     </div>
   </aside>
   <div
+    bind:this={workspace}
     class="desktop-workspace"
     class:wide={[
       'dashboard',
@@ -174,7 +180,17 @@
       'hardware-wallet'
     ].includes(activeRoute)}
   >
-    <App allowHardwareWhileLocked><HardwareWorkspace slot="hardware" /></App>
+    <App allowHardwareWhileLocked>
+      <HardwareWorkspace slot="hardware" />
+      <DesktopSend slot="send" />
+      <svelte:fragment slot="transaction" let:jam let:origin let:toSign>
+        {#if jam}
+          <JamTransaction {jam} {origin} {toSign} onBack={() => router.navigate('dashboard')} />
+        {:else}
+          <TransactionReview />
+        {/if}
+      </svelte:fragment>
+    </App>
   </div>
   {#if error}
     <div class="desktop-error" role="alert">

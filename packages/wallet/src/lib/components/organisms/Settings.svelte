@@ -186,7 +186,7 @@
 
       <div class="setting-item">
         <span class="setting-label">Version</span>
-        <span class="setting-value">1.0.0</span>
+        <span class="setting-value">{import.meta.env.VITE_APP_VERSION}</span>
       </div>
 
       <div class="setting-item">

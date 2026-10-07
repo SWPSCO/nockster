@@ -11,7 +11,7 @@ use tx_types::{
     transaction_types_v1::{
         LockPrimitiveBody, PkhSignatureValue, RawTransactionV1, SeedV1, SpendsV1,
     },
-    Hash, LockData, SpendCondition, ZMap,
+    Hash, Hashable, SpendCondition, ZMap,
 };
 
 use crate::tx_engine::WalletTransaction;
@@ -395,6 +395,14 @@ fn validate_spends(spends: &SpendsV1) -> Result<(), String> {
 }
 
 pub(crate) fn verify_signed_draft(draft: &str, signed: &str) -> Result<(), String> {
+    verify_draft_spends(draft, signed, true)
+}
+
+pub(crate) fn verify_partial_signed_draft(draft: &str, signed: &str) -> Result<(), String> {
+    verify_draft_spends(draft, signed, false)
+}
+
+fn verify_draft_spends(draft: &str, signed: &str, require_complete: bool) -> Result<(), String> {
     fn spends(tx: DecodedJamTx) -> Result<SpendsV1, String> {
         match tx {
             DecodedJamTx::Wallet(tx) => Ok(tx.spends),
@@ -405,24 +413,29 @@ pub(crate) fn verify_signed_draft(draft: &str, signed: &str) -> Result<(), Strin
     }
     let expected = spends(decode_tx(draft)?)?;
     let actual = spends(decode_tx(signed)?)?;
-    if summarize_spends(&actual)?
-        .iter()
-        .any(|s| !s.is_fully_signed)
+    if require_complete
+        && summarize_spends(&actual)?
+            .iter()
+            .any(|s| !s.is_fully_signed)
     {
         return Err("transaction is not fully signed".into());
     }
-    fn without_signatures(spends: SpendsV1) -> SpendsV1 {
+    fn without_signatures(spends: SpendsV1, allow_preimages: bool) -> SpendsV1 {
         let mut map = ZMap::new();
         for (name, mut spend) in spends.map.tap() {
             if let SpendBody::V1(ref mut body) = spend.body {
                 body.witness.pkh.map = ZMap::new();
+                if allow_preimages {
+                    // Revealing a preimage satisfies the approved lock without changing it.
+                    body.witness.hax = ZMap::new();
+                }
             }
             map.put(name, spend);
         }
         SpendsV1 { map }
     }
-    if compute_tx_id_v1(&without_signatures(expected))
-        != compute_tx_id_v1(&without_signatures(actual))
+    if compute_tx_id_v1(&without_signatures(expected, !require_complete))
+        != compute_tx_id_v1(&without_signatures(actual, !require_complete))
     {
         return Err("signed transaction differs from the approved draft".into());
     }
@@ -559,25 +572,48 @@ fn extract_seed_lock_summary(seed: &SeedV1) -> Result<Option<JamLockSummary>, St
         return Ok(None);
     };
 
-    let condition = decode_lock_condition(lock_noun)?;
-    if condition.to_hash() != seed.lock_root {
-        return Err("output lock data does not match its lock root".into());
-    }
-    Ok(Some(JamLockSummary {
-        pkh: extract_pkh_summary(&condition),
-    }))
-}
-
-fn decode_lock_condition(lock_noun: &tx_types::UntypedNoun) -> Result<SpendCondition, String> {
     let mut slab = NounSlab::<NockJammer>::new();
     let noun = slab
         .cue_into(lock_noun.p.clone())
         .map_err(|err| format!("failed to cue noteData.lock noun: {err}"))?;
-    let lock_data = LockData::from_noun(&noun)
-        .map_err(|err| format!("failed to decode lock-data noun: {err}"))?;
-    match lock_data {
-        LockData::V0(condition) => Ok(condition),
+    let data = noun.as_cell().map_err(|_| "invalid lock-data")?;
+    if u64::from_noun(&data.head()).map_err(|_| "invalid lock-data version")? != 0 {
+        return Err("unsupported lock-data version".into());
     }
+    let lock = data.tail();
+    let (hashable, pkh) = if let Ok(condition) = SpendCondition::from_noun(&lock) {
+        (condition.to_hashable(), extract_pkh_summary(&condition))
+    } else {
+        let tree = lock.as_cell().map_err(|_| "invalid output lock")?;
+        let size = u64::from_noun(&tree.head()).map_err(|_| "invalid lock tree size")?;
+        if !matches!(size, 2 | 4 | 8 | 16) {
+            return Err("invalid lock tree size".into());
+        }
+        (
+            Hashable::cell(
+                Hashable::leaf_from_atom(size.to_le_bytes()),
+                lock_tree_hashable(tree.tail(), size)?,
+            ),
+            None,
+        )
+    };
+    if tx_types::hash_hashable(&hashable) != seed.lock_root {
+        return Err("output lock data does not match its lock root".into());
+    }
+    Ok(Some(JamLockSummary { pkh }))
+}
+
+fn lock_tree_hashable(noun: nockvm::noun::Noun, size: u64) -> Result<Hashable, String> {
+    if size == 1 {
+        return SpendCondition::from_noun(&noun)
+            .map(|condition| condition.to_hashable())
+            .map_err(|err| format!("invalid lock tree branch: {err}"));
+    }
+    let pair = noun.as_cell().map_err(|_| "invalid lock tree pair")?;
+    Ok(Hashable::cell(
+        lock_tree_hashable(pair.head(), size / 2)?,
+        lock_tree_hashable(pair.tail(), size / 2)?,
+    ))
 }
 
 fn extract_pkh_summary(condition: &SpendCondition) -> Option<JamLockPkh> {

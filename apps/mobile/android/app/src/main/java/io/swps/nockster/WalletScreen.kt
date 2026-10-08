@@ -180,15 +180,13 @@ private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -
     var mnemonic by remember { mutableStateOf<List<String>>(emptyList()) }
     var importKind by remember { mutableStateOf("mnemonic") }
     var customAddress by remember { mutableStateOf(model.snapshot.optJSONObject("vanitySearch") != null) }
-    var minedKey by remember { mutableStateOf("") }
-    var minedAddress by remember { mutableStateOf("") }
     var first by remember { mutableStateOf("") }
     var last by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf(false) }
     val nameExists = model.wallets.any { it.text("name") == name.trim() }
-    val valid = name.isNotBlank() && !nameExists && (if (importing) secret.isNotBlank() else saved && (minedKey.isNotEmpty() || mnemonic.isNotEmpty() && first.trim() == mnemonic.first() && last.trim() == mnemonic.last())) &&
+    val valid = name.isNotBlank() && !nameExists && (if (importing) secret.isNotBlank() else saved && (mnemonic.isNotEmpty() && first.trim() == mnemonic.first() && last.trim() == mnemonic.last())) &&
         (model.snapshot.optBoolean("exists") || password.length >= 12 && password == confirmation)
-    fun clearRecovery() { secret = ""; mnemonic = emptyList(); minedKey = ""; minedAddress = ""; saved = false; first = ""; last = "" }
+    fun clearRecovery() { secret = ""; mnemonic = emptyList(); saved = false; first = ""; last = "" }
     DisposableEffect(Unit) { onDispose { clearRecovery(); password = ""; confirmation = "" } }
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         NocksterBrand()
@@ -210,31 +208,24 @@ private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -
             }
         }
         if (importing) {
-            WalletChoice("Import with", importKind, listOf("mnemonic" to "24-word seed phrase", "raw" to "Secret key · hex", "extended" to "Extended private key")) { importKind = it; secret = "" }
-            OutlinedTextField(secret, { secret = it }, label = { Text(if (importKind == "raw") "Secret key in hex" else "Recovery material") },
+            WalletChoice("Import with", importKind, listOf("mnemonic" to "24-word seed phrase", "extended" to "Extended private key")) { importKind = it; secret = "" }
+            OutlinedTextField(secret, { secret = it }, label = { Text("Recovery material") },
                 keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), minLines = if (importKind == "mnemonic") 4 else 2,
-                supportingText = { Text(when (importKind) { "raw" -> "64 hexadecimal characters, with an optional 0x prefix. A raw key has no seed phrase."; "extended" -> "Paste your zprv extended private key."; else -> "Enter your 24 words separated by spaces." }) },
+                supportingText = { Text(when (importKind) { "extended" -> "Paste your zprv extended private key."; else -> "Enter your 24 words separated by spaces." }) },
                 modifier = Modifier.fillMaxWidth())
-        } else if (mnemonic.isEmpty() && minedKey.isEmpty()) {
+        } else if (mnemonic.isEmpty()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Custom address", Modifier.weight(1f)); Switch(customAddress, { customAddress = it }, modifier = Modifier.semantics { contentDescription = "Custom address" })
             }
             if (customAddress) VanityControls(model, name, {
                 if (model.wallets.isEmpty()) { customAddress = false; importing = true } else done()
             }) { candidate ->
-                minedAddress = candidate.text("address")
-                if (candidate.text("kind") == "mnemonic") mnemonic = candidate.text("key").split(" ") else minedKey = candidate.text("key")
+                mnemonic = candidate.text("key").split(" ")
                 saved = false
             } else Button(onClick = { scope.launch {
                 val words = model.perform("generate")?.optJSONArray("mnemonic")
                 if (words != null) mnemonic = (0 until words.length()).map { words.getString(it) }
             } }, enabled = !model.busy) { Text("Generate Recovery Phrase") }
-        } else if (minedKey.isNotEmpty()) {
-            Text("Back up your secret key", style = MaterialTheme.typography.titleLarge)
-            SelectionContainer { Text(minedKey, fontFamily = FontFamily.Monospace) }
-            Text("This wallet has no seed phrase. Save this key privately to restore it.")
-            Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(saved, { saved = it }); Text("I saved my secret key somewhere private") }
-            SelectionContainer { Text(minedAddress, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
         } else {
             Text("Secret Recovery Phrase", style = MaterialTheme.typography.titleLarge)
             mnemonic.chunked(2).forEachIndexed { index, pair ->
@@ -265,7 +256,7 @@ private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -
             Text("Use this device’s screen-lock PIN, pattern, password, or biometrics to unlock. This is optional and can also be enabled in Settings. Your wallet password still works.", style = MaterialTheme.typography.bodySmall)
         }
         Button(onClick = {
-            val key = if (importing) secret else minedKey.ifEmpty { mnemonic.joinToString(" ") }
+            val key = if (importing) secret else mnemonic.joinToString(" ")
             val setupPassword = password
             val enrollDeviceUnlock = !model.snapshot.optBoolean("exists") && enableDeviceUnlock
             // Enrollment must survive SetupScreen leaving composition after the import.
@@ -303,10 +294,8 @@ private fun VanityControls(model: WalletModel, walletName: String, onBackground:
     val settings = session?.optJSONObject("options")
     var prefix by remember { mutableStateOf(settings?.text("prefix") ?: "") }
     var insensitive by remember { mutableStateOf(settings?.optBoolean("insensitive") ?: false) }
-    var recovery by remember { mutableStateOf(settings?.text("keyMode") ?: "mnemonic") }
     var backend by remember { mutableStateOf(settings?.text("backend") ?: "auto") }
     var lanes by remember { mutableStateOf(settings?.text("lanes") ?: "4096") }
-    var steps by remember { mutableStateOf(settings?.text("steps") ?: "1") }
     var limit by remember { mutableStateOf(settings?.optLong("maxAttempts")?.toString() ?: "0") }
     var advanced by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(session?.optJSONObject("progress") ?: JSONObject()) }
@@ -328,13 +317,11 @@ private fun VanityControls(model: WalletModel, walletName: String, onBackground:
         singleLine = true, enabled = editable, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
     Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(insensitive, { insensitive = it; reset() }, enabled = editable, modifier = Modifier.semantics { contentDescription = "Ignore case and match letter / digit equivalents" }); Text("Ignore case and match letter / digit equivalents") }
     if (insensitive) Text("a / 4 · b / 8 · e / 3 · i / 1 · l / 1 · o / 0 · s / 5 · t / 7 · z / 2. i and l stay distinct.", style = MaterialTheme.typography.bodySmall)
-    WalletChoice("Recovery", recovery, listOf("mnemonic" to "24-word seed phrase", "raw" to "Secret key (no phrase)"), editable) { recovery = it; lanes = if (it == "raw") "64" else "4096"; reset() }
-    Text("Seed phrases take longer to find. A secret key has no recovery phrase.", style = MaterialTheme.typography.bodySmall)
+    Text("Back up your wallet with a 24-word seed phrase.", style = MaterialTheme.typography.bodySmall)
     TextButton(onClick = { advanced = !advanced }) { Text("Search settings"); Icon(if (advanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null) }
     if (advanced) {
         WalletChoice("Compute with", backend, listOf("auto" to "Automatic · GPU or CPU", "cpu" to "CPU only"), editable) { backend = it; reset() }
         OutlinedTextField(lanes, { lanes = it; reset() }, label = { Text("GPU lanes") }, enabled = editable, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-        if (recovery == "raw") OutlinedTextField(steps, { steps = it; reset() }, label = { Text("Steps per batch (1–16)") }, enabled = editable, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
         OutlinedTextField(limit, { limit = it; reset() }, label = { Text("Attempt limit") }, supportingText = { Text("0 means no limit") }, enabled = editable, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
     }
     if (progress.text("message").isNotEmpty()) Text(progress.text("message"))
@@ -347,11 +334,11 @@ private fun VanityControls(model: WalletModel, walletName: String, onBackground:
         Button(onClick = { scope.launch { model.perform("vanityTake", JSONObject().put("searchId", searchId))?.optJSONObject("candidate")?.let(onFound) } }, enabled = !model.busy) { Text("Use This Address") }
     } else {
         Button(onClick = {
-            val laneCount = lanes.toIntOrNull(); val stepCount = steps.toIntOrNull(); val attempts = limit.toLongOrNull()
-            if (laneCount == null || stepCount == null || attempts == null || attempts !in 0L..9007199254740991L) {
+            val laneCount = lanes.toIntOrNull(); val attempts = limit.toLongOrNull()
+            if (laneCount == null || attempts == null || attempts !in 0L..9007199254740991L) {
                 progress = JSONObject().put("status", "error").put("message", "Enter whole numbers for the search settings.")
             } else scope.launch {
-                val settings = JSONObject().put("prefix", prefix).put("insensitive", insensitive).put("keyMode", recovery).put("backend", backend).put("lanes", laneCount).put("steps", stepCount).put("maxAttempts", attempts)
+                val settings = JSONObject().put("prefix", prefix).put("insensitive", insensitive).put("keyMode", "mnemonic").put("backend", backend).put("lanes", laneCount).put("maxAttempts", attempts)
                 model.perform("vanityStart", JSONObject().put("searchId", searchId).put("name", walletName).put("vanity", settings))?.optJSONObject("vanity")?.let { progress = it }
             }
         }, enabled = prefix.isNotBlank() && !model.busy) { Text("Find Address") }

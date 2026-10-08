@@ -4,7 +4,7 @@ import { mkdtemp, cp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-for (const recovery of ['mnemonic', 'raw', 'extended']) {
+for (const recovery of ['mnemonic', 'extended']) {
   test(`${recovery} wallets appear immediately and remain selected after storage synchronization`, async () => {
     const dir = await mkdtemp(join(tmpdir(), 'nockster-wallet-creation-'));
     const extension = join(dir, 'extension');
@@ -75,43 +75,6 @@ for (const recovery of ['mnemonic', 'raw', 'extended']) {
         expect(
           await page.evaluate(async () => JSON.stringify(await chrome.storage.local.get(null)))
         ).not.toContain(candidate.key);
-      } else if (recovery === 'raw') {
-        await page.screenshot({ path: '/tmp/vanity-extension-collapsed.png' });
-        await page.getByRole('button', { name: 'Generate a custom address', exact: true }).click();
-        await page.getByLabel('Enable custom address generation', { exact: true }).check();
-        await page.getByLabel('Address starts with', { exact: true }).fill('2');
-        await page.getByLabel('Recovery', { exact: true }).selectOption('raw');
-        await page.getByText('Search settings', { exact: true }).click();
-        await page.getByLabel('Compute with', { exact: true }).selectOption('cpu');
-        await page.getByRole('button', { name: 'Find Address', exact: true }).click();
-        await expect(
-          page.getByRole('button', { name: 'Use This Address', exact: true })
-        ).toBeVisible();
-        const address = await page.locator('.search-status .address').textContent();
-        expect(address).toMatch(/^2/);
-        await page.getByRole('button', { name: 'Continue in Background', exact: true }).click();
-        await expect(page.getByText('Vanity address ready', { exact: true })).toBeVisible();
-        await page.getByRole('button', { name: 'Return to Search', exact: true }).click();
-        await expect(page.locator('.search-status .address')).toHaveText(address!);
-        await page.screenshot({ path: 'test-results/extension-vanity-found.png' });
-        await page.getByRole('button', { name: 'Use This Address', exact: true }).click();
-        const secret = await page.getByLabel('Secret key · hex').inputValue();
-        expect(secret).toMatch(/^[a-f0-9]{64}$/);
-        await page.getByLabel('I saved my secret key somewhere private.').check();
-        await page.getByRole('button', { name: 'Continue', exact: true }).click();
-        await expect
-          .poll(async () =>
-            page.evaluate(async () => {
-              const { data } = await chrome.runtime.sendMessage({ type: 'vault:getWallets' });
-              return data.wallets.find(
-                (wallet: { nickname: string }) => wallet.nickname === 'My Wallet 2'
-              )?.publicKey;
-            })
-          )
-          .toBe(address);
-        expect(
-          await page.evaluate(async () => JSON.stringify(await chrome.storage.local.get(null)))
-        ).not.toContain(secret);
       } else {
         await page.getByRole('button', { name: 'Generate Wallet', exact: true }).click();
         await expect(page.locator('.seed-word-text')).toHaveCount(24);

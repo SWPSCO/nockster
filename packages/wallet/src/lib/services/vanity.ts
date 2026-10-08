@@ -1,12 +1,11 @@
 import { mineAddress } from './vanityWorker';
 import type { MineOptions, MineProgress, MineResult } from '../../../public/vanity/miner.js';
 
-export type RecoveryKind = 'mnemonic' | 'raw';
 export type VanityOptions = Pick<
   MineOptions,
-  'prefix' | 'insensitive' | 'backend' | 'lanes' | 'steps' | 'maxAttempts'
-> & { keyMode?: RecoveryKind };
-export type WalletCandidate = { kind: RecoveryKind | 'extended'; key: string; address?: string };
+  'prefix' | 'insensitive' | 'backend' | 'lanes' | 'maxAttempts'
+> & { keyMode?: 'mnemonic' };
+export type WalletCandidate = { kind: 'mnemonic' | 'extended'; key: string; address?: string };
 export type VanityProgress = {
   status: 'idle' | 'mining' | 'found' | 'stopped' | 'exhausted' | 'error';
   message: string;
@@ -33,16 +32,13 @@ export function validateVanityOptions(options: VanityOptions): VanityOptions {
   if (!alphabet.test(prefix))
     throw new Error('Use Base58 characters, or enable letter equivalents for 0, O, I, and l.');
   const keyMode = options.keyMode ?? 'mnemonic';
-  if (keyMode !== 'mnemonic' && keyMode !== 'raw') throw new Error('Choose a recovery method.');
+  if (keyMode !== 'mnemonic') throw new Error('Generate a wallet with a 24-word seed phrase.');
   const backend = options.backend ?? 'auto';
   if (backend !== 'auto' && backend !== 'cpu') throw new Error('Choose Automatic or CPU.');
-  const lanes = options.lanes ?? (keyMode === 'raw' ? 64 : 4096);
-  const steps = options.steps ?? 1;
+  const lanes = options.lanes ?? 4096;
   const maxAttempts = options.maxAttempts ?? 0;
-  if (!Number.isInteger(lanes) || lanes < 1 || lanes > (keyMode === 'raw' ? 256 : 4096))
-    throw new Error('GPU lanes are outside the selected recovery method’s range.');
-  if (!Number.isInteger(steps) || steps < 1 || steps > 16)
-    throw new Error('Use 1–16 raw-key steps per batch.');
+  if (!Number.isInteger(lanes) || lanes < 1 || lanes > 4096)
+    throw new Error('Use 1–4096 GPU lanes.');
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 0)
     throw new Error('Attempt limit must be a nonnegative whole number.');
   return {
@@ -51,7 +47,6 @@ export function validateVanityOptions(options: VanityOptions): VanityOptions {
     keyMode,
     backend,
     lanes,
-    steps,
     maxAttempts
   };
 }
@@ -104,7 +99,7 @@ export class VanitySearch {
       let found: MineResult | null = null;
       try {
         if (this.generation !== generation) return;
-        found = await mineAddress({ ...options, signal: controller.signal, onProgress });
+        found = await mineAddress({ ...options, steps: 1, signal: controller.signal, onProgress });
         if (this.generation !== generation) return;
         if (!found) {
           this.update({
@@ -114,14 +109,13 @@ export class VanitySearch {
           return;
         }
         const data = JSON.parse(new TextDecoder().decode(found.keyJson));
-        const key = options.keyMode === 'raw' ? data.secret_key_hex_be : data.mnemonic;
+        const key = data.mnemonic;
         if (
           typeof key !== 'string' ||
           data.pkh !== found.pkh ||
-          (options.keyMode === 'mnemonic' &&
-            (data.derivation_path !== 'm' ||
-              data.passphrase !== '' ||
-              key.split(' ').length !== 24))
+          data.derivation_path !== 'm' ||
+          data.passphrase !== '' ||
+          key.split(' ').length !== 24
         ) {
           throw new Error('The generator returned invalid recovery material.');
         }

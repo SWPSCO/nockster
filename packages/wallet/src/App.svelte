@@ -1,5 +1,7 @@
 <script lang="ts">
   export let allowHardwareWhileLocked = false;
+  export let readWalletFile:
+    ((file: File) => Promise<{ phrase: string; address: string }[]>) | undefined = undefined;
   import { nextWalletName } from './lib/utils/walletName';
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
@@ -30,7 +32,6 @@
   import type { WalletCandidate } from './lib/services/vanity';
   import { vanitySession } from './lib/stores/vanitySession';
   import CreateWallet from './lib/components/organisms/CreateWallet.svelte';
-  import SecretKeyBackup from './lib/components/organisms/SecretKeyBackup.svelte';
   import WelcomeScreen from './lib/components/organisms/WelcomeScreen.svelte';
   import SeedPhraseDisplay from './lib/components/organisms/SeedPhraseDisplay.svelte';
   import ConfirmSeedPhrase from './lib/components/organisms/ConfirmSeedPhrase.svelte';
@@ -176,7 +177,6 @@
   ): Promise<boolean> {
     const creationFlowRoutes: Route[] = [
       'create-wallet',
-      'backup-secret-key',
       'seed-phrase',
       'confirm-seed',
       'password-creation',
@@ -236,22 +236,16 @@
   $: activeWalletValue = $activeWallet;
 
   // Progress bar logic
-  const createFlowRoutes: Route[] = [
-    'seed-phrase',
-    'confirm-seed',
-    'backup-secret-key',
-    'password-creation'
-  ];
+  const createFlowRoutes: Route[] = ['seed-phrase', 'confirm-seed', 'password-creation'];
   const importFlowRoutes: Route[] = ['import-wallet', 'password-creation-import'];
 
   $: shouldShowProgressBar = [...createFlowRoutes, ...importFlowRoutes].includes(currentRoute);
   $: isImportFlow = importFlowRoutes.includes(currentRoute);
-  $: totalSteps = isImportFlow || pendingForDisplay?.kind === 'raw' ? 2 : 3;
+  $: totalSteps = isImportFlow ? 2 : 3;
   $: currentStep = (() => {
     if (currentRoute === 'seed-phrase') return 1;
     if (currentRoute === 'confirm-seed') return 2;
-    if (currentRoute === 'backup-secret-key') return 1;
-    if (currentRoute === 'password-creation') return pendingForDisplay?.kind === 'raw' ? 2 : 3;
+    if (currentRoute === 'password-creation') return 3;
     if (currentRoute === 'import-wallet') return 1;
     if (currentRoute === 'password-creation-import') return 2;
     return 1;
@@ -310,7 +304,6 @@
     // Don't interrupt wallet creation flow - these routes should be preserved
     const creationFlowRoutes = [
       'create-wallet',
-      'backup-secret-key',
       'seed-phrase',
       'confirm-seed',
       'password-creation',
@@ -319,13 +312,9 @@
     ];
     const isInCreationFlow = creationFlowRoutes.includes(currentRouteFromStorage);
     if (
-      [
-        'seed-phrase',
-        'confirm-seed',
-        'backup-secret-key',
-        'password-creation',
-        'password-creation-import'
-      ].includes(currentRouteFromStorage) &&
+      ['seed-phrase', 'confirm-seed', 'password-creation', 'password-creation-import'].includes(
+        currentRouteFromStorage
+      ) &&
       !getPendingWallet()
     ) {
       router.navigate(
@@ -518,7 +507,7 @@
 
   async function handleGeneratedWallet(candidate: WalletCandidate, name: string) {
     setPendingWallet(candidate, name);
-    router.navigate(candidate.kind === 'mnemonic' ? 'seed-phrase' : 'backup-secret-key');
+    router.navigate('seed-phrase');
   }
 
   function cancelWalletCreation() {
@@ -675,11 +664,7 @@
       ]);
     }
 
-    const kind = key.trim().startsWith('zprv')
-      ? 'extended'
-      : key.trim().split(/\s+/).length === 24
-        ? 'mnemonic'
-        : 'raw';
+    const kind = key.trim().startsWith('zprv') ? 'extended' : 'mnemonic';
     setPendingWallet({ kind, key: key.trim(), address }, finalWalletName);
     if (vaultState.exists && vaultState.unlocked) {
       if (!(await finalizeWalletCreation())) throw new Error('Unable to import wallet.');
@@ -748,11 +733,19 @@
 
       {#if $vanitySession.options && currentRoute !== 'create-wallet' && currentRoute !== 'lock-screen'}
         <div class="vanity-banner" role="status">
-          <span>{$vanitySession.progress.status === 'found' ? 'Vanity address ready' : $vanitySession.progress.status === 'mining' ? 'Vanity search running' : 'Vanity search stopped'}</span>
-          <button on:click={() => {
-            walletStore.setCreatingAdditionalWallet($walletStore.wallets.length > 0);
-            router.navigate('create-wallet');
-          }}>Return to Search</button>
+          <span
+            >{$vanitySession.progress.status === 'found'
+              ? 'Vanity address ready'
+              : $vanitySession.progress.status === 'mining'
+                ? 'Vanity search running'
+                : 'Vanity search stopped'}</span
+          >
+          <button
+            on:click={() => {
+              walletStore.setCreatingAdditionalWallet($walletStore.wallets.length > 0);
+              router.navigate('create-wallet');
+            }}>Return to Search</button
+          >
           <button on:click={() => vanitySession.clear()}>Cancel Search</button>
         </div>
       {/if}
@@ -765,13 +758,6 @@
           />
         {:else if currentRoute === 'create-wallet'}
           <CreateWallet onReady={handleGeneratedWallet} onBack={cancelWalletCreation} />
-        {:else if currentRoute === 'backup-secret-key'}
-          <SecretKeyBackup
-            secretKey={pendingForDisplay?.key || ''}
-            address={pendingForDisplay?.address || ''}
-            onContinue={handleSeedPhraseConfirmed}
-            onBack={backToCreation}
-          />
         {:else if currentRoute === 'seed-phrase'}
           <SeedPhraseDisplay
             seedPhrase={pendingForDisplay?.key.split(' ') || []}
@@ -787,10 +773,7 @@
         {:else if currentRoute === 'password-creation'}
           <PasswordCreation
             onCreateWallet={handlePasswordCreated}
-            onBack={() =>
-              router.navigate(
-                pendingForDisplay?.kind === 'raw' ? 'backup-secret-key' : 'confirm-seed'
-              )}
+            onBack={() => router.navigate('confirm-seed')}
           />
         {:else if currentRoute === 'password-creation-import'}
           <PasswordCreation
@@ -897,6 +880,7 @@
           </Settings>
         {:else if currentRoute === 'import-wallet'}
           <ImportWallet
+            {readWalletFile}
             onImport={(phrase, name) => handleWalletImported(phrase, name)}
             onBack={() => {
               clearPendingWallet();
@@ -919,7 +903,10 @@
             ><HardwareWallet onBack={() => router.navigate('wallet-management')} /></slot
           >
         {:else if currentRoute === 'address-book'}
-          <AddressBook desktopLayout={import.meta.env.MODE === 'desktop'} onBack={() => router.navigate('settings')} />
+          <AddressBook
+            desktopLayout={import.meta.env.MODE === 'desktop'}
+            onBack={() => router.navigate('settings')}
+          />
         {:else if currentRoute === 'lock-screen'}
           <LockScreen onUnlock={handleUnlock} />
         {:else if currentRoute === 'confirm-transaction'}
@@ -966,9 +953,27 @@
 {/if}
 
 <style>
-  .vanity-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--color-border); font-size: 12px; }
-  .vanity-banner span { flex: 1; min-width: 120px; }
-  .vanity-banner button { color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px; padding: 6px 8px; cursor: pointer; }
+  .vanity-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 12px;
+  }
+  .vanity-banner span {
+    flex: 1;
+    min-width: 120px;
+  }
+  .vanity-banner button {
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    cursor: pointer;
+  }
 
   .nockster-wallet {
     width: 357px;

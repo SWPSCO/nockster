@@ -51,14 +51,15 @@ python3 -m unittest discover -s tests/ci -p '*_test.py'
 See [local testing](docs/local-testing.md), [desktop development](docs/desktop.md),
 [wallet services](docs/wallet-services.md), and [extension releases](docs/extension-release.md).
 
-Wallet creation offers an optional custom address search with seed-phrase or raw-key recovery.
-Import accepts a 24-word phrase, `zprv`, or 64-character secret-key hex. The CLI searches locally
+Wallet creation offers an optional custom address search with 24-word seed-phrase recovery.
+Import accepts a 24-word phrase or `zprv`. Desktop also reads seed phrases from Nockchain
+`keys.export` wallet files. The CLI searches locally
 and saves private recovery JSON to a new file (`0600` on Unix):
 
 ```sh
 cd nockster-esp
 cargo run --release -p nockster-cli -- vanity --prefix nock --insensitive --out wallet.json
-# Add --raw-key for a secret key without a phrase; --threads and --max-attempts bound CPU work.
+# --threads and --max-attempts bound CPU work.
 ```
 
 ## Hardware development

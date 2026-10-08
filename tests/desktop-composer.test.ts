@@ -178,8 +178,13 @@ test('multisig output composition preserves the required signer count', () => {
 
 test('multisig copies combine verified signatures without changing the approved transaction', () => {
   const created = buildVault('multisig test password');
-  const first = importWallet(created.vault, created.vaultKey, 'first', '0'.repeat(63) + '1');
-  const vault = importWallet(first.vault, first.vaultKey, 'second', '0'.repeat(63) + '2');
+  const first = importWallet(
+    created.vault,
+    created.vaultKey,
+    'first',
+    'fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float'
+  );
+  const vault = importWallet(first.vault, first.vaultKey, 'second', 'abandon '.repeat(23) + 'art');
   try {
     const addresses = ['first', 'second'].map(
       name => exportWallet(vault.vault, vault.vaultKey, name).wallet.publicKey

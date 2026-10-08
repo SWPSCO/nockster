@@ -111,7 +111,6 @@ struct VanityOptions: Codable {
     let keyMode: String
     let backend: String
     let lanes: Int
-    let steps: Int
     let maxAttempts: Double
 }
 

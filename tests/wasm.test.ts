@@ -68,39 +68,32 @@ test('Nockster drafts round-trip through the Nockster firmware signing core', ()
   assert.throws(() => verifyPartialSignedDraft(draft.base64Tx, altered.base64Tx));
 });
 
-test('raw signing keys restore the same address without HD recovery fields', () => {
-  const built = buildVault('raw key test password');
+test('imports accept seed phrases and zprv and reject signing scalars', () => {
+  const built = buildVault('import test password');
   const seeded = importWallet(built.vault, built.vaultKey, 'phrase', mnemonic);
   const original = exportWallet(seeded.vault, seeded.vaultKey, 'phrase').wallet;
-  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-  const scalar = [...original.privateKey].reduce(
-    (n, digit) => n * 58n + BigInt(alphabet.indexOf(digit)),
-    0n
-  );
-  const hex = scalar.toString(16).padStart(64, '0');
-  const address = validateWalletKey(`0X${hex.toUpperCase()}`);
-  assert.equal(address, original.publicKey);
+  assert.equal(validateWalletKey(original.extendedPrivateKey), original.publicKey);
   lockVault(seeded.vault, seeded.vaultKey);
-  const rawVault = buildVault('raw key test password');
-  const imported = importWallet(rawVault.vault, rawVault.vaultKey, 'raw', hex);
-  const before = exportWallet(imported.vault, imported.vaultKey, 'raw').wallet;
-  assert.equal(before.publicKey, original.publicKey);
-  assert.equal(before.privateKey, original.privateKey);
-  for (const field of [
-    'seedphrase',
-    'extendedPrivateKey',
-    'extendedPublicKey',
-    'chainCode',
-    'depth',
-    'index',
-    'parentFingerprint',
-    'version'
-  ])
-    assert.ok(before[field] == null, field);
-  lockVault(imported.vault, imported.vaultKey);
-  const unlocked = unlockVault('raw key test password', imported.vault);
-  assert.deepEqual(exportWallet(unlocked.vault, unlocked.vaultKey, 'raw').wallet, before);
-  for (const key of ['', '00'.repeat(32), 'ff'.repeat(32), '1', 'gg'.repeat(32)])
+  const second = buildVault('import test password');
+  const imported = importWallet(
+    second.vault,
+    second.vaultKey,
+    'extended',
+    original.extendedPrivateKey
+  );
+  assert.equal(
+    exportWallet(imported.vault, imported.vaultKey, 'extended').wallet.publicKey,
+    original.publicKey
+  );
+  for (const key of ['', '0'.repeat(63) + '1', '0x' + '01'.repeat(32), 'ff'.repeat(32)]) {
     assert.throws(() => validateWalletKey(key));
+    assert.throws(() => importWallet(imported.vault, imported.vaultKey, 'invalid', key));
+  }
+  lockVault(imported.vault, imported.vaultKey);
+  const unlocked = unlockVault('import test password', imported.vault);
+  assert.equal(
+    exportWallet(unlocked.vault, unlocked.vaultKey, 'extended').wallet.publicKey,
+    original.publicKey
+  );
   lockVault(unlocked.vault, unlocked.vaultKey);
 });

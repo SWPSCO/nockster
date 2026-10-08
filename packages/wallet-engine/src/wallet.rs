@@ -6,10 +6,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::js_error::js_error;
 use tx_types::{
-    crypto::{
-        cheetah::point::cheetah_pub_from_sk,
-        utils::{be32_atom_to_t8_le, be32_lt, is_zero32, CHEETAH_N},
-    },
+    crypto::{cheetah::point::cheetah_pub_from_sk, utils::be32_atom_to_t8_le},
     transaction_types::{Hash, SchnorrPubkey, F6LT, T8},
 };
 
@@ -50,36 +47,9 @@ impl Wallet {
         let value = key.trim().to_string();
         if value.starts_with("zprv") {
             Wallet::from_extended_key(value)
-        } else if !value.contains(char::is_whitespace) {
-            Wallet::from_secret_key_hex(&value)
         } else {
             Wallet::from_seedphrase(value)
         }
-    }
-
-    /// Import one signing scalar without inventing a recovery phrase or HD metadata.
-    pub fn from_secret_key_hex(value: &str) -> Result<Self, JsValue> {
-        let scalar = parse_secret_key_hex(value).map_err(|error| js_error(&error))?;
-        let coords = cheetah_pub_from_sk(*scalar);
-        let public_key = SchnorrPubkey {
-            x: F6LT { values: coords[0] },
-            y: F6LT { values: coords[1] },
-            inf: false,
-        }
-        .to_hash()
-        .to_b58();
-        Ok(Self {
-            public_key,
-            private_key: bs58::encode(scalar.as_ref()).into_string(),
-            extended_public_key: None,
-            extended_private_key: None,
-            chain_code: None,
-            depth: None,
-            index: None,
-            parent_fingerprint: None,
-            version: None,
-            seedphrase: None,
-        })
     }
 
     /// Construct wallet from extended private key
@@ -223,66 +193,31 @@ fn decode_private_key_bytes(value: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-fn parse_secret_key_hex(value: &str) -> Result<Zeroizing<[u8; 32]>, String> {
-    let value = value.trim();
-    let value = value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-        .unwrap_or(value);
-    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("Secret key must contain exactly 64 hexadecimal characters".into());
-    }
-    let mut scalar = Zeroizing::new([0u8; 32]);
-    hex::decode_to_slice(value, &mut scalar[..])
-        .map_err(|_| "Invalid hexadecimal secret key".to_string())?;
-    if is_zero32(&scalar) || !be32_lt(&scalar, &CHEETAH_N) {
-        return Err("Secret key must be nonzero and less than the Cheetah curve order".into());
-    }
-    Ok(scalar)
-}
-
 #[cfg(test)]
-mod raw_key_tests {
+mod tests {
     use super::*;
 
     #[test]
-    fn scalar_validation_preserves_big_endian_bytes_and_rejects_boundaries() {
-        let key = format!("{:064x}", 1);
-        assert_eq!(parse_secret_key_hex(&format!(" 0x{key} ")).unwrap()[31], 1);
-        assert!(parse_secret_key_hex(&"00".repeat(32)).is_err());
-        assert!(parse_secret_key_hex(&hex::encode(CHEETAH_N)).is_err());
-        assert!(parse_secret_key_hex(&"ff".repeat(32)).is_err());
-        for invalid in ["1", "zprv-invalid", &"gg".repeat(32), &"01".repeat(33)] {
-            assert!(parse_secret_key_hex(invalid).is_err());
-        }
-        let mut largest = CHEETAH_N;
-        for byte in largest.iter_mut().rev() {
-            let (next, borrow) = byte.overflowing_sub(1);
-            *byte = next;
-            if !borrow {
-                break;
-            }
-        }
+    fn stored_signing_wallet_round_trips_without_hd_fields() {
+        let mut scalar = [0u8; 32];
+        scalar[31] = 1;
+        let wallet: Wallet = serde_json::from_value(serde_json::json!({
+            "publicKey": "stored address",
+            "privateKey": bs58::encode(scalar).into_string()
+        }))
+        .unwrap();
+        let address = wallet.schnorr_pubkey().unwrap().to_hash().to_b58();
+        let restored: Wallet =
+            serde_json::from_str(&serde_json::to_string(&wallet).unwrap()).unwrap();
         assert_eq!(
-            *parse_secret_key_hex(&hex::encode(largest)).unwrap(),
-            largest
-        );
-    }
-
-    #[test]
-    fn raw_key_keeps_the_signing_address_without_hd_or_seed_material() {
-        let wallet = Wallet::from_key(&format!("{:064x}", 1)).unwrap();
-        assert_eq!(
-            wallet.public_key,
-            wallet.schnorr_pubkey().unwrap().to_hash().to_b58()
+            restored.schnorr_pubkey().unwrap().to_hash().to_b58(),
+            address
         );
         assert_eq!(
-            decode_private_key_bytes(&wallet.private_key).unwrap()[31],
-            1
+            restored.private_key_t8().unwrap(),
+            wallet.private_key_t8().unwrap()
         );
-        assert!(wallet.seedphrase.is_none());
-        assert!(wallet.extended_private_key.is_none());
-        assert!(wallet.extended_public_key.is_none());
-        assert!(wallet.chain_code.is_none());
+        assert!(restored.seedphrase.is_none());
+        assert!(restored.extended_private_key.is_none());
     }
 }

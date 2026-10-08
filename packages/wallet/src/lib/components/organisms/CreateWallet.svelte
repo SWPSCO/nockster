@@ -5,7 +5,7 @@
   import { nextWalletName } from '../../utils/walletName';
   import { generateMnemonic } from '../../utils/vaultBridge';
   import { validateWalletKey } from '../../../vaultController';
-  import { type WalletCandidate, type RecoveryKind } from '../../services/vanity';
+  import { type WalletCandidate } from '../../services/vanity';
   import { vanitySession as search } from '../../stores/vanitySession';
   import { expectedVanityAttempts, formatVanityDuration } from '../../utils/vanityEstimate';
   import Header from '../molecules/Header.svelte';
@@ -19,10 +19,8 @@
   let miningExpanded = !!session.options;
   let prefix = session.options?.prefix ?? '';
   let insensitive = session.options?.insensitive ?? false;
-  let keyMode: RecoveryKind = session.options?.keyMode ?? 'mnemonic';
   let backend: 'auto' | 'cpu' = session.options?.backend ?? 'auto';
   let lanes = session.options?.lanes ?? 4096;
-  let steps = session.options?.steps ?? 1;
   let maxAttempts = session.options?.maxAttempts ?? 0;
   let progress = session.progress;
   let busy = false;
@@ -65,10 +63,6 @@
     search.clear();
     error = '';
   }
-  function changeRecovery() {
-    lanes = keyMode === 'raw' ? 64 : 4096;
-    resetSearch();
-  }
   async function continueWith(candidate: WalletCandidate) {
     busy = true;
     error = '';
@@ -108,10 +102,9 @@
       search.start(name.trim(), {
         prefix,
         insensitive,
-        keyMode,
+        keyMode: 'mnemonic',
         backend,
         lanes,
-        steps,
         maxAttempts
       });
     } catch (failure) {
@@ -203,19 +196,7 @@
             a / 4 · b / 8 · e / 3 · i / 1 · l / 1 · o / 0 · s / 5 · t / 7 · z / 2<br />i and l stay
             distinct.
           </p>{/if}
-        <label class="field" for="vanity-recovery"
-          >Recovery
-          <select
-            id="vanity-recovery"
-            aria-label="Recovery"
-            bind:value={keyMode}
-            on:change={changeRecovery}
-            ><option value="mnemonic">24-word seed phrase</option><option value="raw"
-              >Secret key (no phrase)</option
-            ></select
-          >
-        </label>
-        <p class="hint">Seed phrases take longer to find. A secret key has no recovery phrase.</p>
+        <p class="hint">Back up your wallet with a 24-word seed phrase.</p>
         <details bind:open={advanced}>
           <summary>Search settings</summary>
           <div class="advanced">
@@ -236,21 +217,11 @@
                   id="vanity-lanes"
                   type="number"
                   min="1"
-                  max={keyMode === 'raw' ? 256 : 4096}
+                  max="4096"
                   bind:value={lanes}
                   on:input={resetSearch}
                 /></label
               >
-              {#if keyMode === 'raw'}<label class="field" for="vanity-steps"
-                  >Steps per batch<input
-                    id="vanity-steps"
-                    type="number"
-                    min="1"
-                    max="16"
-                    bind:value={steps}
-                    on:input={resetSearch}
-                  /></label
-                >{/if}
             </div>
             <label class="field" for="vanity-limit"
               >Attempt limit<input

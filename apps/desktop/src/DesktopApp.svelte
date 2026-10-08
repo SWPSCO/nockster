@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readWalletFile } from './wallet-file';
   import { onMount } from 'svelte';
   import App from '../../../packages/wallet/src/App.svelte';
   import { router, type Route } from '../../../packages/wallet/src/lib/stores/router';
@@ -36,7 +37,6 @@
   const flowRoutes: Route[] = [
     'welcome',
     'create-wallet',
-    'backup-secret-key',
     'lock-screen',
     'seed-phrase',
     'confirm-seed',
@@ -209,7 +209,7 @@
       'hardware-wallet'
     ].includes(activeRoute)}
   >
-    <App allowHardwareWhileLocked>
+    <App allowHardwareWhileLocked {readWalletFile}>
       <HardwareWorkspace slot="hardware" />
       <AppUpdates slot="desktop-updates" />
       <DesktopSend slot="send" />

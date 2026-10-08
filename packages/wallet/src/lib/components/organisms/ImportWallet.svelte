@@ -1,5 +1,6 @@
 <script lang="ts">
   import { get } from 'svelte/store';
+  import { onDestroy } from 'svelte';
   import { walletStore } from '../../stores/wallet';
   import { nextWalletName } from '../../utils/walletName';
   import Header from '../molecules/Header.svelte';
@@ -8,15 +9,51 @@
   export let onImport: (seedPhrase: string, walletName: string) => Promise<void> | void = () => {};
   export let onBack: () => void = () => {};
   export let showHeader: boolean = true;
+  export let readWalletFile:
+    ((file: File) => Promise<{ phrase: string; address: string }[]>) | undefined = undefined;
+  let fileWallets: { phrase: string; address: string }[] = [];
+  let selectedWallet = '';
+  let readingFile = false;
+  let fileRead = 0;
+  function clearFile() {
+    fileRead++;
+    fileWallets.forEach(wallet => {
+      wallet.phrase = '';
+    });
+    fileWallets = [];
+    selectedWallet = '';
+    readingFile = false;
+  }
+  onDestroy(clearFile);
+  async function selectFile(event: Event) {
+    clearFile();
+    seedPhrase = '';
+    error = '';
+    const file = (event.currentTarget as HTMLInputElement).files?.[0];
+    if (!file || !readWalletFile) return;
+    const generation = fileRead;
+    readingFile = true;
+    try {
+      const wallets = await readWalletFile(file);
+      if (generation !== fileRead) {
+        wallets.forEach(wallet => {
+          wallet.phrase = '';
+        });
+        return;
+      }
+      fileWallets = wallets;
+      selectedWallet = wallets.length === 1 ? '0' : '';
+    } catch (failure) {
+      if (generation === fileRead)
+        error = failure instanceof Error ? failure.message : 'Unable to read wallet file.';
+    } finally {
+      if (generation === fileRead) readingFile = false;
+    }
+  }
 
   let seedPhrase = '';
-  let importKind: 'mnemonic' | 'raw' | 'extended' = 'mnemonic';
-  $: inputLabel =
-    importKind === 'mnemonic'
-      ? 'Seed phrase'
-      : importKind === 'raw'
-        ? 'Secret key · hex'
-        : 'Extended private key';
+  let importKind: 'mnemonic' | 'extended' | 'file' = 'mnemonic';
+  $: inputLabel = importKind === 'mnemonic' ? 'Seed phrase' : 'Extended private key';
   let walletName = nextWalletName(get(walletStore).wallets.map(wallet => wallet.name));
   $: nameExists = $walletStore.wallets.some(wallet => wallet.name === walletName.trim());
   let error = '';
@@ -31,16 +68,19 @@
     error = '';
     if (nameExists) return;
 
+    if (importKind === 'file') {
+      if (selectedWallet === '' || !fileWallets[Number(selectedWallet)]) {
+        error = 'Choose a wallet from your wallet file.';
+        return;
+      }
+      seedPhrase = fileWallets[Number(selectedWallet)].phrase;
+    }
     if (!seedPhrase.trim()) {
       error = `Enter your ${inputLabel.toLowerCase()}.`;
       return;
     }
     if (importKind === 'mnemonic' && !validateSeedPhrase(seedPhrase)) {
       error = 'Enter exactly 24 recovery words.';
-      return;
-    }
-    if (importKind === 'raw' && !/^(?:0x)?[a-fA-F0-9]{64}$/i.test(seedPhrase.trim())) {
-      error = 'Enter a 64-character hexadecimal secret key.';
       return;
     }
     if (importKind === 'extended' && !seedPhrase.trim().startsWith('zprv')) {
@@ -54,6 +94,7 @@
       // Call the import function and wait for it to complete
       await onImport(seedPhrase.trim(), walletName.trim());
       seedPhrase = '';
+      clearFile();
       // If successful, the parent component will handle navigation
     } catch (err) {
       error =
@@ -74,7 +115,7 @@
   <div class="import-content">
     <div class="import-header">
       <h2 class="import-title">Import Wallet</h2>
-      <p class="import-subtitle">Restore a wallet with your recovery phrase or private key.</p>
+      <p class="import-subtitle">Restore a wallet with your seed phrase or extended private key.</p>
     </div>
 
     <div class="import-form">
@@ -104,42 +145,70 @@
           bind:value={importKind}
           on:change={() => {
             seedPhrase = '';
+            clearFile();
             error = '';
           }}
           disabled={isImporting}
         >
           <option value="mnemonic">24-word seed phrase</option>
-          <option value="raw">Secret key · hex</option>
-          <option value="extended">Extended private key</option>
+          <option value="extended">Extended private key · zprv</option>
+          {#if readWalletFile}<option value="file">Nockchain wallet file</option>{/if}
         </select>
       </div>
-      <div class="form-group">
-        <label for="seed-phrase" class="form-label">{inputLabel}</label>
-        <textarea
-          id="seed-phrase"
-          class="textarea-field"
-          class:error
-          placeholder={importKind === 'mnemonic'
-            ? 'Enter your 24 words…'
-            : importKind === 'raw'
-              ? '64 hexadecimal characters'
-              : 'zprv…'}
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-          bind:value={seedPhrase}
-          disabled={isImporting}
-          rows="4"
-        ></textarea>
-        <p class="helper-text">
-          {importKind === 'mnemonic'
-            ? 'Enter the words separated by spaces.'
-            : importKind === 'raw'
-              ? 'A 32-byte private signing key. An optional 0x prefix is accepted. This wallet has no seed phrase.'
+      {#if importKind === 'file'}
+        <div class="form-group">
+          <label for="wallet-file" class="form-label">Nockchain wallet file</label>
+          <input
+            id="wallet-file"
+            class="input-field"
+            type="file"
+            on:change={selectFile}
+            disabled={isImporting}
+          />
+          <p class="helper-text">
+            Choose a keys.export file containing a seed phrase. Your file is read locally on this
+            device.
+          </p>
+          {#if readingFile}<p class="helper-text" role="status">Reading wallet file…</p>{/if}
+          {#if fileWallets.length > 1}
+            <label for="file-wallet" class="form-label">Wallet to import</label>
+            <select
+              id="file-wallet"
+              class="input-field"
+              bind:value={selectedWallet}
+              disabled={isImporting}
+            >
+              <option value="" disabled>Choose a wallet address</option>
+              {#each fileWallets as wallet, index}<option value={String(index)}
+                  >{wallet.address}</option
+                >{/each}
+            </select>
+          {:else if fileWallets.length === 1}
+            <p class="file-address" role="status">Wallet address: {fileWallets[0].address}</p>
+          {/if}
+        </div>
+      {:else}
+        <div class="form-group">
+          <label for="seed-phrase" class="form-label">{inputLabel}</label>
+          <textarea
+            id="seed-phrase"
+            class="textarea-field"
+            class:error
+            placeholder={importKind === 'mnemonic' ? 'Enter your 24 words…' : 'zprv…'}
+            spellcheck="false"
+            autocomplete="off"
+            autocapitalize="off"
+            bind:value={seedPhrase}
+            disabled={isImporting}
+            rows="4"
+          ></textarea>
+          <p class="helper-text">
+            {importKind === 'mnemonic'
+              ? 'Enter the words separated by spaces.'
               : 'Paste your zprv extended private key.'}
-        </p>
-      </div>
-
+          </p>
+        </div>
+      {/if}
       {#if error}
         <div class="error-message">{error}</div>
       {/if}
@@ -151,7 +220,10 @@
       variant="primary"
       fullWidth={true}
       on:click={handleImport}
-      disabled={nameExists || isImporting}
+      disabled={nameExists ||
+        isImporting ||
+        readingFile ||
+        (importKind === 'file' && selectedWallet === '')}
     >
       {isImporting ? 'Importing...' : 'Import Wallet'}
     </Button>
@@ -159,6 +231,11 @@
 </div>
 
 <style>
+  .file-address {
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    margin-top: 12px;
+  }
   .button-footer {
     position: static;
     flex-shrink: 0;

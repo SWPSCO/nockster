@@ -17,7 +17,7 @@ test('native vanity recovery imports the mined address and survives vault lock',
 }) => {
   test.setTimeout(120_000);
   const password = 'synthetic vanity test password';
-  for (const kind of ['raw', 'mnemonic']) {
+  for (const kind of ['mnemonic']) {
     const searchId = `recover-${kind}`;
     const started = await request(page, 'vanityStart', {
       searchId,
@@ -35,8 +35,7 @@ test('native vanity recovery imports the mined address and survives vault lock',
     const { candidate, error } = await request(page, 'vanityTake', { searchId });
     expect(error).toBeUndefined();
     expect(candidate.address).toMatch(/^2/);
-    if (kind === 'raw') expect(candidate.key).toMatch(/^[0-9a-f]{64}$/);
-    else expect(candidate.key.split(' ')).toHaveLength(24);
+    expect(candidate.key.split(' ')).toHaveLength(24);
     expect((await request(page, 'vanityTake', { searchId })).error).toBeTruthy();
     const imported = await request(page, 'import', { name: kind, password, key: candidate.key });
     expect(imported.error).toBeUndefined();
@@ -56,7 +55,15 @@ test('native vanity recovery imports the mined address and survives vault lock',
 test('native vanity limits, cancellation, stale controls and locking discard candidates', async ({
   page
 }) => {
-  const vanity = { prefix: 'zzzzzzzzzzzzzz', keyMode: 'raw', backend: 'cpu', maxAttempts: 1 };
+  const vanity = { prefix: 'zzzzzzzzzzzzzz', keyMode: 'mnemonic', backend: 'cpu', maxAttempts: 1 };
+  expect(
+    (
+      await request(page, 'vanityStart', {
+        searchId: 'invalid',
+        vanity: { ...vanity, keyMode: 'raw' }
+      })
+    ).error
+  ).toBeTruthy();
   expect(
     (
       await request(page, 'import', {
@@ -110,7 +117,7 @@ test('mobile bridge imports a generated zprv and restores its address after relo
 test('native search session exposes resumable public state and remains usable after cancellation', async ({
   page
 }) => {
-  const vanity = { prefix: 'zzzzzzzzzzzzzz', keyMode: 'raw', backend: 'cpu', maxAttempts: 0 };
+  const vanity = { prefix: 'zzzzzzzzzzzzzz', keyMode: 'mnemonic', backend: 'cpu', maxAttempts: 0 };
   await request(page, 'vanityStart', { searchId: 'background', name: 'Mined Wallet', vanity });
   const resumed = await request(page, 'status');
   expect(resumed.state.vanitySearch).toMatchObject({
@@ -174,13 +181,13 @@ test('cancelling a native search does not wait for an in-flight network refresh'
       await request(page, 'import', {
         name: 'Cancel test',
         password: 'synthetic cancel test password',
-        key: '0'.repeat(63) + '1'
+        key: 'fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float'
       })
     ).error
   ).toBeUndefined();
   await request(page, 'vanityStart', {
     searchId: 'cancel-busy',
-    vanity: { prefix: 'zzzzzzzzzzzzzz', keyMode: 'raw', backend: 'cpu' }
+    vanity: { prefix: 'zzzzzzzzzzzzzz', keyMode: 'mnemonic', backend: 'cpu' }
   });
   hold = true;
   await page.evaluate(() => {

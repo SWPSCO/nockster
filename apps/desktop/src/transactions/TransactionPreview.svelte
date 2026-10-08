@@ -51,7 +51,6 @@
   $: height = rows * row;
   $: inputOffset = (height - inputRows * row) / 2;
   $: outputOffset = (height - (outputs.length + 2) * row) / 2;
-  $: selectedTotal = notes.reduce((sum, note) => sum + BigInt(note.assets), 0n);
 </script>
 
 <section class="transaction-preview" aria-label="Transaction preview">
@@ -162,9 +161,5 @@
       </div>
     </div>
   </div>
-  <div class="preview-caption">
-    <span>{formatComposerAmount(selectedTotal, units)} selected</span><span
-      >Preview updates as you edit</span
-    >
-  </div>
+  <slot />
 </section>

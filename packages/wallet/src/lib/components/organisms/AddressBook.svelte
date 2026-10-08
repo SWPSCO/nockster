@@ -8,6 +8,7 @@
 
   export const onAddContact: () => void = () => {};
   export let onSelectContact: (contact: any) => void = () => {};
+  export let desktopLayout = false;
   export let onBack: () => void = () => {};
 
   let returnTo: string | null = null;
@@ -266,8 +267,9 @@
                 rel="noopener noreferrer"
                 class="btn-icon"
                 title="View on Nockblocks"
+                aria-label="View on Nockblocks"
               >
-                ↗
+                {desktopLayout ? '🌐' : '↗'}
               </a>
               <button
                 class="btn-icon send"

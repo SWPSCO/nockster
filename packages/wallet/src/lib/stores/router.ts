@@ -5,7 +5,6 @@ import { ROUTES } from '../constants';
 export type Route =
   | 'welcome'
   | 'create-wallet'
-  | 'backup-secret-key'
   | 'seed-phrase'
   | 'confirm-seed'
   | 'password-creation'

@@ -179,10 +179,10 @@ test('composer selects real notes, builds and exports a draft, invalidates edits
   await page.getByLabel('Amount (NOCK)', { exact: true }).fill('10');
   await page.getByRole('button', { name: 'Build Draft', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Review & Sign', exact: true })).toBeVisible();
-  await expect(page.locator('.composer > fieldset .summary')).toContainText('41.5 NOCK');
+  await expect(page.locator('.composer .compact-draft')).toContainText('41.5 NOCK');
   const downloading = page.waitForEvent('download');
   await page
-    .locator('.composer > fieldset')
+    .locator('.transaction-preview')
     .getByRole('button', { name: 'Download Draft', exact: true })
     .click();
   expect((await downloading).suggestedFilename()).toMatch(/\.psnt$/);
@@ -248,9 +248,15 @@ test('composer picks contacts in place and previews the form in the selected uni
     .getByRole('navigation', { name: 'Main' })
     .getByRole('button', { name: 'Send', exact: true })
     .click();
+  const paymentHeading = await page.locator('.transaction-heading').boundingBox();
   await page.getByRole('tab', { name: 'Compose', exact: true }).click();
+  const composeHeading = await page.locator('.transaction-heading').boundingBox();
+  expect(composeHeading!.width).toBe(paymentHeading!.width);
+  expect(composeHeading!.x).toBe(paymentHeading!.x);
   const preview = page.getByRole('region', { name: 'Transaction preview', exact: true });
   await expect(preview.locator('.input-node')).toContainText('Select input notes');
+  await expect(preview.getByRole('button', { name: 'Build Draft', exact: true })).toBeVisible();
+  await expect(preview.locator('.compact-draft')).toHaveCount(1);
   await expect(preview.getByText('Editing', { exact: true })).toBeVisible();
   expect(
     await page

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readWalletFile } from './wallet-file';
   import { onMount } from 'svelte';
   import App from '../../../packages/wallet/src/App.svelte';
   import { router, type Route } from '../../../packages/wallet/src/lib/stores/router';
@@ -12,6 +13,8 @@
   import { firmwareUpdate } from './hardware/firmware';
   import DesktopSend from './transactions/DesktopSend.svelte';
   import AppUpdates from './updates/AppUpdates.svelte';
+  import UpdateOverlay from './updates/UpdateOverlay.svelte';
+  import { desktopUpdates } from './updates/session';
   import TransactionReview from './transactions/TransactionReview.svelte';
   import JamTransaction from '../../../packages/wallet/src/lib/components/organisms/JamTransaction.svelte';
 
@@ -34,7 +37,6 @@
   const flowRoutes: Route[] = [
     'welcome',
     'create-wallet',
-    'backup-secret-key',
     'lock-screen',
     'seed-phrase',
     'confirm-seed',
@@ -74,8 +76,12 @@
     const showError = (event: Event) => {
       error = (event as CustomEvent<string>).detail;
     };
+    const stopUpdates = desktopUpdates.start();
     window.addEventListener('desktop-error', showError);
-    return () => window.removeEventListener('desktop-error', showError);
+    return () => {
+      stopUpdates();
+      window.removeEventListener('desktop-error', showError);
+    };
   });
 </script>
 
@@ -122,6 +128,42 @@
             aria-hidden="true"
           ></span>{/if}
       </button>
+      <button
+        disabled={!canNavigate}
+        aria-current={activeRoute === 'settings' ? 'page' : undefined}
+        onclick={() => router.navigate('settings')}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          aria-hidden="true"
+          ><path d="M4 7h16M4 17h16" /><circle
+            cx="9"
+            cy="7"
+            r="3"
+            fill="var(--color-surface)"
+          /><circle cx="15" cy="17" r="3" fill="var(--color-surface)" /></svg
+        >
+        Settings
+      </button>
+      <button
+        disabled={!locked && !canNavigate}
+        onclick={() => (locked ? router.navigate('lock-screen') : lock())}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          aria-hidden="true"
+          ><rect x="5" y="10" width="14" height="11" rx="2" /><path
+            d={locked ? 'M8 10V6a4 4 0 0 1 8 0v4' : 'M8 10V6a4 4 0 0 1 8 0'}
+          /></svg
+        >
+        {locked ? 'Unlock software wallets' : 'Lock wallet'}
+      </button>
     </nav>
     {#if canNavigate}
       <div class="desktop-wallets">
@@ -155,21 +197,6 @@
         {/each}
       </div>
     {/if}
-    <div class="desktop-sidebar-bottom">
-      <button
-        disabled={!canNavigate}
-        aria-current={activeRoute === 'settings' ? 'page' : undefined}
-        onclick={() => router.navigate('settings')}>Settings</button
-      >
-      {#if locked}<button onclick={() => router.navigate('lock-screen')}
-          >Unlock software wallets</button
-        >
-      {:else}<button disabled={!canNavigate} onclick={lock}
-          >Lock wallet <kbd>⇧ {navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} L</kbd></button
-        >{/if}
-      <div class="desktop-network">Nockchain <span>Mainnet</span></div>
-      <AppUpdates />
-    </div>
   </aside>
   <div
     bind:this={workspace}
@@ -182,8 +209,9 @@
       'hardware-wallet'
     ].includes(activeRoute)}
   >
-    <App allowHardwareWhileLocked>
+    <App allowHardwareWhileLocked {readWalletFile}>
       <HardwareWorkspace slot="hardware" />
+      <AppUpdates slot="desktop-updates" />
       <DesktopSend slot="send" />
       <svelte:fragment slot="transaction" let:jam let:origin let:toSign>
         {#if jam}
@@ -194,6 +222,7 @@
       </svelte:fragment>
     </App>
   </div>
+  <UpdateOverlay />
   {#if error}
     <div class="desktop-error" role="alert">
       <span>{error}</span><button onclick={() => (error = '')} aria-label="Dismiss error"

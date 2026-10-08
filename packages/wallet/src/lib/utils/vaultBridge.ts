@@ -114,7 +114,7 @@ export function clearPendingWallet(): void {
 /**
  * Import a wallet into the vault
  * @param nickname - Wallet name/nickname
- * @param key - A 24-word mnemonic, extended private key, or 32-byte secret key in hex
+ * @param key - A 24-word mnemonic or zprv extended private key
  */
 export async function importWalletToVault(
   nickname: string,

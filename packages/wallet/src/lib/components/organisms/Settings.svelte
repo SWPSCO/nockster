@@ -189,6 +189,8 @@
         <span class="setting-value">{import.meta.env.VITE_APP_VERSION}</span>
       </div>
 
+      <slot name="updates" />
+
       <div class="setting-item">
         <span class="setting-label">Terms of Service</span>
         <button class="btn-text">View →</button>

@@ -662,51 +662,69 @@
         </div>
       {/each}
     </section>
-    <section class="transaction-section">
-      <div class="summary" aria-label="Draft summary">
-        <h2>Draft summary</h2>
-        <div class="summary-row">
-          <span>Selected inputs · {selectedNotes.length}</span><span class="value"
-            >{money(selectedTotal)}<span class="usd-value">{usd(selectedTotal)}</span></span
-          >
-        </div>
-        <div class="summary-row">
-          <span>Outputs · {outputs.length}</span><span class="value"
-            >{outputTotal ? money(outputTotal) : '—'}<span class="usd-value"
-              >{outputTotal ? usd(outputTotal) : ''}</span
-            ></span
-          >
-        </div>
-        <div class="summary-row">
-          <span>Network fee</span><span class="value"
-            >{currentDraft ? money(currentDraft.summary.total_fees) : '—'}<span class="usd-value"
-              >{usd(currentDraft?.summary.total_fees ?? null)}</span
-            ></span
-          >
-        </div>
-        <div class="summary-row">
-          <span>Change returned</span><span class="value"
-            >{refundTotal !== null ? money(refundTotal) : '—'}<span class="usd-value"
-              >{usd(refundTotal)}</span
-            ></span
-          >
-        </div>
-        <div class="summary-row total">
-          <span>Total sent + fee</span><span class="value"
-            >{currentDraft
-              ? money(outputTotal + BigInt(currentDraft.summary.total_fees))
-              : '—'}<span class="usd-value"
+  </fieldset>
+  <TransactionPreview
+    notes={selectedNotes}
+    {outputs}
+    {units}
+    fee={currentDraft?.summary.total_fees ?? null}
+    change={refundTotal}
+    sourceName={source.kind === 'wallet'
+      ? sourceWallet?.name || ''
+      : source.kind === 'multisig'
+        ? 'Multisig'
+        : source.kind === 'htlc'
+          ? 'HTLC'
+          : 'Input note'}
+    choices={addressChoices}
+  >
+    <div class="draft-footer">
+      <div class="summary compact-draft" aria-label="Draft summary">
+        <h3>Draft summary</h3>
+        <div class="draft-metrics">
+          <div class="summary-row">
+            <span>Selected inputs · {selectedNotes.length}</span><span class="value"
+              >{money(selectedTotal)}<span class="usd-value">{usd(selectedTotal)}</span></span
+            >
+          </div>
+          <div class="summary-row">
+            <span>Outputs · {outputs.length}</span><span class="value"
+              >{outputTotal ? money(outputTotal) : '—'}<span class="usd-value"
+                >{outputTotal ? usd(outputTotal) : ''}</span
+              ></span
+            >
+          </div>
+          <div class="summary-row">
+            <span>Network fee</span><span class="value"
+              >{currentDraft ? money(currentDraft.summary.total_fees) : '—'}<span class="usd-value"
+                >{usd(currentDraft?.summary.total_fees ?? null)}</span
+              ></span
+            >
+          </div>
+          <div class="summary-row">
+            <span>Change returned</span><span class="value"
+              >{refundTotal !== null ? money(refundTotal) : '—'}<span class="usd-value"
+                >{usd(refundTotal)}</span
+              ></span
+            >
+          </div>
+          <div class="summary-row total">
+            <span>Total sent + fee</span><span class="value"
               >{currentDraft
-                ? usd(outputTotal + BigInt(currentDraft.summary.total_fees))
-                : ''}</span
-            ></span
-          >
+                ? money(outputTotal + BigInt(currentDraft.summary.total_fees))
+                : '—'}<span class="usd-value"
+                >{currentDraft
+                  ? usd(outputTotal + BigInt(currentDraft.summary.total_fees))
+                  : ''}</span
+              ></span
+            >
+          </div>
         </div>
       </div>
       {#if error}<p class="transaction-error" role="alert">{error}</p>{/if}
       <div class="actions">
         <button
-          class="primary"
+          class="build-draft"
           disabled={building ||
             notesLoading ||
             selecting ||
@@ -723,8 +741,8 @@
             >Review & Sign</button
           >{/if}
       </div>
-    </section>
-  </fieldset>
+    </div>
+  </TransactionPreview>
   {#if currentDraft}
     <div bind:this={reviewElement}>
       <TransactionReview
@@ -735,19 +753,4 @@
       />
     </div>
   {/if}
-  <TransactionPreview
-    notes={selectedNotes}
-    {outputs}
-    {units}
-    fee={currentDraft?.summary.total_fees ?? null}
-    change={refundTotal}
-    sourceName={source.kind === 'wallet'
-      ? sourceWallet?.name || ''
-      : source.kind === 'multisig'
-        ? 'Multisig'
-        : source.kind === 'htlc'
-          ? 'HTLC'
-          : 'Input note'}
-    choices={addressChoices}
-  />
 </div>

@@ -892,7 +892,9 @@
                 focused: true
               });
             }}
-          />
+          >
+            <svelte:fragment slot="updates"><slot name="desktop-updates" /></svelte:fragment>
+          </Settings>
         {:else if currentRoute === 'import-wallet'}
           <ImportWallet
             onImport={(phrase, name) => handleWalletImported(phrase, name)}
@@ -917,7 +919,7 @@
             ><HardwareWallet onBack={() => router.navigate('wallet-management')} /></slot
           >
         {:else if currentRoute === 'address-book'}
-          <AddressBook onBack={() => router.navigate('settings')} />
+          <AddressBook desktopLayout={import.meta.env.MODE === 'desktop'} onBack={() => router.navigate('settings')} />
         {:else if currentRoute === 'lock-screen'}
           <LockScreen onUnlock={handleUnlock} />
         {:else if currentRoute === 'confirm-transaction'}

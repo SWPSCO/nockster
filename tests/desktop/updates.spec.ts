@@ -16,6 +16,19 @@ test('downloads automatically and locks the wallet only when restart is requeste
   });
   await page.goto('/');
   await createWallet(page);
+  await page.evaluate(async source => {
+    const { router } = await import(`${source}/lib/stores/router.ts`);
+    router.navigate('dashboard');
+  }, source);
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Wallet navigation' })
+      .getByRole('button', { name: /update/i })
+  ).toHaveCount(0);
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Settings', exact: true })
+    .click();
   await expect(page.getByText('Version 9.8.7 is ready.')).toBeVisible();
   expect(checks).toBe(1);
   expect(installs).toBe(0);
@@ -37,6 +50,15 @@ test('manual releases link to the trusted download site without installing', asy
     return { phase: 'manual', version: '9.8.7', downloaded: 0 };
   });
   await page.goto('/');
+  await createWallet(page);
+  await page.evaluate(async source => {
+    const { router } = await import(`${source}/lib/stores/router.ts`);
+    router.navigate('dashboard');
+  }, source);
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Settings', exact: true })
+    .click();
   await expect(page.getByText('Version 9.8.7 needs a new installer.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Restart to update' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Download from nockster.com' }).click();
@@ -56,6 +78,15 @@ test('failed checks offer retry and a manual download without blocking the walle
       : { phase: 'current', downloaded: 0 };
   });
   await page.goto('/');
+  await createWallet(page);
+  await page.evaluate(async source => {
+    const { router } = await import(`${source}/lib/stores/router.ts`);
+    router.navigate('dashboard');
+  }, source);
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Settings', exact: true })
+    .click();
   await expect(page.getByText('Update check failed. Try again later.')).toBeVisible();
   await page.getByRole('button', { name: 'Download from nockster.com' }).click();
   await expect
@@ -74,6 +105,19 @@ test('installation errors retain a manual installer link and release the overlay
   });
   await page.goto('/');
   await createWallet(page);
+  await page.evaluate(async source => {
+    const { router } = await import(`${source}/lib/stores/router.ts`);
+    router.navigate('dashboard');
+  }, source);
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Wallet navigation' })
+      .getByRole('button', { name: /update/i })
+  ).toHaveCount(0);
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Settings', exact: true })
+    .click();
   await page.getByRole('button', { name: 'Restart to update' }).click();
   await expect(page.getByRole('alert')).toContainText('Installer permission denied');
   await expect(page.getByText('Installing update…', { exact: true })).toHaveCount(0);
@@ -96,6 +140,15 @@ test('download progress and the installer link remain reachable at the minimum w
   });
   await page.setViewportSize({ width: 800, height: 640 });
   await page.goto('/');
+  await createWallet(page);
+  await page.evaluate(async source => {
+    const { router } = await import(`${source}/lib/stores/router.ts`);
+    router.navigate('dashboard');
+  }, source);
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Settings', exact: true })
+    .click();
   await expect(page.getByRole('progressbar', { name: 'App update download' })).toHaveAttribute(
     'value',
     '50'

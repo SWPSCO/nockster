@@ -1,3 +1,4 @@
+import { browserStorage as localStorage } from '../platform/browserStorage';
 // chrome.storage helpers for managing the serialized vault blob.
 // Falls back to localStorage when chrome.storage is unavailable (dev mode).
 

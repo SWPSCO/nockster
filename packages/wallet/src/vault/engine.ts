@@ -68,7 +68,7 @@ function updateActivity() {
 export function checkAutoLock(): boolean {
   // In-process clients enforce their session lifetime through the app lifecycle
   // and user activity tracking; the extension worker tracks vault activity.
-  if (['mobile', 'desktop'].includes(import.meta.env.MODE)) return false;
+  if (['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE)) return false;
   if (vaultKey === null || autoLockTimeoutMinutes === 0) {
     return false; // Already locked or auto-lock disabled
   }

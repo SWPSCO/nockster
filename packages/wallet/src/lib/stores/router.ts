@@ -1,3 +1,4 @@
+import { browserStorage as localStorage } from '../../platform/browserStorage';
 import { writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 import { ROUTES } from '../constants';
@@ -89,7 +90,7 @@ function createRouter() {
 
     // Load router state from Chrome storage
     loadFromStorage: async () => {
-      if (import.meta.env.MODE === 'desktop') return;
+      if (['desktop', 'urbit'].includes(import.meta.env.MODE)) return;
       return new Promise<void>(resolve => {
         if (typeof chrome !== 'undefined' && chrome.storage) {
           chrome.storage.local.get(['routerState'], result => {
@@ -114,7 +115,7 @@ function createRouter() {
 
     // Save router state to Chrome storage
     saveToStorage: (state: RouterState) => {
-      if (import.meta.env.MODE === 'desktop') return;
+      if (['desktop', 'urbit'].includes(import.meta.env.MODE)) return;
       if (typeof chrome !== 'undefined' && chrome.storage) {
         chrome.storage.local.set({ routerState: state });
       } else {

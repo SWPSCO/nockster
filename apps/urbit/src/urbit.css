@@ -1,0 +1,165 @@
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+.urbit-shell {
+  height: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.urbit-toolbar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(10px + env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) 10px
+    max(18px, env(safe-area-inset-left));
+  border-bottom: 1px solid var(--color-border);
+}
+.urbit-toolbar button,
+.backup-panel button {
+  padding: 8px 12px;
+  min-height: 44px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+.urbit-wallet {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
+  padding: clamp(12px, 3vw, 40px);
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+  scrollbar-gutter: stable;
+}
+.urbit-shell .urbit-wallet .nockster-wallet {
+  width: 100%;
+  max-width: 680px;
+  min-width: 0;
+  min-height: 100%;
+  height: auto;
+  margin-inline: auto;
+  overflow: visible;
+}
+.urbit-shell .nockster-wallet:has(.wallet-dashboard, .transaction-history, .wallet-management) {
+  max-width: 1080px;
+}
+.urbit-shell .urbit-wallet .wallet-content,
+.urbit-shell .urbit-wallet .route-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: auto;
+  overflow: visible;
+}
+.urbit-shell .route-content > * {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
+}
+.urbit-shell
+  .route-content
+  > *
+  > :is(.content, .create-content, .import-content, .backup-content, .receive-content) {
+  flex: 1 0 auto;
+  overflow: visible;
+}
+.urbit-shell .route-content > * > .content > * {
+  flex-shrink: 0;
+}
+.urbit-shell .route-content .button-footer {
+  position: static;
+  flex-shrink: 0;
+}
+.urbit-shell .route-content .header {
+  height: auto !important;
+  min-height: 68px !important;
+}
+.urbit-shell .route-content .header button:not(.wallet-selector) {
+  min-width: 44px;
+  min-height: 44px;
+}
+.urbit-shell .wallet-dashboard .transaction-list {
+  min-height: 200px;
+  overflow: visible;
+}
+.urbit-shell .route-content > .welcome-screen {
+  justify-content: center;
+  max-width: 440px;
+  width: 100%;
+  margin-inline: auto;
+  padding-block: 24px;
+}
+.urbit-shell .welcome-screen .welcome-content {
+  flex: 0;
+  padding: 24px 16px 40px;
+}
+.urbit-shell .welcome-center {
+  margin-top: 0;
+}
+.urbit-shell .lock-content {
+  max-width: 400px;
+  padding: 32px 16px;
+}
+.urbit-shell .unlock-form {
+  width: 100%;
+}
+.backup-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: clamp(20px, 4vw, 40px);
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+.backup-panel p {
+  margin: 12px 0;
+}
+.backup-panel input {
+  width: 100%;
+  margin: 8px 0 16px;
+  padding: 10px;
+}
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (min-width: 760px) {
+  .urbit-shell .wallet-dashboard .balance-display {
+    text-align: left;
+    padding-block: 40px 24px;
+  }
+  .urbit-shell .wallet-dashboard .balance-amount {
+    font-size: clamp(36px, 4vw, 54px);
+  }
+  .urbit-shell .wallet-dashboard .quick-actions {
+    max-width: 360px;
+    width: 100%;
+    margin-bottom: 32px;
+  }
+}
+@media (max-width: 480px) {
+  .urbit-wallet {
+    padding-inline: max(0px, env(safe-area-inset-left)) max(0px, env(safe-area-inset-right));
+    scrollbar-gutter: auto;
+  }
+  .urbit-shell input,
+  .urbit-shell textarea,
+  .urbit-shell select {
+    font-size: 16px;
+  }
+  .backup-actions > button {
+    flex: 1 1 100%;
+  }
+}

@@ -1,3 +1,4 @@
+import { browserStorage as localStorage } from '../../platform/browserStorage';
 import { pendingWithoutConfirmed } from '../utils/pendingStatus';
 import { bridgeFromRecipients, verifyBridgeTransaction } from '../utils/bridge';
 import { vaultStorage } from '../../platform/vault';
@@ -412,7 +413,7 @@ function createWalletStore() {
     },
 
     clearAllData: async () => {
-      if (import.meta.env.MODE === 'desktop') {
+      if (['desktop', 'urbit'].includes(import.meta.env.MODE)) {
         const { wipeVault } = await import('../../vaultController');
         await wipeVault();
         await vaultStorage.remove(['walletState']);
@@ -1087,7 +1088,7 @@ function createWalletStore() {
           };
         };
 
-        if (['mobile', 'desktop'].includes(import.meta.env.MODE)) {
+        if (['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE)) {
           try {
             const result = await vaultStorage.get(['walletState']);
             if (result.walletState) applyStoredState(await processWalletState(result.walletState));
@@ -1159,7 +1160,7 @@ function createWalletStore() {
           lastActivityTime: state.lastActivityTime // Save last activity time
         };
 
-        if (['mobile', 'desktop'].includes(import.meta.env.MODE)) {
+        if (['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE)) {
           saved = vaultStorage.set({ walletState: stateToSave });
         } else if (typeof chrome !== 'undefined' && chrome.storage) {
           saved = chrome.storage.local.set({ walletState: stateToSave });

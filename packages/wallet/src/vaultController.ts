@@ -11,7 +11,7 @@ import type {
 async function sendVaultMessage<T = unknown>(
   message: { type: string } & Record<string, unknown>
 ): Promise<T> {
-  if (['mobile', 'desktop'].includes(import.meta.env.MODE)) {
+  if (['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE)) {
     const { handleVaultMessage } = await import('./vault/engine');
     const response = await handleVaultMessage(message as import('./vault/engine').VaultMessage);
     if (!response.success) throw new Error(response.error || 'Vault operation failed');

@@ -1,3 +1,4 @@
+import { browserStorage as localStorage } from '../../platform/browserStorage';
 /**
  * Chrome Storage Utility
  * Provides a unified interface for Chrome storage with fallback to localStorage
@@ -120,10 +121,9 @@ class StorageManager {
     } else {
       // Estimate localStorage size
       let size = 0;
-      for (const key in localStorage) {
-        if (Object.prototype.hasOwnProperty.call(localStorage, key)) {
-          size += localStorage[key].length + key.length;
-        }
+      for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index)!;
+        size += (localStorage.getItem(key)?.length ?? 0) + key.length;
       }
       return size * 2; // Rough estimate (UTF-16)
     }

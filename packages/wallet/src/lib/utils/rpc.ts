@@ -549,7 +549,7 @@ export class NockchainRPC {
   }
 
   async submitTransaction(rawTransaction: string): Promise<string> {
-    if (['mobile', 'desktop'].includes(import.meta.env.MODE))
+    if (['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE))
       return (await import('../../platform/submission')).submitIrisV1Transaction(rawTransaction);
     return this.request<string>('submitTransaction', [{ rawTransaction }]);
   }

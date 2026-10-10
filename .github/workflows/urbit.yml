@@ -1,0 +1,69 @@
+name: Build and test Urbit desk
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: &urbit-paths
+      - 'apps/urbit/**'
+      - 'desk/**'
+      - 'build.zig'
+      - 'packages/wallet/**'
+      - 'packages/wallet-engine/**'
+      - 'scripts/build-wasm.sh'
+      - 'scripts/build-vanity.mjs'
+      - 'scripts/package-urbit.mjs'
+      - 'tests/urbit/**'
+      - 'tests/urbit-backup.test.ts'
+      - 'playwright.urbit.config.ts'
+      - 'package*.json'
+      - 'release-version.json'
+      - '.github/workflows/urbit.yml'
+      - '.github/actions/setup-js/**'
+  pull_request:
+    paths: *urbit-paths
+
+permissions:
+  contents: read
+
+jobs:
+  urbit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-js
+      - name: Install build tools
+        run: |
+          rustup toolchain install nightly-2025-02-14 --profile minimal --target wasm32-unknown-unknown
+          cargo +stable install wasm-pack --version 0.15.0 --locked
+          curl --fail --location https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz -o "$RUNNER_TEMP/zig.tar.xz"
+          echo "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            packages/wallet-engine/target
+            ~/.cache/zig/desk-deps
+          key: urbit-${{ runner.os }}-${{ hashFiles('packages/wallet-engine/Cargo.lock', 'build.zig') }}
+      - name: Build desk and release bundles
+        run: zig build release
+      - name: Test wallet and encrypted backups
+        run: |
+          node --experimental-strip-types --test tests/urbit-backup.test.ts
+          npx playwright install --with-deps chromium
+          npm run test:urbit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nockster-urbit
+          path: release/urbit/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: urbit-test-results
+          path: test-results/

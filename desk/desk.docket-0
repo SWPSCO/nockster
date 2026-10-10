@@ -1,0 +1,9 @@
+:~  title+'Nockster'
+    info+'Nockchain wallet with browser signing and encrypted backups'
+    color+0x16.171b
+    version+[0 1 0]
+    image+'/apps/nockster/nockster-logo.svg'
+    website+'https://nockster.com'
+    license+'UNLICENSED'
+    site+/apps/nockster
+==

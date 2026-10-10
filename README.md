@@ -9,6 +9,7 @@ build configuration, and native integrations.
 | Mobile wallet | [`apps/mobile`](apps/mobile) | Native SwiftUI and Android Compose apps with a Capacitor wallet bridge |
 | Browser extension | [`apps/extension`](apps/extension) | Chromium extension, popup, website approvals, and background worker |
 | Desktop wallet | [`apps/desktop`](apps/desktop) | Tauri wallet for Linux, macOS, and Windows |
+| Urbit wallet | [`apps/urbit`](apps/urbit), [`desk`](desk) | Static WASM wallet and encrypted ship backups; [build and installation](docs/urbit.md) |
 | Shared wallet | [`packages/wallet`](packages/wallet) | Svelte screens, wallet state, storage adapters, signing bridge, and shared assets |
 | Wallet engine | [`packages/wallet-engine`](packages/wallet-engine) | Rust vault, transaction signing, WASM bindings, and API models |
 | Hardware wallet | [`nockster-esp`](nockster-esp) | ESP32 firmware, protocol library, CLI, hardware companion GUI, web tools, enclosure, and manual |

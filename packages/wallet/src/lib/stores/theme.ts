@@ -1,3 +1,4 @@
+import { browserStorage as localStorage } from '../../platform/browserStorage';
 import { writable } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 

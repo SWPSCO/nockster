@@ -1,3 +1,4 @@
+import { browserStorage as localStorage } from '../../platform/browserStorage';
 import { writable, derived, get } from 'svelte/store';
 import type { Writable, Readable } from 'svelte/store';
 import type { Transaction, TransactionStatus } from '../types/index';

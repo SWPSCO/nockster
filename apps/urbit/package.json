@@ -1,0 +1,10 @@
+{
+  "name": "@nockster/urbit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode urbit",
+    "build:web": "vite build --mode urbit",
+    "preview": "vite preview --host 127.0.0.1 --port 5186 --strictPort"
+  }
+}

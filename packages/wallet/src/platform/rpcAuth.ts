@@ -4,13 +4,16 @@ import { NETWORK } from '../lib/constants';
 import { handleVaultMessage, type VaultMessage } from '../vault/engine';
 import { vaultStorage } from './vault';
 
-const inProcess = ['mobile', 'desktop'].includes(import.meta.env.MODE);
+const inProcess = ['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE);
+const throughShip =
+  import.meta.env.MODE === 'urbit' && location.pathname.startsWith('/apps/nockster');
 export const ACCOUNTS_URL = (import.meta.env.VITE_ACCOUNTS_URL || 'https://nockblocks.com').replace(
   /\/$/,
   ''
 );
 const network = import.meta.env.VITE_RPC_NETWORK || 'mainnet';
 type Credential = { key: string; expiresAt: string; id: string };
+type AccountSession = { cookie?: string };
 type Identity = {
   nickname: string;
   address: string;
@@ -77,18 +80,35 @@ async function identity(): Promise<Identity> {
   };
 }
 
-async function accounts<T>(path: string, who: Identity, body?: unknown): Promise<T> {
+async function accounts<T>(
+  path: string,
+  who: Identity,
+  body?: unknown,
+  session?: AccountSession
+): Promise<T> {
   check(who);
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
-  const response = await fetch(`${ACCOUNTS_URL}${path}`, {
+  const response = await fetch(`${throughShip ? '/nockster/accounts' : ACCOUNTS_URL}${path}`, {
     method: body === undefined ? 'GET' : 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    credentials: throughShip ? 'same-origin' : 'include',
+    redirect: 'error',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      ...(throughShip ? { 'X-Nockster-Proxy': '1' } : {}),
+      ...(throughShip && session?.cookie ? { 'X-Nockster-Session': session.cookie } : {})
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal
   });
   check(who);
   if (!response.ok) throw new Error(`Nockblocks sign-in failed (${response.status})`);
+  if (throughShip && session && path === '/auth/iris/token') {
+    const cookie = response.headers.get('x-nockster-session')?.split(';', 1)[0];
+    if (!cookie || !/^[^\s=;,]+=[^\s;,]+$/.test(cookie))
+      throw new Error('Nockblocks did not issue a sign-in session.');
+    session.cookie = cookie;
+  }
   const result: T = await response.json();
   check(who);
   return result;
@@ -106,7 +126,7 @@ function valid(value: unknown): value is Credential {
   );
 }
 
-async function authenticate(who: Identity) {
+async function authenticate(who: Identity, session: AccountSession) {
   const origin = globalThis.location.origin;
   const challenge = await accounts<{
     challenge_id: string;
@@ -143,16 +163,21 @@ async function authenticate(who: Identity) {
     message: expected
   });
   check(who);
-  await accounts('/auth/iris/token', who, {
-    address: who.address,
-    account_type: 'v1',
-    challenge_id: challenge.challenge_id,
-    nonce: challenge.nonce,
-    message: expected,
-    ...signed,
-    origin,
-    link_account: false
-  });
+  await accounts(
+    '/auth/iris/token',
+    who,
+    {
+      address: who.address,
+      account_type: 'v1',
+      challenge_id: challenge.challenge_id,
+      nonce: challenge.nonce,
+      message: expected,
+      ...signed,
+      origin,
+      link_account: false
+    },
+    session
+  );
 }
 
 async function obtain(who: Identity): Promise<Credential> {
@@ -169,17 +194,27 @@ async function obtain(who: Identity): Promise<Credential> {
     if (valid(credential) && !rejected.has(credential.key)) return credential;
   }
 
-  await authenticate(who);
+  const session: AccountSession = {};
+  await authenticate(who, session);
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
   const result = await accounts<{ key: string; api_key: { id: string; expires_at: string } }>(
     '/auth/keys',
     who,
     {
-      name: import.meta.env.MODE === 'desktop' ? 'Nockster desktop' : inProcess ? 'Nockster mobile' : 'Nockster extension',
+      name:
+        import.meta.env.MODE === 'urbit'
+          ? 'Nockster Urbit'
+          : import.meta.env.MODE === 'desktop'
+            ? 'Nockster desktop'
+            : inProcess
+              ? 'Nockster mobile'
+              : 'Nockster extension',
       networks: [network],
       expires_at: expiresAt
-    }
+    },
+    session
   );
+  session.cookie = undefined;
   const credential = {
     key: result.key,
     id: result.api_key?.id,

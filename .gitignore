@@ -91,3 +91,7 @@ debug/
 .env
 
 /packages/wallet/public/vanity/
+
+# Assembled Urbit desk
+/.zig-cache/
+/zig-out/

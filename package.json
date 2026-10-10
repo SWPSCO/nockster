@@ -47,7 +47,11 @@
     "dev:desktop": "npm run dev --workspace @nockster/desktop --",
     "build:desktop": "npm run build --workspace @nockster/desktop --",
     "test:desktop": "playwright test --config playwright.desktop.config.ts",
-    "build:vanity": "node scripts/build-vanity.mjs"
+    "build:vanity": "node scripts/build-vanity.mjs",
+    "dev:urbit": "npm run dev --workspace @nockster/urbit --",
+    "build:urbit:web": "npm run build:web --workspace @nockster/urbit --",
+    "build:urbit": "zig build",
+    "test:urbit": "playwright test --config playwright.urbit.config.ts"
   },
   "devDependencies": {
     "@capacitor/cli": "8.5.2",

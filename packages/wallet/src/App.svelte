@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { browserStorage as localStorage } from './platform/browserStorage';
+
   export let allowHardwareWhileLocked = false;
   export let readWalletFile:
     ((file: File) => Promise<{ phrase: string; address: string }[]>) | undefined = undefined;
@@ -839,7 +841,7 @@
           />
         {:else if currentRoute === 'settings'}
           <Settings
-            showPopOut={import.meta.env.MODE !== 'desktop'}
+            showPopOut={!['desktop', 'urbit'].includes(import.meta.env.MODE)}
             onBack={() => router.navigate('dashboard')}
             onLogout={async () => {
               if (confirm('This will delete ALL wallet data. Are you sure?')) {

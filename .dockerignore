@@ -1,0 +1,11 @@
+# Keep the firmware build context small + reproducible.
+target/
+**/target/
+node_modules/
+**/node_modules/
+web/dist/
+crates/nockster-wasm/pkg/
+.git/
+.vendor-tmp-esp-rom-sys/
+*.pdf
+enclosure/

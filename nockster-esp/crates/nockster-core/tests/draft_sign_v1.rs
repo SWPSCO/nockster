@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 use nockapp::noun::slab::NounSlab;
-use nockapp::AtomExt;
+use nockapp::{AtomExt, NounAllocator, NounSpace};
 use nockvm::noun::{D, T};
 use noun_serde::{NounDecode, NounEncode};
 
@@ -11,13 +11,14 @@ use tx_types::transaction_types::{
     Chal, Coins, Hash, NName, SchnorrPubkey, Sig, Source, Spend, SpendBody, F6LT, T8,
 };
 use tx_types::transaction_types_v1::{
-    compute_tx_id_v1, LockMerkleProof, MerkleProof, NoteData, PkhSignature, PkhSignatureValue,
-    SeedV1, SeedsV1, SpendCondition, SpendV1, SpendsV1, Witness,
+    compute_tx_id_v1, Hax, LockMerkleProof, LockPrimitive, LockPrimitiveBody, MerkleProof,
+    NoteData, Pkh, PkhSignature, PkhSignatureValue, RawTransactionV1, SeedV1, SeedsV1,
+    SpendCondition, SpendV1, SpendsV1, Witness,
 };
 
 fn jam_single(noun: nockvm::noun::Noun) -> Vec<u8> {
     let mut slab: NounSlab = NounSlab::new();
-    let copied = slab.copy_into(noun);
+    let copied = slab.copy_into(noun, &NounSpace::empty());
     slab.set_root(copied);
     slab.jam().to_vec()
 }
@@ -114,7 +115,7 @@ fn sign_draft_v1_inserts_expected_signature() {
     let spend_body = SpendV1 {
         witness,
         seeds: tx_types::transaction_types_v1::SeedsV1 { set: ZSet::new() },
-        fee: Coins { value: 7 },
+        fee: Coins { value: 10_000_000 },
     };
     let spend = Spend {
         version: 1,
@@ -157,10 +158,10 @@ fn sign_draft_v1_inserts_expected_signature() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2)
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     // Verify the inserted signature matches signing the tx-types sig-hash.
@@ -174,7 +175,7 @@ fn sign_draft_v1_inserts_expected_signature() {
         panic!("expected SpendBody::V1");
     };
 
-    let msg5 = sv1.compute_sig_hash().values;
+    let msg5 = sv1.compute_sig_hash().expect("sig hash").values;
     let (chal, sig) = nockster_core::schnorr_sign_tx(sk_be, (pk_arr[0], pk_arr[1]), msg5);
 
     let inserted = sv1
@@ -228,7 +229,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
     let mut note_map: ZMap<String, UntypedNoun> = ZMap::new();
     let mut tmp: NounSlab = NounSlab::new();
     let val_noun = T(&mut tmp, &[D(1), D(2), D(3)]);
-    let val_untyped = UntypedNoun::from_noun(&val_noun).expect("untyped noun");
+    let val_untyped = UntypedNoun::from_noun(&val_noun, &tmp.noun_space()).expect("untyped noun");
     note_map.put("memo".to_string(), val_untyped);
     let note_data = NoteData { map: note_map };
 
@@ -268,7 +269,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
     let spend_body = SpendV1 {
         witness,
         seeds: SeedsV1 { set: seed_set },
-        fee: Coins { value: 7 },
+        fee: Coins { value: 10_000_000 },
     };
     let spend = Spend {
         version: 1,
@@ -310,10 +311,10 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2)
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     // Compute expected pubkey + pkh.
@@ -334,7 +335,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
         panic!("expected SpendBody::V1");
     };
 
-    let msg5 = sv1.compute_sig_hash().values;
+    let msg5 = sv1.compute_sig_hash().expect("sig hash").values;
     let (chal, sig) = nockster_core::schnorr_sign_tx(sk_be, (pk_arr[0], pk_arr[1]), msg5);
 
     let inserted = sv1
@@ -454,7 +455,7 @@ fn draft_review_v1_reports_totals_and_refund() {
             seeds: SeedsV1 {
                 set: external_seeds,
             },
-            fee: Coins { value: 7 },
+            fee: Coins { value: 10_000_000 },
         }),
     };
     let spend2 = Spend {
@@ -462,7 +463,7 @@ fn draft_review_v1_reports_totals_and_refund() {
         body: SpendBody::V1(SpendV1 {
             witness,
             seeds: SeedsV1 { set: refund_seeds },
-            fee: Coins { value: 3 },
+            fee: Coins { value: 10_000_000 },
         }),
     };
 
@@ -499,7 +500,7 @@ fn draft_review_v1_reports_totals_and_refund() {
     assert_eq!(review.external_output_count, 3);
     assert_eq!(review.external_total, 16);
     assert_eq!(review.refund_total, 4);
-    assert_eq!(review.fee_total, 10);
+    assert_eq!(review.fee_total, 20_000_000);
     assert!(review.minimum_fee > 0);
     assert_eq!(
         nockster_core::draft_sign::draft_outputs_v1(&draft_jam, &cfg).expect("draft outputs"),
@@ -565,7 +566,7 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
     let spend_body = SpendV1 {
         witness,
         seeds: SeedsV1 { set: ZSet::new() },
-        fee: Coins { value: 1 },
+        fee: Coins { value: 10_000_000 },
     };
     let spend = Spend {
         version: 1,
@@ -607,10 +608,10 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
     let tail_jam_after = jam_single(cell2.tail());
     assert_eq!(tail_jam_after, tail_jam_before, "tx:transact tail changed");
 
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&cell2.head())
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&cell2.head(), &slab2.noun_space())
         .expect("decode head raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     let spend_entry = signed_raw
@@ -622,7 +623,7 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
         panic!("expected SpendBody::V1");
     };
 
-    let msg5 = sv1.compute_sig_hash().values;
+    let msg5 = sv1.compute_sig_hash().expect("sig hash").values;
     let (chal, sig) = nockster_core::schnorr_sign_tx(sk_be, (pk_arr[0], pk_arr[1]), msg5);
     let inserted = sv1
         .witness
@@ -659,7 +660,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     let mut note_map: ZMap<String, UntypedNoun> = ZMap::new();
     let mut tmp: NounSlab = NounSlab::new();
     let val_noun = T(&mut tmp, &[D(1), D(2), D(3)]);
-    let val_untyped = UntypedNoun::from_noun(&val_noun).expect("untyped noun");
+    let val_untyped = UntypedNoun::from_noun(&val_noun, &tmp.noun_space()).expect("untyped noun");
     note_map.put("memo".to_string(), val_untyped);
     let note_data = NoteData { map: note_map };
 
@@ -686,7 +687,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     let spend_body = SpendV1 {
         witness,
         seeds: SeedsV1 { set: seed_set },
-        fee: Coins { value: 7 },
+        fee: Coins { value: 10_000_000 },
     };
     let spend = Spend {
         version: 1,
@@ -709,7 +710,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     slab.set_root(noun);
     let wallet_jam = slab.jam().to_vec();
 
-    let expected_id = compute_tx_id_v1(&wallet.spends);
+    let expected_id = compute_tx_id_v1(&wallet.spends).expect("tx id");
     let rewritten = nockster_core::draft_sign::rewrite_txid_v1(&wallet_jam)
         .expect("rewrite placeholder wallet tx-id");
     assert_eq!(rewritten.name, expected_id.to_b58());
@@ -720,7 +721,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
         .cue_into(Bytes::from(rewritten_jam.clone()))
         .expect("cue rewritten wallet");
     let rewritten_wallet =
-        WalletTransactionV1::from_noun(&rewrite_noun).expect("decode rewritten wallet");
+        WalletTransactionV1::from_noun(&rewrite_noun, &rewrite_slab.noun_space()).expect("decode rewritten wallet");
     assert_eq!(rewritten_wallet.name, expected_id.to_b58());
 
     let stable = nockster_core::draft_sign::rewrite_txid_v1(&rewritten_jam)
@@ -749,9 +750,9 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_wallet = WalletTransactionV1::from_noun(&noun2).expect("decode wallet v1");
+    let signed_wallet = WalletTransactionV1::from_noun(&noun2, &slab2.noun_space()).expect("decode wallet v1");
 
-    let computed_id = compute_tx_id_v1(&signed_wallet.spends);
+    let computed_id = compute_tx_id_v1(&signed_wallet.spends).expect("tx id");
     let parsed_id = Hash::from_b58(&signed_wallet.name).expect("wallet name decodes as hash");
     assert_eq!(
         parsed_id, computed_id,
@@ -776,7 +777,7 @@ fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
     let mut note_map: ZMap<String, UntypedNoun> = ZMap::new();
     let mut tmp: NounSlab = NounSlab::new();
     let val_noun = T(&mut tmp, &[D(1), D(2), D(3)]);
-    let val_untyped = UntypedNoun::from_noun(&val_noun).expect("untyped noun");
+    let val_untyped = UntypedNoun::from_noun(&val_noun, &tmp.noun_space()).expect("untyped noun");
     note_map.put("memo".to_string(), val_untyped);
     let note_data = NoteData { map: note_map };
 
@@ -803,7 +804,7 @@ fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
     let spend_body = SpendV1 {
         witness,
         seeds: SeedsV1 { set: seed_set },
-        fee: Coins { value: 7 },
+        fee: Coins { value: 10_000_000 },
     };
     let spend = Spend {
         version: 1,
@@ -855,8 +856,8 @@ fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
 
     let cell2 = cell1.tail().as_cell().expect("spends cell");
     let spends_noun2 = cell2.head();
-    let spends2 = SpendsV1::from_noun(&spends_noun2).expect("decode spends");
-    let computed_id = compute_tx_id_v1(&spends2);
+    let spends2 = SpendsV1::from_noun(&spends_noun2, &slab2.noun_space()).expect("decode spends");
+    let computed_id = compute_tx_id_v1(&spends2).expect("tx id");
     assert_eq!(name_str, computed_id.to_b58());
 }
 
@@ -923,7 +924,7 @@ fn sign_draft_v1_replaces_placeholder_when_map_full() {
     let spend_body = SpendV1 {
         witness,
         seeds: tx_types::transaction_types_v1::SeedsV1 { set: ZSet::new() },
-        fee: Coins { value: 7 },
+        fee: Coins { value: 10_000_000 },
     };
     let spend = Spend {
         version: 1,
@@ -965,10 +966,10 @@ fn sign_draft_v1_replaces_placeholder_when_map_full() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2)
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     let spend_entry = signed_raw
@@ -988,6 +989,251 @@ fn sign_draft_v1_replaces_placeholder_when_map_full() {
         sv1.witness.pkh.map.get(&placeholder_key).is_none(),
         "placeholder key should be evicted when the map is full"
     );
+}
+
+/// The no_std signer keeps only the canonical base58 spelling of the axis
+/// hash; decoding it must match tx-types' independent `Hash::from_b58`.
+#[test]
+fn lock_merkle_axis_hash_matches_tx_types() {
+    let expected = tx_types::transaction_types::Hash::from_b58(
+        nockster_core::draft_sign::LOCK_MERKLE_AXIS_HASH_B58,
+    )
+    .expect("canonical axis hash")
+    .values;
+    assert_eq!(
+        nockster_core::draft_sign::digest_from_b58(
+            nockster_core::draft_sign::LOCK_MERKLE_AXIS_HASH_B58
+        )
+        .expect("decode axis hash"),
+        expected
+    );
+}
+
+fn simple_pkh_draft(pkh: &Hash, fee: u64, tim: u64) -> (Vec<u8>, NName) {
+    let mut allowed = ZSet::new();
+    allowed.put(pkh.clone());
+    let spend_condition = SpendCondition {
+        p: vec![LockPrimitive {
+            header: "pkh".to_string(),
+            body: LockPrimitiveBody::Pkh(Pkh { m: 1, h: allowed }),
+        }],
+    };
+    let witness = Witness {
+        lmp: empty_full_lock_merkle_proof(spend_condition),
+        pkh: PkhSignature { map: ZMap::new() },
+        hax: ZMap::<Hash, UntypedNoun>::new(),
+        tim,
+    };
+    let spend = Spend {
+        version: 1,
+        body: SpendBody::V1(SpendV1 {
+            witness,
+            seeds: SeedsV1 { set: ZSet::new() },
+            fee: Coins { value: fee },
+        }),
+    };
+    let name = NName {
+        p: vec![Hash { values: [9; 5] }, Hash { values: [8; 5] }],
+    };
+    let mut spends_map: ZMap<NName, Spend> = ZMap::new();
+    spends_map.put(name.clone(), spend);
+    let raw = RawTransactionV1 {
+        version: 1,
+        id: Hash { values: [0; 5] },
+        spends: SpendsV1 { map: spends_map },
+    };
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = raw.to_noun(&mut slab);
+    slab.set_root(noun);
+    (slab.jam().to_vec(), name)
+}
+
+fn decode_signed(jam: &[u8]) -> RawTransactionV1 {
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = slab.cue_into(Bytes::from(jam.to_vec())).expect("cue signed");
+    RawTransactionV1::from_noun(&noun, &slab.noun_space()).expect("decode signed")
+}
+
+/// `%hax` must hash its commitment z-set exactly like `%pkh`'s hash set.
+/// Comparing the re-signed draft's id against tx-types' independent
+/// `compute_tx_id_v1` catches the old `"fake"` placeholder digest.
+#[test]
+fn hax_lock_tx_id_matches_tx_types() {
+    let sk_be = runtime_signer_scalar();
+
+    let mut commitments = ZSet::new();
+    commitments.put(Hash {
+        values: [7, 8, 9, 10, 11],
+    });
+    let spend_condition = SpendCondition {
+        p: vec![LockPrimitive {
+            header: "hax".to_string(),
+            body: LockPrimitiveBody::Hax(Hax { set: commitments }),
+        }],
+    };
+    let witness = Witness {
+        lmp: empty_full_lock_merkle_proof(spend_condition),
+        pkh: PkhSignature { map: ZMap::new() },
+        hax: ZMap::<Hash, UntypedNoun>::new(),
+        tim: 0,
+    };
+    let spend = Spend {
+        version: 1,
+        body: SpendBody::V1(SpendV1 {
+            witness,
+            seeds: SeedsV1 { set: ZSet::new() },
+            fee: Coins { value: 10_000_000 },
+        }),
+    };
+    let name = NName {
+        p: vec![Hash { values: [1; 5] }, Hash { values: [2; 5] }],
+    };
+    let mut spends_map: ZMap<NName, Spend> = ZMap::new();
+    spends_map.put(name, spend);
+    let raw = RawTransactionV1 {
+        version: 1,
+        id: Hash { values: [0; 5] },
+        spends: SpendsV1 { map: spends_map },
+    };
+    let mut slab: NounSlab = NounSlab::new();
+    let noun = raw.to_noun(&mut slab);
+    slab.set_root(noun);
+    let draft_jam = slab.jam().to_vec();
+
+    let signed = nockster_core::draft_sign::sign_draft_v1(
+        &draft_jam,
+        &nockster_core::draft_sign::SignerConfig { sk_be },
+    )
+    .expect("sign hax draft");
+    let signed_raw = decode_signed(&signed);
+    assert_eq!(
+        signed_raw.id,
+        compute_tx_id_v1(&signed_raw.spends).expect("tx id"),
+        "hax tx id must match tx-types/upstream hashing"
+    );
+}
+
+#[test]
+fn fee_policy_tracks_bythos_and_overrides() {
+    use nockster_core::draft_sign::{
+        draft_review_v1_with_policy, FeePolicy, BASE_FEE, BYTHOS_PHASE,
+    };
+
+    let sk_be = runtime_signer_scalar();
+    let pk_arr = nockster_core::cheetah_pub_from_sk(sk_be);
+    let pkh = SchnorrPubkey {
+        x: F6LT { values: pk_arr[0] },
+        y: F6LT { values: pk_arr[1] },
+        inf: false,
+    }
+    .to_hash();
+    let (draft_jam, _) = simple_pkh_draft(&pkh, 10_000_000, 0);
+    let cfg = nockster_core::draft_sign::SignerConfig { sk_be };
+    let default = FeePolicy::default();
+
+    let post =
+        draft_review_v1_with_policy(&draft_jam, &cfg, BYTHOS_PHASE, default).expect("post");
+    let pre = draft_review_v1_with_policy(&draft_jam, &cfg, BYTHOS_PHASE - 1, default).expect("pre");
+    assert!(
+        pre.minimum_fee > post.minimum_fee,
+        "pre-Bythos fees use 2x base and no witness discount"
+    );
+
+    let no_floor = FeePolicy {
+        min_fee: 0,
+        ..default
+    };
+    let single = draft_review_v1_with_policy(&draft_jam, &cfg, BYTHOS_PHASE, no_floor)
+        .expect("base fee")
+        .minimum_fee;
+    let doubled = draft_review_v1_with_policy(
+        &draft_jam,
+        &cfg,
+        BYTHOS_PHASE,
+        FeePolicy {
+            base_fee: BASE_FEE * 2,
+            ..no_floor
+        },
+    )
+    .expect("doubled base fee")
+    .minimum_fee;
+    assert_eq!(doubled, single * 2);
+
+    let floor = draft_review_v1_with_policy(
+        &draft_jam,
+        &cfg,
+        BYTHOS_PHASE,
+        FeePolicy {
+            base_fee: 0,
+            min_fee: 12_345,
+            ..default
+        },
+    )
+    .expect("floor")
+    .minimum_fee;
+    assert_eq!(floor, 12_345);
+
+    let shifted = FeePolicy {
+        bythos_phase: 1_000,
+        ..default
+    };
+    let before = draft_review_v1_with_policy(&draft_jam, &cfg, 999, shifted)
+        .expect("shifted pre")
+        .minimum_fee;
+    let after = draft_review_v1_with_policy(&draft_jam, &cfg, 1_000, shifted)
+        .expect("shifted post")
+        .minimum_fee;
+    assert!(before > after);
+}
+
+#[test]
+fn sign_draft_v1_rejects_fee_below_minimum() {
+    let sk_be = runtime_signer_scalar();
+    let pk_arr = nockster_core::cheetah_pub_from_sk(sk_be);
+    let pkh = SchnorrPubkey {
+        x: F6LT { values: pk_arr[0] },
+        y: F6LT { values: pk_arr[1] },
+        inf: false,
+    }
+    .to_hash();
+    let (draft_jam, _) = simple_pkh_draft(&pkh, 7, 0);
+    let err = nockster_core::draft_sign::sign_draft_v1(
+        &draft_jam,
+        &nockster_core::draft_sign::SignerConfig { sk_be },
+    )
+    .expect_err("underpaid draft must be rejected");
+    match err {
+        nockster_core::draft_sign::SignDraftError::FeeBelowMinimum { minimum, provided } => {
+            assert_eq!(provided, 7);
+            assert!(minimum > provided);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn sign_draft_v1_normalizes_nonzero_tim() {
+    let sk_be = runtime_signer_scalar();
+    let pk_arr = nockster_core::cheetah_pub_from_sk(sk_be);
+    let pkh = SchnorrPubkey {
+        x: F6LT { values: pk_arr[0] },
+        y: F6LT { values: pk_arr[1] },
+        inf: false,
+    }
+    .to_hash();
+    let (draft_jam, name) = simple_pkh_draft(&pkh, 10_000_000, 5);
+    let signed = nockster_core::draft_sign::sign_draft_v1(
+        &draft_jam,
+        &nockster_core::draft_sign::SignerConfig { sk_be },
+    )
+    .expect("sign nonzero-tim draft");
+    let signed_raw = decode_signed(&signed);
+    let spend = signed_raw.spends.map.get(&name).expect("spend");
+    let SpendBody::V1(sv1) = &spend.body else {
+        panic!("expected v1 spend");
+    };
+    assert_eq!(sv1.witness.tim, 0, "tim must be normalized like upstream");
+    assert_eq!(signed_raw.id, compute_tx_id_v1(&signed_raw.spends).expect("tx id"));
 }
 
 fn poke_tuple(arena: &mut pokenoun::Arena, elems: &[pokenoun::Noun]) -> pokenoun::Noun {

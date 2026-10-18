@@ -1,4 +1,5 @@
 use nockapp::noun::slab::NounSlab;
+use nockapp::NounAllocator;
 /// Compare flat array tip5_hash_words vs noun-based Tip5Hasher
 use nockster_core::cheetah::test_tip5_hash_words;
 use nockvm::noun::{Atom, Cell};
@@ -41,7 +42,8 @@ fn test_compare_hash_methods() {
         let atom = Atom::new(&mut slab, element).as_noun();
         list = Cell::new(&mut slab, atom, list).as_noun();
     }
-    let hash_noun = Tip5Hasher::hash_varlen(list).unwrap();
+    let space = slab.noun_space();
+    let hash_noun = Tip5Hasher::hash_varlen(list, &space).unwrap();
     println!("\nNoun-based hash (Tip5Hasher):");
     println!("  {:016x?}", hash_noun.values);
 

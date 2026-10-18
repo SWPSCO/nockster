@@ -1,7 +1,7 @@
 [package]
 name = "nockster-cli"
 authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -45,7 +45,7 @@ nockvm_macros = { workspace = true }
 
 
 nockster-core = { path = "../nockster-core", features = ["std", "alloc-path"] }
-tx-types = { workspace = true }
+tx-types = { workspace = true, features = ["std", "embedded"] }
 vanity = { workspace = true, features = ["export", "std"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

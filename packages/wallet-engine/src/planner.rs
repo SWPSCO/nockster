@@ -131,6 +131,8 @@ pub(crate) fn plan_spends(
         if needed == 0 {
             break;
         }
+        let spend_lock = spendable_lock(&note, source, height)
+            .ok_or_else(|| "selected input note is not spendable".to_string())?;
         let mut capacity = note.assets.value;
         let input_fee = capacity.min(remaining_fee);
         remaining_fee -= input_fee;
@@ -155,7 +157,15 @@ pub(crate) fn plan_spends(
         let mut merged: Vec<Output> = Vec::new();
         for output in allocated {
             if let Some(existing) = merged.iter_mut().find(|o| o.lock_root == output.lock_root) {
-                if existing.note_data.to_hash() != output.note_data.to_hash() {
+                let existing_hash = existing
+                    .note_data
+                    .to_hash()
+                    .map_err(|err| format!("note-data hash: {err}"))?;
+                let output_hash = output
+                    .note_data
+                    .to_hash()
+                    .map_err(|err| format!("note-data hash: {err}"))?;
+                if existing_hash != output_hash {
                     return Err("conflicting note data for the same output lock".into());
                 }
                 existing.amount = existing
@@ -166,6 +176,10 @@ pub(crate) fn plan_spends(
                 merged.push(output);
             }
         }
+        let proof_page = height.unwrap_or(tx_types::fee_calculator::BYTHOS_PHASE);
+        let parent_hash = note
+            .to_hash()
+            .map_err(|err| format!("input note hash: {err}"))?;
         let seeds = SeedsV1 {
             set: ZSet::gas(
                 merged
@@ -177,7 +191,7 @@ pub(crate) fn plan_spends(
                         gift: Coins {
                             value: output.amount,
                         },
-                        parent_hash: note.to_hash(),
+                        parent_hash: parent_hash.clone(),
                     })
                     .collect::<Vec<_>>(),
             ),
@@ -188,10 +202,7 @@ pub(crate) fn plan_spends(
                 version: 1,
                 body: SpendBody::V1(SpendV1 {
                     witness: Witness {
-                        lmp: build_lock_merkle_proof(
-                            spendable_lock(&note, source, height).expect("selected spendable note"),
-                            1,
-                        ),
+                        lmp: build_lock_merkle_proof(spend_lock, 1, proof_page),
                         pkh: PkhSignature { map: ZMap::new() },
                         hax: ZMap::new(),
                         tim: 0,
@@ -285,7 +296,7 @@ mod tests {
                 input.assets.value
             );
             for seed in seeds {
-                assert_eq!(seed.parent_hash, input.to_hash());
+                assert_eq!(seed.parent_hash, input.to_hash().expect("note hash"));
             }
             total_fee += body.fee.value;
         }

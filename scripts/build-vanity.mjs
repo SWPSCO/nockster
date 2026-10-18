@@ -8,7 +8,7 @@ const metadata = JSON.parse(
   execFileSync(
     cargo,
     [
-      '+nightly-2025-02-14',
+      '+nightly-2026-04-03',
       'metadata',
       '--locked',
       '--format-version',
@@ -38,7 +38,7 @@ execFileSync(
     env: {
       ...process.env,
       CARGO: cargo,
-      RUSTUP_TOOLCHAIN: 'nightly-2025-02-14',
+      RUSTUP_TOOLCHAIN: 'nightly-2026-04-03',
       CARGO_TARGET_DIR: resolve(root, 'packages/wallet-engine/target/vanity', revision)
     }
   }

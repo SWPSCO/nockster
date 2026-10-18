@@ -16,8 +16,11 @@ mod zmap;
 
 pub use noun_codec::{cue, jam, Arena, Noun};
 pub use tx_v1::{
-    cheetah_pubkey_pkh_lock_root_v1, cheetah_pubkey_pkh_v1, draft_outputs_v1, draft_review_v1,
-    draft_review_v1_for_pkh, message_digest_v1, noun_commitment_v1, rewrite_txid_v1, sign_draft_v1,
-    tip5_digest_b58, DraftOutputV1, DraftReviewV1, LockPrimitiveV1, LockSummaryV1, MultisigInputV1,
-    RewriteTxIdV1, SignDraftError, SignerConfig,
+    calculate_minimum_fee_v1, cheetah_pubkey_pkh_lock_root_v1, cheetah_pubkey_pkh_v1,
+    digest_from_b58, draft_outputs_v1, draft_review_v1, draft_review_v1_for_pkh,
+    draft_review_v1_for_pkh_with_policy, draft_review_v1_with_policy, message_digest_v1,
+    noun_commitment_v1, rewrite_txid_v1, sign_draft_v1, sign_draft_v1_with_policy, tip5_digest_b58,
+    DraftOutputV1, DraftReviewV1, FeePolicy, LockPrimitiveV1, LockSummaryV1, MultisigInputV1,
+    RewriteTxIdV1, SignDraftError, SignerConfig, BASE_FEE, BYTHOS_PHASE, INPUT_FEE_DIVISOR,
+    LOCK_MERKLE_AXIS_HASH_B58, MIN_FEE,
 };

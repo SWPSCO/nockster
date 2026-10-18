@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
+use nockapp::NounAllocator;
 use noun_serde::NounDecode;
 use std::fs;
 use tx_types::transaction_types::SpendBody;
@@ -40,13 +41,13 @@ fn compare_local_bythos_v1_tx_files() {
     // Try to decode the unsigned local fixture as RawTransactionV1.
     println!("\n--- local Bythos v1 unsigned tx ---");
     let mut tx_sig_hash = None;
-    if let Ok(v1) = RawTransactionV1::from_noun(&noun1) {
+    if let Ok(v1) = RawTransactionV1::from_noun(&noun1, &slab1.noun_space()) {
         println!("Decoded as RawTransactionV1");
         println!("  txid: {}", v1.id.to_b58());
         for (name, spend) in v1.spends.map.tap() {
             println!("  Spend: {:?}", name);
             if let SpendBody::V1(sb) = &spend.body {
-                let sig_hash = sb.compute_sig_hash();
+                let sig_hash = sb.compute_sig_hash().expect("sig hash");
                 tx_sig_hash = Some(sig_hash.clone());
                 println!("    Fee: {}", sb.fee.value);
                 println!(
@@ -70,13 +71,13 @@ fn compare_local_bythos_v1_tx_files() {
     // Try to decode the signed local fixture as RawTransactionV1.
     println!("\n--- local Bythos v1 signed tx ---");
     let mut signed_sig_hash = None;
-    if let Ok(v1) = RawTransactionV1::from_noun(&noun2) {
+    if let Ok(v1) = RawTransactionV1::from_noun(&noun2, &slab2.noun_space()) {
         println!("Decoded as RawTransactionV1");
         println!("  txid: {}", v1.id.to_b58());
         for (name, spend) in v1.spends.map.tap() {
             println!("  Spend: {:?}", name);
             if let SpendBody::V1(sb) = &spend.body {
-                let sig_hash = sb.compute_sig_hash();
+                let sig_hash = sb.compute_sig_hash().expect("sig hash");
                 signed_sig_hash = Some(sig_hash.clone());
                 println!("    Fee: {}", sb.fee.value);
                 println!(

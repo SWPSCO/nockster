@@ -189,6 +189,7 @@ pub mod utils {
 #[cfg(feature = "std")]
 pub fn test_tip5_hash_words(words: &[u64]) -> [u64; 5] {
     use nockapp::noun::slab::NounSlab;
+    use nockapp::NounAllocator;
     use nockvm::noun::{Atom, Cell};
     use tx_types::hashing::tip5::Tip5Hasher;
 
@@ -198,7 +199,8 @@ pub fn test_tip5_hash_words(words: &[u64]) -> [u64; 5] {
         let atom = Atom::new(&mut slab, w).as_noun();
         list = Cell::new(&mut slab, atom, list).as_noun();
     }
+    let space = slab.noun_space();
 
-    let hash = Tip5Hasher::hash_varlen(list).expect("hash");
+    let hash = Tip5Hasher::hash_varlen(list, &space).expect("hash");
     hash.values
 }

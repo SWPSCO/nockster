@@ -2,6 +2,7 @@ use crate::tx_v1::sign_transaction_v1;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use nockapp::noun::slab::{NockJammer, NounSlab};
+use nockapp::{NounAllocator, NounSpace};
 use nockblocks_api_v1::models::{note_v1_object::Version as ApiNoteVersion, NoteV1Object};
 use noun_serde::{NounDecode, NounEncode};
 use serde_json::Value as JsonValue;
@@ -367,7 +368,9 @@ fn plan_transaction(
 }
 
 fn finish_transaction(spends: SpendsV1, fee: u64) -> Result<BuiltTransaction, String> {
-    let tx_id = compute_tx_id_v1(&spends).to_b58();
+    let tx_id = compute_tx_id_v1(&spends)
+        .map_err(|err| format!("compute tx id: {err}"))?
+        .to_b58();
     let input_notes = spends
         .map
         .tap()
@@ -427,7 +430,7 @@ fn build_transaction_from_spends(
             }
         }
     }
-    let tx_id = compute_tx_id_v1(spends);
+    let tx_id = compute_tx_id_v1(spends).map_err(|err| format!("compute tx id: {err}"))?;
     Ok(Transaction {
         name: tx_id.to_b58(),
         p: Inputs::V1(InputsV1 { map: inputs_map }),
@@ -574,7 +577,10 @@ fn base64_json_value_to_untyped_noun(
     }
 }
 
-pub(crate) fn validate_based_noun(noun: nockvm::noun::Noun) -> Result<(), String> {
+pub(crate) fn validate_based_noun(
+    noun: nockvm::noun::Noun,
+    space: &NounSpace,
+) -> Result<(), String> {
     let mut pending = vec![noun];
     let mut count = 0usize;
     while let Some(noun) = pending.pop() {
@@ -582,11 +588,12 @@ pub(crate) fn validate_based_noun(noun: nockvm::noun::Noun) -> Result<(), String
         if count > 100_000 {
             return Err("noun exceeds size limit".into());
         }
-        if let Ok(cell) = noun.as_cell() {
-            pending.push(cell.head());
-            pending.push(cell.tail());
+        let handle = noun.in_space(space);
+        if let Ok(cell) = handle.as_cell() {
+            pending.push(cell.head().noun());
+            pending.push(cell.tail().noun());
         } else {
-            let atom = noun.as_atom().map_err(|_| "invalid noun atom")?;
+            let atom = handle.as_atom().map_err(|_| "invalid noun atom")?;
             let value = atom.as_u64().map_err(|_| "noun atom exceeds field size")?;
             if u128::from(value) >= BASE_FIELD_PRIME {
                 return Err("noun atom exceeds field size".into());
@@ -608,7 +615,8 @@ fn decode_base64(encoded: &str, label: &str) -> Result<Vec<u8>, String> {
     let noun = slab
         .cue_into(Bytes::from(bytes.clone()))
         .map_err(|e| format!("invalid noun for {label}: {e}"))?;
-    validate_based_noun(noun)?;
+    let space = slab.noun_space();
+    validate_based_noun(noun, &space)?;
     Ok(bytes)
 }
 
@@ -665,12 +673,26 @@ pub(crate) fn verify_bridge_intent(
         return Err("one bridge destination is required".into());
     }
     let expected = convert_recipients(recipients)?;
+    let expected_hashes = expected
+        .iter()
+        .map(|output| {
+            output
+                .note_data
+                .to_hash()
+                .map_err(|err| format!("output note-data hash: {err}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let refund = crate::planner::payment(source, 0, false);
+    let refund_hash = refund
+        .note_data
+        .to_hash()
+        .map_err(|err| format!("refund note-data hash: {err}"))?;
     let raw = crate::tx_jam::to_raw_tx_jam(transaction)?;
     let mut slab = NounSlab::<NockJammer>::new();
     let noun = slab.cue_into(Bytes::from(general_purpose::STANDARD.decode(raw).map_err(|e| e.to_string())?))
         .map_err(|e| e.to_string())?;
-    let raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun)
+    let space = slab.noun_space();
+    let raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun, &space)
         .map_err(|e| e.to_string())?;
     let mut totals = vec![0u64; expected.len()];
     let mut fee = 0u64;
@@ -685,10 +707,19 @@ pub(crate) fn verify_bridge_intent(
             if seed.output_source.is_some() {
                 return Err("unexpected bridge output source".into());
             }
-            if let Some(index) = expected.iter().position(|output|
-                output.lock_root == seed.lock_root && output.note_data.to_hash() == seed.note_data.to_hash()) {
+            let seed_hash = seed
+                .note_data
+                .to_hash()
+                .map_err(|err| format!("seed note-data hash: {err}"))?;
+            if let Some(index) = expected
+                .iter()
+                .enumerate()
+                .position(|(i, output)| {
+                    output.lock_root == seed.lock_root && expected_hashes[i] == seed_hash
+                })
+            {
                 totals[index] = totals[index].checked_add(seed.gift.value).ok_or("output overflow")?;
-            } else if seed.lock_root != refund.lock_root || seed.note_data.to_hash() != refund.note_data.to_hash() {
+            } else if seed.lock_root != refund.lock_root || seed_hash != refund_hash {
                 return Err("transaction contains an unreviewed output or bridge destination".into());
             }
         }
@@ -717,7 +748,7 @@ fn decode_wallet_transaction_base64(value: &str) -> Result<WalletTransaction, St
     let noun = slab
         .cue_into(Bytes::from(bytes))
         .map_err(|err| format!("failed to cue wallet noun: {err}"))?;
-    WalletTransaction::from_noun(&noun)
+    WalletTransaction::from_noun(&noun, &slab.noun_space())
         .map_err(|err| format!("failed to decode wallet transaction noun: {err}"))
 }
 
@@ -969,8 +1000,14 @@ mod tests {
         let inferred = convert_note_v1(api_note.clone()).unwrap();
         api_note.note_data.clear();
         let on_chain = convert_note_v1(api_note).unwrap();
-        assert_eq!(inferred.to_hash(), on_chain.to_hash());
-        assert_ne!(disclosed.to_hash(), on_chain.to_hash());
+        assert_eq!(
+            inferred.to_hash().expect("note hash"),
+            on_chain.to_hash().expect("note hash")
+        );
+        assert_ne!(
+            disclosed.to_hash().expect("note hash"),
+            on_chain.to_hash().expect("note hash")
+        );
         assert_eq!(inferred.note_data.map.wyt(), 0);
         assert_eq!(disclosed.note_data.map.wyt(), 1);
     }
@@ -1024,7 +1061,7 @@ mod tests {
                     let SpendBody::V1(body) = spend.body else { panic!("expected V1 spend") };
                     assert!(body.seeds.set.wyt() > 0);
                     for seed in body.seeds.set.tap() {
-                        assert_eq!(seed.parent_hash, on_chain.to_hash());
+                        assert_eq!(seed.parent_hash, on_chain.to_hash().expect("note hash"));
                     }
                 }
                 let inspected = crate::tx_jam::inspect_tx_jam(&built.base64_tx).unwrap();
@@ -1050,7 +1087,10 @@ mod tests {
         let inspected =
             crate::tx_jam::inspect_tx_jam(&built.base64_tx).expect("inspect signed transaction");
         assert!(inspected.spends.iter().all(|spend| spend.is_fully_signed));
-        assert_eq!(compute_tx_id_v1(&wallet_tx.spends).to_b58(), wallet_tx.name);
+        assert_eq!(
+            compute_tx_id_v1(&wallet_tx.spends).expect("tx id").to_b58(),
+            wallet_tx.name
+        );
         assert_eq!(wallet_tx.spends.map.wyt(), 1);
 
         let reencoded = encode_wallet_transaction(&wallet_tx);

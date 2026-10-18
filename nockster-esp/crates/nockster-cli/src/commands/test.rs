@@ -125,7 +125,9 @@ pub fn run(
     let (sk, cc) = cheetah::master_from_seed(&seed64);
     let xk = cheetah::XKey::from_master(sk, cc);
     // path is empty: stays at master
-    let host_pk = xk.pk.unwrap();
+    let host_pk = xk
+        .pk
+        .ok_or_else(|| anyhow::anyhow!("master xkey is missing its public key"))?;
     anyhow::ensure!(
         host_pk.0 == dev_x && host_pk.1 == dev_y,
         "device pk != host pk"
@@ -156,7 +158,10 @@ pub fn run(
     }
 
     // 11) sign-for self-test: device vs host
-    let (e_host, s_host) = cheetah::schnorr_sign_tx(xk.sk.unwrap(), host_pk, dummy.values);
+    let host_sk = xk
+        .sk
+        .ok_or_else(|| anyhow::anyhow!("master xkey is missing its secret key"))?;
+    let (e_host, s_host) = cheetah::schnorr_sign_tx(host_sk, host_pk, dummy.values);
     let (e_dev, s_dev) = match send_call(
         &mut *sp,
         7,

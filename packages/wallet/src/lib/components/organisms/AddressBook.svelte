@@ -1,4 +1,6 @@
 <script lang="ts">
+  import UrbitContacts from './UrbitContacts.svelte';
+  import { hasShipSocial } from '../../../platform/urbitSocial';
   import { getAddressBook, saveAddressAlias, deleteAddressAlias } from '../../utils/addressBook';
   import { onMount } from 'svelte';
   import Header from '../molecules/Header.svelte';
@@ -80,6 +82,7 @@
     name: string;
     address: string;
     avatar: string;
+    ship?: string;
   }
 
   let contacts: Contact[] = [];
@@ -159,6 +162,25 @@
     ];
   }
 
+  async function saveShipContact(contact: { ship: string; address: string }) {
+    const local: Contact[] = (await loadFromStorage('addressBook')) ?? [];
+    const saved: Contact = {
+      id: Date.now(),
+      name: contact.ship,
+      ship: contact.ship,
+      address: contact.address,
+      avatar: '⏻'
+    };
+    await persistToStorage('addressBook', [
+      ...local.filter(item => item.ship !== contact.ship && item.address !== contact.address),
+      saved
+    ]);
+    contacts = [
+      ...contacts.filter(item => item.ship !== contact.ship && item.address !== contact.address),
+      saved
+    ];
+  }
+
   async function handleDeleteContact(id: number | string) {
     try {
       const contact = contacts.find(contact => contact.id === id);
@@ -179,6 +201,9 @@
   <Header title="Address Book" showBack={true} on:click={handleBack} />
 
   <div class="address-content">
+    {#if hasShipSocial}
+      <UrbitContacts onSave={saveShipContact} onUse={handleSelectContact} />
+    {/if}
     <p>
       Synced with your Nockblocks account. Local contacts remain on this device until saved online.
     </p>
@@ -315,6 +340,7 @@
 
   .search-input {
     flex: 1;
+    min-width: 0;
     padding: 10px 12px;
     border: 1px solid var(--color-border) 359;
     border-radius: 8px;

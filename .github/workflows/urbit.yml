@@ -37,7 +37,7 @@ jobs:
       - uses: ./.github/actions/setup-js
       - name: Install build tools
         run: |
-          rustup toolchain install nightly-2025-02-14 --profile minimal --target wasm32-unknown-unknown
+          rustup toolchain install nightly-2026-04-03 --profile minimal --target wasm32-unknown-unknown
           cargo +stable install wasm-pack --version 0.15.0 --locked
           curl --fail --location https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz -o "$RUNNER_TEMP/zig.tar.xz"
           echo "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  $RUNNER_TEMP/zig.tar.xz" | sha256sum --check

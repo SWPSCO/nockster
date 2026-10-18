@@ -68,7 +68,14 @@ body,
 .urbit-shell
   .route-content
   > *
-  > :is(.content, .create-content, .import-content, .backup-content, .receive-content) {
+  > :is(
+    .content,
+    .create-content,
+    .import-content,
+    .backup-content,
+    .receive-content,
+    .address-content
+  ) {
   flex: 1 0 auto;
   overflow: visible;
 }
@@ -162,4 +169,16 @@ body,
   .backup-actions > button {
     flex: 1 1 100%;
   }
+}
+
+.urbit-shell .address-book .search-section {
+  flex-wrap: wrap;
+}
+.urbit-shell .address-book .contact-item {
+  flex-wrap: wrap;
+  padding: 12px;
+}
+.urbit-shell .address-book .contact-actions .btn-icon {
+  min-width: 44px;
+  min-height: 44px;
 }

@@ -847,9 +847,16 @@ fn resolve_release_metadata(args: &UpdateSignArgs) -> Result<ReleaseMetadata> {
     let git_commit = match args.git_commit.as_deref() {
         Some(value) => value.to_string(),
         None => {
-            let commit = git_output(["rev-parse", "HEAD"])
+            let git_head = git_output(["rev-parse", "HEAD"]);
+            let commit = git_head
+                .as_ref()
+                .cloned()
+                .or_else(|| std::env::var("GITHUB_SHA").ok())
+                .or_else(|| std::env::var("GIT_COMMIT").ok())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow!("could not derive --git-commit; pass it explicitly"))?;
-            if git_dirty() {
+            if git_head.is_some() && git_dirty() {
                 ui::warn(
                     "working tree has uncommitted changes; bundle git_commit records HEAD only",
                 );

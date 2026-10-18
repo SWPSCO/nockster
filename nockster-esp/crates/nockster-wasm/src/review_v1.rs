@@ -3,15 +3,15 @@
 //! refund/change, bridge deposits, output lock primitives, and per-input
 //! multisig coordination state.
 //!
-//! This mirrors `nockster_core::draft_sign::tx_v1`'s *structural* parsing
-//! against `tx_types::pokenoun` (the same codec `compose_v1` uses), avoiding a
-//! `nockster-core` dependency that would collide on the `tx-types` std/no_std
-//! feature split. The heavy lock-root *verification* (Tip5 hashing) is the
-//! device's job and is intentionally not duplicated here — a host preview
-//! cannot be a trust anchor anyway.
+//! This mirrors `nockster_core::draft_sign::tx_v1`'s parsing against
+//! `tx_types::pokenoun` (the same codec `compose_v1` uses). Like the device,
+//! it recomputes the lock root from `note_data` and only trusts the parsed
+//! recipient / bridge / lock metadata when it matches the note's committed
+//! `lock_root` — otherwise the preview shows the root itself. A host preview
+//! is still not a trust anchor; the device performs the same binding.
 
 use serde::Serialize;
-use tx_types::pokenoun::{cue, Arena, Noun};
+use tx_types::pokenoun::{cue, hash_noun_varlen, hash_ten_cell, Arena, Noun};
 use tx_types::transaction_types::Hash;
 
 #[derive(Serialize)]
@@ -44,8 +44,11 @@ pub struct OutputView {
     /// For an OR-composed lock (`%2/%4/%8/%16` tree), the padded branch count
     /// (2/4/8/16); `None` for a single spend-condition.
     pub or_lock: Option<u64>,
-    /// Output lock primitives parsed from `note_data`. The device additionally
-    /// verifies these hash to the committed lock-root; this host view does not.
+    /// True when the parsed `note_data` lock hashes to the note's committed
+    /// `lock_root`. When false, `recipient_b58` is the lock root itself and
+    /// the lock / bridge metadata is not trusted.
+    pub lock_verified: bool,
+    /// Output lock primitives parsed from `note_data` (only when verified).
     pub lock: Option<Vec<PrimitiveView>>,
 }
 
@@ -267,6 +270,161 @@ fn parse_lock(note_data: Noun, arena: &Arena) -> Option<Vec<PrimitiveView>> {
     }
 }
 
+fn hash_optional_page(opt: Noun, arena: &Arena, null_digest: [u64; 5]) -> Option<[u64; 5]> {
+    if opt == arena.atom0() {
+        return Some(null_digest);
+    }
+    let (tag, value) = tuple2(opt, arena)?;
+    if noun_atom_u64(tag, arena) != Some(0) {
+        return None;
+    }
+    let value_digest = hash_noun_varlen(value, arena).ok()?;
+    hash_ten_cell(null_digest, value_digest).ok()
+}
+
+fn hash_timelock_range(
+    range: Noun,
+    arena: &Arena,
+    null_digest: [u64; 5],
+) -> Option<[u64; 5]> {
+    let (min, max) = tuple2(range, arena)?;
+    let min_digest = hash_optional_page(min, arena, null_digest)?;
+    let max_digest = hash_optional_page(max, arena, null_digest)?;
+    hash_ten_cell(min_digest, max_digest).ok()
+}
+
+fn hash_hash_zset(set: Noun, arena: &Arena, null_digest: [u64; 5]) -> Option<[u64; 5]> {
+    if set == arena.atom0() {
+        return Some(null_digest);
+    }
+    let (value, left, right) = tuple3(set, arena)?;
+    let value_digest = parse_hash(value, arena)?;
+    let left_digest = hash_hash_zset(left, arena, null_digest)?;
+    let right_digest = hash_hash_zset(right, arena, null_digest)?;
+    let children = hash_ten_cell(left_digest, right_digest).ok()?;
+    hash_ten_cell(value_digest, children).ok()
+}
+
+fn hash_lock_primitive(
+    lp: Noun,
+    arena: &Arena,
+    null_digest: [u64; 5],
+) -> Option<[u64; 5]> {
+    let (header, body) = tuple2(lp, arena)?;
+    let tag_digest = hash_noun_varlen(header, arena).ok()?;
+
+    let inner = if atom_eq_bytes(header, b"pkh", arena) {
+        let (m, h) = tuple2(body, arena)?;
+        let m_digest = hash_noun_varlen(m, arena).ok()?;
+        let h_digest = hash_hash_zset(h, arena, null_digest)?;
+        hash_ten_cell(m_digest, h_digest).ok()?
+    } else if atom_eq_bytes(header, b"tim", arena) {
+        let (rel, abs) = tuple2(body, arena)?;
+        let rel_digest = hash_timelock_range(rel, arena, null_digest)?;
+        let abs_digest = hash_timelock_range(abs, arena, null_digest)?;
+        hash_ten_cell(rel_digest, abs_digest).ok()?
+    } else if atom_eq_bytes(header, b"hax", arena) {
+        hash_hash_zset(body, arena, null_digest)?
+    } else if atom_eq_bytes(header, b"brn", arena) {
+        null_digest
+    } else {
+        return None;
+    };
+    hash_ten_cell(tag_digest, inner).ok()
+}
+
+fn hash_lock_primitives_list(
+    prims: Noun,
+    arena: &Arena,
+    null_digest: [u64; 5],
+) -> Option<[u64; 5]> {
+    if prims == arena.atom0() {
+        return Some(null_digest);
+    }
+    let (head, tail) = uncons(prims, arena)?;
+    let head_digest = hash_lock_primitive(head, arena, null_digest)?;
+    let tail_digest = hash_lock_primitives_list(tail, arena, null_digest)?;
+    hash_ten_cell(head_digest, tail_digest).ok()
+}
+
+fn hash_balanced_pairs(hashes: &[[u64; 5]]) -> Option<[u64; 5]> {
+    if hashes.len() == 1 {
+        return hashes.first().copied();
+    }
+    let half = hashes.len() / 2;
+    let left = hash_balanced_pairs(&hashes[..half])?;
+    let right = hash_balanced_pairs(&hashes[half..])?;
+    hash_ten_cell(left, right).ok()
+}
+
+fn hash_lock_tree_root(leaf_hashes: &[[u64; 5]], size: usize) -> Option<[u64; 5]> {
+    if size == 1 {
+        return leaf_hashes.first().copied();
+    }
+    // `leaf(size)` is a small atom, hashed in its own arena.
+    let mut tag_arena = Arena::new();
+    let tag_atom = tag_arena.alloc_atom_u64(size as u64);
+    let tag_digest = hash_noun_varlen(tag_atom, &tag_arena).ok()?;
+    let payload = hash_balanced_pairs(leaf_hashes)?;
+    hash_ten_cell(tag_digest, payload).ok()
+}
+
+/// Walk the padded OR tree payload (`[left right]`, tags stripped on deeper
+/// levels) and collect the leaf spend-conditions in order.
+fn collect_lock_tree_leaves(
+    node: Noun,
+    size: u64,
+    arena: &Arena,
+    out: &mut Vec<Noun>,
+) -> Option<()> {
+    match size {
+        0 => None,
+        1 => {
+            out.push(node);
+            Some(())
+        }
+        _ => {
+            let half = size / 2;
+            let (left, right) = tuple2(node, arena)?;
+            collect_lock_tree_leaves(left, half, arena, out)?;
+            collect_lock_tree_leaves(right, half, arena, out)
+        }
+    }
+}
+
+/// Recompute the committed lock root from `note_data` "lock" = `[%0 sc]`,
+/// mirroring nockchain's single-spend-condition and OR-tree hashing.
+fn computed_lock_root(note_data: Noun, arena: &Arena) -> Option<([u64; 5], Option<u64>)> {
+    let lock_data = note_data_find(note_data, arena, b"lock")?;
+    let (ver, sc) = tuple2(lock_data, arena)?;
+    if noun_atom_u64(ver, arena) != Some(0) {
+        return None;
+    }
+    let null_digest = hash_noun_varlen(arena.atom0(), arena).ok()?;
+
+    if let Some(size) = parse_or_lock(note_data, arena) {
+        let (tag, payload) = tuple2(sc, arena)?;
+        if noun_atom_u64(tag, arena) != Some(size) {
+            return None;
+        }
+        let mut leaves = Vec::new();
+        collect_lock_tree_leaves(payload, size, arena, &mut leaves)?;
+        if leaves.len() as u64 != size {
+            return None;
+        }
+        let mut leaf_hashes = Vec::with_capacity(leaves.len());
+        for leaf in leaves {
+            leaf_hashes.push(hash_lock_primitives_list(leaf, arena, null_digest)?);
+        }
+        Some((
+            hash_lock_tree_root(&leaf_hashes, size as usize)?,
+            Some(size),
+        ))
+    } else {
+        Some((hash_lock_primitives_list(sc, arena, null_digest)?, None))
+    }
+}
+
 fn be20_mul_add(buf: &mut [u8; 20], mul: u64, add: u64) -> bool {
     let mut carry = add as u128;
     for byte in buf.iter_mut().rev() {
@@ -470,8 +628,29 @@ fn walk_seeds(
     let gift = noun_atom_u64(gift_noun, arena)?;
     if gift != 0 {
         let lock_root_digest = parse_hash(lock_root, arena)?;
-        let recipient = seed_recipient_pkh(note_data, arena).unwrap_or(lock_root_digest);
-        let is_refund = recipient == signer_pkh;
+        // A compromised host could put any lock in note-data. Only trust the
+        // parsed recipient / constraints when they hash to the committed
+        // `lock_root`; otherwise show the root itself and never call it change.
+        let lock_verified = computed_lock_root(note_data, arena)
+            .is_some_and(|(computed, _)| computed == lock_root_digest);
+        let lock = if lock_verified {
+            parse_lock(note_data, arena)
+        } else {
+            None
+        };
+        let or_lock = if lock_verified {
+            parse_or_lock(note_data, arena)
+        } else {
+            None
+        };
+        let recipient = if lock_verified {
+            seed_recipient_pkh(note_data, arena).unwrap_or(lock_root_digest)
+        } else {
+            lock_root_digest
+        };
+        let is_refund = lock_verified
+            && recipient == signer_pkh
+            && matches!(lock.as_deref(), Some([PrimitiveView::Pkh { m: 1, n: 1 }]));
         if is_refund {
             *refund_total = refund_total.checked_add(gift)?;
         } else {
@@ -481,10 +660,16 @@ fn walk_seeds(
             recipient_b58: digest_to_b58(recipient),
             gift,
             is_refund,
-            bridge_evm_addr: parse_bridge_evm(note_data, arena),
-            bridge_withdrawal: note_data_find(note_data, arena, b"bridge-w").is_some(),
-            or_lock: parse_or_lock(note_data, arena),
-            lock: parse_lock(note_data, arena),
+            bridge_evm_addr: if lock_verified {
+                parse_bridge_evm(note_data, arena)
+            } else {
+                None
+            },
+            bridge_withdrawal: lock_verified
+                && note_data_find(note_data, arena, b"bridge-w").is_some(),
+            or_lock,
+            lock_verified,
+            lock,
         });
     }
 
@@ -832,4 +1017,105 @@ pub fn review(jam: &[u8], source_pkh_b58: &str) -> Result<ReviewView, String> {
     };
     walk_spends(spends, &arena, signer_pkh, &mut view).ok_or("malformed draft".to_string())?;
     Ok(view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tx_types::pokenoun::{canonical_zmap_put, jam};
+
+    fn build_tuple(arena: &mut Arena, elems: &[Noun]) -> Noun {
+        let mut out = *elems.last().expect("non-empty tuple");
+        for &elem in elems[..elems.len() - 1].iter().rev() {
+            out = arena.alloc_cell(elem, out);
+        }
+        out
+    }
+
+    fn hash_noun(arena: &mut Arena, digest: [u64; 5]) -> Noun {
+        let elems = [
+            arena.alloc_atom_u64(digest[0]),
+            arena.alloc_atom_u64(digest[1]),
+            arena.alloc_atom_u64(digest[2]),
+            arena.alloc_atom_u64(digest[3]),
+            arena.alloc_atom_u64(digest[4]),
+        ];
+        build_tuple(arena, &elems)
+    }
+
+    fn pkh_lock(arena: &mut Arena, pkh: [u64; 5]) -> Noun {
+        let header = arena.alloc_atom_bytes(b"pkh");
+        let m = arena.alloc_atom_u64(1);
+        let hash = hash_noun(arena, pkh);
+        let null = arena.atom0();
+        let set = build_tuple(arena, &[hash, null, null]);
+        let body = build_tuple(arena, &[m, set]);
+        let prim = build_tuple(arena, &[header, body]);
+        build_tuple(arena, &[prim, null])
+    }
+
+    fn note_data_with_lock(arena: &mut Arena, lock: Noun) -> Noun {
+        let key = arena.alloc_atom_bytes(b"lock");
+        let zero = arena.alloc_atom_u64(0);
+        let value = build_tuple(arena, &[zero, lock]);
+        let null = arena.atom0();
+        canonical_zmap_put(arena, null, key, value).expect("note-data zmap")
+    }
+
+    fn draft_with_lock_root(arena: &mut Arena, note_data: Noun, lock_root: Noun) -> Vec<u8> {
+        let output_source = arena.atom0();
+        let gift = arena.alloc_atom_u64(9);
+        let parent = hash_noun(arena, [42; 5]);
+        let seed = build_tuple(arena, &[output_source, lock_root, note_data, gift, parent]);
+        let null = arena.atom0();
+        let seeds = build_tuple(arena, &[seed, null, null]);
+
+        let witness = build_tuple(arena, &[null, null, null, null]);
+        let fee = arena.alloc_atom_u64(10_000_000);
+        let spend_body = build_tuple(arena, &[witness, seeds, fee]);
+        let one = arena.alloc_atom_u64(1);
+        let spend = build_tuple(arena, &[one, spend_body]);
+
+        let first = hash_noun(arena, [9; 5]);
+        let last = hash_noun(arena, [8; 5]);
+        let name = build_tuple(arena, &[first, last, null]);
+        let spends = canonical_zmap_put(arena, null, name, spend).expect("spends zmap");
+        let root = build_tuple(arena, &[null, spends]);
+        jam(root, arena)
+    }
+
+    #[test]
+    fn review_binds_note_data_lock_to_committed_lock_root() {
+        let signer = [1, 2, 3, 4, 5];
+        let signer_b58 = Hash { values: signer }.to_b58();
+
+        let mut arena = Arena::new();
+        let lock = pkh_lock(&mut arena, signer);
+        let note_data = note_data_with_lock(&mut arena, lock);
+        let null_digest = hash_noun_varlen(arena.atom0(), &arena).expect("null digest");
+        let computed =
+            hash_lock_primitives_list(lock, &arena, null_digest).expect("computed root");
+        let wrong_root = hash_noun(&mut arena, [0; 5]);
+        let good_root = hash_noun(&mut arena, computed);
+        let wrong_root_b58 = Hash { values: [0; 5] }.to_b58();
+
+        let mismatched = draft_with_lock_root(&mut arena, note_data, wrong_root);
+        let view = review(&mismatched, &signer_b58).expect("review mismatched");
+        let out = view.outputs.first().expect("output");
+        assert!(!out.lock_verified, "mismatched lock must not verify");
+        assert!(!out.is_refund, "mismatched lock must not look like change");
+        assert_eq!(out.recipient_b58, wrong_root_b58);
+        assert!(out.lock.is_none());
+
+        let matched = draft_with_lock_root(&mut arena, note_data, good_root);
+        let view = review(&matched, &signer_b58).expect("review matched");
+        let out = view.outputs.first().expect("output");
+        assert!(out.lock_verified);
+        assert!(out.is_refund);
+        assert_eq!(out.recipient_b58, signer_b58);
+        assert!(matches!(
+            out.lock.as_deref(),
+            Some([PrimitiveView::Pkh { m: 1, n: 1 }])
+        ));
+    }
 }

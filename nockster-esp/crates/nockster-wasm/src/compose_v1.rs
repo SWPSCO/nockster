@@ -1,26 +1,15 @@
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+use nockster_core::draft_sign::{digest_from_b58, FeePolicy, LOCK_MERKLE_AXIS_HASH_B58};
+#[cfg(test)]
+use nockster_core::draft_sign::BYTHOS_PHASE;
 use tx_types::pokenoun::{
     canonical_zmap_put, canonical_zset_put, cue, hash_noun_varlen, hash_ten_cell, jam, Arena, Noun,
 };
 
-const BYTHOS_PHASE: u64 = 54_000;
-const BASE_FEE: u64 = 1 << 14;
-const INPUT_FEE_DIVISOR: u64 = 4;
-const MIN_FEE: u64 = 256;
 const DEFAULT_COINBASE_REL_MIN: u64 = 100;
 const LOCK_MERKLE_PROOF_FULL_TAG: &[u8] = b"full";
-
-// tx-types constant:
-// Hash::from_b58("6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ayaV4A")
-const LOCK_MERKLE_AXIS_HASH: [u64; 5] = [
-    1988594973584463658,
-    8158631336633700141,
-    2161567007650232260,
-    460329990575991155,
-    8368574252173164961,
-];
 
 fn js_err(msg: impl AsRef<str>) -> JsValue {
     JsValue::from_str(msg.as_ref())
@@ -176,11 +165,19 @@ impl ComposedTransactionV1 {
 #[derive(Debug, Clone, Copy)]
 struct TxIdCtx {
     null_digest: [u64; 5],
-    // Retained for parity with the hashing context; the `%hax` stub that read
-    // it was replaced by real commitment-z-set hashing.
-    #[allow(dead_code)]
-    fake_digest: [u64; 5],
     version_digest: [u64; 5],
+}
+
+fn tx_id_ctx(arena: &mut Arena) -> Result<TxIdCtx, JsValue> {
+    let null_digest =
+        hash_noun_varlen(arena.atom0(), arena).map_err(|e| js_err(format!("{e:?}")))?;
+    let version_atom = arena.alloc_atom_u64(1);
+    let version_digest =
+        hash_noun_varlen(version_atom, arena).map_err(|e| js_err(format!("{e:?}")))?;
+    Ok(TxIdCtx {
+        null_digest,
+        version_digest,
+    })
 }
 
 fn uncons(noun: Noun, arena: &Arena) -> Option<(Noun, Noun)> {
@@ -498,7 +495,8 @@ fn hash_lock_merkle_proof_hashable(
             Ok(hash_ten_cell(version_digest, inner).map_err(|e| js_err(format!("{e:?}")))?)
         }
         None => {
-            let axis_digest = LOCK_MERKLE_AXIS_HASH;
+            let axis_digest =
+                digest_from_b58(LOCK_MERKLE_AXIS_HASH_B58).map_err(|e| js_err(format!("{e:?}")))?;
             let inner =
                 hash_ten_cell(axis_digest, merk_digest).map_err(|e| js_err(format!("{e:?}")))?;
             Ok(hash_ten_cell(spend_condition_hash, inner).map_err(|e| js_err(format!("{e:?}")))?)
@@ -669,23 +667,44 @@ struct FeeBreakdown {
     minimum_fee: u64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct FeePolicy {
-    bythos_phase: u64,
-    base_fee: u64,
-    input_fee_divisor: u64,
-    min_fee: u64,
+fn fee_policy_from_input(input: &ComposeTxV1Input) -> FeePolicy {
+    let mut policy = FeePolicy::default();
+    if let Some(v) = input.bythos_phase {
+        policy.bythos_phase = v;
+    }
+    if let Some(v) = input.base_fee {
+        policy.base_fee = v;
+    }
+    if let Some(v) = input.input_fee_divisor {
+        policy.input_fee_divisor = v;
+    }
+    if let Some(v) = input.min_fee {
+        policy.min_fee = v;
+    }
+    policy
 }
 
-impl FeePolicy {
-    fn from_input(input: &ComposeTxV1Input) -> Self {
-        Self {
-            bythos_phase: input.bythos_phase.unwrap_or(BYTHOS_PHASE),
-            base_fee: input.base_fee.unwrap_or(BASE_FEE),
-            input_fee_divisor: input.input_fee_divisor.unwrap_or(INPUT_FEE_DIVISOR),
-            min_fee: input.min_fee.unwrap_or(MIN_FEE),
+/// Hoon `num-of-leaves` over the `(~(rep z-by note-data) ...)` accumulator:
+/// two leaves per atom-valued entry plus the terminal `~` (`2n+1`).
+fn count_note_data_words(note_data: Noun, arena: &Arena) -> Result<u64, JsValue> {
+    fn walk(map: Noun, arena: &Arena, words: &mut u64) -> Result<(), JsValue> {
+        if map == arena.atom0() {
+            return Ok(());
         }
+        let (node, left, right) =
+            decompose_map(map, arena).ok_or_else(|| js_err("malformed note-data map"))?;
+        let (key, value) =
+            decompose_pair(node, arena).ok_or_else(|| js_err("malformed note-data node"))?;
+        *words = words
+            .checked_add(count_leaves(key, arena))
+            .and_then(|w| w.checked_add(count_leaves(value, arena)))
+            .ok_or_else(|| js_err("note-data word count overflow"))?;
+        walk(left, arena, words)?;
+        walk(right, arena, words)
     }
+    let mut words = 1;
+    walk(note_data, arena, &mut words)?;
+    Ok(words)
 }
 
 fn merge_note_data_into(arena: &mut Arena, src: Noun, dst: &mut Noun) -> Result<(), JsValue> {
@@ -728,7 +747,9 @@ fn collect_seed_note_data(
             merged.push((lock_root, data));
         }
     } else {
-        *legacy_words = legacy_words.saturating_add(count_leaves(note_data, arena));
+        *legacy_words = legacy_words
+            .checked_add(count_note_data_words(note_data, arena)?)
+            .ok_or_else(|| js_err("note-data word count overflow"))?;
     }
 
     collect_seed_note_data(arena, left, merged, legacy_words, bythos_active)?;
@@ -796,10 +817,12 @@ fn calculate_transaction_fee(
         &mut witness_words,
         bythos_active,
     )?;
-    let merged_seed_words = merged
-        .iter()
-        .map(|(_root, note_data)| count_leaves(*note_data, arena))
-        .sum::<u64>();
+    let mut merged_seed_words = 0u64;
+    for (_root, note_data) in merged.iter() {
+        merged_seed_words = merged_seed_words
+            .checked_add(count_note_data_words(*note_data, arena)?)
+            .ok_or_else(|| js_err("note-data word count overflow"))?;
+    }
     let seed_words = legacy_seed_words.saturating_add(merged_seed_words);
     let effective_base_fee = if bythos_active {
         fee_policy.base_fee
@@ -1461,19 +1484,7 @@ pub fn compose_tx_v1_recipient_address(recipient: JsValue) -> Result<String, JsV
         RecipientInput::Pkh(b58) => Ok(b58),
         recipient @ RecipientInput::Multisig { .. } => {
             let mut arena = Arena::new();
-            let null_digest =
-                hash_noun_varlen(arena.atom0(), &arena).map_err(|e| js_err(format!("{e:?}")))?;
-            let fake_atom = arena.alloc_atom_bytes(b"fake");
-            let fake_digest =
-                hash_noun_varlen(fake_atom, &arena).map_err(|e| js_err(format!("{e:?}")))?;
-            let version_atom = arena.alloc_atom_u64(1);
-            let version_digest =
-                hash_noun_varlen(version_atom, &arena).map_err(|e| js_err(format!("{e:?}")))?;
-            let ctx = TxIdCtx {
-                null_digest,
-                fake_digest,
-                version_digest,
-            };
+            let ctx = tx_id_ctx(&mut arena)?;
 
             let (_lock, addr) = recipient_lock_and_display_address(&mut arena, &recipient, &ctx)?;
             Ok(addr)
@@ -2352,23 +2363,12 @@ fn compose_tx_v1_with_selection(
     }
 
     let coinbase_rel_min = input.coinbase_rel_min.unwrap_or(DEFAULT_COINBASE_REL_MIN);
-    let fee_policy = FeePolicy::from_input(&input);
+    let fee_policy = fee_policy_from_input(&input);
     let current_height = input.current_height.unwrap_or(fee_policy.bythos_phase);
     let source_pkh = parse_b58_hash(&input.source_pkh)?;
 
     let mut arena = Arena::new();
-    let null_digest =
-        hash_noun_varlen(arena.atom0(), &arena).map_err(|e| js_err(format!("{e:?}")))?;
-    let fake_atom = arena.alloc_atom_bytes(b"fake");
-    let fake_digest = hash_noun_varlen(fake_atom, &arena).map_err(|e| js_err(format!("{e:?}")))?;
-    let version_atom = arena.alloc_atom_u64(1);
-    let version_digest =
-        hash_noun_varlen(version_atom, &arena).map_err(|e| js_err(format!("{e:?}")))?;
-    let ctx = TxIdCtx {
-        null_digest,
-        fake_digest,
-        version_digest,
-    };
+    let ctx = tx_id_ctx(&mut arena)?;
 
     // Parse an optional multisig source lock (sorted, deduped digests).
     let source_multisig: Option<(u64, Vec<[u64; 5]>)> = match &input.source_multisig {
@@ -2524,6 +2524,7 @@ fn compose_tx_v1_with_selection(
     let tx_id = compute_tx_id_v1(spends_map, &arena, &ctx)?;
     let tx_id_b58 = hash_to_b58(tx_id);
     let id_noun = build_hash_noun(&mut arena, tx_id);
+    let version_atom = arena.alloc_atom_u64(1);
     let raw_tx = build_tuple(&mut arena, &[version_atom, id_noun, spends_map]);
     let raw_jam = jam(raw_tx, &arena);
 
@@ -2592,16 +2593,7 @@ mod tests {
         let source_pkh = parse_b58_hash(source_pkh_b58).expect("source pkh");
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).expect("null digest");
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).expect("fake digest");
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).expect("version digest");
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
 
         let simple_pkh = build_pkh_lock(&mut arena, source_pkh).expect("lock primitive");
         let simple_lock = build_list(&mut arena, &[simple_pkh]);
@@ -2678,16 +2670,7 @@ mod tests {
             .collect();
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
 
         // Derive the note's first name from the 2-of-3 multisig lock so the
         // input reconstruction must match.
@@ -2755,16 +2738,7 @@ mod tests {
         let source_pkh = parse_b58_hash(source_pkh_b58).unwrap();
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
         let simple_pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
         let simple_lock = build_list(&mut arena, &[simple_pkh]);
         let simple_lock_hash = hash_lock_primitives_list(simple_lock, &arena, &ctx).unwrap();
@@ -2822,16 +2796,7 @@ mod tests {
         let source_pkh = parse_b58_hash(source_pkh_b58).unwrap();
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
         let simple_pkh = build_pkh_lock(&mut arena, source_pkh).unwrap();
         let simple_lock = build_list(&mut arena, &[simple_pkh]);
         let simple_lock_hash = hash_lock_primitives_list(simple_lock, &arena, &ctx).unwrap();
@@ -2887,16 +2852,7 @@ mod tests {
 
     // Build a TxIdCtx for tests.
     fn test_ctx(arena: &mut Arena) -> TxIdCtx {
-        let null_digest = hash_noun_varlen(arena.atom0(), arena).unwrap();
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, arena).unwrap();
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, arena).unwrap();
-        TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        }
+        tx_id_ctx(arena).expect("tx id ctx")
     }
 
     /// Golden lock-root vectors copied verbatim from nockchain-wallet's own
@@ -3291,16 +3247,7 @@ mod tests {
         let b = hash_to_b58([42u64, 0, 0, 0, 0]);
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).unwrap();
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).unwrap();
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).unwrap();
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
 
         // Two branches: a plain pkh and a timelocked pkh.
         let branches = vec![
@@ -3378,16 +3325,7 @@ mod tests {
         let source_pkh = parse_b58_hash(source_pkh_b58).expect("source pkh");
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).expect("null digest");
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).expect("fake digest");
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).expect("version digest");
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
 
         let simple_pkh = build_pkh_lock(&mut arena, source_pkh).expect("lock primitive");
         let simple_lock = build_list(&mut arena, &[simple_pkh]);
@@ -3454,16 +3392,7 @@ mod tests {
         let source_pkh = parse_b58_hash(source_pkh_b58).expect("source pkh");
 
         let mut arena = Arena::new();
-        let null_digest = hash_noun_varlen(arena.atom0(), &arena).expect("null digest");
-        let fake_atom = arena.alloc_atom_bytes(b"fake");
-        let fake_digest = hash_noun_varlen(fake_atom, &arena).expect("fake digest");
-        let version_atom = arena.alloc_atom_u64(1);
-        let version_digest = hash_noun_varlen(version_atom, &arena).expect("version digest");
-        let ctx = TxIdCtx {
-            null_digest,
-            fake_digest,
-            version_digest,
-        };
+        let ctx = tx_id_ctx(&mut arena).expect("tx id ctx");
 
         let simple_pkh = build_pkh_lock(&mut arena, source_pkh).expect("lock primitive");
         let simple_lock = build_list(&mut arena, &[simple_pkh]);
@@ -3523,5 +3452,22 @@ mod tests {
         assert_eq!(noun_atom_u64(version, &decode_arena), Some(1));
         let (_witness, _seeds, fee) = tuple3(body, &decode_arena).expect("spend body");
         assert_eq!(noun_atom_u64(fee, &decode_arena), Some(total_fees));
+    }
+
+    #[test]
+    fn note_data_fee_words_are_two_per_entry_plus_terminal() {
+        let mut arena = Arena::new();
+        let null = arena.atom0();
+        let k1 = arena.alloc_atom_bytes(b"lock");
+        let v1 = arena.alloc_atom_u64(1);
+        let k2 = arena.alloc_atom_bytes(b"memo");
+        let v2 = arena.alloc_atom_u64(2);
+        let map = canonical_zmap_put(&mut arena, null, k1, v1).expect("put");
+        let map = canonical_zmap_put(&mut arena, map, k2, v2).expect("put");
+
+        assert_eq!(count_note_data_words(map, &arena).expect("words"), 5);
+        // The z-map noun itself (Hoon's rep accumulator minus keys) is 3n+1.
+        assert_eq!(count_leaves(map, &arena), 7);
+        assert_eq!(count_note_data_words(null, &arena).expect("empty"), 1);
     }
 }

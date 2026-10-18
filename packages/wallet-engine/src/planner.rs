@@ -131,6 +131,8 @@ pub(crate) fn plan_spends(
         if needed == 0 {
             break;
         }
+        let spend_lock = spendable_lock(&note, source, height)
+            .ok_or_else(|| "selected input note is not spendable".to_string())?;
         let mut capacity = note.assets.value;
         let input_fee = capacity.min(remaining_fee);
         remaining_fee -= input_fee;
@@ -188,10 +190,7 @@ pub(crate) fn plan_spends(
                 version: 1,
                 body: SpendBody::V1(SpendV1 {
                     witness: Witness {
-                        lmp: build_lock_merkle_proof(
-                            spendable_lock(&note, source, height).expect("selected spendable note"),
-                            1,
-                        ),
+                        lmp: build_lock_merkle_proof(spend_lock, 1),
                         pkh: PkhSignature { map: ZMap::new() },
                         hax: ZMap::new(),
                         tim: 0,

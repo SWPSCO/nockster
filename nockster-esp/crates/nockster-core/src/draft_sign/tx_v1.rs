@@ -14,6 +14,8 @@ pub enum SignDraftError {
     ZMap(ZMapError),
     Malformed,
     Unsupported,
+    /// The draft's summed spend fee is below the minimum for its page.
+    FeeBelowMinimum { minimum: u64, provided: u64 },
 }
 
 impl From<CodecError> for SignDraftError {
@@ -132,19 +134,98 @@ pub struct RewriteTxIdV1 {
     pub rewritten: Option<Vec<u8>>,
 }
 
-// tx-types constant:
-// Hash::from_b58("6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ayaV4A")
-const LOCK_MERKLE_AXIS_HASH: [u64; 5] = [
-    1988594973584463658,
-    8158631336633700141,
-    2161567007650232260,
-    460329990575991155,
-    8368574252173164961,
-];
+/// Canonical lock-merkle-proof axis hash, spelled exactly as in
+/// `tx-types::transaction_types_v1::LOCK_MERKLE_AXIS_HASH`. Kept as the
+/// base58 source of truth (and decoded once per tx-id context) so the no_std
+/// signer cannot drift from a second, hand-written limb array.
+pub const LOCK_MERKLE_AXIS_HASH_B58: &str =
+    "6mhCSwJQDvbkbiPAUNjetJtVoo1VLtEhmEYoU4hmdGd6ep1F6ayaV4A";
 const LOCK_MERKLE_PROOF_FULL_TAG: &[u8] = b"full";
-const BASE_FEE: u64 = 1 << 14;
-const INPUT_FEE_DIVISOR: u64 = 4;
-const MIN_FEE: u64 = 256;
+
+// Fee constants come from tx-types whenever it is compiled (std builds:
+// CLI, wasm, tests). The firmware no_std build cannot see the std-gated
+// `tx_types::fee_calculator`, so it mirrors the same blockchain-constants
+// values here; everything else takes a `FeePolicy` from the host instead.
+#[cfg(feature = "std")]
+pub use tx_types::fee_calculator::{BASE_FEE, BYTHOS_PHASE, INPUT_FEE_DIVISOR, MIN_FEE};
+#[cfg(not(feature = "std"))]
+pub const BYTHOS_PHASE: u64 = 54_000;
+#[cfg(not(feature = "std"))]
+pub const BASE_FEE: u64 = 16_384;
+#[cfg(not(feature = "std"))]
+pub const INPUT_FEE_DIVISOR: u64 = 4;
+#[cfg(not(feature = "std"))]
+pub const MIN_FEE: u64 = 256;
+
+/// Height-dependent fee policy (mirrors the wasm composer's policy and the
+/// chain's `blockchain-constants`). Hosts pass overrides from chain config;
+/// `Default` is the post-Bythos mainnet policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeePolicy {
+    pub bythos_phase: u64,
+    pub base_fee: u64,
+    pub input_fee_divisor: u64,
+    pub min_fee: u64,
+}
+
+impl Default for FeePolicy {
+    fn default() -> Self {
+        Self {
+            bythos_phase: BYTHOS_PHASE,
+            base_fee: BASE_FEE,
+            input_fee_divisor: INPUT_FEE_DIVISOR,
+            min_fee: MIN_FEE,
+        }
+    }
+}
+
+/// Decode a base58 u320 hash into its five base-`p` digits, matching
+/// `tx_types::transaction_types::Hash::from_b58`. Used for the chain constants
+/// that are canonically spelled in base58.
+pub fn digest_from_b58(s: &str) -> Result<[u64; 5], SignDraftError> {
+    if s.len() > 64 {
+        return Err(SignDraftError::Malformed);
+    }
+    let bytes = bs58::decode(s)
+        .into_vec()
+        .map_err(|_| SignDraftError::Malformed)?;
+    if bytes.len() > 40 {
+        return Err(SignDraftError::Malformed);
+    }
+
+    // Big-endian bytes -> little-endian 64-bit limbs.
+    let mut limbs: Vec<u64> = Vec::with_capacity(6);
+    for chunk in bytes.rchunks(8) {
+        let mut buf = [0u8; 8];
+        buf[8 - chunk.len()..].copy_from_slice(chunk);
+        limbs.push(u64::from_be_bytes(buf));
+    }
+    if limbs.is_empty() {
+        limbs.push(0);
+    }
+
+    let mut out = [0u64; 5];
+    for digit in out.iter_mut() {
+        *digit = divrem_u64(&mut limbs, tip5::GOLDILOCKS_P);
+        while limbs.last() == Some(&0) && limbs.len() > 1 {
+            limbs.pop();
+        }
+    }
+    if limbs.iter().any(|&limb| limb != 0) {
+        return Err(SignDraftError::Malformed);
+    }
+    Ok(out)
+}
+
+fn divrem_u64(limbs: &mut [u64], divisor: u64) -> u64 {
+    let mut rem: u128 = 0;
+    for limb in limbs.iter_mut().rev() {
+        let cur = (rem << 64) | *limb as u128;
+        *limb = (cur / divisor as u128) as u64;
+        rem = cur % divisor as u128;
+    }
+    rem as u64
+}
 
 fn cheetah_pub_from_sk_tuple(sk_be: [u8; 32]) -> ([u64; 6], [u64; 6]) {
     #[cfg(feature = "std")]
@@ -303,10 +384,40 @@ fn merge_note_data_into(
     merge_note_data_into(arena, right, dst)
 }
 
+/// Hoon's `num-of-leaves` over `(~(rep z-by note-data) |=([[k v] tree]
+/// [k v tree]))`: each entry contributes its key and value leaves and the
+/// accumulator's terminal `~` contributes one more, i.e. `2n+1` for `n`
+/// atom-valued entries. Counting the z-map noun itself gives `3n+1`.
+fn count_note_data_words(note_data: Noun, arena: &Arena) -> Result<u64, SignDraftError> {
+    let mut words = 1u64;
+    count_note_data_words_into(note_data, arena, &mut words)?;
+    Ok(words)
+}
+
+fn count_note_data_words_into(
+    map: Noun,
+    arena: &Arena,
+    words: &mut u64,
+) -> Result<(), SignDraftError> {
+    if map == arena.atom0() {
+        return Ok(());
+    }
+    let (node, left, right) = decompose_map(map, arena).ok_or(SignDraftError::Malformed)?;
+    let (key, value) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    *words = words
+        .checked_add(count_leaves(key, arena))
+        .and_then(|w| w.checked_add(count_leaves(value, arena)))
+        .ok_or(SignDraftError::Malformed)?;
+    count_note_data_words_into(left, arena, words)?;
+    count_note_data_words_into(right, arena, words)
+}
+
 fn collect_seed_note_data_for_fee(
     arena: &mut Arena,
     seeds: Noun,
     merged: &mut Vec<([u64; 5], Noun)>,
+    legacy_seed_words: &mut u64,
+    bythos_active: bool,
 ) -> Result<(), SignDraftError> {
     if seeds == arena.atom0() {
         return Ok(());
@@ -318,23 +429,32 @@ fn collect_seed_note_data_for_fee(
         tuple5(seed, arena).ok_or(SignDraftError::Malformed)?;
     let lock_root = parse_hash(lock_root_noun, arena).ok_or(SignDraftError::Malformed)?;
 
-    if let Some((_root, data)) = merged.iter_mut().find(|(root, _)| *root == lock_root) {
-        merge_note_data_into(arena, note_data, data)?;
+    if bythos_active {
+        if let Some((_root, data)) = merged.iter_mut().find(|(root, _)| *root == lock_root) {
+            merge_note_data_into(arena, note_data, data)?;
+        } else {
+            let mut data = arena.atom0();
+            merge_note_data_into(arena, note_data, &mut data)?;
+            merged.push((lock_root, data));
+        }
     } else {
-        let mut data = arena.atom0();
-        merge_note_data_into(arena, note_data, &mut data)?;
-        merged.push((lock_root, data));
+        *legacy_seed_words = legacy_seed_words
+            .checked_add(count_note_data_words(note_data, arena)?)
+            .ok_or(SignDraftError::Malformed)?;
     }
 
-    collect_seed_note_data_for_fee(arena, left, merged)?;
-    collect_seed_note_data_for_fee(arena, right, merged)
+    collect_seed_note_data_for_fee(arena, left, merged, legacy_seed_words, bythos_active)?;
+    collect_seed_note_data_for_fee(arena, right, merged, legacy_seed_words, bythos_active)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect_spend_words_for_fee(
     arena: &mut Arena,
     spends: Noun,
     merged: &mut Vec<([u64; 5], Noun)>,
+    legacy_seed_words: &mut u64,
     witness_words: &mut u64,
+    bythos_active: bool,
 ) -> Result<(), SignDraftError> {
     if spends == arena.atom0() {
         return Ok(());
@@ -348,25 +468,111 @@ fn collect_spend_words_for_fee(
     }
     let (witness, seeds, _fee) = tuple3(body, arena).ok_or(SignDraftError::Malformed)?;
     *witness_words = witness_words.saturating_add(count_leaves(witness, arena));
-    collect_seed_note_data_for_fee(arena, seeds, merged)?;
+    collect_seed_note_data_for_fee(arena, seeds, merged, legacy_seed_words, bythos_active)?;
 
-    collect_spend_words_for_fee(arena, left, merged, witness_words)?;
-    collect_spend_words_for_fee(arena, right, merged, witness_words)
+    collect_spend_words_for_fee(
+        arena,
+        left,
+        merged,
+        legacy_seed_words,
+        witness_words,
+        bythos_active,
+    )?;
+    collect_spend_words_for_fee(
+        arena,
+        right,
+        merged,
+        legacy_seed_words,
+        witness_words,
+        bythos_active,
+    )
 }
 
-fn calculate_minimum_fee_v1(arena: &mut Arena, spends: Noun) -> Result<u64, SignDraftError> {
+/// Minimum fee at `page_num` under `policy`, matching `tx-types`
+/// `calculate_min_fee_for_page` / Hoon `meets-min-fee`.
+pub fn calculate_minimum_fee_v1(
+    arena: &mut Arena,
+    spends: Noun,
+    page_num: u64,
+    policy: &FeePolicy,
+) -> Result<u64, SignDraftError> {
+    let bythos_active = page_num >= policy.bythos_phase;
     let mut merged = Vec::<([u64; 5], Noun)>::new();
+    let mut legacy_seed_words = 0u64;
     let mut witness_words = 0u64;
-    collect_spend_words_for_fee(arena, spends, &mut merged, &mut witness_words)?;
-    let seed_words = merged
-        .iter()
-        .map(|(_root, note_data)| count_leaves(*note_data, arena))
-        .sum::<u64>();
-    let seed_fee = seed_words.saturating_mul(BASE_FEE);
+    collect_spend_words_for_fee(
+        arena,
+        spends,
+        &mut merged,
+        &mut legacy_seed_words,
+        &mut witness_words,
+        bythos_active,
+    )?;
+
+    let seed_words = if bythos_active {
+        let mut total = 0u64;
+        for (_root, note_data) in merged.iter() {
+            total = total
+                .checked_add(count_note_data_words(*note_data, arena)?)
+                .ok_or(SignDraftError::Malformed)?;
+        }
+        total
+    } else {
+        legacy_seed_words
+    };
+
+    let effective_base_fee = if bythos_active {
+        policy.base_fee
+    } else {
+        policy.base_fee.saturating_mul(2)
+    };
+    let witness_divisor = if bythos_active {
+        policy.input_fee_divisor.max(1)
+    } else {
+        1
+    };
+    let seed_fee = seed_words
+        .checked_mul(effective_base_fee)
+        .ok_or(SignDraftError::Malformed)?;
     let witness_fee = witness_words
-        .saturating_mul(BASE_FEE)
-        .saturating_div(INPUT_FEE_DIVISOR);
-    Ok(seed_fee.saturating_add(witness_fee).max(MIN_FEE))
+        .checked_mul(effective_base_fee)
+        .ok_or(SignDraftError::Malformed)?
+        / witness_divisor;
+    Ok(seed_fee
+        .checked_add(witness_fee)
+        .ok_or(SignDraftError::Malformed)?
+        .max(policy.min_fee))
+}
+
+fn spend_fee_total(spends: Noun, arena: &Arena) -> Result<u64, SignDraftError> {
+    if spends == arena.atom0() {
+        return Ok(0);
+    }
+    let (node, left, right) = decompose_map(spends, arena).ok_or(SignDraftError::Malformed)?;
+    let (_name, spend) = decompose_pair(node, arena).ok_or(SignDraftError::Malformed)?;
+    let (_ver, body) = tuple2(spend, arena).ok_or(SignDraftError::Malformed)?;
+    let (_witness, _seeds, fee) = tuple3(body, arena).ok_or(SignDraftError::Malformed)?;
+    let total = noun_atom_u64(fee, arena).ok_or(SignDraftError::Malformed)?;
+    let left_total = spend_fee_total(left, arena)?;
+    let right_total = spend_fee_total(right, arena)?;
+    total
+        .checked_add(left_total)
+        .and_then(|sum| sum.checked_add(right_total))
+        .ok_or(SignDraftError::Malformed)
+}
+
+fn enforce_minimum_fee(
+    arena: &mut Arena,
+    spends: Noun,
+    page_num: u64,
+    policy: &FeePolicy,
+) -> Result<(), SignDraftError> {
+    let minimum = calculate_minimum_fee_v1(arena, spends, page_num, policy)?;
+    let provided = spend_fee_total(spends, arena)?;
+    if provided < minimum {
+        return Err(SignDraftError::FeeBelowMinimum { minimum, provided });
+    }
+    Ok(())
 }
 
 fn hash_note_data(map: Noun, arena: &Arena) -> Result<[u64; 5], SignDraftError> {
@@ -477,7 +683,7 @@ fn sign_spend_v1(
 
     // SpendV1 body: [witness seeds fee]
     let (witness, seeds, fee) = tuple3(body_noun, arena).ok_or(SignDraftError::Malformed)?;
-    let (lmp, pkh_map, hax, tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+    let (lmp, pkh_map, hax, _tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
 
     // Only sign if the input lock actually authorizes our pkh, and only if doing so does not
     // exceed the lock's m-of-n signature count (tx-engine-1.hoon requires exactly m signatures).
@@ -542,7 +748,7 @@ fn sign_spend_v1(
     }
     let new_pkh_map =
         zmap::canonical_zmap_put(arena, pkh_map_for_signing, pkh_key_noun, value_noun)?;
-    let new_witness = build_tuple(arena, &[lmp, new_pkh_map, hax, tim]);
+    let new_witness = build_tuple(arena, &[lmp, new_pkh_map, hax, arena.atom0()]);
     let new_body = build_tuple(arena, &[new_witness, seeds, fee]);
     Ok(build_tuple(arena, &[ver_noun, new_body]))
 }
@@ -813,20 +1019,20 @@ fn zmap_rebuild_skipping_key(
 
 struct TxIdCtx {
     null_digest: [u64; 5],
-    fake_digest: [u64; 5],
     version_digest: [u64; 5],
+    /// `LOCK_MERKLE_AXIS_HASH`, decoded from its canonical base58 spelling.
+    axis_digest: [u64; 5],
 }
 
 fn tx_id_ctx(arena: &mut Arena) -> Result<TxIdCtx, SignDraftError> {
     let null_digest = tip5::hash_noun_varlen(arena.atom0(), arena)?;
-    let fake_atom = arena.alloc_atom_bytes(b"fake");
-    let fake_digest = tip5::hash_noun_varlen(fake_atom, arena)?;
     let version_atom = arena.alloc_atom_u64(1);
     let version_digest = tip5::hash_noun_varlen(version_atom, arena)?;
+    let axis_digest = digest_from_b58(LOCK_MERKLE_AXIS_HASH_B58)?;
     Ok(TxIdCtx {
         null_digest,
-        fake_digest,
         version_digest,
+        axis_digest,
     })
 }
 
@@ -927,6 +1133,35 @@ pub fn message_digest_v1(message: &[u8]) -> Result<[u64; 5], SignDraftError> {
         build_tuple(&mut arena, &belts)
     };
     Ok(tip5::hash_noun_varlen(list, &arena)?)
+}
+
+#[cfg(test)]
+mod fee_word_tests {
+    use super::*;
+
+    #[test]
+    fn note_data_words_are_two_per_entry_plus_terminal() {
+        let mut arena = Arena::new();
+        let null = arena.atom0();
+        let k1 = arena.alloc_atom_bytes(b"lock");
+        let v1 = arena.alloc_atom_u64(1);
+        let k2 = arena.alloc_atom_bytes(b"memo");
+        let v2 = arena.alloc_atom_u64(2);
+        // A cell-valued entry contributes both of its leaves.
+        let v3 = arena.alloc_cell(v1, v2);
+
+        let map = zmap::canonical_zmap_put(&mut arena, null, k1, v1).expect("put");
+        let map = zmap::canonical_zmap_put(&mut arena, map, k2, v2).expect("put");
+        // Two atom-valued entries: 2n + 1 = 5 word leaves (Hoon `num-of-leaves`).
+        assert_eq!(count_note_data_words(map, &arena).expect("words"), 5);
+        // The z-map noun itself has 3n + 1 = 7 leaves: the old over-count.
+        assert_eq!(count_leaves(map, &arena), 7);
+        assert_eq!(count_note_data_words(null, &arena).expect("empty"), 1);
+
+        let cell_key = arena.alloc_atom_bytes(b"tree");
+        let map = zmap::canonical_zmap_put(&mut arena, map, cell_key, v3).expect("put");
+        assert_eq!(count_note_data_words(map, &arena).expect("words"), 8);
+    }
 }
 
 #[cfg(test)]
@@ -1106,8 +1341,12 @@ fn hash_lock_primitive_hashable(
     }
 
     if arena.atom_eq_bytes(header_id, b"hax") {
+        // `%hax` body is the z-set of preimage commitments and hashes exactly
+        // like `%pkh`'s hash set (nockchain `hashable:hax`). The old `"fake"`
+        // placeholder produced a wrong tx id for every HAX-locked spend.
         let tag_digest = tip5::hash_noun_varlen(header, arena)?;
-        return Ok(tip5::hash_ten_cell(tag_digest, ctx.fake_digest)?);
+        let h_digest = hash_zset_hashes(body, arena, ctx)?;
+        return Ok(tip5::hash_ten_cell(tag_digest, h_digest)?);
     }
 
     if arena.atom_eq_bytes(header_id, b"brn") {
@@ -1175,8 +1414,7 @@ fn hash_lock_merkle_proof_hashable(
             Ok(tip5::hash_ten_cell(version_digest, inner)?)
         }
         None => {
-            let axis_digest = LOCK_MERKLE_AXIS_HASH;
-            let inner = tip5::hash_ten_cell(axis_digest, merk_digest)?;
+            let inner = tip5::hash_ten_cell(ctx.axis_digest, merk_digest)?;
             Ok(tip5::hash_ten_cell(spend_condition_hash, inner)?)
         }
     }
@@ -1274,12 +1512,15 @@ fn hash_witness_hashable(
     arena: &Arena,
     ctx: &TxIdCtx,
 ) -> Result<[u64; 5], SignDraftError> {
-    let (lmp, pkh_map, hax, tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
+    let (lmp, pkh_map, hax, _tim) = tuple4(witness, arena).ok_or(SignDraftError::Malformed)?;
 
     let lmp_hash = hash_lock_merkle_proof_hashable(lmp, arena, ctx)?;
     let pkh_hash = hash_pkh_signature_map_hashable(pkh_map, arena, ctx)?;
     let hax_hash = hash_hax_map_hashable(hax, arena, ctx)?;
-    let tim_digest = tip5::hash_noun_varlen(tim, arena)?;
+    // Upstream decodes `Witness` with `tim = 0` (the field is a placeholder;
+    // Hoon requires `~`), so any spelling hashes as leaf+0 and is normalized
+    // away when the signed draft is re-jammed.
+    let tim_digest = ctx.null_digest;
 
     let mut acc = tim_digest;
     acc = tip5::hash_ten_cell(hax_hash, acc)?;
@@ -1848,9 +2089,20 @@ pub fn draft_review_v1(
     draft_jam: &[u8],
     cfg: &SignerConfig,
 ) -> Result<DraftReviewV1, SignDraftError> {
+    draft_review_v1_with_policy(draft_jam, cfg, BYTHOS_PHASE, FeePolicy::default())
+}
+
+/// Review with an explicit page height and fee policy (host-supplied chain
+/// constants). `minimum_fee` in the result is computed at `current_height`.
+pub fn draft_review_v1_with_policy(
+    draft_jam: &[u8],
+    cfg: &SignerConfig,
+    current_height: u64,
+    fee_policy: FeePolicy,
+) -> Result<DraftReviewV1, SignDraftError> {
     let pk_coords = cheetah_pub_from_sk_tuple(cfg.sk_be);
     let signer_pkh = pkh_digest_from_pk(pk_coords)?;
-    draft_review_v1_for_pkh(draft_jam, signer_pkh)
+    draft_review_v1_for_pkh_with_policy(draft_jam, signer_pkh, current_height, fee_policy)
 }
 
 /// Review a draft against a known signer pkh digest, for hosts that hold only
@@ -1859,6 +2111,20 @@ pub fn draft_review_v1(
 pub fn draft_review_v1_for_pkh(
     draft_jam: &[u8],
     signer_pkh: [u64; 5],
+) -> Result<DraftReviewV1, SignDraftError> {
+    draft_review_v1_for_pkh_with_policy(
+        draft_jam,
+        signer_pkh,
+        BYTHOS_PHASE,
+        FeePolicy::default(),
+    )
+}
+
+pub fn draft_review_v1_for_pkh_with_policy(
+    draft_jam: &[u8],
+    signer_pkh: [u64; 5],
+    current_height: u64,
+    fee_policy: FeePolicy,
 ) -> Result<DraftReviewV1, SignDraftError> {
     let mut arena = Arena::new();
     let root = cue(draft_jam, &mut arena)?;
@@ -1902,7 +2168,8 @@ pub fn draft_review_v1_for_pkh(
         return Err(SignDraftError::Malformed);
     };
 
-    let minimum_fee = calculate_minimum_fee_v1(&mut arena, spends)?;
+    let minimum_fee =
+        calculate_minimum_fee_v1(&mut arena, spends, current_height, &fee_policy)?;
 
     let mut acc: Vec<OutAcc> = Vec::new();
     let mut refund: Option<RefundAcc> = None;
@@ -1967,6 +2234,17 @@ pub fn draft_review_v1_for_pkh(
 }
 
 pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, SignDraftError> {
+    sign_draft_v1_with_policy(draft_jam, cfg, BYTHOS_PHASE, FeePolicy::default())
+}
+
+/// Sign with an explicit page height and fee policy. Refuses drafts whose
+/// summed spend fee is below the computed minimum (`meets-min-fee`).
+pub fn sign_draft_v1_with_policy(
+    draft_jam: &[u8],
+    cfg: &SignerConfig,
+    current_height: u64,
+    fee_policy: FeePolicy,
+) -> Result<Vec<u8>, SignDraftError> {
     let pk_coords = cheetah_pub_from_sk_tuple(cfg.sk_be);
 
     let mut arena = Arena::new();
@@ -2070,6 +2348,15 @@ pub fn sign_draft_v1(draft_jam: &[u8], cfg: &SignerConfig) -> Result<Vec<u8>, Si
     } else {
         return Err(SignDraftError::Malformed);
     };
+
+    let fee_spends = match &outer {
+        Outer::WalletV1 { spends } => *spends,
+        Outer::WalletTxV1 { spends, .. } => *spends,
+        Outer::RawTx { raw } | Outer::TxTransact { raw, .. } => {
+            tuple3(*raw, &arena).ok_or(SignDraftError::Malformed)?.2
+        }
+    };
+    enforce_minimum_fee(&mut arena, fee_spends, current_height, &fee_policy)?;
 
     let new_root = match outer {
         Outer::WalletV1 { spends } => {

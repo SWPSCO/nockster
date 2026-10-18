@@ -4,12 +4,10 @@ use wasm_bindgen::prelude::*;
 use nockapp::noun::slab::NounSlab;
 use nockapp::NounAllocator;
 use noun_serde::NounEncode;
-use tx_types::hashing::hashable::Hashable;
 use tx_types::transaction_types::{Hash, SchnorrPubkey, F6LT};
 
 mod compose_v1;
 mod review_v1;
-mod tip5;
 
 pub use compose_v1::{
     compose_tx_v1_min_inputs,
@@ -26,10 +24,7 @@ pub fn init() {
         // 256MB to ensure we have space for 64MB nockstack
         let target_pages = 4096;
         if initial_pages < target_pages {
-            let grow_result = core::arch::wasm32::memory_grow(0, target_pages - initial_pages);
-            if grow_result != usize::MAX {
-                let final_pages = core::arch::wasm32::memory_size(0);
-            }
+            let _ = core::arch::wasm32::memory_grow(0, target_pages - initial_pages);
         }
     }
 
@@ -47,93 +42,6 @@ pub fn init() {
             )
             .into(),
         );
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn fmt_u64x5(arr: &[u64; 5]) -> String {
-    format!(
-        "{:016x}.{:016x}.{:016x}.{:016x}.{:016x}",
-        arr[0], arr[1], arr[2], arr[3], arr[4]
-    )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn format_hash(hash: &Hash) -> String {
-    fmt_u64x5(&hash.values)
-}
-
-/// Hash a SchnorrPubkey using NounSlab (not NockStack!)
-/// Converts to noun then hashes with reference hasher
-pub fn build_schnorr_pubkey_hashable(pk: &SchnorrPubkey) -> Result<Hashable, JsValue> {
-    use nockapp::noun::slab::NounSlab;
-    use noun_serde::NounEncode;
-    use tx_types::hashing::hashable::Hashable;
-
-    #[cfg(target_arch = "wasm32")]
-    web_sys::console::log_1(&"hash_schnorr_pubkey: creating NounSlab".into());
-
-    let mut slab: NounSlab = NounSlab::new();
-
-    #[cfg(target_arch = "wasm32")]
-    web_sys::console::log_1(&"hash_schnorr_pubkey: converting pubkey to noun".into());
-
-    let pk_noun = pk.to_noun(&mut slab);
-    let space = slab.noun_space();
-
-    #[cfg(target_arch = "wasm32")]
-    web_sys::console::log_1(
-        &"hash_schnorr_pubkey: hashing noun (may crash if NockStack needed)".into(),
-    );
-
-    let pk_hash = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun, &space)
-        .map_err(|e| JsValue::from_str(&format!("Pubkey hash failed: {:?}", e)))?;
-
-    #[cfg(target_arch = "wasm32")]
-    web_sys::console::log_1(
-        &format!(
-            "hash_schnorr_pubkey: success! hash = {}",
-            format_hash(&pk_hash)
-        )
-        .into(),
-    );
-
-    Ok(Hashable::Hash(pk_hash))
-}
-
-pub fn hash_hashable_wasm(h: &tx_types::hashing::hashable::Hashable) -> Result<Hash, JsValue> {
-    use tx_types::hashing::hashable::Hashable;
-
-    match h {
-        Hashable::Leaf(data) => {
-            // convert bytes to zero-padded u64s
-            let mut u64s = Vec::new();
-            for chunk in data.chunks(8) {
-                let mut bytes = [0u8; 8];
-                bytes[..chunk.len()].copy_from_slice(chunk);
-                u64s.push(u64::from_le_bytes(bytes));
-            }
-            Ok(tip5::hash_varlen_u64s(&u64s))
-        }
-        Hashable::Hash(digest) => {
-            // already hashed
-            Ok(digest.clone())
-        }
-        Hashable::Cell(left, right) => {
-            // recursively hash both sides and combine
-            let left_hash = hash_hashable_wasm(left)?;
-            let right_hash = hash_hashable_wasm(right)?;
-            // combine hash([left.values, right.values])
-            Ok(tip5::hash_two_hashes(&left_hash, &right_hash))
-        }
-        Hashable::List(items) => {
-            // hash each item recursively
-            let hashes: Result<Vec<Hash>, JsValue> = items.iter().map(hash_hashable_wasm).collect();
-            let hashes = hashes?;
-
-            // hash the list of hashes
-            Ok(tip5::hash_hash_list(&hashes))
-        }
     }
 }
 

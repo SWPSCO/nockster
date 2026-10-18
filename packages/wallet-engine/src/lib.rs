@@ -603,14 +603,11 @@ fn normalize_note_payload(value: JsonValue) -> Result<JsonValue, String> {
     match value {
         JsonValue::Array(mut notes) => {
             for (idx, note) in notes.iter_mut().enumerate() {
-                if !note.is_object() {
+                let Some(map) = note.as_object_mut() else {
                     return Err(format!(
                         "expected each note to be an object, found {note:?}"
                     ));
-                }
-                let map = note
-                    .as_object_mut()
-                    .expect("checked note is object; as_object_mut must succeed");
+                };
                 let version_value = map
                     .get_mut("version")
                     .ok_or_else(|| format!("note #{idx} is missing required field 'version'"))?;

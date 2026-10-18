@@ -724,7 +724,7 @@ fn decode_wallet_transaction_base64(value: &str) -> Result<WalletTransaction, St
     let noun = slab
         .cue_into(Bytes::from(bytes))
         .map_err(|err| format!("failed to cue wallet noun: {err}"))?;
-    WalletTransaction::from_noun(&noun)
+    WalletTransaction::from_noun(&noun, &slab.noun_space())
         .map_err(|err| format!("failed to decode wallet transaction noun: {err}"))
 }
 

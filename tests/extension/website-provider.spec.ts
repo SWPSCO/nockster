@@ -199,6 +199,9 @@ test('website provider gates connections and signatures on approval and binds re
     await expect(firstChoice).toBeChecked();
     await firstChoice.press('ArrowDown');
     await expect(secondChoice).toBeChecked();
+    // Re-select explicitly so the approval window commits the bound address before Connect.
+    await secondChoice.check();
+    await expect(secondChoice).toBeChecked();
     await choose.screenshot({ path: '/tmp/nockster-wallet-options.png' });
     await choose.setViewportSize({ width: 280, height: 620 });
     await choose.screenshot({ path: '/tmp/nockster-wallet-options-narrow.png' });

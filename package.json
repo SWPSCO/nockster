@@ -29,7 +29,7 @@
     "generate-types:rust:v1": "openapi-generator-cli generate -i nockblocks-api-v1.yaml -g rust -t ./openapi-generator-templates/rust -o ./packages/wallet-engine/nockblocks_api_v1 --additional-properties=packageName=nockblocks_api_v1,packageVersion=1.0.0,library=reqwest --global-property=models,modelDocs=false,apis=,supportingFiles=",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "typecheck": "tsc --noEmit && svelte-check --workspace packages/wallet --tsconfig ./tsconfig.json --threshold error",
-    "test:core": "cargo +nightly-2025-02-14 test --manifest-path packages/wallet-engine/Cargo.toml --lib --locked",
+    "test:core": "cargo +nightly-2026-04-03 test --manifest-path packages/wallet-engine/Cargo.toml --lib --locked",
     "dev:mobile": "npm run dev --workspace @nockster/mobile --",
     "build:mobile:web": "npm run build:web --workspace @nockster/mobile --",
     "build:mobile": "npm run build:wasm && npm run mobile:sync",

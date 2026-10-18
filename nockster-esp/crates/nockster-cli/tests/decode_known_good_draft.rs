@@ -42,7 +42,7 @@ fn decode_local_bythos_v1_draft_as_wallet_tx() {
         for (spend_name, spend) in spends.map.tap() {
             println!("\n  Spend: {:?}", spend_name);
             if let SpendBody::V1(sb) = &spend.body {
-                let sig_hash = sb.compute_sig_hash();
+                let sig_hash = sb.compute_sig_hash().expect("sig hash");
                 println!("    Fee: {}", sb.fee.value);
                 println!(
                     "    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",

@@ -83,7 +83,10 @@ pub fn print_raw_v1_details(raw: &RawTransactionV1) {
 
     let stats = tx_types::transaction_stats(raw);
     let computed = compute_tx_id_v1(&raw.spends);
-    let verified = raw.id == computed;
+    let verified = computed
+        .as_ref()
+        .map(|computed| raw.id == *computed)
+        .unwrap_or(false);
 
     ui::subhead("transaction");
     ui::kv("version", ui::strong(&raw.version.to_string()));
@@ -96,8 +99,10 @@ pub fn print_raw_v1_details(raw: &RawTransactionV1) {
         "tx id",
         format!("{}  {}", ui::accent(&raw.id.to_b58()), badge),
     );
-    if !verified {
-        ui::kv("computed", ui::dim(&computed.to_b58()));
+    match &computed {
+        Ok(computed) if !verified => ui::kv("computed", ui::dim(&computed.to_b58())),
+        Ok(_) => {}
+        Err(err) => ui::warn(&format!("could not compute tx id: {err}")),
     }
 
     ui::subhead("summary");

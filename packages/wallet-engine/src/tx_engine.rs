@@ -368,7 +368,9 @@ fn plan_transaction(
 }
 
 fn finish_transaction(spends: SpendsV1, fee: u64) -> Result<BuiltTransaction, String> {
-    let tx_id = compute_tx_id_v1(&spends).to_b58();
+    let tx_id = compute_tx_id_v1(&spends)
+        .map_err(|err| format!("compute tx id: {err}"))?
+        .to_b58();
     let input_notes = spends
         .map
         .tap()
@@ -428,7 +430,7 @@ fn build_transaction_from_spends(
             }
         }
     }
-    let tx_id = compute_tx_id_v1(spends);
+    let tx_id = compute_tx_id_v1(spends).map_err(|err| format!("compute tx id: {err}"))?;
     Ok(Transaction {
         name: tx_id.to_b58(),
         p: Inputs::V1(InputsV1 { map: inputs_map }),
@@ -671,7 +673,20 @@ pub(crate) fn verify_bridge_intent(
         return Err("one bridge destination is required".into());
     }
     let expected = convert_recipients(recipients)?;
+    let expected_hashes = expected
+        .iter()
+        .map(|output| {
+            output
+                .note_data
+                .to_hash()
+                .map_err(|err| format!("output note-data hash: {err}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let refund = crate::planner::payment(source, 0, false);
+    let refund_hash = refund
+        .note_data
+        .to_hash()
+        .map_err(|err| format!("refund note-data hash: {err}"))?;
     let raw = crate::tx_jam::to_raw_tx_jam(transaction)?;
     let mut slab = NounSlab::<NockJammer>::new();
     let noun = slab.cue_into(Bytes::from(general_purpose::STANDARD.decode(raw).map_err(|e| e.to_string())?))
@@ -692,10 +707,19 @@ pub(crate) fn verify_bridge_intent(
             if seed.output_source.is_some() {
                 return Err("unexpected bridge output source".into());
             }
-            if let Some(index) = expected.iter().position(|output|
-                output.lock_root == seed.lock_root && output.note_data.to_hash() == seed.note_data.to_hash()) {
+            let seed_hash = seed
+                .note_data
+                .to_hash()
+                .map_err(|err| format!("seed note-data hash: {err}"))?;
+            if let Some(index) = expected
+                .iter()
+                .enumerate()
+                .position(|(i, output)| {
+                    output.lock_root == seed.lock_root && expected_hashes[i] == seed_hash
+                })
+            {
                 totals[index] = totals[index].checked_add(seed.gift.value).ok_or("output overflow")?;
-            } else if seed.lock_root != refund.lock_root || seed.note_data.to_hash() != refund.note_data.to_hash() {
+            } else if seed.lock_root != refund.lock_root || seed_hash != refund_hash {
                 return Err("transaction contains an unreviewed output or bridge destination".into());
             }
         }
@@ -976,8 +1000,14 @@ mod tests {
         let inferred = convert_note_v1(api_note.clone()).unwrap();
         api_note.note_data.clear();
         let on_chain = convert_note_v1(api_note).unwrap();
-        assert_eq!(inferred.to_hash(), on_chain.to_hash());
-        assert_ne!(disclosed.to_hash(), on_chain.to_hash());
+        assert_eq!(
+            inferred.to_hash().expect("note hash"),
+            on_chain.to_hash().expect("note hash")
+        );
+        assert_ne!(
+            disclosed.to_hash().expect("note hash"),
+            on_chain.to_hash().expect("note hash")
+        );
         assert_eq!(inferred.note_data.map.wyt(), 0);
         assert_eq!(disclosed.note_data.map.wyt(), 1);
     }
@@ -1031,7 +1061,7 @@ mod tests {
                     let SpendBody::V1(body) = spend.body else { panic!("expected V1 spend") };
                     assert!(body.seeds.set.wyt() > 0);
                     for seed in body.seeds.set.tap() {
-                        assert_eq!(seed.parent_hash, on_chain.to_hash());
+                        assert_eq!(seed.parent_hash, on_chain.to_hash().expect("note hash"));
                     }
                 }
                 let inspected = crate::tx_jam::inspect_tx_jam(&built.base64_tx).unwrap();
@@ -1057,7 +1087,10 @@ mod tests {
         let inspected =
             crate::tx_jam::inspect_tx_jam(&built.base64_tx).expect("inspect signed transaction");
         assert!(inspected.spends.iter().all(|spend| spend.is_fully_signed));
-        assert_eq!(compute_tx_id_v1(&wallet_tx.spends).to_b58(), wallet_tx.name);
+        assert_eq!(
+            compute_tx_id_v1(&wallet_tx.spends).expect("tx id").to_b58(),
+            wallet_tx.name
+        );
         assert_eq!(wallet_tx.spends.map.wyt(), 1);
 
         let reencoded = encode_wallet_transaction(&wallet_tx);

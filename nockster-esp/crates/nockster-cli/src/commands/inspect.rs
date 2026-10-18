@@ -23,12 +23,12 @@ fn decode_no_panic<T: NounDecode>(noun: &Noun, space: &NounSpace) -> Option<T> {
         .and_then(|r| r.ok())
 }
 
-fn raw_v1_from_spends(spends: SpendsV1) -> RawTransactionV1 {
-    RawTransactionV1 {
+fn raw_v1_from_spends(spends: SpendsV1) -> anyhow::Result<RawTransactionV1> {
+    Ok(RawTransactionV1 {
         version: 1,
-        id: compute_tx_id_v1(&spends),
+        id: compute_tx_id_v1(&spends).context("compute tx id")?,
         spends,
-    }
+    })
 }
 
 fn decode_tx_v1_wrapper(noun: &Noun, space: &NounSpace) -> Option<SpendsV1> {
@@ -68,18 +68,18 @@ fn bythos_raw_from_noun(noun: &Noun, space: &NounSpace) -> anyhow::Result<RawTra
     }
 
     if let Some(spends) = decode_tx_v1_wrapper(noun, space) {
-        return Ok(raw_v1_from_spends(spends));
+        return raw_v1_from_spends(spends);
     }
 
     if let Some(wallet) = decode_no_panic::<WalletTransactionV1>(noun, space) {
-        let computed = compute_tx_id_v1(&wallet.spends);
+        let computed = compute_tx_id_v1(&wallet.spends).context("compute wallet tx id")?;
         if wallet.name != computed.to_b58() {
             ui::warn(&format!(
                 "wallet name differs from computed txid: {}",
                 computed.to_b58()
             ));
         }
-        return Ok(raw_v1_from_spends(wallet.spends));
+        return raw_v1_from_spends(wallet.spends);
     }
 
     Err(anyhow!(

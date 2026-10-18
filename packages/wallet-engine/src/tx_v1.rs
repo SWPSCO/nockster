@@ -22,6 +22,8 @@ pub fn sign_transaction_v1(
         spends.put(name, spend);
     }
     inputs.map = signed;
-    tx.name = tx_types::compute_tx_id_v1(&tx_types::SpendsV1 { map: spends }).to_b58();
+    tx.name = tx_types::compute_tx_id_v1(&tx_types::SpendsV1 { map: spends })
+        .map_err(|err| format!("compute tx id: {err}"))?
+        .to_b58();
     Ok(tx)
 }

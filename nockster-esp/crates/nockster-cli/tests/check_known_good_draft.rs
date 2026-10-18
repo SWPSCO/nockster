@@ -47,7 +47,7 @@ fn check_local_bythos_v1_draft_sig_hash() {
         for (name, spend) in v1.spends.map.tap() {
             println!("  Spend: {:?}", name);
             if let SpendBody::V1(sb) = &spend.body {
-                let sig_hash = sb.compute_sig_hash();
+                let sig_hash = sb.compute_sig_hash().expect("sig hash");
                 println!("    Fee: {}", sb.fee.value);
                 println!(
                     "    sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
@@ -80,7 +80,7 @@ fn check_local_bythos_v1_draft_sig_hash() {
                     for (name, spend) in v1.spends.map.tap() {
                         println!("    Spend: {:?}", name);
                         if let SpendBody::V1(sb) = &spend.body {
-                            let sig_hash = sb.compute_sig_hash();
+                            let sig_hash = sb.compute_sig_hash().expect("sig hash");
                             println!(
                                 "      sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
                                 sig_hash.values[0],

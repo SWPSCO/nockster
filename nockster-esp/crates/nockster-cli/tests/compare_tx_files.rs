@@ -47,7 +47,7 @@ fn compare_local_bythos_v1_tx_files() {
         for (name, spend) in v1.spends.map.tap() {
             println!("  Spend: {:?}", name);
             if let SpendBody::V1(sb) = &spend.body {
-                let sig_hash = sb.compute_sig_hash();
+                let sig_hash = sb.compute_sig_hash().expect("sig hash");
                 tx_sig_hash = Some(sig_hash.clone());
                 println!("    Fee: {}", sb.fee.value);
                 println!(
@@ -77,7 +77,7 @@ fn compare_local_bythos_v1_tx_files() {
         for (name, spend) in v1.spends.map.tap() {
             println!("  Spend: {:?}", name);
             if let SpendBody::V1(sb) = &spend.body {
-                let sig_hash = sb.compute_sig_hash();
+                let sig_hash = sb.compute_sig_hash().expect("sig hash");
                 signed_sig_hash = Some(sig_hash.clone());
                 println!("    Fee: {}", sb.fee.value);
                 println!(

@@ -95,7 +95,7 @@ pub(crate) fn inspect_tx_jam(base64_jam: &str) -> Result<JamInspectResult, Strin
     let decoded = decode_tx(base64_jam)?;
     match decoded {
         DecodedJamTx::Wallet(wallet_tx) => {
-            let tx_id = compute_tx_id_v1(&wallet_tx.spends).to_b58();
+            let tx_id = compute_tx_id_v1(&wallet_tx.spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             let outputs = summarize_outputs(&wallet_tx.spends)?;
             let spends = summarize_spends(&wallet_tx.spends)?;
             Ok(JamInspectResult {
@@ -107,7 +107,7 @@ pub(crate) fn inspect_tx_jam(base64_jam: &str) -> Result<JamInspectResult, Strin
             })
         }
         DecodedJamTx::WalletV1Bundle(wallet_tx) => {
-            let tx_id = compute_tx_id_v1(&wallet_tx.spends).to_b58();
+            let tx_id = compute_tx_id_v1(&wallet_tx.spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             let outputs = summarize_outputs(&wallet_tx.spends)?;
             let spends = summarize_spends(&wallet_tx.spends)?;
             Ok(JamInspectResult {
@@ -173,7 +173,7 @@ pub(crate) fn to_raw_tx_jam(base64_jam: &str) -> Result<String, String> {
     match decoded {
         DecodedJamTx::Wallet(wallet_tx) => {
             let spends = wallet_tx.spends;
-            let tx_id_hash = compute_tx_id_v1(&spends);
+            let tx_id_hash = compute_tx_id_v1(&spends).map_err(|err| format!("compute tx id: {err}"))?;
             let raw_tx = RawTransactionV1 {
                 version: 1,
                 id: tx_id_hash,
@@ -183,7 +183,7 @@ pub(crate) fn to_raw_tx_jam(base64_jam: &str) -> Result<String, String> {
         }
         DecodedJamTx::WalletV1Bundle(wallet_tx) => {
             let spends = wallet_tx.spends;
-            let tx_id_hash = compute_tx_id_v1(&spends);
+            let tx_id_hash = compute_tx_id_v1(&spends).map_err(|err| format!("compute tx id: {err}"))?;
             let raw_tx = RawTransactionV1 {
                 version: 1,
                 id: tx_id_hash,
@@ -205,17 +205,17 @@ pub(crate) fn to_wallet_tx_jam(base64_jam: &str) -> Result<String, String> {
     let decoded = decode_tx(trimmed)?;
     match decoded {
         DecodedJamTx::Wallet(mut wallet_tx) => {
-            let tx_id = compute_tx_id_v1(&wallet_tx.spends).to_b58();
+            let tx_id = compute_tx_id_v1(&wallet_tx.spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             wallet_tx.name = tx_id;
             Ok(encode_base64(&wallet_tx))
         }
         DecodedJamTx::WalletV1Bundle(mut wallet_tx) => {
-            let tx_id = compute_tx_id_v1(&wallet_tx.spends).to_b58();
+            let tx_id = compute_tx_id_v1(&wallet_tx.spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             wallet_tx.name = tx_id;
             Ok(encode_base64(&wallet_tx))
         }
         DecodedJamTx::RawV1(raw_tx) => {
-            let tx_id = compute_tx_id_v1(&raw_tx.spends).to_b58();
+            let tx_id = compute_tx_id_v1(&raw_tx.spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             let wallet_tx = WalletTransaction {
                 name: tx_id,
                 spends: raw_tx.spends,
@@ -247,7 +247,7 @@ fn sign_tx_jam_inner(
                 &wallet_pubkey_hash,
                 selected_spends,
             )?;
-            let tx_id = compute_tx_id_v1(&spends).to_b58();
+            let tx_id = compute_tx_id_v1(&spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             wallet_tx.name = tx_id.clone();
             wallet_tx.spends = spends;
             Ok(JamSignResult {
@@ -265,7 +265,7 @@ fn sign_tx_jam_inner(
                 &wallet_pubkey_hash,
                 selected_spends,
             )?;
-            let tx_id = compute_tx_id_v1(&spends).to_b58();
+            let tx_id = compute_tx_id_v1(&spends).map_err(|err| format!("compute tx id: {err}"))?.to_b58();
             wallet_tx.name = tx_id.clone();
             wallet_tx.spends = spends;
             Ok(JamSignResult {
@@ -283,7 +283,7 @@ fn sign_tx_jam_inner(
                 &wallet_pubkey_hash,
                 selected_spends,
             )?;
-            let tx_id_hash = compute_tx_id_v1(&spends);
+            let tx_id_hash = compute_tx_id_v1(&spends).map_err(|err| format!("compute tx id: {err}"))?;
             let tx_id = tx_id_hash.to_b58();
             raw_tx.id = tx_id_hash;
             raw_tx.spends = spends;
@@ -318,7 +318,8 @@ fn decode_tx(base64_jam: &str) -> Result<DecodedJamTx, String> {
     // Attempt decodes in an order that avoids panics from mismatched shapes.
     if let Ok(raw_tx) = RawTransactionV1::from_noun(&noun, &space) {
         validate_spends(&raw_tx.spends)?;
-        if raw_tx.version != 1 || raw_tx.id != compute_tx_id_v1(&raw_tx.spends) {
+        let computed = compute_tx_id_v1(&raw_tx.spends).map_err(|err| format!("compute tx id: {err}"))?;
+        if raw_tx.version != 1 || raw_tx.id != computed {
             return Err("invalid raw transaction version or ID".into());
         }
         return Ok(DecodedJamTx::RawV1(raw_tx));
@@ -328,7 +329,8 @@ fn decode_tx(base64_jam: &str) -> Result<DecodedJamTx, String> {
         return match raw_tx {
             RawTransaction::V1(v1) => {
                 validate_spends(&v1.spends)?;
-                if v1.version != 1 || v1.id != compute_tx_id_v1(&v1.spends) {
+                let computed = compute_tx_id_v1(&v1.spends).map_err(|err| format!("compute tx id: {err}"))?;
+                if v1.version != 1 || v1.id != computed {
                     return Err("invalid raw transaction ID".into());
                 }
                 Ok(DecodedJamTx::RawV1(v1))
@@ -438,9 +440,11 @@ fn verify_draft_spends(draft: &str, signed: &str, require_complete: bool) -> Res
         }
         SpendsV1 { map }
     }
-    if compute_tx_id_v1(&without_signatures(expected, !require_complete))
-        != compute_tx_id_v1(&without_signatures(actual, !require_complete))
-    {
+    let expected_id = compute_tx_id_v1(&without_signatures(expected, !require_complete))
+        .map_err(|err| format!("compute tx id: {err}"))?;
+    let actual_id = compute_tx_id_v1(&without_signatures(actual, !require_complete))
+        .map_err(|err| format!("compute tx id: {err}"))?;
+    if expected_id != actual_id {
         return Err("signed transaction differs from the approved draft".into());
     }
     Ok(())
@@ -484,6 +488,9 @@ fn summarize_spends(spends: &SpendsV1) -> Result<Vec<JamSpendSummary>, String> {
         let lock = extract_pkh_summary(body.witness.lmp.spend_condition())
             .map(|pkh| JamLockSummary { pkh: Some(pkh) });
 
+        let sig_hash = body
+            .compute_sig_hash()
+            .map_err(|err| format!("compute sig hash: {err}"))?;
         let mut signed_by = body
             .witness
             .pkh
@@ -494,7 +501,7 @@ fn summarize_spends(spends: &SpendsV1) -> Result<Vec<JamSpendSummary>, String> {
                 value.pk.to_hash() == *hash
                     && tx_types::validation::schnorr_verify_digest(
                         value.pk.clone(),
-                        body.compute_sig_hash(),
+                        sig_hash.clone(),
                         value.sig.clone(),
                     )
             })
@@ -606,7 +613,9 @@ fn extract_seed_lock_summary(seed: &SeedV1) -> Result<Option<JamLockSummary>, St
             None,
         )
     };
-    if tx_types::hash_hashable(&hashable) != seed.lock_root {
+    let computed_root = tx_types::hash_hashable(&hashable)
+        .map_err(|err| format!("hash output lock data: {err}"))?;
+    if computed_root != seed.lock_root {
         return Err("output lock data does not match its lock root".into());
     }
     Ok(Some(JamLockSummary { pkh }))
@@ -677,7 +686,10 @@ fn sign_spends_v1(
         });
 
         if should_sign && spend_is_signable(&spend, wallet_pubkey_hash) {
-            let sig_hash = spend.body.sig_hash();
+            let sig_hash = spend
+                .body
+                .sig_hash()
+                .map_err(|err| format!("compute sig hash: {err}"))?;
             let (chal, sig) = schnorr_sign_digest(
                 signing_key.clone(),
                 schnorr_pubkey.clone(),
@@ -743,7 +755,7 @@ mod tests {
         let spends = draft();
         let raw = RawTransactionV1 {
             version: 1,
-            id: compute_tx_id_v1(&spends),
+            id: compute_tx_id_v1(&spends).expect("tx id"),
             spends: spends.clone(),
         };
         assert!(inspect_tx_jam(&encode_base64(&raw)).is_ok());
@@ -767,7 +779,7 @@ mod tests {
     #[test]
     fn wallet_display_name_is_not_the_transaction_id() {
         let spends = draft();
-        let expected = compute_tx_id_v1(&spends).to_b58();
+        let expected = compute_tx_id_v1(&spends).expect("tx id").to_b58();
         let tx = WalletTransaction {
             name: "payment".into(),
             spends,

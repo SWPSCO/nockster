@@ -29,7 +29,7 @@ fn verify_local_bythos_v1_signed_signature() {
 
         if let SpendBody::V1(sb) = &spend.body {
             // Get sig_hash
-            let sig_hash = sb.compute_sig_hash();
+            let sig_hash = sb.compute_sig_hash().expect("sig hash");
             println!(
                 "  sig_hash: {:016x}_{:016x}_{:016x}_{:016x}_{:016x}",
                 sig_hash.values[0],

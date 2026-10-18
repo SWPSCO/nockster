@@ -161,7 +161,7 @@ fn sign_draft_v1_inserts_expected_signature() {
     let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     // Verify the inserted signature matches signing the tx-types sig-hash.
@@ -175,7 +175,7 @@ fn sign_draft_v1_inserts_expected_signature() {
         panic!("expected SpendBody::V1");
     };
 
-    let msg5 = sv1.compute_sig_hash().values;
+    let msg5 = sv1.compute_sig_hash().expect("sig hash").values;
     let (chal, sig) = nockster_core::schnorr_sign_tx(sk_be, (pk_arr[0], pk_arr[1]), msg5);
 
     let inserted = sv1
@@ -314,7 +314,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
     let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     // Compute expected pubkey + pkh.
@@ -335,7 +335,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
         panic!("expected SpendBody::V1");
     };
 
-    let msg5 = sv1.compute_sig_hash().values;
+    let msg5 = sv1.compute_sig_hash().expect("sig hash").values;
     let (chal, sig) = nockster_core::schnorr_sign_tx(sk_be, (pk_arr[0], pk_arr[1]), msg5);
 
     let inserted = sv1
@@ -611,7 +611,7 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
     let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&cell2.head(), &slab2.noun_space())
         .expect("decode head raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     let spend_entry = signed_raw
@@ -623,7 +623,7 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
         panic!("expected SpendBody::V1");
     };
 
-    let msg5 = sv1.compute_sig_hash().values;
+    let msg5 = sv1.compute_sig_hash().expect("sig hash").values;
     let (chal, sig) = nockster_core::schnorr_sign_tx(sk_be, (pk_arr[0], pk_arr[1]), msg5);
     let inserted = sv1
         .witness
@@ -710,7 +710,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     slab.set_root(noun);
     let wallet_jam = slab.jam().to_vec();
 
-    let expected_id = compute_tx_id_v1(&wallet.spends);
+    let expected_id = compute_tx_id_v1(&wallet.spends).expect("tx id");
     let rewritten = nockster_core::draft_sign::rewrite_txid_v1(&wallet_jam)
         .expect("rewrite placeholder wallet tx-id");
     assert_eq!(rewritten.name, expected_id.to_b58());
@@ -752,7 +752,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
         .expect("cue signed jam");
     let signed_wallet = WalletTransactionV1::from_noun(&noun2, &slab2.noun_space()).expect("decode wallet v1");
 
-    let computed_id = compute_tx_id_v1(&signed_wallet.spends);
+    let computed_id = compute_tx_id_v1(&signed_wallet.spends).expect("tx id");
     let parsed_id = Hash::from_b58(&signed_wallet.name).expect("wallet name decodes as hash");
     assert_eq!(
         parsed_id, computed_id,
@@ -857,7 +857,7 @@ fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
     let cell2 = cell1.tail().as_cell().expect("spends cell");
     let spends_noun2 = cell2.head();
     let spends2 = SpendsV1::from_noun(&spends_noun2, &slab2.noun_space()).expect("decode spends");
-    let computed_id = compute_tx_id_v1(&spends2);
+    let computed_id = compute_tx_id_v1(&spends2).expect("tx id");
     assert_eq!(name_str, computed_id.to_b58());
 }
 
@@ -969,7 +969,7 @@ fn sign_draft_v1_replaces_placeholder_when_map_full() {
     let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
-    let computed_id = compute_tx_id_v1(&signed_raw.spends);
+    let computed_id = compute_tx_id_v1(&signed_raw.spends).expect("tx id");
     assert_eq!(signed_raw.id, computed_id, "tx-id should be recomputed");
 
     let spend_entry = signed_raw
@@ -1108,7 +1108,7 @@ fn hax_lock_tx_id_matches_tx_types() {
     let signed_raw = decode_signed(&signed);
     assert_eq!(
         signed_raw.id,
-        compute_tx_id_v1(&signed_raw.spends),
+        compute_tx_id_v1(&signed_raw.spends).expect("tx id"),
         "hax tx id must match tx-types/upstream hashing"
     );
 }
@@ -1233,7 +1233,7 @@ fn sign_draft_v1_normalizes_nonzero_tim() {
         panic!("expected v1 spend");
     };
     assert_eq!(sv1.witness.tim, 0, "tim must be normalized like upstream");
-    assert_eq!(signed_raw.id, compute_tx_id_v1(&signed_raw.spends));
+    assert_eq!(signed_raw.id, compute_tx_id_v1(&signed_raw.spends).expect("tx id"));
 }
 
 fn poke_tuple(arena: &mut pokenoun::Arena, elems: &[pokenoun::Noun]) -> pokenoun::Noun {

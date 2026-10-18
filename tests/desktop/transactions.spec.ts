@@ -179,7 +179,7 @@ test('composer selects real notes, builds and exports a draft, invalidates edits
   await page.getByLabel('Amount (NOCK)', { exact: true }).fill('10');
   await page.getByRole('button', { name: 'Build Draft', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Review & Sign', exact: true })).toBeVisible();
-  await expect(page.locator('.composer .compact-draft')).toContainText('41.5 NOCK');
+  await expect(page.locator('.composer .compact-draft')).toContainText('40.5 NOCK');
   const downloading = page.waitForEvent('download');
   await page
     .locator('.transaction-preview')

@@ -10,10 +10,10 @@ crate-type = ["cdylib"]     # good practice for wasm-bindgen targets
 wasm-opt = false
 
 [dependencies]
-tx-types = { git = "https://github.com/swpsco/tx-types", rev = "8fd9af2e17e369bf3713390350bb4e23467eeb6f", default-features = false, features = ["std", "embedded"] }
-nockapp = { git = "https://github.com/swpsco/tx-types", rev = "8fd9af2e17e369bf3713390350bb4e23467eeb6f", default-features = false }
-noun-serde = { git = "https://github.com/swpsco/tx-types", rev = "8fd9af2e17e369bf3713390350bb4e23467eeb6f" }
-nockvm = { git = "https://github.com/swpsco/tx-types", rev = "8fd9af2e17e369bf3713390350bb4e23467eeb6f" }
+tx-types = { git = "https://github.com/swpsco/tx-types", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false, features = ["std", "embedded"] }
+nockapp = { git = "https://github.com/swpsco/tx-types", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
+noun-serde = { git = "https://github.com/swpsco/tx-types", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
+nockvm = { git = "https://github.com/swpsco/tx-types", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
 nockblocks_api_v0 = { path = "./nockblocks_api_v0" }
 nockblocks_api_v1 = { path = "./nockblocks_api_v1" }
 

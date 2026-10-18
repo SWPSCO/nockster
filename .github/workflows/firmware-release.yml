@@ -103,6 +103,7 @@ jobs:
           mkdir -p out && chmod 777 out
           docker run --rm \
             -e GIT_AUTH_TOKEN \
+            -e GITHUB_SHA="${{ github.sha }}" \
             -e RELEASE_VERSION="${{ steps.meta.outputs.version }}" \
             -e FW_PROFILE="${{ steps.meta.outputs.profile }}" \
             -e NOCKSTER_UPDATE_PUBKEY_SHA256_HEX \

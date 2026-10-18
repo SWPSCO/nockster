@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
+use nockapp::NounAllocator;
 use noun_serde::NounDecode;
 use std::fs;
 use tx_types::transaction_types::SpendBody;
@@ -40,7 +41,7 @@ fn check_local_bythos_v1_draft_sig_hash() {
         .expect("cue local Bythos v1 draft fixture");
 
     // Try to decode as RawTransactionV1
-    if let Ok(v1) = RawTransactionV1::from_noun(&noun) {
+    if let Ok(v1) = RawTransactionV1::from_noun(&noun, &slab.noun_space()) {
         println!("Decoded as RawTransactionV1");
         println!("  txid: {}", v1.id.to_b58());
         for (name, spend) in v1.spends.map.tap() {
@@ -73,7 +74,7 @@ fn check_local_bythos_v1_draft_sig_hash() {
             if let Ok(_head_cell) = cell.head().as_cell() {
                 println!("  Head is cell");
                 // Try [raw-tx ...] format
-                if let Ok(v1) = RawTransactionV1::from_noun(&cell.head()) {
+                if let Ok(v1) = RawTransactionV1::from_noun(&cell.head(), &slab.noun_space()) {
                     println!("  Head decodes as RawTransactionV1!");
                     println!("    txid: {}", v1.id.to_b58());
                     for (name, spend) in v1.spends.map.tap() {

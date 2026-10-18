@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
+use nockapp::{NounAllocator, NounSpace};
 use nockvm::noun::Noun;
 use noun_serde::NounDecode;
 use std::fs;
@@ -11,8 +12,8 @@ use tx_types::transaction_types_v1::*;
 const LOCAL_BYTHOS_V1_DRAFT: &str = "../../known-good.draft";
 
 // WalletTransaction format: [name: String, spends: SpendsV1]
-fn decode_wallet_tx(noun: &Noun) -> Option<(String, SpendsV1)> {
-    let cell = noun.as_cell().ok()?;
+fn decode_wallet_tx(noun: &Noun, space: &NounSpace) -> Option<(String, SpendsV1)> {
+    let cell = noun.in_space(space).as_cell().ok()?;
 
     // Head is name (b58 string)
     let name_atom = cell.head().as_atom().ok()?;
@@ -20,7 +21,7 @@ fn decode_wallet_tx(noun: &Noun) -> Option<(String, SpendsV1)> {
     let name = std::str::from_utf8(&name_bytes).ok()?.to_string();
 
     // Tail is spends
-    let spends = SpendsV1::from_noun(&cell.tail()).ok()?;
+    let spends = SpendsV1::from_noun(&cell.tail().noun(), space).ok()?;
 
     Some((name, spends))
 }
@@ -34,7 +35,7 @@ fn decode_local_bythos_v1_draft_as_wallet_tx() {
     let mut slab: NounSlab = NounSlab::new();
     let noun = slab.cue_into(Bytes::from(draft_data)).expect("cue");
 
-    if let Some((name, spends)) = decode_wallet_tx(&noun) {
+    if let Some((name, spends)) = decode_wallet_tx(&noun, &slab.noun_space()) {
         println!("Name: {}", name);
         println!("Spends count: {}", spends.map.wyt());
 

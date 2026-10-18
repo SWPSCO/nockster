@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 use nockapp::noun::slab::NounSlab;
-use nockapp::AtomExt;
+use nockapp::{AtomExt, NounAllocator, NounSpace};
 use nockvm::noun::{D, T};
 use noun_serde::{NounDecode, NounEncode};
 
@@ -17,7 +17,7 @@ use tx_types::transaction_types_v1::{
 
 fn jam_single(noun: nockvm::noun::Noun) -> Vec<u8> {
     let mut slab: NounSlab = NounSlab::new();
-    let copied = slab.copy_into(noun);
+    let copied = slab.copy_into(noun, &NounSpace::empty());
     slab.set_root(copied);
     slab.jam().to_vec()
 }
@@ -157,7 +157,7 @@ fn sign_draft_v1_inserts_expected_signature() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2)
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
     let computed_id = compute_tx_id_v1(&signed_raw.spends);
@@ -228,7 +228,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
     let mut note_map: ZMap<String, UntypedNoun> = ZMap::new();
     let mut tmp: NounSlab = NounSlab::new();
     let val_noun = T(&mut tmp, &[D(1), D(2), D(3)]);
-    let val_untyped = UntypedNoun::from_noun(&val_noun).expect("untyped noun");
+    let val_untyped = UntypedNoun::from_noun(&val_noun, &tmp.noun_space()).expect("untyped noun");
     note_map.put("memo".to_string(), val_untyped);
     let note_data = NoteData { map: note_map };
 
@@ -310,7 +310,7 @@ fn sign_draft_v1_handles_seeds_and_note_data() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2)
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
     let computed_id = compute_tx_id_v1(&signed_raw.spends);
@@ -607,7 +607,7 @@ fn sign_draft_v1_preserves_tx_transact_tail() {
     let tail_jam_after = jam_single(cell2.tail());
     assert_eq!(tail_jam_after, tail_jam_before, "tx:transact tail changed");
 
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&cell2.head())
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&cell2.head(), &slab2.noun_space())
         .expect("decode head raw-tx");
 
     let computed_id = compute_tx_id_v1(&signed_raw.spends);
@@ -659,7 +659,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     let mut note_map: ZMap<String, UntypedNoun> = ZMap::new();
     let mut tmp: NounSlab = NounSlab::new();
     let val_noun = T(&mut tmp, &[D(1), D(2), D(3)]);
-    let val_untyped = UntypedNoun::from_noun(&val_noun).expect("untyped noun");
+    let val_untyped = UntypedNoun::from_noun(&val_noun, &tmp.noun_space()).expect("untyped noun");
     note_map.put("memo".to_string(), val_untyped);
     let note_data = NoteData { map: note_map };
 
@@ -720,7 +720,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
         .cue_into(Bytes::from(rewritten_jam.clone()))
         .expect("cue rewritten wallet");
     let rewritten_wallet =
-        WalletTransactionV1::from_noun(&rewrite_noun).expect("decode rewritten wallet");
+        WalletTransactionV1::from_noun(&rewrite_noun, &rewrite_slab.noun_space()).expect("decode rewritten wallet");
     assert_eq!(rewritten_wallet.name, expected_id.to_b58());
 
     let stable = nockster_core::draft_sign::rewrite_txid_v1(&rewritten_jam)
@@ -749,7 +749,7 @@ fn sign_draft_v1_wallet_wrapper_updates_name() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_wallet = WalletTransactionV1::from_noun(&noun2).expect("decode wallet v1");
+    let signed_wallet = WalletTransactionV1::from_noun(&noun2, &slab2.noun_space()).expect("decode wallet v1");
 
     let computed_id = compute_tx_id_v1(&signed_wallet.spends);
     let parsed_id = Hash::from_b58(&signed_wallet.name).expect("wallet name decodes as hash");
@@ -776,7 +776,7 @@ fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
     let mut note_map: ZMap<String, UntypedNoun> = ZMap::new();
     let mut tmp: NounSlab = NounSlab::new();
     let val_noun = T(&mut tmp, &[D(1), D(2), D(3)]);
-    let val_untyped = UntypedNoun::from_noun(&val_noun).expect("untyped noun");
+    let val_untyped = UntypedNoun::from_noun(&val_noun, &tmp.noun_space()).expect("untyped noun");
     note_map.put("memo".to_string(), val_untyped);
     let note_data = NoteData { map: note_map };
 
@@ -855,7 +855,7 @@ fn sign_draft_v1_wallet_tx_v1_wrapper_updates_name() {
 
     let cell2 = cell1.tail().as_cell().expect("spends cell");
     let spends_noun2 = cell2.head();
-    let spends2 = SpendsV1::from_noun(&spends_noun2).expect("decode spends");
+    let spends2 = SpendsV1::from_noun(&spends_noun2, &slab2.noun_space()).expect("decode spends");
     let computed_id = compute_tx_id_v1(&spends2);
     assert_eq!(name_str, computed_id.to_b58());
 }
@@ -965,7 +965,7 @@ fn sign_draft_v1_replaces_placeholder_when_map_full() {
     let noun2 = slab2
         .cue_into(Bytes::from(signed_jam))
         .expect("cue signed jam");
-    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2)
+    let signed_raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun2, &slab2.noun_space())
         .expect("decode v1 raw-tx");
 
     let computed_id = compute_tx_id_v1(&signed_raw.spends);

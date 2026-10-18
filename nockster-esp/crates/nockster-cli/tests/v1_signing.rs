@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
+use nockapp::NounAllocator;
 use noun_serde::NounDecode;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -79,7 +80,7 @@ fn diagnose_local_bythos_v1_signed_format() {
 
     // Try InputsV1 directly on the tail
     if let Ok(cell) = noun.as_cell() {
-        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV1::from_noun(&cell.tail())))
+        if let Ok(Ok(inputs)) = catch_unwind(AssertUnwindSafe(|| InputsV1::from_noun(&cell.tail(), &slab.noun_space())))
         {
             println!("\nDecoded tail as InputsV1!");
             println!("  inputs count: {}", inputs.map.wyt());
@@ -122,7 +123,7 @@ fn diagnose_local_bythos_v1_signed_format() {
     }
 
     // Try RawTransactionV1 directly; local signed fixtures should use this form.
-    if let Ok(Ok(v1)) = catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(&noun))) {
+    if let Ok(Ok(v1)) = catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(&noun, &slab.noun_space()))) {
         println!("\nDecoded as RawTransactionV1 directly!");
         println!("  id: {}", v1.id.to_b58());
         println!("  spends: {}", v1.spends.map.wyt());
@@ -169,7 +170,7 @@ fn diagnose_local_bythos_v1_signed_format() {
     // Try as cell and decode head as RawTransactionV1
     if let Ok(cell) = noun.as_cell() {
         if let Ok(Ok(v1)) = catch_unwind(AssertUnwindSafe(|| {
-            RawTransactionV1::from_noun(&cell.head())
+            RawTransactionV1::from_noun(&cell.head(), &slab.noun_space())
         })) {
             println!("\nDecoded head as RawTransactionV1!");
             println!("  id: {}", v1.id.to_b58());
@@ -219,7 +220,7 @@ fn compute_local_bythos_v1_sig_hash_from_unsigned() {
     let noun = slab.cue_into(Bytes::from(data)).expect("cue");
 
     // Try decoding directly as RawTransactionV1 (raw-tx:transact format)
-    if let Ok(v1) = RawTransactionV1::from_noun(&noun) {
+    if let Ok(v1) = RawTransactionV1::from_noun(&noun, &slab.noun_space()) {
         println!("Decoded directly as RawTransactionV1");
         println!("Transaction ID: {}", v1.id.to_b58());
 
@@ -240,7 +241,7 @@ fn compute_local_bythos_v1_sig_hash_from_unsigned() {
         }
     } else if let Ok(cell) = noun.as_cell() {
         // Try as [raw-tx tail] format
-        if let Ok(v1) = RawTransactionV1::from_noun(&cell.head()) {
+        if let Ok(v1) = RawTransactionV1::from_noun(&cell.head(), &slab.noun_space()) {
             println!("Decoded from cell.head() as RawTransactionV1");
             println!("Transaction ID: {}", v1.id.to_b58());
 

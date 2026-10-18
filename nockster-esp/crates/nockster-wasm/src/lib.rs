@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use nockapp::noun::slab::NounSlab;
+use nockapp::NounAllocator;
 use noun_serde::NounEncode;
 use tx_types::hashing::hashable::Hashable;
 use tx_types::transaction_types::{Hash, SchnorrPubkey, F6LT};
@@ -78,13 +79,14 @@ pub fn build_schnorr_pubkey_hashable(pk: &SchnorrPubkey) -> Result<Hashable, JsV
     web_sys::console::log_1(&"hash_schnorr_pubkey: converting pubkey to noun".into());
 
     let pk_noun = pk.to_noun(&mut slab);
+    let space = slab.noun_space();
 
     #[cfg(target_arch = "wasm32")]
     web_sys::console::log_1(
         &"hash_schnorr_pubkey: hashing noun (may crash if NockStack needed)".into(),
     );
 
-    let pk_hash = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun)
+    let pk_hash = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun, &space)
         .map_err(|e| JsValue::from_str(&format!("Pubkey hash failed: {:?}", e)))?;
 
     #[cfg(target_arch = "wasm32")]
@@ -663,7 +665,8 @@ pub fn cheetah_pkh_b58(pubkey_x: Vec<String>, pubkey_y: Vec<String>) -> Result<S
     };
     let mut slab: NounSlab = NounSlab::new();
     let pk_noun = pk.to_noun(&mut slab);
-    let digest = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun)
+    let space = slab.noun_space();
+    let digest = tx_types::hashing::tip5::Tip5Hasher::hash_noun_varlen(pk_noun, &space)
         .map_err(|_| JsValue::from_str("failed to hash pubkey"))?;
     Ok(digest.to_b58())
 }

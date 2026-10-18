@@ -2,6 +2,7 @@
 
 use bytes::Bytes;
 use nockapp::noun::slab::NounSlab;
+use nockapp::NounAllocator;
 use noun_serde::NounDecode;
 use std::fs;
 use tx_types::transaction_types::{Hash, SpendBody};
@@ -21,7 +22,7 @@ fn verify_local_bythos_v1_signed_signature() {
     let noun = slab.cue_into(Bytes::from(signed_data)).expect("cue");
 
     // Decode as RawTransactionV1
-    let v1 = RawTransactionV1::from_noun(&noun).expect("decode as V1");
+    let v1 = RawTransactionV1::from_noun(&noun, &slab.noun_space()).expect("decode as V1");
 
     for (name, spend) in v1.spends.map.tap() {
         println!("Spend: {:?}", name);

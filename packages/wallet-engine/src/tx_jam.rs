@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use nockapp::noun::slab::{NockJammer, NounSlab};
+use nockapp::{NounAllocator, NounSpace};
 use noun_serde::{NounDecode, NounEncode};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -312,9 +313,10 @@ fn decode_tx(base64_jam: &str) -> Result<DecodedJamTx, String> {
     let noun = slab
         .cue_into(Bytes::from(bytes))
         .map_err(|err| format!("failed to cue jammed noun: {err}"))?;
+    let space = slab.noun_space();
 
     // Attempt decodes in an order that avoids panics from mismatched shapes.
-    if let Ok(raw_tx) = RawTransactionV1::from_noun(&noun) {
+    if let Ok(raw_tx) = RawTransactionV1::from_noun(&noun, &space) {
         validate_spends(&raw_tx.spends)?;
         if raw_tx.version != 1 || raw_tx.id != compute_tx_id_v1(&raw_tx.spends) {
             return Err("invalid raw transaction version or ID".into());
@@ -322,7 +324,7 @@ fn decode_tx(base64_jam: &str) -> Result<DecodedJamTx, String> {
         return Ok(DecodedJamTx::RawV1(raw_tx));
     }
 
-    if let Ok(raw_tx) = RawTransaction::from_noun(&noun) {
+    if let Ok(raw_tx) = RawTransaction::from_noun(&noun, &space) {
         return match raw_tx {
             RawTransaction::V1(v1) => {
                 validate_spends(&v1.spends)?;
@@ -335,7 +337,7 @@ fn decode_tx(base64_jam: &str) -> Result<DecodedJamTx, String> {
         };
     }
 
-    if let Ok(wallet_tx) = WalletTransactionV1Bundle::from_noun(&noun) {
+    if let Ok(wallet_tx) = WalletTransactionV1Bundle::from_noun(&noun, &space) {
         if wallet_tx.version != 1 {
             return Err("unsupported wallet transaction version".into());
         }
@@ -343,7 +345,7 @@ fn decode_tx(base64_jam: &str) -> Result<DecodedJamTx, String> {
         return Ok(DecodedJamTx::WalletV1Bundle(wallet_tx));
     }
 
-    if let Ok(wallet_tx) = WalletTransaction::from_noun(&noun) {
+    if let Ok(wallet_tx) = WalletTransaction::from_noun(&noun, &space) {
         validate_spends(&wallet_tx.spends)?;
         return Ok(DecodedJamTx::Wallet(wallet_tx));
     }
@@ -359,7 +361,9 @@ fn validate_spends(spends: &SpendsV1) -> Result<(), String> {
         return Err("transaction has no spends".into());
     }
     let mut slab = NounSlab::<NockJammer>::new();
-    crate::tx_engine::validate_based_noun(spends.to_noun(&mut slab))?;
+    let noun = spends.to_noun(&mut slab);
+    let space = slab.noun_space();
+    crate::tx_engine::validate_based_noun(noun, &space)?;
     for (name, spend) in spends.map.tap() {
         if name.p.len() != 2 {
             return Err("invalid input note name".into());
@@ -576,23 +580,28 @@ fn extract_seed_lock_summary(seed: &SeedV1) -> Result<Option<JamLockSummary>, St
     let noun = slab
         .cue_into(lock_noun.p.clone())
         .map_err(|err| format!("failed to cue noteData.lock noun: {err}"))?;
-    let data = noun.as_cell().map_err(|_| "invalid lock-data")?;
-    if u64::from_noun(&data.head()).map_err(|_| "invalid lock-data version")? != 0 {
+    let space = slab.noun_space();
+    let data = noun.in_space(&space).as_cell().map_err(|_| "invalid lock-data")?;
+    if u64::from_noun(&data.head().noun(), &space).map_err(|_| "invalid lock-data version")? != 0 {
         return Err("unsupported lock-data version".into());
     }
-    let lock = data.tail();
-    let (hashable, pkh) = if let Ok(condition) = SpendCondition::from_noun(&lock) {
+    let lock = data.tail().noun();
+    let (hashable, pkh) = if let Ok(condition) = SpendCondition::from_noun(&lock, &space) {
         (condition.to_hashable(), extract_pkh_summary(&condition))
     } else {
-        let tree = lock.as_cell().map_err(|_| "invalid output lock")?;
-        let size = u64::from_noun(&tree.head()).map_err(|_| "invalid lock tree size")?;
+        let tree = lock
+            .in_space(&space)
+            .as_cell()
+            .map_err(|_| "invalid output lock")?;
+        let size = u64::from_noun(&tree.head().noun(), &space)
+            .map_err(|_| "invalid lock tree size")?;
         if !matches!(size, 2 | 4 | 8 | 16) {
             return Err("invalid lock tree size".into());
         }
         (
             Hashable::cell(
                 Hashable::leaf_from_atom(size.to_le_bytes()),
-                lock_tree_hashable(tree.tail(), size)?,
+                lock_tree_hashable(tree.tail().noun(), &space, size)?,
             ),
             None,
         )
@@ -603,16 +612,23 @@ fn extract_seed_lock_summary(seed: &SeedV1) -> Result<Option<JamLockSummary>, St
     Ok(Some(JamLockSummary { pkh }))
 }
 
-fn lock_tree_hashable(noun: nockvm::noun::Noun, size: u64) -> Result<Hashable, String> {
+fn lock_tree_hashable(
+    noun: nockvm::noun::Noun,
+    space: &NounSpace,
+    size: u64,
+) -> Result<Hashable, String> {
     if size == 1 {
-        return SpendCondition::from_noun(&noun)
+        return SpendCondition::from_noun(&noun, space)
             .map(|condition| condition.to_hashable())
             .map_err(|err| format!("invalid lock tree branch: {err}"));
     }
-    let pair = noun.as_cell().map_err(|_| "invalid lock tree pair")?;
+    let pair = noun
+        .in_space(space)
+        .as_cell()
+        .map_err(|_| "invalid lock tree pair")?;
     Ok(Hashable::cell(
-        lock_tree_hashable(pair.head(), size / 2)?,
-        lock_tree_hashable(pair.tail(), size / 2)?,
+        lock_tree_hashable(pair.head().noun(), space, size / 2)?,
+        lock_tree_hashable(pair.tail().noun(), space, size / 2)?,
     ))
 }
 

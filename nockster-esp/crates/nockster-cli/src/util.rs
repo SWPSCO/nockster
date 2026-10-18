@@ -2,7 +2,7 @@ extern crate alloc;
 
 use anyhow::{anyhow, Result};
 use hex;
-use nockapp::AtomExt;
+use nockapp::{AtomExt, NounSpace};
 use nockvm::noun::{Atom, Noun};
 use noun_serde::NounDecode;
 use tx_types::transaction_types::{SpendBody, TimelockRange};
@@ -18,10 +18,10 @@ fn is_printable_ascii(bytes: &[u8]) -> bool {
 }
 
 /// Extract transaction ID from various noun formats
-pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
+pub fn transaction_name_from_noun(noun: &Noun, space: &NounSpace) -> Result<String> {
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
-    if let Ok(cell) = noun.as_cell() {
+    if let Ok(cell) = noun.in_space(space).as_cell() {
         if let Ok(tag) = cell.head().as_atom() {
             if tag.as_u64() == Ok(1) {
                 if let Ok(rest) = cell.tail().as_cell() {
@@ -37,15 +37,17 @@ pub fn transaction_name_from_noun(noun: &Noun) -> Result<String> {
         }
     }
 
-    if let Ok(Ok(raw)) = catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(noun))) {
+    if let Ok(Ok(raw)) =
+        catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(noun, space)))
+    {
         return Ok(raw.id.to_b58());
     }
 
-    if let Ok(cell) = noun.as_cell() {
+    if let Ok(cell) = noun.in_space(space).as_cell() {
         let head = cell.head();
 
         if let Ok(Ok(raw_head)) =
-            catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(&head)))
+            catch_unwind(AssertUnwindSafe(|| RawTransactionV1::from_noun(&head.noun(), space)))
         {
             return Ok(raw_head.id.to_b58());
         }

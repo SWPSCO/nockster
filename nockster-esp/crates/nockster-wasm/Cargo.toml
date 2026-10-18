@@ -18,7 +18,7 @@ serde_json = "1.0"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 
-tx-types = { workspace = true, features = ["std"] }
+tx-types = { workspace = true, features = ["std", "embedded"] }
 # core, for its tested Shamir GF(256) math — keeps the share format from
 # diverging across host and device. std features match the rest of the build
 # (tx-types is already pinned to std here).

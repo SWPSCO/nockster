@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [features]
 std = [
   "tx-types/std",
+  "tx-types/embedded",
   "k256/std",
   "bip32/std",
   "bip39/std",

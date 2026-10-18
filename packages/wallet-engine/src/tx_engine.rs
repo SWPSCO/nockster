@@ -2,6 +2,7 @@ use crate::tx_v1::sign_transaction_v1;
 use base64::{engine::general_purpose, Engine as _};
 use bytes::Bytes;
 use nockapp::noun::slab::{NockJammer, NounSlab};
+use nockapp::{NounAllocator, NounSpace};
 use nockblocks_api_v1::models::{note_v1_object::Version as ApiNoteVersion, NoteV1Object};
 use noun_serde::{NounDecode, NounEncode};
 use serde_json::Value as JsonValue;
@@ -574,7 +575,10 @@ fn base64_json_value_to_untyped_noun(
     }
 }
 
-pub(crate) fn validate_based_noun(noun: nockvm::noun::Noun) -> Result<(), String> {
+pub(crate) fn validate_based_noun(
+    noun: nockvm::noun::Noun,
+    space: &NounSpace,
+) -> Result<(), String> {
     let mut pending = vec![noun];
     let mut count = 0usize;
     while let Some(noun) = pending.pop() {
@@ -582,11 +586,12 @@ pub(crate) fn validate_based_noun(noun: nockvm::noun::Noun) -> Result<(), String
         if count > 100_000 {
             return Err("noun exceeds size limit".into());
         }
-        if let Ok(cell) = noun.as_cell() {
-            pending.push(cell.head());
-            pending.push(cell.tail());
+        let handle = noun.in_space(space);
+        if let Ok(cell) = handle.as_cell() {
+            pending.push(cell.head().noun());
+            pending.push(cell.tail().noun());
         } else {
-            let atom = noun.as_atom().map_err(|_| "invalid noun atom")?;
+            let atom = handle.as_atom().map_err(|_| "invalid noun atom")?;
             let value = atom.as_u64().map_err(|_| "noun atom exceeds field size")?;
             if u128::from(value) >= BASE_FIELD_PRIME {
                 return Err("noun atom exceeds field size".into());
@@ -608,7 +613,8 @@ fn decode_base64(encoded: &str, label: &str) -> Result<Vec<u8>, String> {
     let noun = slab
         .cue_into(Bytes::from(bytes.clone()))
         .map_err(|e| format!("invalid noun for {label}: {e}"))?;
-    validate_based_noun(noun)?;
+    let space = slab.noun_space();
+    validate_based_noun(noun, &space)?;
     Ok(bytes)
 }
 
@@ -670,7 +676,8 @@ pub(crate) fn verify_bridge_intent(
     let mut slab = NounSlab::<NockJammer>::new();
     let noun = slab.cue_into(Bytes::from(general_purpose::STANDARD.decode(raw).map_err(|e| e.to_string())?))
         .map_err(|e| e.to_string())?;
-    let raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun)
+    let space = slab.noun_space();
+    let raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun, &space)
         .map_err(|e| e.to_string())?;
     let mut totals = vec![0u64; expected.len()];
     let mut fee = 0u64;

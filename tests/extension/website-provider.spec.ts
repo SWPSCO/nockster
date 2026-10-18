@@ -190,9 +190,12 @@ test('website provider gates connections and signatures on approval and binds re
     const choose = await approval(context, page, 'nock_connect');
     await expect(choose.getByRole('radio')).toHaveCount(2);
     await expect(choose.locator('select')).toHaveCount(0);
-    const firstChoice = choose.getByRole('radio').first();
-    const secondChoice = choose.getByRole('radio').nth(1);
-    await expect(firstChoice).toBeChecked();
+    // Vault wallets are a hash map, so identify them by address rather than DOM order.
+    const firstChoice = choose.locator(`input[type="radio"][value="${address}"]`);
+    const secondChoice = choose.locator(
+      `input[type="radio"][value="${secondWallet.publicKey}"]`
+    );
+    await expect(choose.locator('input[type="radio"]:checked')).toHaveCount(1);
     await secondChoice.check();
     await expect(secondChoice).toBeChecked();
     await secondChoice.press('ArrowUp');

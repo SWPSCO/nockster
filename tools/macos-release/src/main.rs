@@ -46,6 +46,28 @@ fn run(program: &str, args: &[&OsStr]) -> Result<()> {
     Ok(())
 }
 
+fn run_with_retries(program: &str, args: &[&OsStr]) -> Result<()> {
+    const ATTEMPTS: u32 = 3;
+    for attempt in 1..=ATTEMPTS {
+        let status = Command::new(program)
+            .args(args)
+            .status()
+            .with_context(|| format!("Run {program}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        if attempt < ATTEMPTS {
+            eprintln!(
+                "warning: {program} failed with {status}; retrying ({attempt}/{ATTEMPTS})"
+            );
+            std::thread::sleep(Duration::from_secs(5 * u64::from(attempt)));
+        } else {
+            bail!("{program} failed with {status}");
+        }
+    }
+    unreachable!()
+}
+
 fn verify_app(app: &Path) -> Result<()> {
     run(
         "codesign",
@@ -56,7 +78,7 @@ fn verify_app(app: &Path) -> Result<()> {
             app.as_os_str(),
         ],
     )?;
-    run(
+    run_with_retries(
         "xcrun",
         &["stapler".as_ref(), "validate".as_ref(), app.as_os_str()],
     )?;
@@ -208,7 +230,7 @@ fn release(app: &Path, dmg: &Path) -> Result<()> {
     )?;
     signer.sign_path_in_place(dmg)?;
     notarize(&notary, dmg)?;
-    run(
+    run_with_retries(
         "xcrun",
         &["stapler".as_ref(), "validate".as_ref(), dmg.as_os_str()],
     )?;

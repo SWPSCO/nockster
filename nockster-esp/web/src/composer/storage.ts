@@ -65,6 +65,7 @@ export function loadAddressBook(): AddressBookEntry[] {
           const note: NoteV1 = {
             id: noteId,
             nameFirst,
+            noteData: n.noteData,
             nameLast,
             originPage,
             assets,

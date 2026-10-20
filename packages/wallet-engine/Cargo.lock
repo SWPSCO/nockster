@@ -651,7 +651,7 @@ dependencies = [
 [[package]]
 name = "ibig"
 version = "0.3.6"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "cfg-if",
  "num-traits",
@@ -931,12 +931,12 @@ dependencies = [
 [[package]]
 name = "murmur3"
 version = "0.5.2"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 
 [[package]]
 name = "nockapp"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "bincode",
  "bitvec",
@@ -975,7 +975,7 @@ dependencies = [
 [[package]]
 name = "nockchain-libp2p-io"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "bs58",
  "ibig",
@@ -987,7 +987,7 @@ dependencies = [
 [[package]]
 name = "nockchain-math"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "arrayref",
  "bs58",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "nockster-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "base64",
@@ -1042,7 +1042,7 @@ dependencies = [
 [[package]]
 name = "nockvm"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "autotools",
  "bitvec",
@@ -1068,7 +1068,7 @@ dependencies = [
 [[package]]
 name = "nockvm_macros"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "quote",
  "syn",
@@ -1077,7 +1077,7 @@ dependencies = [
 [[package]]
 name = "noun-serde"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "nockapp",
  "nockvm",
@@ -1089,7 +1089,7 @@ dependencies = [
 [[package]]
 name = "noun-serde-derive"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "nockvm",
  "proc-macro2",
@@ -1195,8 +1195,8 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pokenoun"
-version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+version = "0.2.0"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 
 [[package]]
 name = "poly1305"
@@ -1836,10 +1836,11 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tx-types"
-version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+version = "0.2.0"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "anyhow",
+ "base64",
  "bip39",
  "bs58",
  "bytes",
@@ -2295,7 +2296,7 @@ dependencies = [
 [[package]]
 name = "zkvm-jetpack"
 version = "0.1.0"
-source = "git+https://github.com/swpsco/tx-types?rev=f225b52c8c5901c782573ffeb34d53c1c58aad52#f225b52c8c5901c782573ffeb34d53c1c58aad52"
+source = "git+https://github.com/SWPSCO/tx-types.git?rev=02d194605c475013745cc65b26f1413cd098932e#02d194605c475013745cc65b26f1413cd098932e"
 dependencies = [
  "bitvec",
  "bs58",

@@ -12,8 +12,7 @@ pub fn sign_transaction_v1(
     let mut spends = ZMap::new();
     for (name, mut input) in inputs.map.tap() {
         input.spend.witness.pkh = PkhSignature { map: ZMap::new() };
-        let spend =
-            tx_types::tx_builder_v1::sign_spend_v1(input.spend, key.clone(), pubkey.clone())?;
+        let spend = tx_types::sign_spend_v1(input.spend, key.clone(), pubkey.clone())?;
         let tx_types::SpendBody::V1(ref body) = spend.body else {
             unreachable!()
         };

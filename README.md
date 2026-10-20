@@ -18,6 +18,12 @@ build configuration, and native integrations.
 
 ## Wallet development
 
+Rust workspaces pin the shared `tx-types` 0.2 transaction core and its matching
+noun runtime to one Git revision. `packages/wallet-engine` and `nockster-esp`
+call the same `tx_types::planner`; their adapters provide RPC note data, wallet envelopes,
+and software or hardware signatures. Composer inputs include the actual
+`note_data` map and an explicit candidate height for time-locked inputs.
+
 Use Node and npm versions matching `package.json`. Install dependencies from
 this directory; npm workspaces share the root lockfile. The Rust engine pins
 its toolchain in `packages/wallet-engine/rust-toolchain.toml`; the desktop

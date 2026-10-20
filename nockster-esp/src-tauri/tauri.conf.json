@@ -1,12 +1,12 @@
 {
   "productName": "Nockster",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "io.swps.nockster",
   "build": {
     "beforeDevCommand": "cd web && npm run dev",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "cd .. && make web",
-    "frontendDist": "web/dist"
+    "frontendDist": "../web/dist"
   },
   "app": {
     "withGlobalTauri": false,

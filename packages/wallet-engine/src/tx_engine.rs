@@ -5,159 +5,39 @@ use nockapp::noun::slab::{NockJammer, NounSlab};
 use nockapp::{NounAllocator, NounSpace};
 use nockblocks_api_v1::models::{note_v1_object::Version as ApiNoteVersion, NoteV1Object};
 use noun_serde::{NounDecode, NounEncode};
-use serde_json::Value as JsonValue;
 use tx_types::{
-    compute_tx_id_v1, lock_data_to_untyped_noun, Coins, Hash, InputV1, Inputs, InputsV1, LockData,
-    LockPrimitive, LockPrimitiveBody, NName, NNote, NNoteV1, NoteData, PageNumber, PkhSignature,
-    Spend, SpendBody, SpendCondition, SpendsV1, Tim, TimelockRange, Transaction, UntypedNoun, ZMap,
-    ZSet,
+    compute_tx_id_v1, Coins, Hash, InputV1, Inputs, InputsV1, LockPrimitive, LockPrimitiveBody,
+    NName, NNote, NNoteV1, NoteData, PageNumber, PkhSignature, Spend, SpendBody, SpendsV1,
+    Transaction, ZMap,
 };
 
 use crate::wallet::Wallet;
 use crate::{TransactionRecipient, BASE_FIELD_PRIME, BRIDGE_LOCK_ROOT, BRIDGE_MINIMUM_NICKS};
 
-const MAX_FEE_ADJUSTMENTS: usize = 32;
-
-/// Convert an EVM address (hex string) to based field elements for noteData.bridge
-/// The EVM address is stored as [%0 [%base addr=evm-address-based]]
-/// where evm-address-based is a triple of base field elements
-///
-/// EVM addresses are 160 bits (20 bytes), so we need to handle them as big integers
-/// by parsing the hex in chunks.
 fn evm_address_to_based(evm_hex: &str) -> Result<[u64; 3], String> {
-    // Remove 0x prefix if present
     let hex = evm_hex.strip_prefix("0x").unwrap_or(evm_hex);
-
-    if hex.len() != 40 {
-        return Err(format!(
-            "invalid EVM address '{}': expected 40 hex characters, got {}",
-            evm_hex,
-            hex.len()
-        ));
+    if hex.len() != 40 || !hex.is_ascii() {
+        return Err("invalid EVM address: expected 40 hexadecimal characters".into());
     }
-
-    // Parse the 160-bit address as bytes
-    if !hex.is_ascii() {
-        return Err("EVM address must be hexadecimal ASCII".into());
+    let mut address = [0u8; 20];
+    for (index, byte) in address.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[2 * index..2 * index + 2], 16)
+            .map_err(|_| "invalid EVM address")?;
     }
-    let bytes =
-        hex_to_bytes(hex).map_err(|e| format!("invalid EVM address '{}': {}", evm_hex, e))?;
-    if bytes.iter().all(|byte| *byte == 0) {
+    if address == [0; 20] {
         return Err("bridge destination cannot be the zero address".into());
     }
-
-    // Convert bytes to little-endian limbs
-    let mut addr_limbs = [0u64; 3];
-    // bytes is big-endian, we need little-endian
-    let bytes_le: Vec<u8> = bytes.iter().rev().cloned().collect();
-
-    // Pack into u64 limbs (little-endian)
-    for (i, chunk) in bytes_le.chunks(8).enumerate() {
-        if i >= 3 {
-            break;
-        }
-        let mut val = 0u64;
-        for (j, &b) in chunk.iter().enumerate() {
-            val |= (b as u64) << (j * 8);
-        }
-        addr_limbs[i] = val;
-    }
-
-    // Now perform division by p = 2^64 - 2^32 + 1 = 18446744069414584321
-    // to get three based field elements
-    let p = BASE_FIELD_PRIME;
-
-    // Helper: divide [u64; 3] by u128, return (quotient, remainder)
-    fn div_big_by_p(limbs: [u64; 3], p: u128) -> ([u64; 3], u64) {
-        // Convert limbs to 192-bit value and divide
-        // limbs[0] + limbs[1] * 2^64 + limbs[2] * 2^128
-        let mut quot = [0u64; 3];
-        let mut rem = 0u128;
-
-        // Process from most significant limb
-        for i in (0..3).rev() {
-            let cur = (rem << 64) | limbs[i] as u128;
-            quot[i] = (cur / p) as u64;
-            rem = cur % p;
-        }
-
-        (quot, rem as u64)
-    }
-
-    let (q1, a) = div_big_by_p(addr_limbs, p);
-    let (q2, b) = div_big_by_p(q1, p);
-    let (q3, c) = div_big_by_p(q2, p);
-
-    // q3 should be all zeros
-    if q3 != [0, 0, 0] {
-        return Err(format!(
-            "EVM address {} is too large for based encoding",
-            evm_hex
-        ));
-    }
-
-    Ok([a, b, c])
+    Ok(tx_types::note_data::BridgeDepositDataPayload::from_evm_address(address).evm_address_based)
 }
 
-/// Parse a hex string into bytes
-fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
-    if hex.len() % 2 != 0 {
-        return Err("hex string must have even length".to_string());
-    }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|_| format!("invalid hex at position {}", i))
-        })
-        .collect()
-}
-
-/// Struct representing the bridge deposit data: [%0 [%base [a b c]]]
-/// Uses noun_serde for automatic encoding
-#[derive(Clone, Debug, NounEncode, NounDecode)]
-struct BridgeDepositData {
-    /// Version tag: always 0
-    version: u64,
-    /// Bridge type and address
-    body: BridgeDepositBody,
-}
-
-#[derive(Clone, Debug, NounEncode, NounDecode)]
-struct BridgeDepositBody {
-    /// Type tag: "base" as a cord
-    tag: String,
-    /// EVM address as three based field elements
-    addr: (u64, u64, u64),
-}
-
-/// Build noteData for a bridge output containing the EVM destination address
 fn build_bridge_note_data(evm_address: &str) -> Result<NoteData, String> {
-    let based_addr = evm_address_to_based(evm_address)?;
-
-    // Build the bridge data structure matching Hoon: [%0 [%base [a b c]]]
-    let bridge_data = BridgeDepositData {
-        version: 0,
-        body: BridgeDepositBody {
-            tag: "base".to_string(),
-            addr: (based_addr[0], based_addr[1], based_addr[2]),
-        },
+    let payload = tx_types::note_data::BridgeDepositDataPayload {
+        evm_address_based: evm_address_to_based(evm_address)?,
     };
-
-    // Encode to noun and jam it
-    let mut slab = NounSlab::<NockJammer>::new();
-    let noun = bridge_data.to_noun(&mut slab);
-    slab.set_root(noun);
-    let jammed = slab.jam();
-
-    let bridge_noun = UntypedNoun {
-        p: Bytes::from(jammed.to_vec()),
-    };
-
-    let mut note_data_map = ZMap::new();
-    note_data_map.put("bridge".to_string(), bridge_noun);
-
-    Ok(NoteData { map: note_data_map })
+    let mut data = NoteData { map: ZMap::new() };
+    data.insert_bridge_deposit(&payload)
+        .map_err(|error| error.to_string())?;
+    Ok(data)
 }
 
 #[derive(Clone)]
@@ -265,34 +145,17 @@ pub(crate) fn max_payment(
             _ => unreachable!(),
         })
         .collect();
-    let available = notes
-        .iter()
-        .filter(|n| crate::planner::spendable_lock(n, source, options.chain_height).is_some())
-        .try_fold(0u64, |sum, n| {
-            sum.checked_add(n.assets.value).ok_or("balance overflow")
-        })?;
-    let mut fee = tx_types::fee_calculator::MIN_FEE;
-    for _ in 0..MAX_FEE_ADJUSTMENTS {
-        let amount = available
-            .checked_sub(fee)
-            .filter(|amount| *amount > 0)
-            .ok_or("balance does not cover the network fee")?;
-        let output = crate::planner::payment(destination, amount, options.private_outputs);
-        let spends = crate::planner::plan_spends(
-            &notes,
-            &[output],
-            fee,
-            source,
-            options.private_outputs,
-            options.chain_height,
-        )?;
-        let required = crate::planner::signed_fee(&spends, source);
-        if required <= fee {
-            return Ok(amount);
-        }
-        fee = required;
-    }
-    Err("unable to converge on a network fee".into())
+    let destination = crate::planner::payment(destination, 0, options.private_outputs);
+    let result = crate::planner::plan(
+        &notes,
+        &[],
+        source,
+        options.private_outputs,
+        options.chain_height,
+        tx_types::planner::FeePolicy::Minimum,
+        tx_types::planner::PlanningMode::Sweep { destination },
+    )?;
+    Ok(result.selected_total - result.final_fee)
 }
 
 fn plan_transaction(
@@ -314,7 +177,9 @@ fn plan_transaction(
         .collect::<Vec<_>>();
     let mut outputs = convert_recipients(recipients)?;
     if options.private_outputs
-        && outputs.iter().any(|output| output.note_data.map.has(&"bridge".into()))
+        && outputs
+            .iter()
+            .any(|output| output.note_data.map.has(&"bridge".into()))
     {
         return Err("bridge transactions require public outputs".into());
     }
@@ -323,48 +188,16 @@ fn plan_transaction(
             output.note_data.map.del(&"lock".into());
         }
     }
-    let mut fee = tx_types::fee_calculator::MIN_FEE;
-    for _ in 0..MAX_FEE_ADJUSTMENTS {
-        let spends = crate::planner::plan_spends(
-            &notes,
-            &outputs,
-            fee,
-            source,
-            options.private_outputs,
-            options.chain_height,
-        )?;
-        let required = crate::planner::signed_fee(&spends, source);
-        if required <= fee {
-            return Ok((spends, prepared, fee));
-        }
-        let selected_total = notes
-            .iter()
-            .filter(|n| spends.map.has(&n.name))
-            .try_fold(0u64, |sum, n| {
-                sum.checked_add(n.assets.value).ok_or("input overflow")
-            })?;
-        let output_total = outputs.iter().try_fold(0u64, |sum, o| {
-            sum.checked_add(o.amount).ok_or("output overflow")
-        })?;
-        let remainder = selected_total
-            .checked_sub(output_total)
-            .ok_or("insufficient funds")?;
-        if remainder >= tx_types::fee_calculator::MIN_FEE && remainder <= required {
-            let exact = crate::planner::plan_spends(
-                &notes,
-                &outputs,
-                remainder,
-                source,
-                options.private_outputs,
-                options.chain_height,
-            )?;
-            if crate::planner::signed_fee(&exact, source) <= remainder {
-                return Ok((exact, prepared, remainder));
-            }
-        }
-        fee = required;
-    }
-    Err("unable to converge on a network fee".into())
+    let result = crate::planner::plan(
+        &notes,
+        &outputs,
+        source,
+        options.private_outputs,
+        options.chain_height,
+        tx_types::planner::FeePolicy::Minimum,
+        tx_types::planner::PlanningMode::Standard,
+    )?;
+    Ok((result.spends, prepared, result.final_fee))
 }
 
 fn finish_transaction(spends: SpendsV1, fee: u64) -> Result<BuiltTransaction, String> {
@@ -511,70 +344,17 @@ fn convert_note_v1(note: NoteV1Object) -> Result<NNoteV1, String> {
     name_parts.push(first);
     name_parts.push(last);
 
-    let mut note_data_map = ZMap::new();
-    for (key, value) in note.note_data {
-        if key == "lock" {
-            // The API labels inferred spending conditions; they are not on-chain note data.
-            // Parent hashes commit only to the actual input note.
-            if value.get("source").and_then(JsonValue::as_str) == Some("reconstructed") {
-                continue;
-            }
-            if let Some(lock_noun) = lock_value_to_untyped_noun(value)? {
-                note_data_map.put(key, lock_noun);
-            }
-            continue;
-        }
-
-        if let Some(untyped) = base64_json_value_to_untyped_noun(value, &key)? {
-            note_data_map.put(key, untyped);
-        }
-    }
+    let note_data = tx_types::rpc_note_data::note_data_from_json(
+        &serde_json::to_value(note.note_data).map_err(|error| error.to_string())?,
+    )?;
 
     Ok(NNoteV1 {
         version,
         origin_page: PageNumber { value: origin_page },
         name: NName { p: name_parts },
-        note_data: NoteData { map: note_data_map },
+        note_data,
         assets: Coins { value: assets },
     })
-}
-
-fn lock_value_to_untyped_noun(value: JsonValue) -> Result<Option<UntypedNoun>, String> {
-    match value {
-        JsonValue::Null => Ok(None),
-        JsonValue::Object(_) => {
-            let spend_condition = parse_lock_from_json(&value)?;
-            let lock_data = LockData::V0(spend_condition);
-            Ok(Some(lock_data_to_untyped_noun(&lock_data)))
-        }
-        JsonValue::String(encoded) => {
-            let decoded = decode_base64(&encoded, "noteData.lock")?;
-            Ok(Some(UntypedNoun {
-                p: Bytes::from(decoded),
-            }))
-        }
-        other => Err(format!(
-            "noteData.lock must be an object or base64 string, found {other:?}"
-        )),
-    }
-}
-
-fn base64_json_value_to_untyped_noun(
-    value: JsonValue,
-    label: &str,
-) -> Result<Option<UntypedNoun>, String> {
-    match value {
-        JsonValue::Null => Ok(None),
-        JsonValue::String(encoded) => {
-            let decoded = decode_base64(&encoded, &format!("noteData.{label}"))?;
-            Ok(Some(UntypedNoun {
-                p: Bytes::from(decoded),
-            }))
-        }
-        other => Err(format!(
-            "noteData.{label} must be a base64 string, found {other:?}"
-        )),
-    }
 }
 
 pub(crate) fn validate_based_noun(
@@ -603,26 +383,9 @@ pub(crate) fn validate_based_noun(
     Ok(())
 }
 
-fn decode_base64(encoded: &str, label: &str) -> Result<Vec<u8>, String> {
-    let trimmed = encoded.trim();
-    if trimmed.len() > 1_400_000 {
-        return Err(format!("{label} exceeds size limit"));
-    }
-    let bytes = general_purpose::STANDARD
-        .decode(trimmed)
-        .map_err(|err| format!("failed to decode base64 for {label}: {err}"))?;
-    let mut slab = NounSlab::<NockJammer>::new();
-    let noun = slab
-        .cue_into(Bytes::from(bytes.clone()))
-        .map_err(|e| format!("invalid noun for {label}: {e}"))?;
-    let space = slab.noun_space();
-    validate_based_noun(noun, &space)?;
-    Ok(bytes)
-}
-
 fn convert_recipients(
     recipients: Vec<TransactionRecipient>,
-) -> Result<Vec<crate::planner::Output>, String> {
+) -> Result<Vec<crate::planner::PlannedOutput>, String> {
     if recipients.len() != 1 && recipients.iter().any(|r| r.bridge_evm_address.is_some()) {
         return Err("bridge transactions require one deposit and no additional recipients".into());
     }
@@ -643,7 +406,7 @@ fn convert_recipients(
             if recipient.gift < BRIDGE_MINIMUM_NICKS {
                 return Err("bridge deposit requires at least 100,000 NOCK".into());
             }
-            outputs.push(crate::planner::Output {
+            outputs.push(crate::planner::PlannedOutput {
                 lock_root: Hash::from_b58(BRIDGE_LOCK_ROOT)?,
                 note_data: build_bridge_note_data(&evm)?,
                 amount: recipient.gift,
@@ -669,7 +432,12 @@ pub(crate) fn verify_bridge_intent(
     recipients: Vec<TransactionRecipient>,
     network_fee: u64,
 ) -> Result<(), String> {
-    if recipients.iter().filter(|r| r.bridge_evm_address.is_some()).count() != 1 {
+    if recipients
+        .iter()
+        .filter(|r| r.bridge_evm_address.is_some())
+        .count()
+        != 1
+    {
         return Err("one bridge destination is required".into());
     }
     let expected = convert_recipients(recipients)?;
@@ -689,7 +457,12 @@ pub(crate) fn verify_bridge_intent(
         .map_err(|err| format!("refund note-data hash: {err}"))?;
     let raw = crate::tx_jam::to_raw_tx_jam(transaction)?;
     let mut slab = NounSlab::<NockJammer>::new();
-    let noun = slab.cue_into(Bytes::from(general_purpose::STANDARD.decode(raw).map_err(|e| e.to_string())?))
+    let noun = slab
+        .cue_into(Bytes::from(
+            general_purpose::STANDARD
+                .decode(raw)
+                .map_err(|e| e.to_string())?,
+        ))
         .map_err(|e| e.to_string())?;
     let space = slab.noun_space();
     let raw = tx_types::transaction_types_v1::RawTransactionV1::from_noun(&noun, &space)
@@ -711,20 +484,25 @@ pub(crate) fn verify_bridge_intent(
                 .note_data
                 .to_hash()
                 .map_err(|err| format!("seed note-data hash: {err}"))?;
-            if let Some(index) = expected
-                .iter()
-                .enumerate()
-                .position(|(i, output)| {
-                    output.lock_root == seed.lock_root && expected_hashes[i] == seed_hash
-                })
-            {
-                totals[index] = totals[index].checked_add(seed.gift.value).ok_or("output overflow")?;
+            if let Some(index) = expected.iter().enumerate().position(|(i, output)| {
+                output.lock_root == seed.lock_root && expected_hashes[i] == seed_hash
+            }) {
+                totals[index] = totals[index]
+                    .checked_add(seed.gift.value)
+                    .ok_or("output overflow")?;
             } else if seed.lock_root != refund.lock_root || seed_hash != refund_hash {
-                return Err("transaction contains an unreviewed output or bridge destination".into());
+                return Err(
+                    "transaction contains an unreviewed output or bridge destination".into(),
+                );
             }
         }
     }
-    if fee != network_fee || expected.iter().zip(totals).any(|(output, total)| output.amount != total) {
+    if fee != network_fee
+        || expected
+            .iter()
+            .zip(totals)
+            .any(|(output, total)| output.amount != total)
+    {
         return Err("bridge transaction does not match the reviewed amounts and fee".into());
     }
     Ok(())
@@ -750,160 +528,6 @@ fn decode_wallet_transaction_base64(value: &str) -> Result<WalletTransaction, St
         .map_err(|err| format!("failed to cue wallet noun: {err}"))?;
     WalletTransaction::from_noun(&noun, &slab.noun_space())
         .map_err(|err| format!("failed to decode wallet transaction noun: {err}"))
-}
-
-fn parse_lock_from_json(value: &JsonValue) -> Result<SpendCondition, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "noteData.lock must be an object".to_string())?;
-    let version = obj
-        .get("version")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| "lock.version missing".to_string())?;
-    if version != 0 {
-        return Err(format!("unsupported lock version: {}", version));
-    }
-    let primitives = obj
-        .get("data")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "lock.data missing".to_string())?;
-    if primitives.is_empty() {
-        return Err("lock.data must contain at least one primitive".into());
-    }
-    let mut parsed = Vec::with_capacity(primitives.len());
-    for item in primitives {
-        parsed.push(parse_lock_primitive(item)?);
-    }
-    Ok(SpendCondition { p: parsed })
-}
-
-fn parse_lock_primitive(value: &JsonValue) -> Result<LockPrimitive, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "lock primitive must be an object".to_string())?;
-    if let Some(pkh_val) = obj.get("pkh") {
-        let body = parse_pkh_body(pkh_val)?;
-        return Ok(LockPrimitive {
-            header: "pkh".to_string(),
-            body: LockPrimitiveBody::Pkh(body),
-        });
-    }
-    if let Some(tim_val) = obj.get("tim") {
-        let body = parse_tim_body(tim_val)?;
-        return Ok(LockPrimitive {
-            header: "tim".to_string(),
-            body: LockPrimitiveBody::Tim(body),
-        });
-    }
-    if let Some(hax_val) = obj.get("hax") {
-        let body = parse_hax_body(hax_val)?;
-        return Ok(LockPrimitive {
-            header: "hax".to_string(),
-            body: LockPrimitiveBody::Hax(body),
-        });
-    }
-    if obj.contains_key("brn") {
-        return Ok(LockPrimitive {
-            header: "brn".to_string(),
-            body: LockPrimitiveBody::Brn(tx_types::transaction_types_v1::Brn { value: 0 }),
-        });
-    }
-    Err("unsupported lock primitive object".into())
-}
-
-fn parse_pkh_body(value: &JsonValue) -> Result<tx_types::transaction_types_v1::Pkh, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "pkh primitive must be an object".to_string())?;
-    let m = obj
-        .get("m")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| "pkh.m missing".to_string())?;
-    let hashes = obj
-        .get("h")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "pkh.h missing".to_string())?;
-    if hashes.is_empty() {
-        return Err("pkh.h must contain at least one hash".into());
-    }
-    let mut set = ZSet::new();
-    for entry in hashes {
-        let addr = entry
-            .as_str()
-            .ok_or_else(|| "pkh.h entries must be strings".to_string())?;
-        let hash =
-            parse_hash(addr).map_err(|e| format!("invalid pk hash '{}' in lock: {e}", addr))?;
-        set.put(hash);
-    }
-    Ok(tx_types::transaction_types_v1::Pkh { m, h: set })
-}
-
-fn parse_tim_body(value: &JsonValue) -> Result<Tim, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "tim primitive must be an object".to_string())?;
-    let rel = obj
-        .get("relative")
-        .map(parse_timelock_range)
-        .transpose()?
-        .unwrap_or(TimelockRange {
-            min: None,
-            max: None,
-        });
-    let abs = obj
-        .get("absolute")
-        .map(parse_timelock_range)
-        .transpose()?
-        .unwrap_or(TimelockRange {
-            min: None,
-            max: None,
-        });
-    Ok(Tim { rel, abs })
-}
-
-fn parse_timelock_range(value: &JsonValue) -> Result<TimelockRange, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "timelock range must be an object".to_string())?;
-    let min = obj
-        .get("min")
-        .and_then(|v| v.as_i64())
-        .map(|v| {
-            if v < 0 {
-                Err("timelock min must be non-negative".to_string())
-            } else {
-                Ok(PageNumber { value: v as u64 })
-            }
-        })
-        .transpose()?;
-    let max = obj
-        .get("max")
-        .and_then(|v| v.as_i64())
-        .map(|v| {
-            if v < 0 {
-                Err("timelock max must be non-negative".to_string())
-            } else {
-                Ok(PageNumber { value: v as u64 })
-            }
-        })
-        .transpose()?;
-    Ok(TimelockRange { min, max })
-}
-
-fn parse_hax_body(value: &JsonValue) -> Result<tx_types::transaction_types_v1::Hax, String> {
-    let hashes = value
-        .as_array()
-        .ok_or_else(|| "hax primitive must be an array".to_string())?;
-    let mut set = ZSet::new();
-    for entry in hashes {
-        let addr = entry
-            .as_str()
-            .ok_or_else(|| "hax entries must be strings".to_string())?;
-        let hash =
-            parse_hash(addr).map_err(|e| format!("invalid hax hash '{}' in lock: {e}", addr))?;
-        set.put(hash);
-    }
-    Ok(tx_types::transaction_types_v1::Hax { set })
 }
 
 #[cfg(test)]
@@ -1027,13 +651,18 @@ mod tests {
                             min: Some(PageNumber { value: 100 }),
                             max: None,
                         },
-                        abs: tx_types::TimelockRange { min: None, max: None },
+                        abs: tx_types::TimelockRange {
+                            min: None,
+                            max: None,
+                        },
                     }),
                 });
                 api_note.first_name = NName::first_v1(lock.to_hash()).to_b58();
                 api_note.is_coinbase = true;
                 api_note.note_data.get_mut("lock").unwrap()["data"]
-                    .as_array_mut().unwrap().push(json!({
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({
                         "tim": {"relative": {"min": 100, "max": null},
                                 "absolute": {"min": null, "max": null}}
                     }));
@@ -1047,18 +676,30 @@ mod tests {
                     vec![TransactionRecipient {
                         address: BRIDGE_LOCK_ROOT.into(),
                         gift: 100_000 * 65536,
-                        bridge_evm_address: Some("0x1234567890abcdef1234567890abcdef12345678".into()),
+                        bridge_evm_address: Some(
+                            "0x1234567890abcdef1234567890abcdef12345678".into(),
+                        ),
                     }]
-                } else { sample_recipients() };
+                } else {
+                    sample_recipients()
+                };
                 let built = build_transaction_from_api_with_options(
-                    &wallet, vec![api_note.clone()], recipients,
-                    BuildTxOptions { private_outputs: false, chain_height: Some(153880) },
-                ).unwrap();
+                    &wallet,
+                    vec![api_note.clone()],
+                    recipients,
+                    BuildTxOptions {
+                        private_outputs: false,
+                        chain_height: Some(153880),
+                    },
+                )
+                .unwrap();
                 let tx = decode_wallet_transaction_base64(&built.base64_tx).unwrap();
                 assert_eq!(tx.spends.map.wyt(), 1);
                 for (name, spend) in tx.spends.map.tap() {
                     assert_eq!(name, on_chain.name);
-                    let SpendBody::V1(body) = spend.body else { panic!("expected V1 spend") };
+                    let SpendBody::V1(body) = spend.body else {
+                        panic!("expected V1 spend")
+                    };
                     assert!(body.seeds.set.wyt() > 0);
                     for seed in body.seeds.set.tap() {
                         assert_eq!(seed.parent_hash, on_chain.to_hash().expect("note hash"));
@@ -1263,39 +904,102 @@ mod tests {
         let wallet = Wallet::from_seedphrase(TEST_SEED.into()).unwrap();
         let source = wallet.public_key_hash().unwrap();
         let address = "0xb74f4d97d40f49eaff06c3a9e97907362c9063fa";
-        let recipients = |evm: &str, gift: u64| vec![TransactionRecipient {
-            address: BRIDGE_LOCK_ROOT.into(), gift, bridge_evm_address: Some(evm.into()),
-        }];
-        let tx = build_transaction_from_api(&wallet, vec![sample_large_note()], recipients(address, BRIDGE_MINIMUM_NICKS)).unwrap();
-        verify_bridge_intent(&tx.base64_tx, &source, recipients(address, BRIDGE_MINIMUM_NICKS), tx.fee_paid).unwrap();
-        assert!(verify_bridge_intent(&tx.base64_tx, &source, recipients("0x1111111111111111111111111111111111111111", BRIDGE_MINIMUM_NICKS), tx.fee_paid).is_err());
-        assert!(verify_bridge_intent(&tx.base64_tx, &source, recipients(address, BRIDGE_MINIMUM_NICKS+1), tx.fee_paid).is_err());
-        assert!(verify_bridge_intent(&tx.base64_tx, &source, recipients(address, BRIDGE_MINIMUM_NICKS), tx.fee_paid+1).is_err());
-        assert!(verify_bridge_intent(&tx.base64_tx, &Hash::from_b58(SAMPLE_RECIPIENT).unwrap(), recipients(address, BRIDGE_MINIMUM_NICKS), tx.fee_paid).is_err());
-        assert!(build_transaction_from_api_with_options(&wallet, vec![sample_large_note()], recipients(address, BRIDGE_MINIMUM_NICKS), BuildTxOptions { private_outputs: true, chain_height: None }).is_err());
+        let recipients = |evm: &str, gift: u64| {
+            vec![TransactionRecipient {
+                address: BRIDGE_LOCK_ROOT.into(),
+                gift,
+                bridge_evm_address: Some(evm.into()),
+            }]
+        };
+        let tx = build_transaction_from_api(
+            &wallet,
+            vec![sample_large_note()],
+            recipients(address, BRIDGE_MINIMUM_NICKS),
+        )
+        .unwrap();
+        verify_bridge_intent(
+            &tx.base64_tx,
+            &source,
+            recipients(address, BRIDGE_MINIMUM_NICKS),
+            tx.fee_paid,
+        )
+        .unwrap();
+        assert!(verify_bridge_intent(
+            &tx.base64_tx,
+            &source,
+            recipients(
+                "0x1111111111111111111111111111111111111111",
+                BRIDGE_MINIMUM_NICKS
+            ),
+            tx.fee_paid
+        )
+        .is_err());
+        assert!(verify_bridge_intent(
+            &tx.base64_tx,
+            &source,
+            recipients(address, BRIDGE_MINIMUM_NICKS + 1),
+            tx.fee_paid
+        )
+        .is_err());
+        assert!(verify_bridge_intent(
+            &tx.base64_tx,
+            &source,
+            recipients(address, BRIDGE_MINIMUM_NICKS),
+            tx.fee_paid + 1
+        )
+        .is_err());
+        assert!(verify_bridge_intent(
+            &tx.base64_tx,
+            &Hash::from_b58(SAMPLE_RECIPIENT).unwrap(),
+            recipients(address, BRIDGE_MINIMUM_NICKS),
+            tx.fee_paid
+        )
+        .is_err());
+        assert!(build_transaction_from_api_with_options(
+            &wallet,
+            vec![sample_large_note()],
+            recipients(address, BRIDGE_MINIMUM_NICKS),
+            BuildTxOptions {
+                private_outputs: true,
+                chain_height: None
+            }
+        )
+        .is_err());
     }
 
     #[test]
     fn bridge_rejects_missing_metadata_wrong_lock_and_zero_destination() {
         for (address, evm) in [
             (BRIDGE_LOCK_ROOT, None),
-            (BRIDGE_LOCK_ROOT, Some("0x0000000000000000000000000000000000000000")),
-            ("94qwbi47JzTySWXpNpYkqDDvuTKLdP8mPDdZTZYnphNCLKSWYeEuFdt", Some("0x1234567890abcdef1234567890abcdef12345678")),
+            (
+                BRIDGE_LOCK_ROOT,
+                Some("0x0000000000000000000000000000000000000000"),
+            ),
+            (
+                "94qwbi47JzTySWXpNpYkqDDvuTKLdP8mPDdZTZYnphNCLKSWYeEuFdt",
+                Some("0x1234567890abcdef1234567890abcdef12345678"),
+            ),
         ] {
             assert!(convert_recipients(vec![TransactionRecipient {
-                address: address.into(), gift: BRIDGE_MINIMUM_NICKS,
+                address: address.into(),
+                gift: BRIDGE_MINIMUM_NICKS,
                 bridge_evm_address: evm.map(str::to_owned),
-            }]).is_err());
+            }])
+            .is_err());
         }
         assert!(convert_recipients(vec![
             TransactionRecipient {
-                address: BRIDGE_LOCK_ROOT.into(), gift: BRIDGE_MINIMUM_NICKS,
+                address: BRIDGE_LOCK_ROOT.into(),
+                gift: BRIDGE_MINIMUM_NICKS,
                 bridge_evm_address: Some("0x1234567890abcdef1234567890abcdef12345678".into()),
             },
             TransactionRecipient {
-                address: SAMPLE_RECIPIENT.into(), gift: 1, bridge_evm_address: None,
+                address: SAMPLE_RECIPIENT.into(),
+                gift: 1,
+                bridge_evm_address: None,
             },
-        ]).is_err());
+        ])
+        .is_err());
     }
 
     #[test]

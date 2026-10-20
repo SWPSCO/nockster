@@ -45,7 +45,8 @@
     commitments: '',
     refundAddress: '',
     refundHeight: '',
-    branch: 'claim'
+    branch: 'claim',
+    preimages: ''
   };
   let outputs = [newOutput(1)];
   let nextOutputId = 2;
@@ -100,7 +101,7 @@
   let selectionTimer: ReturnType<typeof setTimeout> | undefined;
   const composerWorker = createComposerWorker();
   let height = '';
-  let manual = { first: '', last: '', origin: '', amount: '' };
+  let manual = { first: '', last: '', origin: '', amount: '', noteData: '{}' };
   let notesLoading = false;
   let building = false;
   let error = '';
@@ -212,8 +213,9 @@
       if (!alive || request !== noteRequest) return;
       notes = largestNotesFirst(
         loaded
-          .filter(note => Number(note.version) === 1)
+          .filter(note => note.version === '1')
           .map(note => ({
+            note_data: note.noteData,
             name_first: note.firstName,
             name_last: note.lastName,
             origin_page: note.originPage,
@@ -235,6 +237,7 @@
     try {
       const wasm = await hardwareCrypto();
       const note: Note = {
+        note_data: JSON.parse(manual.noteData),
         name_first: manual.first.trim(),
         name_last: manual.last.trim(),
         origin_page: wholeNumber(manual.origin, 'Origin block height'),
@@ -248,7 +251,7 @@
         throw new Error('This note is reserved by a pending transaction.');
       notes = largestNotesFirst([...notes, note]);
       if (selectionMode === 'manual') selected = new Set([...selected, noteId(note)]);
-      manual = { first: '', last: '', origin: '', amount: '' };
+      manual = { first: '', last: '', origin: '', amount: '', noteData: '{}' };
     } catch (failure) {
       noteError = failure instanceof Error ? failure.message : String(failure);
     }
@@ -291,6 +294,7 @@
     const input: ComposeInput = {
       source_pkh: sourceAddress,
       notes: inputNotes,
+      manual_inputs: selectionMode === 'manual',
       outputs: [],
       current_height: wholeNumber(height, 'Current block height', 1)
     };
@@ -309,7 +313,12 @@
           source.refundHeight,
           valid
         ),
-        spend_branch: source.branch === 'claim' ? 0 : 1
+        spend_branch: source.branch === 'claim' ? 0 : 1,
+        preimages: source.preimages
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map(value => Array.from(atob(value), ch => ch.charCodeAt(0)))
       };
     input.outputs = outputs.map((output, index) => {
       try {
@@ -499,6 +508,12 @@
         <label for="htlc-claim"
           >Claim address<input id="htlc-claim" bind:value={source.claimAddress} /></label
         >
+        <label for="htlc-preimages"
+          >Claim preimages (base64 JAM, one per line)<textarea
+            id="htlc-preimages"
+            bind:value={source.preimages}
+          /></label
+        >
         <label for="htlc-commitments"
           >Claim preimage commitments<textarea
             id="htlc-commitments"
@@ -566,6 +581,12 @@
       {#if noteError}<p class="transaction-error" role="alert">{noteError}</p>{/if}
       <details>
         <summary>Add an input note manually</summary>
+        <label for="note-data"
+          >On-chain note data (JSON; {'{}'} for an empty map)<textarea
+            id="note-data"
+            bind:value={manual.noteData}
+          /></label
+        >
         <label for="note-first"
           >First note hash<input id="note-first" bind:value={manual.first} /></label
         >

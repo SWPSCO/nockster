@@ -151,6 +151,9 @@ export function Composer({
     nameFirst: '',
     nameLast: '',
     originPage: '',
+    noteData: '{}',
+    currentHeight: '',
+    preimages: '',
     assets: '',
     claimRecipient: '',
     commitment: '',
@@ -189,6 +192,8 @@ export function Composer({
   const [noteFormFirst, setNoteFormFirst] = useState('');
   const [noteFormLast, setNoteFormLast] = useState('');
   const [noteFormOriginPage, setNoteFormOriginPage] = useState('');
+  const [noteFormData, setNoteFormData] = useState('{}');
+  const [candidateHeight, setCandidateHeight] = useState('');
   const [noteFormAssets, setNoteFormAssets] = useState('');
   const [noteFormError, setNoteFormError] = useState<string | null>(null);
   const [quickRecipient, setQuickRecipient] = useState('');
@@ -1005,6 +1010,7 @@ export function Composer({
           updateNodeData(nodeId, { composing: true, lastError: undefined });
           try {
             const result = compose_tx_v1_unsigned({
+              current_height: candidateHeight ? Number(candidateHeight) : undefined,
               source_pkh: entry.address,
               // Spending from a multisig source: inputs are reconstructed as
               // multisig and the .psnt round-trips through each co-signer.
@@ -1013,6 +1019,7 @@ export function Composer({
                   ? { m: entry.multisig.m, pkhs: entry.multisig.pkhs }
                   : undefined,
               notes: inputNotes.map((n) => ({
+                note_data: n.noteData,
                 name_first: n.nameFirst,
                 name_last: n.nameLast,
                 origin_page: n.originPage,
@@ -1047,7 +1054,7 @@ export function Composer({
         },
       });
     },
-    [canSignDraft, nodes, onSignDraft, signDraftDisabledReason, signingDraft, updateNodeData, wasmReady]
+    [candidateHeight, canSignDraft, nodes, onSignDraft, signDraftDisabledReason, signingDraft, updateNodeData, wasmReady]
   );
 
   useEffect(() => {
@@ -1201,12 +1208,14 @@ export function Composer({
       try {
         setQuickStatus('composing...');
         const result = compose_tx_v1_unsigned({
+          current_height: candidateHeight ? Number(candidateHeight) : undefined,
           source_pkh: quickSourceEntry.address,
           source_multisig:
             quickSourceEntry.kind === 'multisig' && quickSourceEntry.multisig
               ? { m: quickSourceEntry.multisig.m, pkhs: quickSourceEntry.multisig.pkhs }
               : undefined,
           notes: notes.map((note) => ({
+            note_data: note.noteData,
             name_first: note.nameFirst,
             name_last: note.nameLast,
             origin_page: note.originPage,
@@ -1258,6 +1267,7 @@ export function Composer({
       quickAmount,
       quickRecipient,
       quickSourceEntry,
+      candidateHeight,
       signDraftDisabledReason,
       wasmReady,
     ]
@@ -1346,7 +1356,7 @@ export function Composer({
     setHtlcStatus('');
     setHtlcDraft(null);
     const fields: Array<[string, string]> = [
-      ['source/change address', htlc.sourceAddr],
+      ['signing address', htlc.sourceAddr],
       ['claim recipient', htlc.claimRecipient],
       ['claim commitment', htlc.commitment],
       ['refund address', htlc.refundAddr],
@@ -1361,6 +1371,10 @@ export function Composer({
     const originPage = Number(htlc.originPage.trim());
     const assets = Number(htlc.assets.trim());
     const refundHeight = Number(htlc.refundHeight.trim());
+    if (!htlc.currentHeight.trim() || !Number.isSafeInteger(Number(htlc.currentHeight)) || Number(htlc.currentHeight) < 0) {
+      setHtlcStatus('Enter the current block height');
+      return;
+    }
     if (![originPage, assets].every((n) => Number.isInteger(n) && n >= 0)) {
       setHtlcStatus('note origin-page and assets must be whole numbers');
       return;
@@ -1385,9 +1399,12 @@ export function Composer({
       ];
       const result = compose_tx_v1_unsigned({
         source_pkh: htlc.sourceAddr.trim(),
-        source_or_lock: { branches, spend_branch: htlc.branch === 'claim' ? 0 : 1 },
+        current_height: Number(htlc.currentHeight),
+        source_or_lock: { branches, spend_branch: htlc.branch === 'claim' ? 0 : 1,
+          preimages: htlc.preimages.trim().split(/\s+/).filter(Boolean).map(value => Array.from(atob(value), ch => ch.charCodeAt(0))) },
         notes: [
           {
+            note_data: JSON.parse(htlc.noteData),
             name_first: htlc.nameFirst.trim(),
             name_last: htlc.nameLast.trim(),
             origin_page: originPage,
@@ -1527,7 +1544,13 @@ export function Composer({
       return;
     }
 
+    let noteData: Record<string, unknown>;
+    try {
+      noteData = JSON.parse(noteFormData);
+      if (!noteData || typeof noteData !== 'object' || Array.isArray(noteData)) throw new Error();
+    } catch { setNoteFormError('Enter the on-chain note data as a JSON object'); return; }
     const note: NoteV1 = {
+      noteData,
       id: newId(),
       nameFirst: first,
       nameLast: last,
@@ -1547,7 +1570,7 @@ export function Composer({
     setNoteFormAssets('');
     setNoteFormError(null);
     setNoteAddOpen(false);
-  }, [addressBook, noteFormAssets, noteFormFirst, noteFormLast, noteFormOriginPage, selectedEntry]);
+  }, [addressBook, noteFormAssets, noteFormFirst, noteFormLast, noteFormOriginPage, noteFormData, selectedEntry]);
 
   const removeNote = useCallback(
     (entryId: string, noteId: string) => {
@@ -1864,6 +1887,10 @@ export function Composer({
       <div className={`composer-layout ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         {!sidebarCollapsed && (
           <div className="composer-sidebar">
+            <label className="composer-field">
+              <span>Current block height</span>
+              <input value={candidateHeight} onChange={(e) => setCandidateHeight(e.target.value)} placeholder="Required for time-locked notes" />
+            </label>
             <div className="composer-sidebar-header">
               <div className="composer-sidebar-title">Composer</div>
               <div className="composer-row composer-sidebar-tools">
@@ -2220,10 +2247,13 @@ export function Composer({
                 </div>
                 {(
                   [
-                    ['sourceAddr', 'your address (change / refund-to)'],
+                    ['sourceAddr', 'your signing address'],
                     ['nameFirst', 'note name (first hash)'],
                     ['nameLast', 'note name (last hash)'],
                     ['originPage', 'note origin page'],
+                    ['noteData', 'on-chain note data (JSON; {} for an empty map)'],
+                    ['currentHeight', 'current block height'],
+                    ['preimages', 'claim preimages (base64 JAM, separated by spaces)'],
                     ['assets', 'note assets (nicks)'],
                     ['claimRecipient', 'HTLC claim recipient (pkh)'],
                     ['commitment', 'HTLC claim commitment (hash)'],
@@ -2538,6 +2568,10 @@ export function Composer({
                   >
                     <summary className="composer-subsummary">Add note</summary>
                     <div className="composer-subbody">
+                      <label className="composer-field">
+                        <span>On-chain note data (JSON; {'{}'} for an empty map)</span>
+                        <textarea value={noteFormData} onChange={(e) => setNoteFormData(e.target.value)} />
+                      </label>
                       <input
                         className="node-input"
                         placeholder="name_first (base58)"

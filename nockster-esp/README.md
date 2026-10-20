@@ -5,6 +5,19 @@ signing Nockchain transactions on an [ESP32-S3-Touch-LCD-1.47](https://www.waves
 
 https://github.com/user-attachments/assets/374c7e70-3651-4e75-a942-28b4d5cc9d79
 
+## Development checks
+
+The workspace pins `tx-types` 0.2 and its noun runtime to one Git revision.
+`cargo check` checks the host crates; first run `npm run build` in `web`
+to prepare the desktop frontend assets. `make check` also checks the GUI emulator
+for `wasm32-unknown-unknown` and the firmware with the `esp` toolchain for
+`xtensa-esp32s3-none-elf`. Install those toolchains/targets before running it.
+
+Transaction planning, lock proofs, note-data commitments, and fee accounting
+come from `tx-types` in both the browser composer and the firmware signing core.
+The public signing fixture is regenerated with
+`node ../scripts/update-signing-fixture.mjs` after rebuilding the wallet WASM.
+
 ## Features
 
 - On-device seed storage, transaction review, approval, and signing.

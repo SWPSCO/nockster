@@ -13,6 +13,7 @@ import {
 import {
   initSync as initCore,
   inspectTxJam,
+  composeUnsignedTx,
   toRawTxJam,
   buildVault,
   importWallet,
@@ -51,6 +52,7 @@ const fixture = JSON.parse(
 );
 const recipient = fixture.recipients[0].address;
 const note: Note = {
+  note_data: fixture.note.noteData,
   name_first: fixture.note.firstName,
   name_last: fixture.note.lastName,
   origin_page: fixture.note.originPage,
@@ -313,5 +315,35 @@ test('largest-first selection splits outputs across notes without adding avoidab
     assert.equal(inspectTxJam(Buffer.from(tx.wallet_jam).toString('base64')).spends.length, 2);
   } finally {
     tx.free();
+  }
+});
+
+test('wallet and hardware composers produce identical raw plans for the same snapshot', () => {
+  for (const height of [53999, 54000, 170000]) {
+    const notes = [
+      { ...fixture.note, assets: 10000000 },
+      { ...fixture.note, lastName: recipient, assets: 9000000 }
+    ];
+    const recipients = [{ address: recipient, gift: 11000000 }];
+    const wallet = composeUnsignedTx(fixture.source, notes, recipients, height);
+    const hardware = compose_tx_v1_min_inputs({
+      source_pkh: fixture.source,
+      notes: notes.map(value => ({
+        name_first: value.firstName,
+        name_last: value.lastName,
+        origin_page: value.originPage,
+        assets: value.assets,
+        version: 1,
+        note_data: value.noteData
+      })),
+      outputs: [{ recipient, amount: 11000000 }],
+      current_height: height
+    });
+    try {
+      assert.equal(wallet.feePaid, JSON.parse(hardware.summary_json).total_fees);
+      assert.equal(toRawTxJam(wallet.base64Tx), Buffer.from(hardware.raw_jam).toString('base64'));
+    } finally {
+      hardware.free();
+    }
   }
 });

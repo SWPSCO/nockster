@@ -924,7 +924,9 @@ monitor:
 	espflash monitor --port /dev/$$DEV
 
 check:
-	@cargo check --workspace
+	@cargo check
+	@cargo check -p nockster-fw-emu --target wasm32-unknown-unknown
+	@cargo +esp -Zbuild-std=core,alloc check -p nockster-fw --target $(TARGET_ESP)
 
 clippy:
 	@cargo clippy --workspace -- -D warnings

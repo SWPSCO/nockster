@@ -28,6 +28,7 @@ export type LockForm = {
 };
 export type OutputForm = LockForm & { id: number; amount: string };
 export type Note = {
+  note_data: Record<string, unknown>;
   name_first: string;
   name_last: string;
   origin_page: number;
@@ -45,6 +46,7 @@ export type SourceForm = {
   refundAddress: string;
   refundHeight: string;
   branch: 'claim' | 'refund';
+  preimages: string;
 };
 export type Output = {
   recipient: Recipient;
@@ -58,10 +60,11 @@ export type Output = {
 export type ComposeInput = {
   source_pkh: string;
   source_multisig?: { m: number; pkhs: string[] };
-  source_or_lock?: { branches: LockBranch[]; spend_branch: number };
+  source_or_lock?: { branches: LockBranch[]; spend_branch: number; preimages: number[][] };
   notes: Note[];
   outputs: Output[];
   current_height: number;
+  manual_inputs?: boolean;
 };
 export type ComposeSummary = {
   total_fees: number;
@@ -182,6 +185,10 @@ export function validateNotes(notes: Note[], valid: AddressValidator): Note[] {
   for (const note of notes) {
     address(note.name_first, 'first note hash', valid);
     address(note.name_last, 'last note hash', valid);
+    if (!note.note_data || typeof note.note_data !== 'object' || Array.isArray(note.note_data))
+      throw new Error(
+        'Input note data is missing. Refresh the notes or supply the on-chain note data.'
+      );
     if (note.version !== 1) throw new Error('Select V1 notes for this transaction.');
     if (
       !Number.isSafeInteger(note.assets) ||

@@ -108,6 +108,7 @@ function normalizeNote(raw: unknown): NoteV1 | null {
   return {
     id: `${nameFirst}:${nameLast}:${originPage}`,
     nameFirst,
+    noteData: valueObject(obj.noteData) ?? undefined,
     nameLast,
     originPage,
     assets,

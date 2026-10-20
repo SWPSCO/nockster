@@ -1,254 +1,98 @@
-//! Single-signer transaction planning shared by software and hardware wallets.
-use tx_types::transaction_types::{Chal, Sig, F6LT};
-use tx_types::{
-    block_types::build_lock_merkle_proof, lock_data_to_untyped_noun, Coins, Hash, LockData,
-    LockPrimitive, LockPrimitiveBody, NName, NNoteV1, NoteData, Pkh, PkhSignature,
-    PkhSignatureValue, SchnorrPubkey, SchnorrSignature, SeedV1, SeedsV1, Spend, SpendBody,
-    SpendCondition, SpendV1, SpendsV1, Witness, ZMap, ZSet,
+//! Wallet snapshot and output adapters for the shared transaction planner.
+use tx_types::lock_resolver::{LockMatcher, SigningKeyLockMatcher};
+pub(crate) use tx_types::planner::PlannedOutput;
+use tx_types::planner::{
+    self, CandidateVersionPolicy, ChainContext, FeePolicy, PlanRequest, PlanningMode,
+    SelectionMode, SelectionOrder,
 };
+use tx_types::{Hash, NNote, NNoteV1, SpendCondition, SpendsV1};
 
-#[derive(Debug, Clone)]
-pub(crate) struct Output {
-    pub lock_root: Hash,
-    pub note_data: NoteData,
-    pub amount: u64,
-}
-
-pub(crate) fn pkh_lock(pkh: &Hash) -> SpendCondition {
-    SpendCondition {
-        p: vec![LockPrimitive {
-            header: "pkh".into(),
-            body: LockPrimitiveBody::Pkh(Pkh {
-                m: 1,
-                h: ZSet::gas(vec![pkh.clone()]),
-            }),
-        }],
+pub(crate) fn matcher(source: &Hash) -> SigningKeyLockMatcher {
+    SigningKeyLockMatcher {
+        signer_pkh: source.clone(),
+        public_key: None,
+        coinbase_relative_min: Some(100),
     }
 }
 
-pub(crate) fn payment(pkh: &Hash, amount: u64, private: bool) -> Output {
-    let lock = pkh_lock(pkh);
-    let mut map = ZMap::new();
-    if !private {
-        map.put(
-            "lock".into(),
-            lock_data_to_untyped_noun(&LockData::V0(lock.clone())),
-        );
-    }
-    Output {
-        lock_root: lock.to_hash(),
-        note_data: NoteData { map },
-        amount,
-    }
+pub(crate) fn pkh_lock(source: &Hash) -> SpendCondition {
+    tx_types::lock_resolver::simple_pkh(source.clone())
 }
 
-/// Resolve the disclosed lock or a standard payment/coinbase lock and enforce its timelocks.
+pub(crate) fn payment(source: &Hash, amount: u64, private: bool) -> PlannedOutput {
+    PlannedOutput::payment(source.clone(), amount, private).expect("validated wallet address")
+}
+
+#[cfg(test)]
 pub(crate) fn spendable_lock(
     note: &NNoteV1,
     source: &Hash,
     height: Option<u64>,
 ) -> Option<SpendCondition> {
-    let mut lock = pkh_lock(source);
-    if let Some(noun) = note.note_data.map.get(&"lock".into()) {
-        let LockData::V0(disclosed) = noun.to_typed::<LockData>().ok()?;
-        lock = disclosed;
-    } else if note.name.p.first()? != &NName::first_v1(lock.to_hash()) {
-        lock.p.push(LockPrimitive {
-            header: "tim".into(),
-            body: LockPrimitiveBody::Tim(tx_types::Tim {
-                rel: tx_types::TimelockRange {
-                    min: Some(tx_types::PageNumber { value: 100 }),
-                    max: None,
-                },
-                abs: tx_types::TimelockRange {
-                    min: None,
-                    max: None,
-                },
-            }),
-        });
-    }
-    if note.name.p.len() != 2 || note.name.p[0] != NName::first_v1(lock.to_hash()) {
-        return None;
-    }
-    let mut has_key = false;
-    for primitive in &lock.p {
-        match &primitive.body {
-            LockPrimitiveBody::Pkh(pkh) if pkh.m == 1 && pkh.h.wyt() == 1 && pkh.h.has(source) => {
-                has_key = true;
-            }
-            LockPrimitiveBody::Tim(tim) => {
-                let height = height?;
-                let relative = height.checked_sub(note.origin_page.value)?;
-                for (range, value) in [(&tim.rel, relative), (&tim.abs, height)] {
-                    if range.min.as_ref().is_some_and(|min| value < min.value)
-                        || range.max.as_ref().is_some_and(|max| value > max.value)
-                    {
-                        return None;
-                    }
-                }
-            }
-            _ => return None,
-        }
-    }
-    has_key.then_some(lock)
+    let resolved = matcher(source).resolve(note)?;
+    resolved
+        .admits(note, height)
+        .then(|| resolved.spend_condition())
+        .flatten()
 }
 
-/// Every input balances independently; every seed commits to the full input note.
+pub(crate) fn plan(
+    notes: &[NNoteV1],
+    outputs: &[PlannedOutput],
+    source: &Hash,
+    private: bool,
+    height: Option<u64>,
+    fee: FeePolicy,
+    mode: PlanningMode,
+) -> Result<planner::PlanResult, String> {
+    let candidates: Vec<_> = notes.iter().cloned().map(NNote::V1).collect();
+    let refund = payment(source, 0, private);
+    let chain = ChainContext {
+        candidate_height: height,
+        ..ChainContext::at_height(height.unwrap_or(tx_types::fee::BYTHOS_PHASE))
+    };
+    planner::plan(
+        PlanRequest {
+            candidates: &candidates,
+            outputs,
+            refund: &refund,
+            selection: SelectionMode::Auto,
+            order: SelectionOrder::Descending,
+            version: CandidateVersionPolicy::V1Only,
+            mode,
+            fee,
+            chain,
+        },
+        &matcher(source),
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
 pub(crate) fn plan_spends(
     notes: &[NNoteV1],
-    outputs: &[Output],
+    outputs: &[PlannedOutput],
     fee: u64,
     source: &Hash,
     private: bool,
     height: Option<u64>,
 ) -> Result<SpendsV1, String> {
-    let total = outputs.iter().try_fold(fee, |sum, output| {
-        sum.checked_add(output.amount)
-            .ok_or("transaction amount overflow")
-    })?;
-    let mut notes = notes.to_vec();
-    notes.sort_by(|a, b| b.assets.value.cmp(&a.assets.value));
-    let mut names = std::collections::HashSet::new();
-    for note in &notes {
-        if !names.insert(note.name.clone()) {
-            return Err("duplicate input note".into());
-        }
-    }
-    notes.retain(|note| spendable_lock(note, source, height).is_some());
-    let available = notes.iter().try_fold(0u64, |sum, note| {
-        sum.checked_add(note.assets.value)
-            .ok_or("input amount overflow")
-    })?;
-    if available < total {
-        return Err("insufficient funds for payments and network fee".into());
-    }
-
-    let mut remaining: Vec<u64> = outputs.iter().map(|o| o.amount).collect();
-    let mut remaining_fee = fee;
-    let mut needed = total;
-    let mut spends = ZMap::new();
-    for note in notes {
-        if needed == 0 {
-            break;
-        }
-        let spend_lock = spendable_lock(&note, source, height)
-            .ok_or_else(|| "selected input note is not spendable".to_string())?;
-        let mut capacity = note.assets.value;
-        let input_fee = capacity.min(remaining_fee);
-        remaining_fee -= input_fee;
-        capacity -= input_fee;
-        let mut allocated: Vec<Output> = Vec::new();
-        for (output, left) in outputs.iter().zip(remaining.iter_mut()) {
-            let amount = capacity.min(*left);
-            if amount > 0 {
-                let mut part = output.clone();
-                part.amount = amount;
-                allocated.push(part);
-                *left -= amount;
-                capacity -= amount;
-            }
-        }
-        needed -= note.assets.value - capacity;
-        if capacity > 0 {
-            allocated.push(payment(source, capacity, private));
-        }
-
-        // Equal seeds are a set element. Merge allocations before constructing the set.
-        let mut merged: Vec<Output> = Vec::new();
-        for output in allocated {
-            if let Some(existing) = merged.iter_mut().find(|o| o.lock_root == output.lock_root) {
-                let existing_hash = existing
-                    .note_data
-                    .to_hash()
-                    .map_err(|err| format!("note-data hash: {err}"))?;
-                let output_hash = output
-                    .note_data
-                    .to_hash()
-                    .map_err(|err| format!("note-data hash: {err}"))?;
-                if existing_hash != output_hash {
-                    return Err("conflicting note data for the same output lock".into());
-                }
-                existing.amount = existing
-                    .amount
-                    .checked_add(output.amount)
-                    .ok_or("output overflow")?;
-            } else {
-                merged.push(output);
-            }
-        }
-        let proof_page = height.unwrap_or(tx_types::fee_calculator::BYTHOS_PHASE);
-        let parent_hash = note
-            .to_hash()
-            .map_err(|err| format!("input note hash: {err}"))?;
-        let seeds = SeedsV1 {
-            set: ZSet::gas(
-                merged
-                    .into_iter()
-                    .map(|output| SeedV1 {
-                        output_source: None,
-                        lock_root: output.lock_root,
-                        note_data: output.note_data,
-                        gift: Coins {
-                            value: output.amount,
-                        },
-                        parent_hash: parent_hash.clone(),
-                    })
-                    .collect::<Vec<_>>(),
-            ),
-        };
-        spends.put(
-            note.name.clone(),
-            Spend {
-                version: 1,
-                body: SpendBody::V1(SpendV1 {
-                    witness: Witness {
-                        lmp: build_lock_merkle_proof(spend_lock, 1, proof_page),
-                        pkh: PkhSignature { map: ZMap::new() },
-                        hax: ZMap::new(),
-                        tim: 0,
-                    },
-                    seeds,
-                    fee: Coins { value: input_fee },
-                }),
-            },
-        );
-    }
-    Ok(SpendsV1 { map: spends })
-}
-
-/// Fee accounting counts noun leaves, so fixed-size signature fields give an exact estimate.
-/// These placeholders are used only for sizing and never enter an exported transaction.
-pub(crate) fn signed_fee(spends: &SpendsV1, source: &Hash) -> u64 {
-    let mut map = ZMap::new();
-    for (name, mut spend) in spends.map.tap() {
-        if let SpendBody::V1(ref mut body) = spend.body {
-            body.witness.pkh.map.put(
-                source.clone(),
-                PkhSignatureValue {
-                    pk: SchnorrPubkey {
-                        x: F6LT { values: [1; 6] },
-                        y: F6LT { values: [1; 6] },
-                        inf: false,
-                    },
-                    sig: SchnorrSignature {
-                        chal: Chal {
-                            values: tx_types::T8 { values: [1; 8] },
-                        },
-                        sig: Sig {
-                            values: tx_types::T8 { values: [1; 8] },
-                        },
-                    },
-                },
-            );
-        }
-        map.put(name, spend);
-    }
-    tx_types::fee_calculator::calculate_min_fee(&map).value
+    plan(
+        notes,
+        outputs,
+        source,
+        private,
+        height,
+        FeePolicy::Exact(fee),
+        PlanningMode::Standard,
+    )
+    .map(|result| result.spends)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tx_types::{Coins, LockPrimitive, LockPrimitiveBody, NName, NoteData, SpendBody, ZMap};
     fn hash(n: u64) -> Hash {
         Hash { values: [n; 5] }
     }
@@ -323,7 +167,7 @@ mod tests {
             note(&source, 4, 100),
             note(&source, 5, 100),
         ];
-        let bridge = Output {
+        let bridge = PlannedOutput {
             lock_root: hash(9),
             note_data: NoteData { map: ZMap::new() },
             amount: 150,

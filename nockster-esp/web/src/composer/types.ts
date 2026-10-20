@@ -1,4 +1,5 @@
 export type NoteV1 = {
+  noteData?: Record<string, unknown>;
   id: string;
   nameFirst: string; // base58 hash
   nameLast: string; // base58 hash

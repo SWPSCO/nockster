@@ -7,12 +7,19 @@ members = [
     "crates/nockster-fw-emu",
     "src-tauri",
 ]
+# Firmware and the GUI emulator use their explicit Xtensa and WASM targets.
+default-members = [
+    "crates/nockster-core",
+    "crates/nockster-cli",
+    "crates/nockster-wasm",
+    "src-tauri",
+]
 resolver = "2"
 
 [workspace.package]
 authors = ["Southwestern Pool Supply Co", "SWPSCo <howdy@swps.io>"]
 edition = "2021"
-version = "0.3.0"
+version = "0.4.0"
 
 [profile.release]
 codegen-units = 1
@@ -77,21 +84,20 @@ postgrest = "1.0.1"
 proc-macro2 = "1.0.95"
 either = "1.13"
 
-# nockchain / tx-types pins
-# nockchain = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "nockchain" }
-nockvm = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
-nockapp = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
-zkvm-jetpack = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
-nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
-nockchain-libp2p-io = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
-nockchain-math = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
-murmur3 = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
+# Shared transaction core and its matching noun runtime
+nockvm = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
+nockapp = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
+zkvm-jetpack = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e" }
+nockvm_macros = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e" }
+nockchain-libp2p-io = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
+nockchain-math = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
+murmur3 = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e" }
 # kernels = { git = "https://github.com/swpsco/nockchain.git", rev = "a7daa6d5a5c85106428bab76132eb28218828dfd", package = "kernels" }
-noun-serde-derive = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
-noun-serde = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
-tx-types = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
-vanity = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
-pokenoun = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52" }
-ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "f225b52c8c5901c782573ffeb34d53c1c58aad52", default-features = false }
+noun-serde-derive = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e" }
+noun-serde = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e" }
+tx-types = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
+vanity = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
+pokenoun = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e" }
+ibig = { git = "https://github.com/SWPSCO/tx-types.git", rev = "02d194605c475013745cc65b26f1413cd098932e", default-features = false }
 
 [workspace.lints.rust]

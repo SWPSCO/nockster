@@ -70,7 +70,7 @@ jobs:
       run:
         working-directory: nockster-esp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Resolve tag and versions
         id: set
@@ -153,20 +153,20 @@ jobs:
             zip \
             "$FUSE_PACKAGE"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.WASM_TOOLCHAIN }}
           targets: ${{ env.LINUX_TARGET }},${{ env.WASM_TARGET }}
 
       - name: Cache Rust dependencies
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: nockster-esp -> target
           key: desktop-linux-${{ env.LINUX_TARGET }}
@@ -254,7 +254,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-linux-x64
           path: nockster-esp/dist/*
@@ -304,20 +304,20 @@ jobs:
             zip \
             "$FUSE_PACKAGE"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.WASM_TOOLCHAIN }}
           targets: ${{ env.LINUX_ARM64_TARGET }},${{ env.WASM_TARGET }}
 
       - name: Cache Rust dependencies
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: nockster-esp -> target
           key: desktop-linux-${{ env.LINUX_ARM64_TARGET }}
@@ -401,7 +401,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-linux-aarch64
           path: nockster-esp/dist/*
@@ -416,20 +416,20 @@ jobs:
       run:
         working-directory: nockster-esp
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.WASM_TOOLCHAIN }}
           targets: ${{ env.MACOS_TARGET }},${{ env.WASM_TARGET }}
 
       - name: Cache Rust dependencies
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: nockster-esp -> target
           key: desktop-macos-${{ env.MACOS_TARGET }}
@@ -636,7 +636,7 @@ jobs:
 
           ls -la dist
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-macos-aarch64
           path: nockster-esp/dist/*
@@ -649,19 +649,19 @@ jobs:
     outputs:
       content_hashes: ${{ steps.content-hash.outputs.content_hashes }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: ${{ needs.build-linux-x64.result == 'success' }}
         with:
           name: desktop-linux-x64
           path: ./linux
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: ${{ needs.build-linux-aarch64.result == 'success' }}
         with:
           name: desktop-linux-aarch64
           path: ./linux-arm64
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         if: ${{ needs.build-macos-aarch64.result == 'success' }}
         with:
           name: desktop-macos-aarch64
@@ -693,7 +693,7 @@ jobs:
           fi
           echo "content_hashes=$(sha256sum $files | base64 -w0)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: packaged-desktop-release
           path: out/*
@@ -702,7 +702,7 @@ jobs:
     name: Generate SLSA provenance
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.generate_provenance }}
     needs: package
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # SLSA requires a version tag; see the exception in check-action-pins.rb
     permissions:
       actions: read
       id-token: write
@@ -719,14 +719,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: packaged-desktop-release
           path: ./out
 
       - name: Download provenance
         if: ${{ needs.provenance.result == 'success' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ needs.provenance.outputs.provenance-name }}
           path: ./prov
@@ -786,7 +786,7 @@ jobs:
           fi
           ls -la release-files
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

@@ -14,7 +14,8 @@ import time
 
 
 SCREENSHOTS = {'01-wallet', '02-receive', '03-activity', '04-send', '05-wallet-dark'}
-DEVICES = [('iphone', 'iPhone-17-Pro-Max'), ('ipad', 'iPad-Pro-13-inch-M5-12GB')]
+DEVICES = [('iphone-medium', 'iPhone-17-Pro'), ('iphone', 'iPhone-17-Pro-Max'),
+           ('ipad', 'iPad-Pro-13-inch-M5-12GB')]
 
 
 def output(*args):
@@ -74,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('seed', type=Path)
     parser.add_argument('destination', type=Path)
-    parser.add_argument('--device', choices=['all', 'iphone', 'ipad'], default='all')
+    parser.add_argument('--device', choices=['all', 'iphone-medium', 'iphone', 'ipad'], default='all')
     args = parser.parse_args()
     seed, destination = args.seed.resolve(), args.destination.resolve()
     if not seed.is_file():

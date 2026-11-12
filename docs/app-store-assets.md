@@ -1,9 +1,11 @@
 # App Store screenshots
 
-Capture the production SwiftUI screens on disposable iPhone 17 Pro Max and
-13-inch iPad Pro simulators. The capture test imports a wallet from a local
+Capture the production SwiftUI screens on disposable iPhone 17 Pro, iPhone 17
+Pro Max, and 13-inch iPad Pro simulators. The capture test imports a wallet from a local
 24-word recovery-phrase file, refreshes real network data, and saves five PNGs
 per device. It never places the phrase in source code or command-line arguments.
+Use `--device iphone-medium`, `--device iphone`, or `--device ipad` to capture
+only one size. The default captures all three.
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -29,12 +31,18 @@ are not UI mockups. Inspect every output, especially tab selection and text
 layout, before uploading. A live service failure causes the capture to fail
 rather than publishing an error state as a wallet screenshot.
 
-Upload the iPhone and iPad sets to the corresponding App Store Connect screenshot
-slots. Match the screenshots to the build being submitted. Apple requires a new
+Upload `iphone-medium` (1206 × 2622) to Dynamic Island medium, `iphone`
+(1320 × 2868) to Dynamic Island large, and `ipad` (2064 × 2752) to iPad 13-inch.
+Apple currently marks medium iPhone and 13-inch iPad as required. Media Manager
+can inherit suitable screenshots from another size, showing "Using Existing
+Assets". Inspect those inherited thumbnails: old explicit screenshots in other
+slots can take precedence over a newly uploaded set. Separate uploads for every
+optional display size are unnecessary when the inherited set is correct.
+Match the screenshots to the build being submitted. Apple requires a new
 version to replace screenshots on an already approved version.
 
 - [Screenshot sizes and file requirements](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)
-- [Uploading screenshots](https://developer.apple.com/help/app-store-connect/manage-app-information/upload-app-previews-and-screenshots/)
+- [Managing App Store assets](https://developer.apple.com/help/app-store-connect/manage-app-information/manage-your-app-store-assets/)
 - [Product page guidance](https://developer.apple.com/app-store/product-page/)
 
 ## Public data for offline mocks

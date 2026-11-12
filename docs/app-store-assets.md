@@ -36,3 +36,34 @@ version to replace screenshots on an already approved version.
 - [Screenshot sizes and file requirements](https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications)
 - [Uploading screenshots](https://developer.apple.com/help/app-store-connect/manage-app-information/upload-app-previews-and-screenshots/)
 - [Product page guidance](https://developer.apple.com/app-store/product-page/)
+
+## Public data for offline mocks
+
+`tests/fixtures/demo-wallet-rpc.json` records the demonstration wallet's public
+balance, recent activity (up to 20 transactions), V0/V1 notes, chain tip, and
+price at capture time. It contains no API key, recovery phrase, account cookies,
+or private address book. Public wallet and transaction addresses remain intact
+so ownership and transaction-direction parsing can be tested faithfully. The
+timestamp in the fixture identifies the snapshot; prices and balances are not
+live estimates. The six calls are sequential, not an atomic chain snapshot.
+
+Refresh it with a read-only API key entered at the hidden prompt:
+
+```sh
+python3 scripts/ci/capture-wallet-fixture.py PUBLIC_DEMO_ADDRESS tests/fixtures/demo-wallet-rpc.json
+```
+
+The script uses only six fixed read methods on `https://nockblocks.com`, rejects
+redirects, and never puts the key in arguments or saved responses. Review the
+public wallet data before committing a refreshed snapshot.
+
+For browser tests, install `mockDemoWallet(page)` from
+`tests/mobile/demo-wallet.fixture.ts` before navigation. Add `mockAccounts(page)`
+afterward if the test needs synthetic authentication. Replay blocks unmatched
+HTTPS requests and RPC methods, including transaction submission, and rejects
+queries for other wallet addresses. Contacts are deliberately empty. See
+`tests/mobile/demo-wallet.spec.ts` for a seed-free example exercising the real
+RPC parser and the replay restrictions.
+
+This fixture does not change the native screenshot capture flow: those PNGs
+still use actual live wallet state through the opt-in XCTest above.

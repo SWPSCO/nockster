@@ -371,7 +371,9 @@ async function perform(
       contacts = [];
       walletStore.selectWallet(`vault-${imported.nickname}`);
       await walletStore.saveToStorage();
-      await refresh();
+      // Return the saved wallet immediately. Native account screens refresh
+      // after opening; a login-service outage must not trap users in setup.
+      networkError = null;
       break;
     }
     case 'select':

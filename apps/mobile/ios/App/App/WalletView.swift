@@ -533,6 +533,8 @@ struct AccountView: View {
                 Section {
                     Label("Some information could not update", systemImage: "wifi.exclamationmark")
                     Text(failure).font(.footnote).foregroundStyle(.secondary)
+                    Button("Retry connection") { Task { _ = await model.perform("refresh") } }
+                        .disabled(model.busy)
                 }
             }
             Section("Your wallets") {
@@ -584,7 +586,15 @@ struct AccountView: View {
             }
         }
         .refreshable { _ = await model.perform("refresh") }
-        .task { _ = await model.perform("refresh") }
+        .task(id: model.snapshot.activeId) {
+            // Optional device-unlock enrollment can still be finishing when
+            // setup opens this screen. Do not lose the initial refresh.
+            while model.busy {
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            _ = await model.perform("refresh")
+        }
         .sheet(item: $editingWallet) { wallet in
             NavigationStack { ManageWalletView(model: model, wallet: wallet) }
         }

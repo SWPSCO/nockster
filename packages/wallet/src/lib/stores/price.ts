@@ -1,6 +1,7 @@
 import { writable, derived } from 'svelte/store';
 import type { Writable } from 'svelte/store';
 import { NETWORK } from '../constants';
+import { fetchWithAbort } from '../../platform/fetchWithAbort';
 
 interface PriceState {
   nockToUsd: number;
@@ -25,7 +26,7 @@ function createPriceStore() {
     update(state => ({ ...state, isLoading: true, error: null }));
 
     try {
-      const response = await fetch(NETWORK.RPC_URL, {
+      const response = await fetchWithAbort(NETWORK.RPC_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 'price', method: 'getTip', params: [] }),

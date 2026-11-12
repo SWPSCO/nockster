@@ -56,7 +56,7 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => Boolean(window.nocksterNative));
 });
 
-test('import signs in with its own address proof and loads account aliases without browser interaction', async ({
+test('opening an imported wallet signs in with its own address proof and loads account aliases without browser interaction', async ({
   page,
   context
 }) => {
@@ -71,7 +71,10 @@ test('import signs in with its own address proof and loads account aliases witho
   ]);
   const calls = await mockAccounts(page);
   await mockWalletData(page);
-  const result = await dispatch(page, 'import', { name: 'Main', key: mnemonic, password });
+  const imported = await dispatch(page, 'import', { name: 'Main', key: mnemonic, password });
+  expect(imported.error).toBeUndefined();
+  expect(calls).toEqual({ challenges: 0, logins: 0, keys: 0 });
+  const result = await dispatch(page, 'refresh');
   expect(result.error).toBeUndefined();
   expect(result.state.networkError).toBeNull();
   expect(result.state.wallets[0].address).toBe(address);
@@ -89,8 +92,10 @@ test('wallets use separate authenticated address books and reuse only their own 
   const calls = await mockAccounts(page, { anyPublicKey: true });
   await mockWalletData(page);
   const first = await dispatch(page, 'import', { name: 'First', key: mnemonic, password });
+  await dispatch(page, 'refresh');
   const secondKey = (await dispatch(page, 'generate')).mnemonic.join(' ');
-  const second = await dispatch(page, 'import', { name: 'Second', key: secondKey });
+  await dispatch(page, 'import', { name: 'Second', key: secondKey });
+  const second = await dispatch(page, 'refresh');
   expect(second.error).toBeUndefined();
   expect(second.state.networkError).toBeNull();
   expect(second.state.contacts[0].alias).toBe('Second account contact');
@@ -110,7 +115,8 @@ test('offline import preserves the wallet and signs in automatically when a refr
   expect(imported.error).toBeUndefined();
   expect(imported.state.unlocked).toBe(true);
   expect(imported.state.wallets[0].address).toBe(address);
-  expect(imported.state.networkError).toBeTruthy();
+  expect(imported.state.networkError).toBeNull();
+  expect((await dispatch(page, 'refresh')).state.networkError).toBeTruthy();
   const calls = await mockAccounts(page);
   await mockWalletData(page);
   const refreshed = await dispatch(page, 'refresh');

@@ -269,6 +269,7 @@ for (const authentication of ['password', 'device'] as const) test(`payment revi
   expect(
     (await request(page, 'import', { name: 'Test Wallet', password, key: mnemonic })).error
   ).toBeUndefined();
+  await request(page, 'refresh');
   const recipient = fixture.recipients[0];
   const prepared = await request(page, 'prepare', {
     amountUnit: 'nicks',
@@ -336,7 +337,7 @@ for (const authentication of ['password', 'device'] as const) test(`payment revi
   expect(submitted).toHaveLength(1);
 });
 
-test('import selects and refreshes the new wallet and refresh keeps every balance current', async ({
+test('import selects the new wallet and opening it refreshes every balance', async ({
   page
 }) => {
   await mockAccounts(page, { anyPublicKey: true });
@@ -360,11 +361,14 @@ test('import selects and refreshes the new wallet and refresh keeps every balanc
     throw new Error(`Unexpected dashboard request: ${body.method}`);
   });
   const first = await create(page);
+  await request(page, 'refresh');
   const generated = await request(page, 'generate');
-  const imported = await request(page, 'import', {
+  const saved = await request(page, 'import', {
     name: 'Second wallet',
     key: generated.mnemonic.join(' ')
   });
+  expect(saved.error).toBeUndefined();
+  const imported = await request(page, 'refresh');
   expect(imported.error).toBeUndefined();
   expect(imported.state.activeId).toBe('vault-Second wallet');
   expect(
@@ -637,7 +641,7 @@ test('native bridge history shares inclusion-based progress with unknown-tip han
     await route.fulfill({json:{jsonrpc:'2.0',id:body.id,result}});
   });
   await create(page);
-  expect((await request(page,'status')).state.history[0].bridgeProgress).toMatchObject({blocks:123,target:400,phase:'confirming'});
+  expect((await request(page,'refresh')).state.history[0].bridgeProgress).toMatchObject({blocks:123,target:400,phase:'confirming'});
   for (const [height,phase,blocks] of [[1400,'ready',400],[2000,'ready',400],[null,'unavailable',null]] as const) {
     tip=height;
     const updated=await request(page,'refresh');

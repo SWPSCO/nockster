@@ -437,7 +437,11 @@ private fun AccountScreen(model: WalletModel, add: () -> Unit, openAddressBook: 
     val scope = rememberCoroutineScope()
     var editingWallet by remember { mutableStateOf<JSONObject?>(null) }
     editingWallet?.let { wallet -> ManageWalletDialog(model, wallet) { editingWallet = null } }
-    LaunchedEffect(Unit) { model.perform("refresh") }
+    LaunchedEffect(model.snapshot.text("activeId")) {
+        // Setup may still be enrolling device unlock when this screen opens.
+        while (model.busy) delay(100)
+        model.perform("refresh")
+    }
     var showNicks by remember(model.snapshot.text("activeId")) { mutableStateOf(false) }
     val balanceColor = if (showNicks) {
         if (isSystemInDarkTheme()) Color(0xFF5EEAD4) else Color(0xFF0F766E)

@@ -21,6 +21,7 @@
 		F1E7C1000000000000000002 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = F1E7C0000000000000000002 /* PrivacyInfo.xcprivacy */; };
 		F1E7C1000000000000000003 /* DeviceUnlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E7C0000000000000000003 /* DeviceUnlock.swift */; };
 		F1E7C1000000000000000004 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = F1E7C0000000000000000004 /* Fonts */; };
+		409AF500286D4676BAD6FA98 /* WalletLoginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3C50FFB350D4B5AA75F0B49 /* WalletLoginTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,8 @@
 		F1E7C0000000000000000002 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		F1E7C0000000000000000003 /* DeviceUnlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUnlock.swift; sourceTree = "<group>"; };
 		F1E7C0000000000000000004 /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fonts; sourceTree = "<group>"; };
+		40FA72D2E47E43FBA20B810E /* AppTests.xctest */ = {isa = PBXFileReference; name = "AppTests.xctest"; path = "AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; };
+		D3C50FFB350D4B5AA75F0B49 /* WalletLoginTests.swift */ = {isa = PBXFileReference; name = "WalletLoginTests.swift"; path = "AppTests/WalletLoginTests.swift"; sourceTree = "<group>"; fileEncoding = 4; lastKnownFileType = sourcecode.swift; includeInIndex = 0; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -51,6 +54,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7AF2ABEBE8C54F9AAAFA89EC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -59,6 +69,7 @@
 			children = (
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
+				F1E7C2000000000000000000 /* AppTests */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -67,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				40FA72D2E47E43FBA20B810E /* AppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -92,6 +104,14 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		F1E7C2000000000000000000 /* AppTests */ = {
+			isa = PBXGroup;
+			children = (
+				D3C50FFB350D4B5AA75F0B49 /* WalletLoginTests.swift */,
+			);
+			name = AppTests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -114,6 +134,23 @@
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B8CB3E14624F4B5484036DE2 /* "AppTests" */ = {
+			isa = PBXNativeTarget;
+			name = "AppTests";
+			productName = "AppTests";
+			productReference = 40FA72D2E47E43FBA20B810E;
+			productType = "com.apple.product-type.bundle.unit-test";
+			buildConfigurationList = E0B95F0FA0B94D4A897161B8;
+			buildPhases = (
+				1989801218AC4923A55EA53B /* Sources */,
+				7AF2ABEBE8C54F9AAAFA89EC /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4A1AE9705FA94AB9B761BA17 /* PBXTargetDependency */,
+			);
 		};
 /* End PBXNativeTarget section */
 
@@ -148,6 +185,7 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				B8CB3E14624F4B5484036DE2 /* "AppTests" */,
 			);
 		};
 /* End PBXProject section */
@@ -180,6 +218,14 @@
 				F1E7C1000000000000000000 /* WalletModel.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1989801218AC4923A55EA53B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				409AF500286D4676BAD6FA98 /* WalletLoginTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -358,6 +404,44 @@
 			};
 			name = Release;
 		};
+		A137ACD37AB540B1AFEABCB8 /* Debug */ = {
+			name = Debug;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				PRODUCT_NAME = "AppTests";
+				SKIP_INSTALL = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.swps.nockster.tests";
+				GENERATE_INFOPLIST_FILE = YES;
+				SWIFT_VERSION = 5.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/App";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+			};
+		};
+		A2C5B1C73683439E86BF549B /* Release */ = {
+			name = Release;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				PRODUCT_NAME = "AppTests";
+				SKIP_INSTALL = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = "io.swps.nockster.tests";
+				GENERATE_INFOPLIST_FILE = YES;
+				SWIFT_VERSION = 5.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/App";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+			};
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -379,6 +463,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		E0B95F0FA0B94D4A897161B8 /* Build configuration list for PBXNativeTarget "AppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A137ACD37AB540B1AFEABCB8 /* Debug */,
+				A2C5B1C73683439E86BF549B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -395,6 +488,24 @@
 			productName = "CapApp-SPM";
 		};
 /* End XCSwiftPackageProductDependency section */
+
+/* Begin PBXTargetDependency section */
+		4A1AE9705FA94AB9B761BA17 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 504EC3031FED79650016851F /* App */;
+			targetProxy = 0A86550A324C4005A0DC33EB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		0A86550A324C4005A0DC33EB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 504EC3031FED79650016851F;
+			remoteInfo = App;
+		};
+/* End PBXContainerItemProxy section */
 	};
 	rootObject = 504EC2FC1FED79650016851F /* Project object */;
 }

@@ -74,6 +74,8 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             "$IOS_BUILD_ROOT/simulator/Build/Products/Debug-iphonesimulator/App.app" \
             "release/ios/nockster-ios-simulator-$NOCKSTER_VERSION-$NOCKSTER_BUILD_NUMBER.zip"
+      - name: Test wallet login on iPhone and iPad
+        run: python3 scripts/ci/ios-login-tests.py "$IOS_BUILD_ROOT/login"
       - name: Install distribution signing identity
         env:
           IOS_DISTRIBUTION_P12_B64: ${{ secrets.IOS_DISTRIBUTION_P12_B64 }}
@@ -119,7 +121,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-build-results
-          path: ${{ env.IOS_BUILD_ROOT }}/*.xcresult
+          path: |
+            ${{ env.IOS_BUILD_ROOT }}/*.xcresult
+            ${{ env.IOS_BUILD_ROOT }}/login/*.xcresult
           if-no-files-found: ignore
           retention-days: 7
       - name: Remove signing identity, profile, and build products

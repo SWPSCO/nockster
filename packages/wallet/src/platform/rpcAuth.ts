@@ -3,6 +3,7 @@ import { walletStore } from '../lib/stores/wallet';
 import { NETWORK } from '../lib/constants';
 import { handleVaultMessage, type VaultMessage } from '../vault/engine';
 import { vaultStorage } from './vault';
+import { fetchWithAbort } from './fetchWithAbort';
 
 const inProcess = ['mobile', 'desktop', 'urbit'].includes(import.meta.env.MODE);
 const throughShip =
@@ -88,21 +89,30 @@ async function accounts<T>(
 ): Promise<T> {
   check(who);
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
-  const response = await fetch(`${throughShip ? '/nockster/accounts' : ACCOUNTS_URL}${path}`, {
-    method: body === undefined ? 'GET' : 'POST',
-    credentials: throughShip ? 'same-origin' : 'include',
-    redirect: 'error',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...(throughShip ? { 'X-Nockster-Proxy': '1' } : {}),
-      ...(throughShip && session?.cookie ? { 'X-Nockster-Session': session.cookie } : {})
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal
-  });
+  const response = await fetchWithAbort(
+    `${throughShip ? '/nockster/accounts' : ACCOUNTS_URL}${path}`,
+    {
+      method: body === undefined ? 'GET' : 'POST',
+      credentials: throughShip ? 'same-origin' : 'include',
+      redirect: 'error',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(throughShip ? { 'X-Nockster-Proxy': '1' } : {}),
+        ...(throughShip && session?.cookie ? { 'X-Nockster-Session': session.cookie } : {})
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal
+    }
+  );
   check(who);
-  if (!response.ok) throw new Error(`Nockblocks sign-in failed (${response.status})`);
+  if (!response.ok) {
+    if (response.status >= 500)
+      throw new Error(
+        `Nockblocks is temporarily unavailable. Try refreshing in a moment. (HTTP ${response.status})`
+      );
+    throw new Error(`Nockblocks sign-in failed (${response.status})`);
+  }
   if (throughShip && session && path === '/auth/iris/token') {
     const cookie = response.headers.get('x-nockster-session')?.split(';', 1)[0];
     if (!cookie || !/^[^\s=;,]+=[^\s;,]+$/.test(cookie))
@@ -286,18 +296,22 @@ export async function fetchAuthenticatedRpc(
   for (let attempt = 0; attempt < 2; attempt++) {
     const key = await credential(who);
     check(who);
-    const response = await transport(url, {
-      method: 'POST',
-      credentials: 'omit',
-      redirect: 'error',
-      headers: {
-        'Content-Type': 'application/json',
-        ...headers,
-        Authorization: `Bearer ${key.key}`
+    const response = await fetchWithAbort(
+      url,
+      {
+        method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+          Authorization: `Bearer ${key.key}`
+        },
+        body,
+        signal: AbortSignal.any([signal, controller.signal])
       },
-      body,
-      signal: AbortSignal.any([signal, controller.signal])
-    });
+      transport
+    );
     check(who);
     if (response.status !== 401 || attempt === 1) return response;
     // Only the rejected credential is discarded. Parallel 401s share one new login.

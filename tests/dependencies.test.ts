@@ -9,6 +9,16 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 
 const require = createRequire(import.meta.url);
 
+test('FTP directory listings ignore prototype names supplied by a server', () => {
+  const ftpRequire = createRequire(require.resolve('get-uri'));
+  const { parseList } = ftpRequire('basic-ftp/dist/parseList.js');
+  const files = parseList('__proto__=x;__PROTO__=x;constructor=x;type=file;size=10; example.txt');
+  assert.equal(files.length, 1);
+  assert.equal(files[0].name, 'example.txt');
+  assert.equal(files[0].size, 10);
+  assert.equal(files[0].isFile, true);
+});
+
 test('get-uri downloads through the patched FTP dependency', { timeout: 5000 }, async () => {
   const { getUri } = await import('get-uri');
   const payload = 'function FindProxyForURL() { return "DIRECT"; }';

@@ -62,6 +62,7 @@ final class WalletLoginTests: XCTestCase {
           if (path === '/auth/keys') return json({key:'ak_test_native', api_key:{id:'test',expires_at:body.expires_at}});
           if (body.method === 'getTip') return json({price:0.02,result:{height:1}});
           if (body.method === 'getNotes') return json({result:{nicks:0,notes:[]}});
+          if (body.method === 'getBlockchainMetrics') return json({result:{blockHeight:1}});
           if (body.method === 'getTransactionsByAddress') return json({result:{transactions:[]}});
           if (body.method === 'getAddressBook') return json({result:{entries:[]}});
           throw new Error('Unexpected test request: '+path+' '+body.method);

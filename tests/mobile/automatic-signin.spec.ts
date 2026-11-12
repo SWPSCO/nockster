@@ -24,6 +24,9 @@ async function mockWalletData(page: Page) {
       case 'getNotes':
         result = { nicks: 65536, notes: [] };
         break;
+      case 'getBlockchainMetrics':
+        result = { blockHeight: 1 };
+        break;
       case 'getTransactionsByAddress':
         result = { transactions: [] };
         break;

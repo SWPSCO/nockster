@@ -36,6 +36,7 @@ def main():
         command = [
             "xcodebuild", "test", "-project", "apps/mobile/ios/App/App.xcodeproj",
             "-scheme", "AppTests", "-parallel-testing-enabled", "NO",
+            "-disable-concurrent-destination-testing",
             "-test-timeouts-enabled", "YES", "-maximum-test-execution-time-allowance", "120",
             "-derivedDataPath", str(build_root / "derived"),
             "-resultBundlePath", str(build_root / "login.xcresult"),

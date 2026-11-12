@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { LockForm } from './composer';
+  import SavedMultisig from './SavedMultisig.svelte';
   export let value: LockForm;
   export let id: string;
 </script>
@@ -24,6 +25,11 @@
     </label>
   </div>
   {#if value.recipientKind === 'multisig' && value.condition !== 'burn'}
+    <SavedMultisig
+      id="{id}-multisig"
+      bind:threshold={value.threshold}
+      bind:signers={value.signers}
+    />
     <label for="{id}-signers"
       >Signer addresses
       <textarea

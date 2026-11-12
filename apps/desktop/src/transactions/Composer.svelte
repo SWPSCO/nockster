@@ -15,6 +15,7 @@
   import { formatUsdEstimate } from '../../../../packages/wallet/src/lib/utils/usd';
   import { hardwareCrypto, download } from '../hardware/crypto';
   import LockFields from './LockFields.svelte';
+  import SavedMultisig from './SavedMultisig.svelte';
   import TransactionReview from './TransactionReview.svelte';
   import { bytesToBase64 } from './files';
   import {
@@ -473,6 +474,11 @@
         >
         <p class="mono source-address">{sourceAddress}</p>
       {:else if source.kind === 'multisig'}
+        <SavedMultisig
+          id="source-multisig"
+          bind:threshold={source.threshold}
+          bind:signers={source.signers}
+        />
         <label for="source-signers"
           >Source signer addresses<textarea
             id="source-signers"

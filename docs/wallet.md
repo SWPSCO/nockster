@@ -63,9 +63,13 @@ It uses Bythos fee accounting and full lock proofs. Each output seed binds to
 its complete input-note hash, as required by Logos. Each input balances its
 outputs and fee independently.
 
-The payment composer handles single-signer v1 inputs. Creating multisig locks,
-constructing arbitrary scripts, and sweeping v0 notes use the Nockchain CLI;
-Nockster signs imported v1 multisig drafts. Hardware transport needs a compatible
+The payment composer handles single-signer v1 inputs. The desktop transaction
+composer also pays to and spends from multisig locks, and combines signed
+copies of one multisig transaction. A multisig can be saved under a name; its
+setup file (signer addresses, required signatures, and the lock address) lets
+co-signers load the same lock, and is refused when the address does not match
+the signers. Constructing arbitrary scripts and sweeping v0 notes use the
+Nockchain CLI. Hardware transport needs a compatible
 connected device and uses `@swps/nockster-js` 1.0.0. Hardware payments use root
 keys and disclosed output locks. There is no dependency on a sibling hardware
 WASM checkout. The firmware signing fixture in `tests/fixtures/nockster-signed.json`

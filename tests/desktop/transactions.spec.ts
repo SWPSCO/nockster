@@ -413,3 +413,91 @@ test('thousands of notes stay virtualized, choose fewest inputs including fees, 
   await page.getByRole('button', { name: 'Clear selection', exact: true }).click();
   await expect(page.locator('.selection-count')).toContainText('0 of 5,000 selected');
 });
+
+test('composer saves a multisig, exports its setup, and imports it back', async ({ page }) => {
+  await openWallet(page);
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Send', exact: true })
+    .click();
+  await page.getByRole('tab', { name: 'Compose', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Spend from', exact: true }).selectOption('multisig');
+  const saved = page.locator('.saved-multisig');
+  const picker = saved.getByRole('combobox', { name: 'Saved multisig', exact: true });
+  const signers = page.getByLabel('Source signer addresses', { exact: true });
+  const threshold = page.getByLabel('Source required signatures', { exact: true });
+  await expect(picker.locator('option:checked')).toHaveText('None saved yet');
+  await expect(saved.getByRole('button', { name: 'Save multisig', exact: true })).toHaveCount(0);
+
+  const pkhs = [fixture.source, fixture.recipients[0].address];
+  await signers.fill(pkhs.join('\n'));
+  await threshold.fill('2');
+  const address = (await saved.locator('.source-address').innerText()).split(/\s/)[0];
+  expect(address.length).toBeGreaterThan(20);
+  await saved.getByLabel('Name', { exact: true }).fill('Treasury');
+  await saved.getByRole('button', { name: 'Save multisig', exact: true }).click();
+  await expect(saved.getByRole('status')).toHaveText('Saved “Treasury”.');
+  await expect(picker.locator('option:checked')).toHaveText('Treasury · 2 of 2');
+
+  const download = page.waitForEvent('download');
+  await saved.getByRole('button', { name: 'Export setup', exact: true }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toBe('treasury.multisig.json');
+  const setup = JSON.parse(readFileSync(await file.path(), 'utf8'));
+  expect(setup).toEqual({
+    format: 'nockster-multisig-setup',
+    version: 1,
+    name: 'Treasury',
+    required_signatures: 2,
+    signers: pkhs,
+    address
+  });
+
+  // Editing the lock leaves the saved entry; removing it clears the picker.
+  await threshold.fill('1');
+  await expect(picker.locator('option:checked')).toHaveText('Not saved');
+  await threshold.fill('2');
+  await saved.getByRole('button', { name: 'Remove', exact: true }).click();
+  await expect(picker.locator('option:checked')).toHaveText('None saved yet');
+
+  // A setup whose address does not match its signers is refused.
+  const importer = saved.getByLabel('Import setup', { exact: true });
+  await signers.fill('');
+  await importer.setInputFiles({
+    name: 'bad.multisig.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ ...setup, required_signatures: 1 }))
+  });
+  await expect(saved.getByRole('alert')).toContainText('does not match');
+  await expect(signers).toHaveValue('');
+
+  await importer.setInputFiles({
+    name: 'treasury.multisig.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(setup))
+  });
+  await expect(saved.getByRole('status')).toHaveText('Imported “Treasury”.');
+  await expect(signers).toHaveValue(pkhs.join('\n'));
+  await expect(threshold).toHaveValue('2');
+  await expect(picker.locator('option:checked')).toHaveText('Treasury · 2 of 2');
+
+  // Saved multisigs survive a reload and are offered for outputs too.
+  await page.reload();
+  await page.locator('input[type="password"]').fill(password);
+  await page.getByRole('button', { name: 'Unlock', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('button', { name: 'Send', exact: true })
+    .click();
+  await page.getByRole('tab', { name: 'Compose', exact: true }).click();
+  await page.getByText('Lock conditions & privacy', { exact: true }).click();
+  await page
+    .getByRole('combobox', { name: 'Recipient type', exact: true })
+    .selectOption('multisig');
+  const output = page.locator('.lock-fields .saved-multisig');
+  await output
+    .getByRole('combobox', { name: 'Saved multisig', exact: true })
+    .selectOption({ label: 'Treasury · 2 of 2' });
+  await expect(page.getByLabel('Signer addresses', { exact: true })).toHaveValue(pkhs.join('\n'));
+  await expect(page.getByLabel('Required signatures', { exact: true })).toHaveValue('2');
+});

@@ -12,6 +12,7 @@ export interface StorageData {
   addressBook?: any[];
   lastActivity?: number;
   encryptedVault?: string;
+  multisigWallets?: any[];
 }
 
 class StorageManager {

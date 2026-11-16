@@ -2523,119 +2523,93 @@ fn handle_frame_v1(req_id: u32, frame: &Frame, mut ui: Option<&mut Gui<'_>>) -> 
                             code: ERR_DEVICE_LOCKED,
                         };
                     }
+                    // Signing requires on-device review and explicit approval.
+                    let Some(ui) = ui.as_mut() else {
+                        return Response::Err {
+                            code: ERR_UNSUPPORTED_VERSION,
+                        };
+                    };
                     let mut cfg = match signing::active_root_signer_config() {
                         Ok(cfg) => cfg,
                         Err(code) => return Response::Err { code },
                     };
-                    if let Some(ui) = ui.as_mut() {
-                        let review = match nockster_core::draft_sign::draft_review_v1(
-                            st.buf.as_slice(),
-                            &cfg,
-                        ) {
-                            Ok(v) => v,
-                            Err(nockster_core::draft_sign::SignDraftError::Unsupported) => {
+                    let review = match nockster_core::draft_sign::draft_review_v1(st.buf.as_slice(), &cfg) {
+                        Ok(v) => v,
+                        Err(nockster_core::draft_sign::SignDraftError::Unsupported) => {
+                            cfg.sk_be.zeroize();
+                            return Response::Err {
+                                code: ERR_UNSUPPORTED_VERSION,
+                            };
+                        }
+                        Err(_) => {
+                            cfg.sk_be.zeroize();
+                            return Response::Err {
+                                code: ERR_BAD_COBS_OR_POSTCARD,
+                            };
+                        }
+                    };
+
+                    let displayed_output_count =
+                        review.outputs.iter().filter(|output| !output.is_refund).count();
+                    if displayed_output_count > TX_REVIEW_MAX_OUTPUTS {
+                        cfg.sk_be.zeroize();
+                        return Response::Err { code: ERR_OVERFLOW };
+                    }
+
+                    let summary = tx_review_summary_from_draft(&review);
+                    let address_book = NvsStore::new()
+                        .read_device_address_book()
+                        .unwrap_or_default();
+                    let mut review_outputs: HVec<
+                        (u64, HString<64>, HString<TX_REVIEW_DETAIL_MAX>),
+                        TX_REVIEW_MAX_OUTPUTS,
+                    > = HVec::new();
+                    for output in review.outputs.iter().filter(|o| !o.is_refund) {
+                        let recipient = annotate_output_recipient(output, &address_book);
+                        let detail = match output_detail(output) {
+                            Ok(detail) => detail,
+                            Err(code) => {
                                 cfg.sk_be.zeroize();
-                                return Response::Err {
-                                    code: ERR_UNSUPPORTED_VERSION,
-                                };
-                            }
-                            Err(_) => {
-                                cfg.sk_be.zeroize();
-                                return Response::Err {
-                                    code: ERR_BAD_COBS_OR_POSTCARD,
-                                };
+                                return Response::Err { code };
                             }
                         };
-
-                        let displayed_output_count =
-                            review.outputs.iter().filter(|output| !output.is_refund).count();
-                        if displayed_output_count > TX_REVIEW_MAX_OUTPUTS {
+                        if review_outputs.push((output.gift, recipient, detail)).is_err() {
                             cfg.sk_be.zeroize();
                             return Response::Err { code: ERR_OVERFLOW };
                         }
-
-                        let summary = tx_review_summary_from_draft(&review);
-                        let address_book = NvsStore::new()
-                            .read_device_address_book()
-                            .unwrap_or_default();
-                        let mut review_outputs: HVec<
-                            (u64, HString<64>, HString<TX_REVIEW_DETAIL_MAX>),
-                            TX_REVIEW_MAX_OUTPUTS,
-                        > = HVec::new();
-                        for output in review.outputs.iter().filter(|o| !o.is_refund) {
-                            let recipient = annotate_output_recipient(output, &address_book);
-                            let detail = match output_detail(output) {
-                                Ok(detail) => detail,
-                                Err(code) => {
-                                    cfg.sk_be.zeroize();
-                                    return Response::Err { code };
-                                }
-                            };
-                            if review_outputs.push((output.gift, recipient, detail)).is_err() {
-                                cfg.sk_be.zeroize();
-                                return Response::Err { code: ERR_OVERFLOW };
-                            }
-                        }
-
-                        let draft = core::mem::take(&mut st.buf);
-                        let stored = critical_section::with(|cs| {
-                            let mut slot = PENDING_SIGN_DRAFT.borrow_ref_mut(cs);
-                            if slot.is_some() {
-                                false
-                            } else {
-                                slot.replace(PendingSignDraft {
-                                    msg_id: req_id,
-                                    frag_id: st.id,
-                                    sk_be: cfg.sk_be,
-                                    draft,
-                                    expires_at: Instant::now() + CONFIRM_TIMEOUT,
-                                });
-                                true
-                            }
-                        });
-                        cfg.sk_be.zeroize();
-
-                        if !stored {
-                            return Response::Err { code: ERR_BUSY };
-                        }
-
-                        set_device_busy(true);
-                        ui.request_tx_review_with_summary(
-                            "Review Tx",
-                            Some(summary),
-                            review_outputs
-                                .iter()
-                                .map(|(gift, recipient, detail)| {
-                                    (*gift, recipient.as_str(), detail.as_str())
-                                }),
-                        );
-                        Response::Ok
-                    } else {
-                        let sign_result =
-                            nockster_core::draft_sign::sign_draft_v1(st.buf.as_slice(), &cfg);
-                        cfg.sk_be.zeroize();
-                        let out = match sign_result {
-                            Ok(v) => v,
-                            Err(nockster_core::draft_sign::SignDraftError::Unsupported) => {
-                                return Response::Err {
-                                    code: ERR_UNSUPPORTED_VERSION,
-                                };
-                            }
-                            Err(_) => {
-                                return Response::Err {
-                                    code: ERR_BAD_COBS_OR_POSTCARD,
-                                };
-                            }
-                        };
-
-                        let total = out.len() as u32;
-                        fragments::set_outbound(req_id, st.id, out);
-                        Response::FragBegin {
-                            id: st.id,
-                            total_len: total,
-                            kind: FragKind::SignDraft,
-                        }
                     }
+
+                    let draft = core::mem::take(&mut st.buf);
+                    let stored = critical_section::with(|cs| {
+                        let mut slot = PENDING_SIGN_DRAFT.borrow_ref_mut(cs);
+                        if slot.is_some() {
+                            false
+                        } else {
+                            slot.replace(PendingSignDraft {
+                                msg_id: req_id,
+                                frag_id: st.id,
+                                sk_be: cfg.sk_be,
+                                draft,
+                                expires_at: Instant::now() + CONFIRM_TIMEOUT,
+                            });
+                            true
+                        }
+                    });
+                    cfg.sk_be.zeroize();
+
+                    if !stored {
+                        return Response::Err { code: ERR_BUSY };
+                    }
+
+                    set_device_busy(true);
+                    ui.request_tx_review_with_summary(
+                        "Review Tx",
+                        Some(summary),
+                        review_outputs.iter().map(|(gift, recipient, detail)| {
+                            (*gift, recipient.as_str(), detail.as_str())
+                        }),
+                    );
+                    Response::Ok
                 }
                 FragKind::AddressBook => {
                     st.buf.zeroize();

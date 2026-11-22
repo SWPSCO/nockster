@@ -479,6 +479,49 @@ async function perform(
       });
       break;
     }
+    case 'bridgeQuote': {
+      // What a bridge deposit will cost, for the compose form to show before
+      // review. Nothing is signed and no reviewed payment is replaced: the
+      // network fee comes from planning the transaction, which is the fee the
+      // signed transaction pays.
+      await requireUnlocked();
+      const wallet = get(walletStore).activeWallet;
+      if (!wallet) throw new Error('Select a wallet');
+      const quote = bridgeDetails(
+        request.bridge?.destination ?? '',
+        parseNocksInput(request.bridge?.amount ?? '') ?? 0n
+      );
+      if (!wallet.notes) {
+        await walletStore.fetchNotes(wallet.id, true);
+        await requireUnlocked();
+        if (epoch !== generation) throw new Error('Wallet session ended');
+      }
+      const current = get(walletStore).activeWallet!;
+      const reserved = collectReservedNoteIds(current.pendingTransactions);
+      const notes = (current.notes ?? []).filter(note => !reserved.has(noteNameToId(note) ?? ''));
+      const { ensureVaultReady } = await import('../vault/wasm');
+      const { composeUnsignedTx } = await import('../pkg/nockster_core.js');
+      const { getRPCClientV1 } = await import('../lib/utils/rpc');
+      await ensureVaultReady();
+      const planned = composeUnsignedTx(
+        current.addresses[0],
+        notes,
+        [{ address: BRIDGE_LOCK_ROOT, gift: quote.amount, bridgeEvmAddress: quote.destination }],
+        await getRPCClientV1().getTipHeight()
+      ) as { feePaid: number };
+      const price = get(nockPrice);
+      result.bridgeQuote = {
+        destination: quote.destination,
+        amount: amount(quote.amount),
+        protocolFee: amount(quote.protocolFee),
+        expectedReceived: amount(quote.expectedReceived),
+        networkFee: amount(planned.feePaid),
+        networkFeeUsd: formatUsdEstimate(planned.feePaid / 65536, price),
+        total: amount(quote.amount + planned.feePaid),
+        totalUsd: formatUsdEstimate((quote.amount + planned.feePaid) / 65536, price)
+      };
+      break;
+    }
     case 'prepare': {
       await requireUnlocked();
       prepared = null;

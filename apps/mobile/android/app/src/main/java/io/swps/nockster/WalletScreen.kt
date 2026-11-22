@@ -927,10 +927,22 @@ private fun AddressBookScreen(model: WalletModel) {
     val scope = rememberCoroutineScope()
     var alias by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
+    var scanning by remember { mutableStateOf(false) }
+    // Scanning an address avoids typing one wrong. Same scanner and same
+    // address check as the Send screen.
+    if (scanning) ScanAddressDialog(model, onDismiss = { scanning = false }) { value ->
+        scanning = false
+        scope.launch {
+            model.perform("scanAddress", JSONObject().put("key", value))?.text("address")?.takeIf { it.isNotEmpty() }?.let { address = it }
+        }
+    }
     LaunchedEffect(Unit) { model.perform("contacts") }
     Text("Synced address book", style = MaterialTheme.typography.titleLarge)
     OutlinedTextField(alias, { alias = it }, label = { Text("Nickname") }, modifier = Modifier.fillMaxWidth())
-    OutlinedTextField(address, { address = it }, label = { Text("Nockchain address") }, modifier = Modifier.fillMaxWidth())
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(address, { address = it }, label = { Text("Nockchain address") }, modifier = Modifier.weight(1f))
+        IconButton(onClick = { scanning = true }, enabled = !model.busy) { Icon(Icons.Default.QrCodeScanner, "Scan QR code") }
+    }
     Button(onClick = { scope.launch { if (model.perform("saveContact", JSONObject().put("name", alias).put("address", address)) != null) { alias = ""; address = "" } } }, enabled = alias.isNotBlank() && address.isNotBlank() && !model.busy) { Text("Save Address") }
     OutlinedButton(onClick = { scope.launch { model.perform("contacts") } }, enabled = !model.busy) { Text("Refresh Addresses") }
     model.snapshot.optJSONArray("contacts")?.objects().orEmpty().forEach { contact ->

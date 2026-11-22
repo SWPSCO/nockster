@@ -1145,11 +1145,24 @@ struct AddressBookView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var alias = ""
     @State private var address = ""
+    @State private var scanning = false
     var body: some View {
         Form {
             Section("Add or update an address") {
                 TextField("Nickname", text: $alias)
-                TextField("Nockchain address", text: $address).textInputAutocapitalization(.never).autocorrectionDisabled()
+                HStack {
+                    TextField("Nockchain address", text: $address).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    // Scanning an address avoids typing one wrong. Same scanner and
+                    // same address check as the Send screen.
+                    Button { Task {
+                        model.cameraPermissionPrompt = true
+                        let granted = await AVCaptureDevice.requestAccess(for: .video)
+                        model.cameraPermissionPrompt = false
+                        if granted && model.snapshot.unlocked { scanning = true }
+                        else if !granted { model.error = "Allow camera access in Settings to scan a QR code" }
+                    } } label: { Image(systemName: "qrcode.viewfinder").accessibilityLabel("Scan QR code") }
+                        .buttonStyle(.borderless).disabled(model.busy)
+                }
                 Button("Save Address") { Task {
                     if await model.perform("saveContact", ["name": alias, "address": address]) != nil { alias = ""; address = "" }
                 } }.disabled(alias.isEmpty || address.isEmpty || model.busy)
@@ -1167,6 +1180,18 @@ struct AddressBookView: View {
                 Button("Refresh") { Task { _ = await model.perform("contacts") } }.disabled(model.busy)
             }
         }.navigationTitle("Address Book").task { _ = await model.perform("contacts") }
+        .sheet(isPresented: $scanning) {
+            NavigationStack {
+                QRScannerView { value in
+                    scanning = false
+                    Task {
+                        if let scanned = await model.perform("scanAddress", ["key": value])?.address { address = scanned }
+                    }
+                } onError: { message in scanning = false; model.error = message }
+                .navigationTitle("Scan address")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
+            }
+        }
     }
 }
 

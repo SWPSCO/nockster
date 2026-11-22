@@ -526,7 +526,14 @@ private fun SendScreen(model: WalletModel) {
     }
     if (bridgeMode) {
         OutlinedTextField(bridgeDestination, { bridgeDestination = it }, label = { Text("Receiving Base address (0x…)") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(bridgeAmount, { bridgeAmount = it }, label = { Text("Amount in NOCK") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(bridgeAmount, { bridgeAmount = it }, label = { Text("Amount in NOCK") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.weight(1f))
+            // The most the wallet can deposit after the network fee. A bridge deposit's fee differs from a payment's.
+            TextButton(onClick = { scope.launch {
+                model.perform("maxAmount", JSONObject().put("bridge", JSONObject().put("destination", bridgeDestination).put("amount", "")))
+                    ?.text("maxAmount")?.takeIf { it.isNotEmpty() }?.let { bridgeAmount = it; preview = null }
+            } }, enabled = !model.busy && bridgeDestination.isNotBlank()) { Text("Max") }
+        }
         UsdSubtitle(composeUsd(bridgeAmount, false, model.snapshot.optDouble("usdPerNock")))
         Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
     } else {
@@ -563,8 +570,15 @@ private fun SendScreen(model: WalletModel) {
             IconButton(onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nockchain address", recipient.first.trim())) }, enabled = !model.busy && recipient.first.isNotBlank()) { Icon(Icons.Default.ContentCopy, "Copy address") }
         }
         if (index == recipients.lastIndex) TextButton(onClick = { recipients = recipients + ("" to "") }, enabled = recipients.size < 16 && !model.busy) { Text("Add Recipient") }
-        OutlinedTextField(recipient.second, { value -> recipients = recipients.mapIndexed { i, pair -> if (i == index) pair.first to value else pair } },
-            label = { Text(if (inNicks) "Amount in nicks" else "Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = if (inNicks) KeyboardType.Number else KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(recipient.second, { value -> recipients = recipients.mapIndexed { i, pair -> if (i == index) pair.first to value else pair } },
+                label = { Text(if (inNicks) "Amount in nicks" else "Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = if (inNicks) KeyboardType.Number else KeyboardType.Decimal), modifier = Modifier.weight(1f))
+            // Max spends the whole balance after the network fee, which only has one answer for one recipient.
+            if (recipients.size == 1) TextButton(onClick = { scope.launch {
+                model.perform("maxAmount", JSONObject().put("address", recipient.first).put("amountUnit", if (inNicks) "nicks" else "nock").put("privateOutputs", privateOutputs))
+                    ?.text("maxAmount")?.takeIf { it.isNotEmpty() }?.let { amount -> if (recipients.size == 1) { recipients = listOf(recipients[0].first to amount); preview = null } }
+            } }, enabled = !model.busy && recipient.first.isNotBlank()) { Text("Max") }
+        }
         UsdSubtitle(composeUsd(recipient.second, inNicks, model.snapshot.optDouble("usdPerNock")))
         if (recipients.size > 1) TextButton(onClick = { recipients = recipients.filterIndexed { i, _ -> i != index }; editingRecipient = null }, enabled = !model.busy) { Text("Remove") }
     }

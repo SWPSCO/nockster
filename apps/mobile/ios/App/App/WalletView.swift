@@ -706,7 +706,12 @@ struct SendView: View {
                     TextField("Receiving Base address (0x…)", text: $bridgeDestination, axis: .vertical)
                         .font(.system(.body, design: .monospaced))
                         .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(model.busy)
-                    TextField("Amount in NOCK", text: $bridgeAmount).keyboardType(.decimalPad).disabled(model.busy)
+                    HStack {
+                        TextField("Amount in NOCK", text: $bridgeAmount).keyboardType(.decimalPad).disabled(model.busy)
+                        Button("Max") { Task { await fillMaxBridgeAmount() } }
+                            .buttonStyle(.borderless).disabled(model.busy || bridgeDestination.isEmpty)
+                            .accessibilityLabel("Use the maximum amount")
+                    }
                     UsdSubtitle(value: composeUsd(bridgeAmount, inNicks: false, price: model.snapshot.usdPerNock))
                 } header: { Text("Bridge to Base") } footer: {
                     Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
@@ -722,6 +727,25 @@ struct SendView: View {
                 }
                 .disabled(model.busy || (bridgeMode ? bridgeDestination.isEmpty || bridgeAmount.isEmpty : recipients.contains { $0.address.isEmpty || $0.amount.isEmpty }))
             }
+        }
+    }
+
+    /// Fills in the most the wallet can send after the network fee, so nothing
+    /// is left behind as dust. The engine works it out from the wallet's notes.
+    private func fillMaxAmount() async {
+        guard recipients.count == 1 else { return }
+        let fields: [String: Any] = ["address": recipients[0].address, "amountUnit": inNicks ? "nicks" : "nock", "privateOutputs": privateOutputs]
+        if let amount = await model.perform("maxAmount", fields)?.maxAmount, recipients.count == 1 {
+            recipients[0].amount = amount
+            preview = nil
+        }
+    }
+
+    /// The same for a bridge deposit, whose fee differs from a payment's.
+    private func fillMaxBridgeAmount() async {
+        if let amount = await model.perform("maxAmount", ["bridge": ["destination": bridgeDestination, "amount": ""]])?.maxAmount {
+            bridgeAmount = amount
+            preview = nil
         }
     }
 
@@ -784,8 +808,16 @@ struct SendView: View {
                     if index == recipients.count - 1 {
                         Button("Add Recipient", systemImage: "plus") { recipients.append(PaymentRecipient(address: "", amount: "")) }.disabled(recipients.count >= 16 || model.busy)
                     }
-                    TextField(inNicks ? "Amount in nicks" : "Amount in NOCK", text: $recipients[index].amount)
-                        .keyboardType(inNicks ? .numberPad : .decimalPad).disabled(model.busy)
+                    HStack {
+                        TextField(inNicks ? "Amount in nicks" : "Amount in NOCK", text: $recipients[index].amount)
+                            .keyboardType(inNicks ? .numberPad : .decimalPad).disabled(model.busy)
+                        // Max spends the whole balance, which only has one answer for one recipient.
+                        if recipients.count == 1 {
+                            Button("Max") { Task { await fillMaxAmount() } }
+                                .buttonStyle(.borderless).disabled(model.busy || recipients[index].address.isEmpty)
+                                .accessibilityLabel("Use the maximum amount")
+                        }
+                    }
                     UsdSubtitle(value: composeUsd(recipients[index].amount, inNicks: inNicks, price: model.snapshot.usdPerNock))
                     if recipients.count > 1 { Button("Remove Recipient", role: .destructive) { recipients.remove(at: index); editingRecipient = nil }.disabled(model.busy) }
                 }

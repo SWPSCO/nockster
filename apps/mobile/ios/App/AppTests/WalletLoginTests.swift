@@ -97,3 +97,39 @@ final class WalletLoginTests: XCTestCase {
         _ = try await webView.callAsyncJavaScript("await window.Capacitor.Plugins.Preferences.clear(); return null;", arguments: [:], in: nil, contentWorld: .page)
     }
 }
+
+@MainActor
+final class WalletAutofillLockTests: XCTestCase {
+    /// Password AutoFill confirms with Face ID in a system sheet. That makes the
+    /// scene inactive without leaving the app, and must not lock the wallet out
+    /// from under the password field. Leaving the app still locks.
+    func testAutofillPromptKeepsWalletOpenAndBackgroundStillLocks() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let host = try XCTUnwrap(scene.windows.first?.rootViewController as? UIHostingController<WalletRootView>)
+        let model = host.rootView.model
+        for _ in 0..<150 where !model.ready { try await Task.sleep(for: .milliseconds(200)) }
+        XCTAssertTrue(model.ready, model.error ?? "Engine did not become ready")
+
+        // A password field has focus when the system sheet appears.
+        model.snapshot.unlocked = true
+        model.credentialField(focused: true)
+        model.setActive(false)
+        XCTAssertTrue(model.snapshot.unlocked, "The AutoFill sheet must not lock the wallet")
+        model.setActive(true)
+        XCTAssertTrue(model.snapshot.unlocked)
+
+        // Leaving the app locks, focused field or not.
+        model.setActive(false)
+        model.enterBackground()
+        XCTAssertFalse(model.snapshot.unlocked, "Backgrounding must lock the wallet")
+        model.setActive(true)
+        try await Task.sleep(for: .milliseconds(500))
+
+        // With no password field focused, becoming inactive locks as before.
+        model.snapshot.unlocked = true
+        model.setActive(false)
+        XCTAssertFalse(model.snapshot.unlocked, "Inactive without a password prompt must still lock")
+        model.setActive(true)
+        try await Task.sleep(for: .milliseconds(500))
+    }
+}

@@ -96,6 +96,7 @@ struct UnlockView: View {
                 SecureField("Wallet password", text: $password)
                     .textContentType(.password).textFieldStyle(.roundedBorder)
                     .submitLabel(.go).onSubmit { unlock() }
+                    .credentialField(model)
                     .accessibilityIdentifier("unlock-password")
                 Button(action: unlock) {
                     if model.busy { ProgressView() }
@@ -237,12 +238,12 @@ struct SetupView: View {
             }
             if !model.snapshot.exists {
                 Section {
-                    SecureField("Wallet password", text: $password).textContentType(.newPassword)
+                    SecureField("Wallet password", text: $password).textContentType(.newPassword).credentialField(model)
                         .accessibilityIdentifier("setup-password")
                     Label(password.count >= 12 ? "Minimum length met" : "\(password.count)/12 characters",
                           systemImage: password.count >= 12 ? "checkmark.circle" : "info.circle")
                         .font(.footnote).foregroundStyle(.secondary)
-                    SecureField("Confirm password", text: $confirmation).textContentType(.newPassword)
+                    SecureField("Confirm password", text: $confirmation).textContentType(.newPassword).credentialField(model)
                         .accessibilityIdentifier("setup-confirm-password")
                     if !confirmation.isEmpty {
                         Label(password == confirmation ? "Passwords match" : "Passwords don’t match",
@@ -1056,6 +1057,8 @@ struct WalletSettingsView: View {
                 } else {
                     SecureField("Confirm wallet password", text: $deviceUnlockPassword).textContentType(.password)
                         .focused($deviceUnlockPasswordFocused).submitLabel(.done).onSubmit { enableDeviceUnlock() }
+                        .onChange(of: deviceUnlockPasswordFocused) { _, focused in model.credentialField(focused: focused) }
+                        .onDisappear { if deviceUnlockPasswordFocused { model.credentialField(focused: false) } }
                         .disabled(model.busy)
                     Button("Continue to device verification", systemImage: "faceid") { enableDeviceUnlock() }
                         .disabled(deviceUnlockPassword.isEmpty || model.busy)
@@ -1207,6 +1210,22 @@ private enum NocksterPalette {
     })
 }
 
+/// Marks a wallet-password field so that the Face ID sheet Password AutoFill
+/// shows over it does not lock the wallet. See `WalletModel.credentialField`.
+private struct CredentialField: ViewModifier {
+    let model: WalletModel
+    @FocusState private var focused: Bool
+    func body(content: Content) -> some View {
+        content.focused($focused)
+            .onChange(of: focused) { _, focused in model.credentialField(focused: focused) }
+            .onDisappear { if focused { model.credentialField(focused: false) } }
+    }
+}
+
+private extension View {
+    func credentialField(_ model: WalletModel) -> some View { modifier(CredentialField(model: model)) }
+}
+
 private struct PaymentAuthenticationView: View {
     @ObservedObject var model: WalletModel
     let submit: (String?) async -> Void
@@ -1222,6 +1241,8 @@ private struct PaymentAuthenticationView: View {
     var body: some View {
         SecureField("Wallet password", text: $password).textContentType(.password)
             .focused($focused).submitLabel(.send).onSubmit { confirm() }.disabled(model.busy)
+            .onChange(of: focused) { _, focused in model.credentialField(focused: focused) }
+            .onDisappear { if focused { model.credentialField(focused: false) } }
         Button("Confirm and Send") { confirm() }.disabled(password.isEmpty || model.busy)
         if model.deviceUnlockEnabled {
             Button("Confirm with device unlock", systemImage: "faceid") {

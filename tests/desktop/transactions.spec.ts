@@ -375,14 +375,17 @@ test('thousands of notes stay virtualized, choose fewest inputs including fees, 
   await expect(page.locator('.note-amount')).toHaveText('4,322 NOCK');
   await page.getByRole('searchbox', { name: 'Search input notes', exact: true }).fill('');
   await page.getByLabel('Recipient address', { exact: true }).fill(fixture.recipients[0].address);
+  // The composer allows its fee-selection worker 20 seconds for large wallets.
+  const draftReady = expect.configure({ timeout: 25_000 });
   await page.getByLabel('Amount (NOCK)', { exact: true }).fill('10');
-  await expect(page.getByRole('button', { name: 'Build Draft', exact: true })).toBeEnabled();
+  await draftReady(page.getByRole('button', { name: 'Build Draft', exact: true })).toBeEnabled();
   await expect(page.locator('.selection-count')).toContainText('1 of 5,000 selected');
   await expect(page.locator('.note-row input').nth(1)).toBeChecked();
   await page.getByLabel('Amount (NOCK)', { exact: true }).fill('4999');
-  await expect(page.getByRole('button', { name: 'Build Draft', exact: true })).toBeEnabled();
+  await draftReady(page.getByRole('button', { name: 'Build Draft', exact: true })).toBeEnabled();
   await expect(page.locator('.selection-count')).toContainText('2 of 5,000 selected');
   await page.getByLabel('Amount (NOCK)', { exact: true }).fill('10');
+  await draftReady(page.getByRole('button', { name: 'Build Draft', exact: true })).toBeEnabled();
   await expect(page.locator('.selection-count')).toContainText('1 of 5,000 selected');
   await page.getByLabel('Amount (NOCK)', { exact: true }).fill('');
   await expect(page.locator('.selection-count')).toContainText('0 of 5,000 selected');

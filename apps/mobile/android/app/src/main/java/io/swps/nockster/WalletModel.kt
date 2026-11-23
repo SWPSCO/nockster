@@ -29,6 +29,15 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
     var pendingRecipients by mutableStateOf<List<Pair<String, String>>>(emptyList())
     private var authenticating = false
     var cameraPermissionPrompt = false
+    // How many wallet-password fields have focus. A password manager confirms
+    // autofill with a biometric prompt that pauses this activity without leaving
+    // the app; locking then would discard the screen being filled in. The wallet
+    // still locks when the activity stops.
+    private var focusedCredentialFields = 0
+    private val credentialPrompt get() = focusedCredentialFields > 0
+    fun credentialField(focused: Boolean) {
+        focusedCredentialFields = maxOf(0, focusedCredentialFields + if (focused) 1 else -1)
+    }
     private var foreground = false
     private var automaticUnlockPending = true
     private var lockJob: Job? = null
@@ -84,6 +93,19 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
                 @Suppress("UNREACHABLE_CODE") JSONObject()
             }
         } finally { withContext(NonCancellable) { javascript("delete window.nocksterReplies[$id]") } }
+    }
+
+    // Asks the engine what a bridge deposit will cost. Unlike perform, this does
+    // not mark the wallet busy: it runs while the amount is being typed, and a
+    // busy wallet disables the fields being typed into. The reply carries
+    // "bridgeQuote", or "error" with the reason it cannot be quoted yet.
+    suspend fun quoteBridge(destination: String, amount: String): JSONObject? {
+        if (!unlocked || privateScreen) return null
+        val generation = session
+        val reply = try {
+            call("bridgeQuote", JSONObject().put("bridge", JSONObject().put("destination", destination).put("amount", amount)))
+        } catch (failure: Exception) { return null }
+        return if (generation == session) reply else null
     }
 
     suspend fun perform(action: String, fields: JSONObject = JSONObject()): JSONObject? {
@@ -146,6 +168,7 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
 
     fun lock() {
         automaticUnlockPending = false
+        focusedCredentialFields = 0
         session++
         snapshot = JSONObject().put("exists", snapshot.optBoolean("exists")).put("unlocked", false)
         error = null
@@ -156,7 +179,7 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
 
     fun background(force: Boolean = false) {
         foreground = false
-        if (force || (!authenticating && !cameraPermissionPrompt)) { privateScreen = true; lock() }
+        if (force || (!authenticating && !cameraPermissionPrompt && !credentialPrompt)) { privateScreen = true; lock() }
         if (force && !authenticating) automaticUnlockPending = true
     }
     fun foreground() {

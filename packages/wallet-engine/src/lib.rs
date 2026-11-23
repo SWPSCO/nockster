@@ -525,6 +525,25 @@ pub fn max_send_amount(
     .map_err(|e| JsValue::from_str(&e))
 }
 
+/// The largest bridge deposit the notes can fund once the fee is paid. A bridge
+/// output carries the Base destination, so its fee, and therefore this
+/// maximum, differs from `maxSendAmount` for the same notes.
+#[wasm_bindgen(js_name = maxBridgeAmount)]
+pub fn max_bridge_amount(
+    source: &str,
+    notes_js: JsValue,
+    evm_address: &str,
+    chain_height: Option<u32>,
+) -> Result<u64, JsValue> {
+    let source = tx_engine::parse_hash(source).map_err(|e| JsValue::from_str(&e))?;
+    let json =
+        serde_wasm_bindgen::from_value(notes_js).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let json = normalize_note_payload(json).map_err(|e| JsValue::from_str(&e))?;
+    let notes = serde_json::from_value(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    tx_engine::max_bridge_deposit(&source, notes, evm_address, chain_height.map(u64::from))
+        .map_err(|e| JsValue::from_str(&e))
+}
+
 /// Returns the minimum network fee in nicks
 #[wasm_bindgen(js_name = getMinNetworkFee)]
 pub fn get_min_network_fee() -> u64 {

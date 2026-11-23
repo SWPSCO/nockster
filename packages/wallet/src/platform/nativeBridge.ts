@@ -6,7 +6,9 @@ import {
   BRIDGE_LOCK_ROOT,
   bridgeDetails,
   verifyBridgeTransaction,
-  type BridgeRecipient
+  type BridgeRecipient,
+  BRIDGE_MINIMUM_NICKS,
+  parseBaseAddress
 } from '../lib/utils/bridge';
 import { priceStore, nockPrice } from '../lib/stores/price';
 import { formatUsdEstimate } from '../lib/utils/usd';
@@ -477,6 +479,88 @@ async function perform(
         if (value === null) throw new Error('Enter a valid amount before switching units');
         return request.amountUnit === 'nicks' ? amount(Number(value)) : value.toString();
       });
+      break;
+    }
+    case 'maxAmount': {
+      // The most the active wallet can send to one recipient, or deposit to
+      // the bridge, after the network fee: the amount that leaves no change.
+      await requireUnlocked();
+      const wallet = get(walletStore).activeWallet;
+      if (!wallet) throw new Error('Select a wallet');
+      if (request.amountUnit !== undefined && !['nock', 'nicks'].includes(request.amountUnit))
+        throw new Error('Choose NOCK or nicks');
+      const bridgeDestination = request.bridge
+        ? parseBaseAddress(request.bridge.destination)
+        : undefined;
+      const address = request.address?.trim() ?? '';
+      if (!bridgeDestination && !address)
+        throw new Error('Enter a recipient address before choosing Max');
+      if (bridgeDestination && request.privateOutputs)
+        throw new Error('Bridge deposits require public outputs');
+      await walletStore.fetchNotes(wallet.id, true);
+      await requireUnlocked();
+      if (epoch !== generation) throw new Error('Wallet session ended');
+      const current = get(walletStore).activeWallet!;
+      const reserved = collectReservedNoteIds(current.pendingTransactions);
+      const notes = (current.notes ?? []).filter(note => !reserved.has(noteNameToId(note) ?? ''));
+      if (!notes.length) throw new Error('This wallet has no spendable balance');
+      const { ensureVaultReady } = await import('../vault/wasm');
+      const { maxSendAmount, maxBridgeAmount } = await import('../pkg/nockster_core.js');
+      const { getRPCClientV1 } = await import('../lib/utils/rpc');
+      await ensureVaultReady();
+      const height = await getRPCClientV1().getTipHeight();
+      const source = current.addresses[0];
+      const maximum = bridgeDestination
+        ? maxBridgeAmount(source, notes, bridgeDestination, height)
+        : maxSendAmount(source, notes, address, Boolean(request.privateOutputs), height);
+      // The payment planner accepts JS numbers for recipient amounts.
+      if (maximum > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Amount exceeds the supported range');
+      if (bridgeDestination && maximum < BRIDGE_MINIMUM_NICKS)
+        throw new Error(
+          `Bridge to Base requires at least 100,000 NOCK. This wallet can deposit ${amount(Number(maximum))} NOCK after the fee.`
+        );
+      result.maxAmount = request.amountUnit === 'nicks' ? maximum.toString() : amount(Number(maximum));
+      break;
+    }
+    case 'bridgeQuote': {
+      // What a bridge deposit will cost, for the compose form to show before
+      // review. Nothing is signed and no reviewed payment is replaced: the
+      // network fee comes from planning the transaction, which is the fee the
+      // signed transaction pays.
+      await requireUnlocked();
+      const wallet = get(walletStore).activeWallet;
+      if (!wallet) throw new Error('Select a wallet');
+      const quote = bridgeDetails(
+        request.bridge?.destination ?? '',
+        parseNocksInput(request.bridge?.amount ?? '') ?? 0n
+      );
+      const available = await walletStore.fetchNotes(wallet.id);
+      await requireUnlocked();
+      if (epoch !== generation) throw new Error('Wallet session ended');
+      const current = get(walletStore).activeWallet!;
+      const reserved = collectReservedNoteIds(current.pendingTransactions);
+      const notes = available.filter(note => !reserved.has(noteNameToId(note) ?? ''));
+      const { ensureVaultReady } = await import('../vault/wasm');
+      const { composeUnsignedTx } = await import('../pkg/nockster_core.js');
+      const { getRPCClientV1 } = await import('../lib/utils/rpc');
+      await ensureVaultReady();
+      const planned = composeUnsignedTx(
+        current.addresses[0],
+        notes,
+        [{ address: BRIDGE_LOCK_ROOT, gift: quote.amount, bridgeEvmAddress: quote.destination }],
+        await getRPCClientV1().getTipHeight()
+      ) as { feePaid: number };
+      const price = get(nockPrice);
+      result.bridgeQuote = {
+        destination: quote.destination,
+        amount: amount(quote.amount),
+        protocolFee: amount(quote.protocolFee),
+        expectedReceived: amount(quote.expectedReceived),
+        networkFee: amount(planned.feePaid),
+        networkFeeUsd: formatUsdEstimate(planned.feePaid / 65536, price),
+        total: amount(quote.amount + planned.feePaid),
+        totalUsd: formatUsdEstimate((quote.amount + planned.feePaid) / 65536, price)
+      };
       break;
     }
     case 'prepare': {

@@ -96,6 +96,7 @@ struct UnlockView: View {
                 SecureField("Wallet password", text: $password)
                     .textContentType(.password).textFieldStyle(.roundedBorder)
                     .submitLabel(.go).onSubmit { unlock() }
+                    .credentialField(model)
                     .accessibilityIdentifier("unlock-password")
                 Button(action: unlock) {
                     if model.busy { ProgressView() }
@@ -237,12 +238,12 @@ struct SetupView: View {
             }
             if !model.snapshot.exists {
                 Section {
-                    SecureField("Wallet password", text: $password).textContentType(.newPassword)
+                    SecureField("Wallet password", text: $password).textContentType(.newPassword).credentialField(model)
                         .accessibilityIdentifier("setup-password")
                     Label(password.count >= 12 ? "Minimum length met" : "\(password.count)/12 characters",
                           systemImage: password.count >= 12 ? "checkmark.circle" : "info.circle")
                         .font(.footnote).foregroundStyle(.secondary)
-                    SecureField("Confirm password", text: $confirmation).textContentType(.newPassword)
+                    SecureField("Confirm password", text: $confirmation).textContentType(.newPassword).credentialField(model)
                         .accessibilityIdentifier("setup-confirm-password")
                     if !confirmation.isEmpty {
                         Label(password == confirmation ? "Passwords match" : "Passwords don’t match",
@@ -613,6 +614,8 @@ struct SendView: View {
     @State private var bridgeMode = false
     @State private var bridgeDestination = ""
     @State private var bridgeAmount = ""
+    @State private var bridgeQuote: BridgeQuote?
+    @State private var bridgeQuoteNote: String?
     @State private var privateOutputs = false
     @State private var preview: PaymentPreview?
     @State private var submitted: String?
@@ -706,11 +709,37 @@ struct SendView: View {
                     TextField("Receiving Base address (0x…)", text: $bridgeDestination, axis: .vertical)
                         .font(.system(.body, design: .monospaced))
                         .textInputAutocapitalization(.never).autocorrectionDisabled().disabled(model.busy)
-                    TextField("Amount in NOCK", text: $bridgeAmount).keyboardType(.decimalPad).disabled(model.busy)
+                    HStack {
+                        TextField("Amount in NOCK", text: $bridgeAmount).keyboardType(.decimalPad).disabled(model.busy)
+                        Button("Max") { Task { await fillMaxBridgeAmount() } }
+                            .buttonStyle(.borderless).disabled(model.busy || bridgeDestination.isEmpty)
+                            .accessibilityLabel("Use the maximum amount")
+                    }
                     UsdSubtitle(value: composeUsd(bridgeAmount, inNicks: false, price: model.snapshot.usdPerNock))
                 } header: { Text("Bridge to Base") } footer: {
                     Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
                 }
+                // The fees, before review: what the deposit costs and what arrives.
+                Section {
+                    if let quote = bridgeQuote {
+                        LabeledContent("Protocol fee (≈0.3%)", value: "\(quote.protocolFee) NOCK")
+                        LabeledContent("Expected on Base", value: "\(quote.expectedReceived) NOCK")
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Network fee", value: "\(quote.networkFee) NOCK")
+                            UsdSubtitle(value: quote.networkFeeUsd)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Total from this wallet", value: "\(quote.total) NOCK")
+                            UsdSubtitle(value: quote.totalUsd)
+                        }
+                    } else {
+                        Text(bridgeQuoteNote ?? "Enter a Base address and an amount to see the fees.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: { Text("Estimated cost") } footer: {
+                    if bridgeQuote != nil { Text("The protocol fee comes out of the payout on Base. You confirm these amounts again at review, before anything is sent.") }
+                }
+                .task(id: [bridgeDestination, bridgeAmount]) { await refreshBridgeQuote() }
             } else {
                 regularPaymentFields
             }
@@ -723,6 +752,41 @@ struct SendView: View {
                 .disabled(model.busy || (bridgeMode ? bridgeDestination.isEmpty || bridgeAmount.isEmpty : recipients.contains { $0.address.isEmpty || $0.amount.isEmpty }))
             }
         }
+        .keyboardDismissible()
+    }
+
+    /// Fills in the most the wallet can send after the network fee, so nothing
+    /// is left behind as dust. The engine works it out from the wallet's notes.
+    private func fillMaxAmount() async {
+        guard recipients.count == 1 else { return }
+        let fields: [String: Any] = ["address": recipients[0].address, "amountUnit": inNicks ? "nicks" : "nock", "privateOutputs": privateOutputs]
+        if let amount = await model.perform("maxAmount", fields)?.maxAmount, recipients.count == 1 {
+            recipients[0].amount = amount
+            preview = nil
+        }
+    }
+
+    /// The same for a bridge deposit, whose fee differs from a payment's.
+    private func fillMaxBridgeAmount() async {
+        if let amount = await model.perform("maxAmount", ["bridge": ["destination": bridgeDestination, "amount": ""]])?.maxAmount {
+            bridgeAmount = amount
+            preview = nil
+        }
+    }
+
+    /// Keeps the bridge estimate in step with the form. Waits for a pause in
+    /// typing, and drops an answer that arrives after the fields have changed.
+    private func refreshBridgeQuote() async {
+        bridgeQuote = nil
+        bridgeQuoteNote = nil
+        let destination = bridgeDestination.trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = bridgeAmount.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty, !amount.isEmpty else { return }
+        do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+        let answer = await model.quoteBridge(destination: destination, amount: amount)
+        guard !Task.isCancelled else { return }
+        bridgeQuote = answer.quote
+        bridgeQuoteNote = answer.note
     }
 
     private func preparePayment() async {
@@ -784,8 +848,16 @@ struct SendView: View {
                     if index == recipients.count - 1 {
                         Button("Add Recipient", systemImage: "plus") { recipients.append(PaymentRecipient(address: "", amount: "")) }.disabled(recipients.count >= 16 || model.busy)
                     }
-                    TextField(inNicks ? "Amount in nicks" : "Amount in NOCK", text: $recipients[index].amount)
-                        .keyboardType(inNicks ? .numberPad : .decimalPad).disabled(model.busy)
+                    HStack {
+                        TextField(inNicks ? "Amount in nicks" : "Amount in NOCK", text: $recipients[index].amount)
+                            .keyboardType(inNicks ? .numberPad : .decimalPad).disabled(model.busy)
+                        // Max spends the whole balance, which only has one answer for one recipient.
+                        if recipients.count == 1 {
+                            Button("Max") { Task { await fillMaxAmount() } }
+                                .buttonStyle(.borderless).disabled(model.busy || recipients[index].address.isEmpty)
+                                .accessibilityLabel("Use the maximum amount")
+                        }
+                    }
                     UsdSubtitle(value: composeUsd(recipients[index].amount, inNicks: inNicks, price: model.snapshot.usdPerNock))
                     if recipients.count > 1 { Button("Remove Recipient", role: .destructive) { recipients.remove(at: index); editingRecipient = nil }.disabled(model.busy) }
                 }
@@ -1055,6 +1127,8 @@ struct WalletSettingsView: View {
                 } else {
                     SecureField("Confirm wallet password", text: $deviceUnlockPassword).textContentType(.password)
                         .focused($deviceUnlockPasswordFocused).submitLabel(.done).onSubmit { enableDeviceUnlock() }
+                        .onChange(of: deviceUnlockPasswordFocused) { _, focused in model.credentialField(focused: focused) }
+                        .onDisappear { if deviceUnlockPasswordFocused { model.credentialField(focused: false) } }
                         .disabled(model.busy)
                     Button("Continue to device verification", systemImage: "faceid") { enableDeviceUnlock() }
                         .disabled(deviceUnlockPassword.isEmpty || model.busy)
@@ -1094,6 +1168,7 @@ struct WalletSettingsView: View {
                 }.listRowBackground(Color.clear)
             }
         }
+        .keyboardDismissible()
         .scrollContentBackground(.hidden)
         .background(NocksterPalette.background)
         .navigationTitle("Settings")
@@ -1132,6 +1207,7 @@ struct FeedbackView: View {
                     .disabled(model.feedbackMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } footer: { Text("Opens a draft to howdy@swps.io in your email app. You review and send it there.") }
         }
+        .keyboardDismissible()
         .navigationTitle("Send feedback")
         .alert("No email app available", isPresented: $emailUnavailable) {
             Button("OK", role: .cancel) {}
@@ -1179,7 +1255,7 @@ struct AddressBookView: View {
                 }
                 Button("Refresh") { Task { _ = await model.perform("contacts") } }.disabled(model.busy)
             }
-        }.navigationTitle("Address Book").task { _ = await model.perform("contacts") }
+        }.keyboardDismissible().navigationTitle("Address Book").task { _ = await model.perform("contacts") }
         .sheet(isPresented: $scanning) {
             NavigationStack {
                 QRScannerView { value in
@@ -1195,12 +1271,54 @@ struct AddressBookView: View {
     }
 }
 
+/// Gives every keyboard a way out.
+///
+/// The number pads used for amounts have no return key, and the multi-line
+/// address fields treat return as a new line, so once either had focus the
+/// keyboard stayed up and covered the tab bar: there was no way to leave the
+/// screen. A Done button above the keyboard dismisses it, and so does
+/// dragging the form down.
+private struct KeyboardDismissal: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
+            }
+    }
+}
+
+private extension View {
+    func keyboardDismissible() -> some View { modifier(KeyboardDismissal()) }
+}
+
 private enum NocksterPalette {
     static let background = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
             ? UIColor(red: 20 / 255, green: 20 / 255, blue: 20 / 255, alpha: 1)
             : .white
     })
+}
+
+/// Marks a wallet-password field so that the Face ID sheet Password AutoFill
+/// shows over it does not lock the wallet. See `WalletModel.credentialField`.
+private struct CredentialField: ViewModifier {
+    let model: WalletModel
+    @FocusState private var focused: Bool
+    func body(content: Content) -> some View {
+        content.focused($focused)
+            .onChange(of: focused) { _, focused in model.credentialField(focused: focused) }
+            .onDisappear { if focused { model.credentialField(focused: false) } }
+    }
+}
+
+private extension View {
+    func credentialField(_ model: WalletModel) -> some View { modifier(CredentialField(model: model)) }
 }
 
 private struct PaymentAuthenticationView: View {
@@ -1218,6 +1336,8 @@ private struct PaymentAuthenticationView: View {
     var body: some View {
         SecureField("Wallet password", text: $password).textContentType(.password)
             .focused($focused).submitLabel(.send).onSubmit { confirm() }.disabled(model.busy)
+            .onChange(of: focused) { _, focused in model.credentialField(focused: focused) }
+            .onDisappear { if focused { model.credentialField(focused: false) } }
         Button("Confirm and Send") { confirm() }.disabled(password.isEmpty || model.busy)
         if model.deviceUnlockEnabled {
             Button("Confirm with device unlock", systemImage: "faceid") {

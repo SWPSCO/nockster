@@ -510,16 +510,16 @@ async function perform(
       await ensureVaultReady();
       const height = await getRPCClientV1().getTipHeight();
       const source = current.addresses[0];
-      const maximum = Number(
-        bridgeDestination
-          ? maxBridgeAmount(source, notes, bridgeDestination, height)
-          : maxSendAmount(source, notes, address, Boolean(request.privateOutputs), height)
-      );
-      if (bridgeDestination && BigInt(maximum) < BRIDGE_MINIMUM_NICKS)
+      const maximum = bridgeDestination
+        ? maxBridgeAmount(source, notes, bridgeDestination, height)
+        : maxSendAmount(source, notes, address, Boolean(request.privateOutputs), height);
+      // The payment planner accepts JS numbers for recipient amounts.
+      if (maximum > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Amount exceeds the supported range');
+      if (bridgeDestination && maximum < BRIDGE_MINIMUM_NICKS)
         throw new Error(
-          `Bridge to Base requires at least 100,000 NOCK. This wallet can deposit ${amount(maximum)} NOCK after the fee.`
+          `Bridge to Base requires at least 100,000 NOCK. This wallet can deposit ${amount(Number(maximum))} NOCK after the fee.`
         );
-      result.maxAmount = request.amountUnit === 'nicks' ? String(maximum) : amount(maximum);
+      result.maxAmount = request.amountUnit === 'nicks' ? maximum.toString() : amount(Number(maximum));
       break;
     }
     case 'prepare': {

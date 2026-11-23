@@ -95,6 +95,19 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
         } finally { withContext(NonCancellable) { javascript("delete window.nocksterReplies[$id]") } }
     }
 
+    // Asks the engine what a bridge deposit will cost. Unlike perform, this does
+    // not mark the wallet busy: it runs while the amount is being typed, and a
+    // busy wallet disables the fields being typed into. The reply carries
+    // "bridgeQuote", or "error" with the reason it cannot be quoted yet.
+    suspend fun quoteBridge(destination: String, amount: String): JSONObject? {
+        if (!unlocked || privateScreen) return null
+        val generation = session
+        val reply = try {
+            call("bridgeQuote", JSONObject().put("bridge", JSONObject().put("destination", destination).put("amount", amount)))
+        } catch (failure: Exception) { return null }
+        return if (generation == session) reply else null
+    }
+
     suspend fun perform(action: String, fields: JSONObject = JSONObject()): JSONObject? {
         if (busy || privateScreen) return null
         busy = true

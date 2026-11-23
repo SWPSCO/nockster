@@ -614,6 +614,8 @@ struct SendView: View {
     @State private var bridgeMode = false
     @State private var bridgeDestination = ""
     @State private var bridgeAmount = ""
+    @State private var bridgeQuote: BridgeQuote?
+    @State private var bridgeQuoteNote: String?
     @State private var privateOutputs = false
     @State private var preview: PaymentPreview?
     @State private var submitted: String?
@@ -717,6 +719,27 @@ struct SendView: View {
                 } header: { Text("Bridge to Base") } footer: {
                     Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
                 }
+                // The fees, before review: what the deposit costs and what arrives.
+                Section {
+                    if let quote = bridgeQuote {
+                        LabeledContent("Protocol fee (≈0.3%)", value: "\(quote.protocolFee) NOCK")
+                        LabeledContent("Expected on Base", value: "\(quote.expectedReceived) NOCK")
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Network fee", value: "\(quote.networkFee) NOCK")
+                            UsdSubtitle(value: quote.networkFeeUsd)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            LabeledContent("Total from this wallet", value: "\(quote.total) NOCK")
+                            UsdSubtitle(value: quote.totalUsd)
+                        }
+                    } else {
+                        Text(bridgeQuoteNote ?? "Enter a Base address and an amount to see the fees.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: { Text("Estimated cost") } footer: {
+                    if bridgeQuote != nil { Text("The protocol fee comes out of the payout on Base. You confirm these amounts again at review, before anything is sent.") }
+                }
+                .task(id: [bridgeDestination, bridgeAmount]) { await refreshBridgeQuote() }
             } else {
                 regularPaymentFields
             }
@@ -749,6 +772,21 @@ struct SendView: View {
             bridgeAmount = amount
             preview = nil
         }
+    }
+
+    /// Keeps the bridge estimate in step with the form. Waits for a pause in
+    /// typing, and drops an answer that arrives after the fields have changed.
+    private func refreshBridgeQuote() async {
+        bridgeQuote = nil
+        bridgeQuoteNote = nil
+        let destination = bridgeDestination.trimmingCharacters(in: .whitespacesAndNewlines)
+        let amount = bridgeAmount.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty, !amount.isEmpty else { return }
+        do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+        let answer = await model.quoteBridge(destination: destination, amount: amount)
+        guard !Task.isCancelled else { return }
+        bridgeQuote = answer.quote
+        bridgeQuoteNote = answer.note
     }
 
     private func preparePayment() async {

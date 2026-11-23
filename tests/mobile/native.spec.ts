@@ -474,7 +474,17 @@ test('Base bridge review binds the destination, payout, fee and signed deposit t
   for (const bridge of [{destination,amount:'99999'}, {destination:'0x'+'0'.repeat(40),amount:'100000'}])
     expect((await request(page, 'prepare', {bridge})).error).toBeTruthy();
   expect((await request(page, 'prepare', {bridge:{destination,amount:'100000'},privateOutputs:true})).error).toContain('public');
+  // The compose form quotes the same costs before review, without signing
+  // anything or replacing a reviewed payment.
+  expect((await request(page, 'bridgeQuote', {bridge:{destination,amount:'99999'}})).error).toContain('100,000 NOCK');
+  expect((await request(page, 'bridgeQuote', {bridge:{destination:'0x12',amount:'100000'}})).error).toContain('Base address');
+  expect((await request(page, 'bridgeQuote', {bridge:{destination,amount:'150003'}})).error).toBeTruthy();
+  const quoted = await request(page, 'bridgeQuote', {bridge:{destination,amount:'100000'}});
+  expect(quoted.error).toBeUndefined();
   const reviewed = await request(page, 'prepare', {bridge:{destination,amount:'100000'}});
+  expect(quoted.bridgeQuote).toMatchObject({destination, amount:'100000', protocolFee:reviewed.preview.bridge.protocolFee, expectedReceived:reviewed.preview.bridge.expectedReceived, networkFee:reviewed.preview.fee, total:reviewed.preview.total});
+  // A quote taken after review leaves the reviewed payment in place.
+  expect((await request(page, 'bridgeQuote', {bridge:{destination,amount:'100001'}})).error).toBeUndefined();
   expect(reviewed.error).toBeUndefined();
   expect(reviewed.preview.bridge).toEqual({destination,amount:'100000',protocolFee:'297.54638671875',expectedReceived:'99702.45361328125'});
   expect(reviewed.preview.recipients).toHaveLength(1);

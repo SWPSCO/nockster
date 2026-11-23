@@ -25,6 +25,18 @@ struct BridgeSummary: Codable {
     let expectedReceived: String
 }
 
+/// What a bridge deposit will cost, shown on the compose form before review.
+struct BridgeQuote: Codable, Equatable {
+    let destination: String
+    let amount: String
+    let protocolFee: String
+    let expectedReceived: String
+    let networkFee: String
+    let networkFeeUsd: String?
+    let total: String
+    let totalUsd: String?
+}
+
 struct BridgeProgress: Codable {
     let blocks: Int?
     let target: Int
@@ -139,6 +151,7 @@ struct WalletReply: Codable {
     let amounts: [String]?
     let address: String?
     let maxAmount: String?
+    let bridgeQuote: BridgeQuote?
 }
 
 struct WalletFailure: LocalizedError {
@@ -255,6 +268,18 @@ final class WalletModel: ObservableObject {
             if requestEpoch == epoch { self.error = error.localizedDescription }
             return nil
         }
+    }
+
+    /// Asks the engine what a bridge deposit will cost. Unlike `perform`, this
+    /// does not mark the wallet busy: it runs while the amount is being typed,
+    /// and a busy wallet disables the fields being typed into. A reason the
+    /// deposit cannot be quoted yet comes back as `note`.
+    func quoteBridge(destination: String, amount: String) async -> (quote: BridgeQuote?, note: String?) {
+        guard snapshot.unlocked, !privateScreen else { return (nil, nil) }
+        let requestEpoch = epoch
+        guard let reply = try? await call("bridgeQuote", ["bridge": ["destination": destination, "amount": amount]]),
+              requestEpoch == epoch else { return (nil, nil) }
+        return (reply.bridgeQuote, reply.error)
     }
 
     func lock() {

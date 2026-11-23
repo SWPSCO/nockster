@@ -515,6 +515,19 @@ private fun SendScreen(model: WalletModel) {
     var bridgeMode by remember { mutableStateOf(false) }
     var bridgeDestination by remember { mutableStateOf("") }
     var bridgeAmount by remember { mutableStateOf("") }
+    var bridgeQuote by remember { mutableStateOf<JSONObject?>(null) }
+    var bridgeQuoteNote by remember { mutableStateOf<String?>(null) }
+    // Keeps the bridge estimate in step with the form: waits for a pause in
+    // typing; a change to either field cancels the answer still on its way.
+    LaunchedEffect(bridgeMode, bridgeDestination, bridgeAmount) {
+        bridgeQuote = null
+        bridgeQuoteNote = null
+        if (!bridgeMode || bridgeDestination.isBlank() || bridgeAmount.isBlank()) return@LaunchedEffect
+        delay(500)
+        val reply = model.quoteBridge(bridgeDestination.trim(), bridgeAmount.trim()) ?: return@LaunchedEffect
+        bridgeQuote = reply.optJSONObject("bridgeQuote")
+        bridgeQuoteNote = if (reply.isNull("error")) null else reply.getString("error")
+    }
     var privateOutputs by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<JSONObject?>(null) }
     var submitted by remember { mutableStateOf<String?>(null) }
@@ -557,6 +570,18 @@ private fun SendScreen(model: WalletModel) {
         }
         UsdSubtitle(composeUsd(bridgeAmount, false, model.snapshot.optDouble("usdPerNock")))
         Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
+        // The fees, before review: what the deposit costs and what arrives.
+        Text("Estimated cost", style = MaterialTheme.typography.titleMedium)
+        val quote = bridgeQuote
+        if (quote != null) {
+            Text("Protocol fee (≈0.3%): ${quote.text("protocolFee")} NOCK")
+            Text("Expected on Base: ${quote.text("expectedReceived")} NOCK")
+            Text("Network fee: ${quote.text("networkFee")} NOCK")
+            UsdSubtitle(quote.text("networkFeeUsd").takeIf { it.isNotEmpty() })
+            Text("Total from this wallet: ${quote.text("total")} NOCK")
+            UsdSubtitle(quote.text("totalUsd").takeIf { it.isNotEmpty() })
+            Text("The protocol fee comes out of the payout on Base. You confirm these amounts again at review, before anything is sent.", style = MaterialTheme.typography.bodySmall)
+        } else Text(bridgeQuoteNote ?: "Enter a Base address and an amount to see the fees.", style = MaterialTheme.typography.bodySmall)
     } else {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(false to "NOCK", true to "NICKS").forEach { (nicks, label) ->

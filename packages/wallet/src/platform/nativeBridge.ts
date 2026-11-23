@@ -491,14 +491,12 @@ async function perform(
         request.bridge?.destination ?? '',
         parseNocksInput(request.bridge?.amount ?? '') ?? 0n
       );
-      if (!wallet.notes) {
-        await walletStore.fetchNotes(wallet.id, true);
-        await requireUnlocked();
-        if (epoch !== generation) throw new Error('Wallet session ended');
-      }
+      const available = await walletStore.fetchNotes(wallet.id);
+      await requireUnlocked();
+      if (epoch !== generation) throw new Error('Wallet session ended');
       const current = get(walletStore).activeWallet!;
       const reserved = collectReservedNoteIds(current.pendingTransactions);
-      const notes = (current.notes ?? []).filter(note => !reserved.has(noteNameToId(note) ?? ''));
+      const notes = available.filter(note => !reserved.has(noteNameToId(note) ?? ''));
       const { ensureVaultReady } = await import('../vault/wasm');
       const { composeUnsignedTx } = await import('../pkg/nockster_core.js');
       const { getRPCClientV1 } = await import('../lib/utils/rpc');

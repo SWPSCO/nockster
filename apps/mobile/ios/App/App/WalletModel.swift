@@ -150,6 +150,7 @@ struct WalletReply: Codable {
     let unlockKey: String?
     let amounts: [String]?
     let address: String?
+    let maxAmount: String?
     let bridgeQuote: BridgeQuote?
 }
 
@@ -182,6 +183,15 @@ final class WalletModel: ObservableObject {
     @Published var feedbackMessage = ""
     @Published var privateScreen = false
     var cameraPermissionPrompt = false
+    /// How many wallet-password fields have focus. Password AutoFill verifies
+    /// with Face ID or Touch ID in a system sheet, which makes the scene inactive
+    /// without leaving the app; locking then would throw away the screen the
+    /// password was being filled into. The wallet still locks on background.
+    private var focusedCredentialFields = 0
+    private var credentialPrompt: Bool { focusedCredentialFields > 0 }
+    func credentialField(focused: Bool) {
+        focusedCredentialFields = max(0, focusedCredentialFields + (focused ? 1 : -1))
+    }
     @Published var sessionID = UUID()
     @Published var pendingRecipients: [PaymentRecipient] = []
     let engine = WalletEngineController()
@@ -274,6 +284,7 @@ final class WalletModel: ObservableObject {
 
     func lock() {
         automaticUnlockPending = false
+        focusedCredentialFields = 0
         epoch += 1
         sessionID = UUID()
         snapshot.unlocked = false
@@ -358,7 +369,7 @@ final class WalletModel: ObservableObject {
     func setActive(_ active: Bool) {
         self.active = active
         if active { backgrounded = false }
-        if authenticating || cameraPermissionPrompt { return }
+        if authenticating || cameraPermissionPrompt || credentialPrompt { return }
 
         if !active {
             privateScreen = true

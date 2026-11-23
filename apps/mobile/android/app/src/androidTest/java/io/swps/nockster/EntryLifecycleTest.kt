@@ -73,4 +73,28 @@ class EntryLifecycleTest {
         ui.onNodeWithText("Unlock Wallet").assertExists()
         ui.runOnIdle { assertFalse(model.unlocked) }
     }
+
+    // A password manager confirms autofill with a biometric prompt that pauses the
+    // activity without leaving the app. That must not lock the wallet out from
+    // under the password field; stopping the activity still locks.
+    @Test fun autofillPromptKeepsWalletOpenAndLeavingStillLocks() {
+        ui.runOnIdle {
+            model.snapshot = JSONObject().put("exists", true).put("unlocked", true)
+            model.credentialField(true)
+        }
+        ui.activityRule.scenario.moveToState(Lifecycle.State.STARTED)
+        ui.activityRule.scenario.onActivity { assertTrue("The autofill prompt must not lock the wallet", model.unlocked) }
+        ui.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        ui.runOnIdle { assertTrue(model.unlocked) }
+        ui.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+        ui.activityRule.scenario.onActivity { assertFalse("Leaving the app must lock the wallet", model.unlocked) }
+        ui.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        ui.waitUntil(10_000) { !model.privateScreen }
+
+        // With no password field focused, a pause locks as before.
+        ui.runOnIdle { model.snapshot = JSONObject().put("exists", true).put("unlocked", true) }
+        ui.activityRule.scenario.moveToState(Lifecycle.State.STARTED)
+        ui.activityRule.scenario.onActivity { assertFalse("A pause without a password prompt must still lock", model.unlocked) }
+        ui.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    }
 }

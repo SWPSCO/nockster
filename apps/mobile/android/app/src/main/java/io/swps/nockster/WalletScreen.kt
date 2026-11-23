@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -47,6 +48,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -112,7 +116,7 @@ fun NocksterApp(model: WalletModel) {
                         }
                     ) { padding ->
                         val content: @Composable () -> Unit = {
-                        Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
+                        Column(Modifier.fillMaxSize().padding(padding).imePadding().dismissKeyboardOnTap().verticalScroll(rememberScrollState()).padding(20.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             if (model.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                             model.snapshot.optJSONObject("vanitySearch")?.let { search ->
@@ -148,6 +152,22 @@ fun NocksterApp(model: WalletModel) {
     }
 }
 
+// Gives every keyboard a way out, the Android half of the iOS Done button.
+// Amount fields now carry a Done key; a multi-line address field has none, so
+// tapping an empty part of the screen also clears focus and closes the keyboard.
+private fun Modifier.dismissKeyboardOnTap() = composed {
+    val focus = LocalFocusManager.current
+    pointerInput(Unit) { detectTapGestures { focus.clearFocus() } }
+}
+
+// Marks a wallet-password field so that a password manager's biometric prompt
+// over it does not lock the wallet. See WalletModel.credentialField.
+private fun Modifier.credentialField(model: WalletModel) = composed {
+    var focused by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) { onDispose { if (focused) model.credentialField(false) } }
+    onFocusChanged { if (it.isFocused != focused) { focused = it.isFocused; model.credentialField(focused) } }
+}
+
 @Composable
 private fun UnlockScreen(model: WalletModel) {
     var password by remember { mutableStateOf("") }
@@ -160,7 +180,7 @@ private fun UnlockScreen(model: WalletModel) {
         Text("Nockchain wallet", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(password, { password = it }, label = { Text("Wallet password") },
             visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { if (password.isNotEmpty() && !model.busy) unlock() }), modifier = Modifier.fillMaxWidth())
+            keyboardActions = KeyboardActions(onDone = { if (password.isNotEmpty() && !model.busy) unlock() }), modifier = Modifier.fillMaxWidth().credentialField(model))
         Button(onClick = unlock, shape = RoundedCornerShape(12.dp),
             enabled = password.isNotEmpty() && !model.busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("Unlock Wallet") }
         if (model.deviceUnlockEnabled) OutlinedButton(onClick = { scope.launch { model.unlockWithDevice() } }, enabled = !model.busy) { Text("Use PIN or Biometrics") }
@@ -243,11 +263,11 @@ private fun SetupScreen(model: WalletModel, appScope: CoroutineScope, done: () -
             Text("Use at least 12 characters. Numbers, symbols, and uppercase letters are optional. Try a few unrelated words.", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(password, { password = it }, label = { Text("Wallet password") },
                 supportingText = { Text(if (password.length >= 12) "Minimum length met" else "${password.length}/12 characters") },
-                visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
+                visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth().credentialField(model))
             OutlinedTextField(confirmation, { confirmation = it }, label = { Text("Confirm password") },
                 isError = confirmation.isNotEmpty() && password != confirmation,
                 supportingText = { if (confirmation.isNotEmpty()) Text(if (password == confirmation) "Passwords match" else "Passwords don’t match") },
-                visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
+                visualTransformation = PasswordVisualTransformation(), singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth().credentialField(model))
             Text("Nockster locks when you leave the app. This password encrypts your wallet on this device.", style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Enable device PIN or biometrics", Modifier.weight(1f))
@@ -490,6 +510,7 @@ private fun AccountScreen(model: WalletModel, add: () -> Unit, openAddressBook: 
 @Composable
 private fun SendScreen(model: WalletModel) {
     val scope = rememberCoroutineScope()
+    val focus = LocalFocusManager.current
     var recipients by remember { mutableStateOf(listOf("" to "")) }
     var bridgeMode by remember { mutableStateOf(false) }
     var bridgeDestination by remember { mutableStateOf("") }
@@ -539,7 +560,14 @@ private fun SendScreen(model: WalletModel) {
     }
     if (bridgeMode) {
         OutlinedTextField(bridgeDestination, { bridgeDestination = it }, label = { Text("Receiving Base address (0x…)") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(bridgeAmount, { bridgeAmount = it }, label = { Text("Amount in NOCK") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(bridgeAmount, { bridgeAmount = it }, label = { Text("Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), modifier = Modifier.weight(1f))
+            // The most the wallet can deposit after the network fee. A bridge deposit's fee differs from a payment's.
+            TextButton(onClick = { scope.launch {
+                model.perform("maxAmount", JSONObject().put("bridge", JSONObject().put("destination", bridgeDestination).put("amount", "")))
+                    ?.text("maxAmount")?.takeIf { it.isNotEmpty() }?.let { bridgeAmount = it; preview = null }
+            } }, enabled = !model.busy && bridgeDestination.isNotBlank()) { Text("Max") }
+        }
         UsdSubtitle(composeUsd(bridgeAmount, false, model.snapshot.optDouble("usdPerNock")))
         Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
         // The fees, before review: what the deposit costs and what arrives.
@@ -588,8 +616,15 @@ private fun SendScreen(model: WalletModel) {
             IconButton(onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Nockchain address", recipient.first.trim())) }, enabled = !model.busy && recipient.first.isNotBlank()) { Icon(Icons.Default.ContentCopy, "Copy address") }
         }
         if (index == recipients.lastIndex) TextButton(onClick = { recipients = recipients + ("" to "") }, enabled = recipients.size < 16 && !model.busy) { Text("Add Recipient") }
-        OutlinedTextField(recipient.second, { value -> recipients = recipients.mapIndexed { i, pair -> if (i == index) pair.first to value else pair } },
-            label = { Text(if (inNicks) "Amount in nicks" else "Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = if (inNicks) KeyboardType.Number else KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(recipient.second, { value -> recipients = recipients.mapIndexed { i, pair -> if (i == index) pair.first to value else pair } },
+                label = { Text(if (inNicks) "Amount in nicks" else "Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = if (inNicks) KeyboardType.Number else KeyboardType.Decimal, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), modifier = Modifier.weight(1f))
+            // Max spends the whole balance after the network fee, which only has one answer for one recipient.
+            if (recipients.size == 1) TextButton(onClick = { scope.launch {
+                model.perform("maxAmount", JSONObject().put("address", recipient.first).put("amountUnit", if (inNicks) "nicks" else "nock").put("privateOutputs", privateOutputs))
+                    ?.text("maxAmount")?.takeIf { it.isNotEmpty() }?.let { amount -> if (recipients.size == 1) { recipients = listOf(recipients[0].first to amount); preview = null } }
+            } }, enabled = !model.busy && recipient.first.isNotBlank()) { Text("Max") }
+        }
         UsdSubtitle(composeUsd(recipient.second, inNicks, model.snapshot.optDouble("usdPerNock")))
         if (recipients.size > 1) TextButton(onClick = { recipients = recipients.filterIndexed { i, _ -> i != index }; editingRecipient = null }, enabled = !model.busy) { Text("Remove") }
     }
@@ -703,7 +738,7 @@ private fun PaymentAuthentication(model: WalletModel, submit: (String?) -> Unit)
     OutlinedTextField(password, { password = it }, label = { Text("Wallet password") },
         singleLine = true, enabled = !model.busy, visualTransformation = PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { confirm() }), modifier = Modifier.fillMaxWidth())
+        keyboardActions = KeyboardActions(onDone = { confirm() }), modifier = Modifier.fillMaxWidth().credentialField(model))
     Button(onClick = { confirm() }, enabled = password.isNotEmpty() && !model.busy, modifier = Modifier.fillMaxWidth()) { Text("Confirm and Send") }
     if (model.deviceUnlockEnabled) OutlinedButton(onClick = { password = ""; focus.clearFocus(); submit(null) }, enabled = !model.busy, modifier = Modifier.fillMaxWidth()) { Text("Confirm with device unlock") }
     model.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -859,7 +894,7 @@ private fun SettingsScreen(model: WalletModel) {
         OutlinedTextField(password, { password = it }, label = { Text("Confirm wallet password") },
             enabled = !model.busy, visualTransformation = PasswordVisualTransformation(), singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { if (password.isNotEmpty() && !model.busy) enableDeviceUnlock() }), modifier = Modifier.fillMaxWidth())
+            keyboardActions = KeyboardActions(onDone = { if (password.isNotEmpty() && !model.busy) enableDeviceUnlock() }), modifier = Modifier.fillMaxWidth().credentialField(model))
         Button(onClick = enableDeviceUnlock, enabled = password.isNotEmpty() && !model.busy) { Text("Continue to device verification") }
     }
     HorizontalDivider()
@@ -899,7 +934,7 @@ private fun FeedbackDialog(model: WalletModel, onDismiss: () -> Unit) {
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close feedback") }
                 })
             }) { padding ->
-                Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
+                Column(Modifier.fillMaxSize().padding(padding).imePadding().dismissKeyboardOnTap().verticalScroll(rememberScrollState()).padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     OutlinedTextField(model.feedbackSubject, { model.feedbackSubject = it }, label = { Text("Subject (optional)") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(model.feedbackMessage, { model.feedbackMessage = it }, label = { Text("Feedback message") },

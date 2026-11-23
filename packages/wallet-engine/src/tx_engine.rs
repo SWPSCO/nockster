@@ -137,6 +137,42 @@ pub(crate) fn max_payment(
     destination: &Hash,
     options: BuildTxOptions,
 ) -> Result<u64, String> {
+    let destination = crate::planner::payment(destination, 0, options.private_outputs);
+    max_output(source, notes, destination, options)
+}
+
+/// The most a wallet can deposit to the bridge in one transaction. A bridge
+/// output carries the Base destination as note data where a plain payment
+/// carries its lock, so the fee, and with it the maximum, is not the same as
+/// `max_payment` for the same notes.
+pub(crate) fn max_bridge_deposit(
+    source: &Hash,
+    notes: Vec<NoteV1Object>,
+    evm_address: &str,
+    chain_height: Option<u64>,
+) -> Result<u64, String> {
+    let destination = crate::planner::PlannedOutput {
+        lock_root: Hash::from_b58(BRIDGE_LOCK_ROOT)?,
+        note_data: build_bridge_note_data(evm_address)?,
+        amount: 0,
+    };
+    max_output(
+        source,
+        notes,
+        destination,
+        BuildTxOptions {
+            private_outputs: false,
+            chain_height,
+        },
+    )
+}
+
+fn max_output(
+    source: &Hash,
+    notes: Vec<NoteV1Object>,
+    destination: crate::planner::PlannedOutput,
+    options: BuildTxOptions,
+) -> Result<u64, String> {
     let prepared = convert_notes(notes)?;
     let notes: Vec<_> = prepared
         .into_iter()
@@ -145,7 +181,6 @@ pub(crate) fn max_payment(
             _ => unreachable!(),
         })
         .collect();
-    let destination = crate::planner::payment(destination, 0, options.private_outputs);
     let result = crate::planner::plan(
         &notes,
         &[],
@@ -765,6 +800,45 @@ mod tests {
         let inspected = crate::tx_jam::inspect_tx_jam(&built.base64_tx).unwrap();
         assert_eq!(inspected.outputs.len(), 1);
         assert_eq!(inspected.outputs[0].gift, amount);
+    }
+
+    #[test]
+    fn max_bridge_deposit_covers_the_bridge_fee_and_leaves_no_change() {
+        let wallet = Wallet::from_seedphrase(TEST_SEED.into()).unwrap();
+        let notes = vec![sample_large_note()];
+        let source = wallet.public_key_hash().unwrap();
+        let evm = "0x1234567890abcdef1234567890abcdef12345678";
+        let amount = max_bridge_deposit(&source, notes.clone(), evm, None).unwrap();
+        let built = build_transaction_from_api(
+            &wallet,
+            notes.clone(),
+            vec![TransactionRecipient {
+                address: BRIDGE_LOCK_ROOT.into(),
+                gift: amount,
+                bridge_evm_address: Some(evm.into()),
+            }],
+        )
+        .unwrap();
+        // Everything the wallet holds is either deposited or paid as the fee.
+        assert_eq!(amount + built.fee_paid, notes[0].assets as u64);
+        let inspected = crate::tx_jam::inspect_tx_jam(&built.base64_tx).unwrap();
+        assert_eq!(inspected.outputs.len(), 1);
+        assert_eq!(inspected.outputs[0].gift, amount);
+
+        // A bridge output carries the Base destination where a plain payment
+        // carries its lock, so the two cost different fees. The plain maximum
+        // is therefore the wrong amount for a deposit: it leaves dust behind.
+        let plain = max_payment(
+            &source,
+            notes.clone(),
+            &Hash::from_b58(SAMPLE_RECIPIENT).unwrap(),
+            BuildTxOptions::default(),
+        )
+        .unwrap();
+        assert_ne!(amount, plain);
+        assert!(
+            max_bridge_deposit(&source, vec![sample_large_note()], "not an address", None).is_err()
+        );
     }
 
     #[test]

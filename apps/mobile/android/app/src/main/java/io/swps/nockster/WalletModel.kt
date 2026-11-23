@@ -29,6 +29,15 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
     var pendingRecipients by mutableStateOf<List<Pair<String, String>>>(emptyList())
     private var authenticating = false
     var cameraPermissionPrompt = false
+    // How many wallet-password fields have focus. A password manager confirms
+    // autofill with a biometric prompt that pauses this activity without leaving
+    // the app; locking then would discard the screen being filled in. The wallet
+    // still locks when the activity stops.
+    private var focusedCredentialFields = 0
+    private val credentialPrompt get() = focusedCredentialFields > 0
+    fun credentialField(focused: Boolean) {
+        focusedCredentialFields = maxOf(0, focusedCredentialFields + if (focused) 1 else -1)
+    }
     private var foreground = false
     private var automaticUnlockPending = true
     private var lockJob: Job? = null
@@ -159,6 +168,7 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
 
     fun lock() {
         automaticUnlockPending = false
+        focusedCredentialFields = 0
         session++
         snapshot = JSONObject().put("exists", snapshot.optBoolean("exists")).put("unlocked", false)
         error = null
@@ -169,7 +179,7 @@ class WalletModel(private val webView: WebView, val deviceUnlock: DeviceUnlock, 
 
     fun background(force: Boolean = false) {
         foreground = false
-        if (force || (!authenticating && !cameraPermissionPrompt)) { privateScreen = true; lock() }
+        if (force || (!authenticating && !cameraPermissionPrompt && !credentialPrompt)) { privateScreen = true; lock() }
         if (force && !authenticating) automaticUnlockPending = true
     }
     fun foreground() {

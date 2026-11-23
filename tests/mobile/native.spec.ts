@@ -626,6 +626,70 @@ for (const outcome of ['rejected', 'unknown'] as const) {
   });
 }
 
+test('Max is the amount that spends the whole balance, for a payment and for a bridge deposit', async ({ page }) => {
+  const fixture = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../fixtures/nockster-signed.json', import.meta.url), 'utf8'));
+  const destination = '0x1234567890abcdef1234567890abcdef12345678';
+  const recipient = fixture.recipients[0].address;
+  const balance = 150_003 * 65536;
+  const notes = [fixture.note.lastName, fixture.source, recipient].map(lastName => ({ ...fixture.note, lastName, assets: 50_001 * 65536 }));
+  await mockAccounts(page);
+  await page.route('https://nockblocks.com/rpc**', async route => {
+    const body = route.request().postDataJSON();
+    const result = body.method === 'getNotesByAddress' ? notes
+      : body.method === 'getTip' ? { height: 100000 }
+      : body.method === 'getBalance' ? { balance }
+      : body.method === 'getTransactionsByAddress' ? { transactions: [] }
+      : body.method === 'getAddressBook' ? { entries: [] } : [];
+    await route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result } });
+  });
+  const key = 'fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float';
+  expect((await request(page, 'import', { name: 'Max test', password, key })).error).toBeUndefined();
+  const nicks = (value: string) => Number(value.replaceAll(',', ''));
+
+  // A payment: the reviewed total is the whole balance, with nothing left as change.
+  expect((await request(page, 'maxAmount', {})).error).toContain('recipient address');
+  const payment = await request(page, 'maxAmount', { address: recipient, amountUnit: 'nicks' });
+  expect(payment.error).toBeUndefined();
+  const paid = await request(page, 'prepare', { amountUnit: 'nicks', recipients: [{ address: recipient, amount: payment.maxAmount }] });
+  expect(paid.error).toBeUndefined();
+  expect(nicks(paid.preview.netSentNicks)).toBe(Number(payment.maxAmount));
+  expect(nicks(paid.preview.totalNicks)).toBe(balance);
+  // One nick more cannot be paid for.
+  expect((await request(page, 'prepare', { amountUnit: 'nicks', recipients: [{ address: recipient, amount: String(Number(payment.maxAmount) + 1) }] })).error).toBeTruthy();
+  // The same amount in NOCK is what the amount field shows.
+  const inNock = await request(page, 'maxAmount', { address: recipient });
+  expect((await request(page, 'convertAmounts', { amountUnit: 'nock', recipients: [{ amount: inNock.maxAmount }] })).amounts).toEqual([payment.maxAmount]);
+
+  // A bridge deposit has its own fee, so its own maximum.
+  expect((await request(page, 'maxAmount', { bridge: { destination: 'not an address', amount: '' } })).error).toContain('Base address');
+  expect((await request(page, 'maxAmount', { bridge: { destination, amount: '' }, privateOutputs: true })).error).toContain('public');
+  const deposit = await request(page, 'maxAmount', { bridge: { destination, amount: '' } });
+  expect(deposit.error).toBeUndefined();
+  const bridged = await request(page, 'prepare', { bridge: { destination, amount: deposit.maxAmount } });
+  expect(bridged.error).toBeUndefined();
+  expect(bridged.preview.bridge.amount).toBe(deposit.maxAmount);
+  expect(nicks(bridged.preview.totalNicks)).toBe(balance);
+});
+
+test('Max refuses a bridge deposit the wallet cannot make', async ({ page }) => {
+  const fixture = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../fixtures/nockster-signed.json', import.meta.url), 'utf8'));
+  await mockAccounts(page);
+  await page.route('https://nockblocks.com/rpc**', async route => {
+    const body = route.request().postDataJSON();
+    const result = body.method === 'getNotesByAddress' ? [{ ...fixture.note, assets: 500 * 65536 }]
+      : body.method === 'getTip' ? { height: 100000 }
+      : body.method === 'getBalance' ? { balance: 500 * 65536 }
+      : body.method === 'getTransactionsByAddress' ? { transactions: [] }
+      : body.method === 'getAddressBook' ? { entries: [] } : [];
+    await route.fulfill({ json: { jsonrpc: '2.0', id: body.id, result } });
+  });
+  const key = 'fluid ordinary worth width spatial program evoke defense fade unveil large dress comfort reason invest urge step fitness bleak worth pole eagle gap float';
+  expect((await request(page, 'import', { name: 'Small wallet', password, key })).error).toBeUndefined();
+  const reply = await request(page, 'maxAmount', { bridge: { destination: '0x1234567890abcdef1234567890abcdef12345678', amount: '' } });
+  expect(reply.error).toContain('at least 100,000 NOCK');
+  expect(reply.maxAmount).toBeUndefined();
+});
+
 test('native bridge history shares inclusion-based progress with unknown-tip handling', async ({ page }) => {
   await mockAccounts(page, {anyPublicKey:true});
   let tip: number | null = 1123;

@@ -138,6 +138,7 @@ struct WalletReply: Codable {
     let unlockKey: String?
     let amounts: [String]?
     let address: String?
+    let maxAmount: String?
 }
 
 struct WalletFailure: LocalizedError {

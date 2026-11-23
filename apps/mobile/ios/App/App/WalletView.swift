@@ -724,6 +724,7 @@ struct SendView: View {
                 .disabled(model.busy || (bridgeMode ? bridgeDestination.isEmpty || bridgeAmount.isEmpty : recipients.contains { $0.address.isEmpty || $0.amount.isEmpty }))
             }
         }
+        .keyboardDismissible()
     }
 
     private func preparePayment() async {
@@ -1097,6 +1098,7 @@ struct WalletSettingsView: View {
                 }.listRowBackground(Color.clear)
             }
         }
+        .keyboardDismissible()
         .scrollContentBackground(.hidden)
         .background(NocksterPalette.background)
         .navigationTitle("Settings")
@@ -1135,6 +1137,7 @@ struct FeedbackView: View {
                     .disabled(model.feedbackMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } footer: { Text("Opens a draft to howdy@swps.io in your email app. You review and send it there.") }
         }
+        .keyboardDismissible()
         .navigationTitle("Send feedback")
         .alert("No email app available", isPresented: $emailUnavailable) {
             Button("OK", role: .cancel) {}
@@ -1169,8 +1172,34 @@ struct AddressBookView: View {
                 }
                 Button("Refresh") { Task { _ = await model.perform("contacts") } }.disabled(model.busy)
             }
-        }.navigationTitle("Address Book").task { _ = await model.perform("contacts") }
+        }.keyboardDismissible().navigationTitle("Address Book").task { _ = await model.perform("contacts") }
     }
+}
+
+/// Gives every keyboard a way out.
+///
+/// The number pads used for amounts have no return key, and the multi-line
+/// address fields treat return as a new line, so once either had focus the
+/// keyboard stayed up and covered the tab bar: there was no way to leave the
+/// screen. A Done button above the keyboard dismisses it, and so does
+/// dragging the form down.
+private struct KeyboardDismissal: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
+            }
+    }
+}
+
+private extension View {
+    func keyboardDismissible() -> some View { modifier(KeyboardDismissal()) }
 }
 
 private enum NocksterPalette {

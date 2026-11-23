@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -48,6 +49,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -114,7 +116,7 @@ fun NocksterApp(model: WalletModel) {
                         }
                     ) { padding ->
                         val content: @Composable () -> Unit = {
-                        Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
+                        Column(Modifier.fillMaxSize().padding(padding).imePadding().dismissKeyboardOnTap().verticalScroll(rememberScrollState()).padding(20.dp),
                             verticalArrangement = Arrangement.spacedBy(16.dp)) {
                             if (model.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                             model.snapshot.optJSONObject("vanitySearch")?.let { search ->
@@ -148,6 +150,14 @@ fun NocksterApp(model: WalletModel) {
             }
         }
     }
+}
+
+// Gives every keyboard a way out, the Android half of the iOS Done button.
+// Amount fields now carry a Done key; a multi-line address field has none, so
+// tapping an empty part of the screen also clears focus and closes the keyboard.
+private fun Modifier.dismissKeyboardOnTap() = composed {
+    val focus = LocalFocusManager.current
+    pointerInput(Unit) { detectTapGestures { focus.clearFocus() } }
 }
 
 // Marks a wallet-password field so that a password manager's biometric prompt
@@ -500,6 +510,7 @@ private fun AccountScreen(model: WalletModel, add: () -> Unit, openAddressBook: 
 @Composable
 private fun SendScreen(model: WalletModel) {
     val scope = rememberCoroutineScope()
+    val focus = LocalFocusManager.current
     var recipients by remember { mutableStateOf(listOf("" to "")) }
     var bridgeMode by remember { mutableStateOf(false) }
     var bridgeDestination by remember { mutableStateOf("") }
@@ -536,7 +547,7 @@ private fun SendScreen(model: WalletModel) {
     }
     if (bridgeMode) {
         OutlinedTextField(bridgeDestination, { bridgeDestination = it }, label = { Text("Receiving Base address (0x…)") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(bridgeAmount, { bridgeAmount = it }, label = { Text("Amount in NOCK") }, enabled = !model.busy, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(bridgeAmount, { bridgeAmount = it }, label = { Text("Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), modifier = Modifier.fillMaxWidth())
         UsdSubtitle(composeUsd(bridgeAmount, false, model.snapshot.optDouble("usdPerNock")))
         Text("Minimum 100,000 NOCK. Receive wrapped NOCK on Base after at least 400 Nockchain confirmations and bridge processing. The protocol deducts approximately 0.3% from the payout. Verify that you control the Base address; deposits cannot be reversed.")
     } else {
@@ -574,7 +585,7 @@ private fun SendScreen(model: WalletModel) {
         }
         if (index == recipients.lastIndex) TextButton(onClick = { recipients = recipients + ("" to "") }, enabled = recipients.size < 16 && !model.busy) { Text("Add Recipient") }
         OutlinedTextField(recipient.second, { value -> recipients = recipients.mapIndexed { i, pair -> if (i == index) pair.first to value else pair } },
-            label = { Text(if (inNicks) "Amount in nicks" else "Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = if (inNicks) KeyboardType.Number else KeyboardType.Decimal), modifier = Modifier.fillMaxWidth())
+            label = { Text(if (inNicks) "Amount in nicks" else "Amount in NOCK") }, enabled = !model.busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = if (inNicks) KeyboardType.Number else KeyboardType.Decimal, imeAction = ImeAction.Done), keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }), modifier = Modifier.fillMaxWidth())
         UsdSubtitle(composeUsd(recipient.second, inNicks, model.snapshot.optDouble("usdPerNock")))
         if (recipients.size > 1) TextButton(onClick = { recipients = recipients.filterIndexed { i, _ -> i != index }; editingRecipient = null }, enabled = !model.busy) { Text("Remove") }
     }
@@ -884,7 +895,7 @@ private fun FeedbackDialog(model: WalletModel, onDismiss: () -> Unit) {
                     IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close feedback") }
                 })
             }) { padding ->
-                Column(Modifier.fillMaxSize().padding(padding).imePadding().verticalScroll(rememberScrollState()).padding(20.dp),
+                Column(Modifier.fillMaxSize().padding(padding).imePadding().dismissKeyboardOnTap().verticalScroll(rememberScrollState()).padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     OutlinedTextField(model.feedbackSubject, { model.feedbackSubject = it }, label = { Text("Subject (optional)") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(model.feedbackMessage, { model.feedbackMessage = it }, label = { Text("Feedback message") },
